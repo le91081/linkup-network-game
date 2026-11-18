@@ -168,6 +168,8 @@ npm run build    # 輸出到 dist/
 
 ## 還可以做的
 
+完整的功能規劃（每個領域已完成、部分完成、尚未開始的項目，以及建議的實作順序）在 [PLAN.md](PLAN.md)。以下是最接近的幾項：
+
 1. IPv6 的 ACL、防火牆政策與 OSPFv3。
 2. Voice VLAN（需要新的 IP 電話設備）、TACACS+、IKEv2、IOS 的 Dialer 介面。
 3. QoS 與多條連線互相搶頻寬、SNMP Trap、設定備份等維運情境的關卡。
