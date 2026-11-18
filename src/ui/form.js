@@ -70,6 +70,7 @@ export function ifaceNote(ctx, i) {
   return ctx.live(() => {
     const rt = i.rt || {};
     if (rt.active === false) return note('warn', '此介面目前沒有作用（連接埠不是 Routed 模式，或對應的 VLAN 不存在）');
+    if (i.shut) return note('warn', '這個介面已被停用 (administratively down)，取消勾選「停用此介面」才會恢復連線。');
     if (i.mode === 'static') {
       if (rt.ip == null) {
         if (!i.ip && !i.mask) return i.bind.t === 'wlan' && rt.note ? note('warn', rt.note) : null;

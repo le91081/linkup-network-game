@@ -7,7 +7,7 @@ import { cloneState, addCable, cableAt, portOf } from './engine/model.js';
 import * as hud from './ui/hud.js';
 import { renderDevicePanel } from './ui/panel.js';
 import { toast, sleep } from './ui/dom.js';
-import { SANDBOX, installSandbox } from './ui/sandbox.js';
+import { SANDBOX, installSandbox, sandboxObjectives } from './ui/sandbox.js';
 
 const STORE_KEY = 'linkup.v1';
 const GREEN = 0x4ade80, RED = 0xff5d6c;
@@ -54,7 +54,7 @@ const app = {
     Object.assign(app, {
       level: lv, levelIdx: idx, state: st, results: [], running: false, selected: null,
       hintsShown: app.store.hints[lv.id] || 0, panelTab: {}, pinned: {}, adv: new Set(), termLog: {}, termHist: {}, refreshers: [],
-      undoStack: [], redoStack: [], snap: JSON.stringify(cloneState(st)),
+      undoStack: [], redoStack: [], snap: JSON.stringify(cloneState(st)), cliSess: {},
     });
     app.store.last = lv.id;
     app.runToken = (app.runToken || 0) + 1;
@@ -107,6 +107,7 @@ const app = {
     to.push(app.snap);
     const sel = app.selected;
     app.state = JSON.parse(from.pop());
+    app.cliSess = {}; // CLI 的設定模式指向舊的物件，全部回到最外層
     recompute(app.state);
     app.scene.playToken++; // 中止還在播的封包動畫
     app.scene.load(app.state, { keep: true });
@@ -120,6 +121,18 @@ const app = {
     hud.renderMission(app);
     app.renderPanel();
     toast(msg);
+  },
+
+  /** 故障模擬：把設備關機或重新開機 */
+  togglePower(id) {
+    const st = app.state, d = st.devices[id];
+    const down = { ...(st.down || {}) };
+    if (down[id]) delete down[id]; else down[id] = true;
+    st.down = down;
+    app.changed();
+    app.renderPanel();
+    toast(down[id] ? `${d.name} 已關機 — 可以測試其他路徑有沒有接手` : `${d.name} 已開機`, down[id] ? 'bad' : 'ok');
+    app.scene.pulse(id, down[id] ? RED : GREEN, true);
   },
 
   renderPanel() {
@@ -175,12 +188,16 @@ const app = {
 
   fastForward() { app.scene.fast = true; },
 
+  /** 這一關的目標；自由模式用的是玩家自己存的目標 */
+  objectives() { return app.level.sandbox ? sandboxObjectives(app.state) : app.level.objectives; },
+
   /** 執行任務目標（不給 indices 就全部執行） */
   async run(indices) {
-    if (app.running || !app.level.objectives.length) return;
+    const objs = app.objectives();
+    if (app.running || !objs.length) return;
     const lv = app.level;
     const token = (app.runToken = (app.runToken || 0) + 1);
-    const list = indices || lv.objectives.map((_, i) => i);
+    const list = indices || objs.map((_, i) => i);
     app.running = true;
     app.scene.fast = false;
     app.scene.clearBubbles();
@@ -189,7 +206,8 @@ const app = {
     $('console').classList.remove('min');
     for (const i of list) {
       if (app.runToken !== token) return;
-      const o = lv.objectives[i];
+      const o = objs[i];
+      if (!o) continue;
       app.results[i] = 'running';
       hud.renderMission(app);
       const r = runObjective(app.state, o);
@@ -207,7 +225,9 @@ const app = {
     app.running = false;
     app.scene.fast = false;
     hud.renderMission(app);
-    if (lv.objectives.every((_, i) => app.results[i] && app.results[i].pass && !app.results[i].stale)) app.complete();
+    const all = objs.every((_, i) => app.results[i] && app.results[i].pass && !app.results[i].stale);
+    if (all && lv.sandbox) toast(`${objs.length} 個目標全部通過 ✔`, 'ok');
+    else if (all) app.complete();
   },
 
   /** 終端機指令觸發的單次追蹤 */

@@ -5,6 +5,7 @@ import { parseIp } from '../engine/ip.js';
 import { dev, ifc, link, setIp, useDhcp, swp, addVlan, portTo, WEB, DB } from './util.js';
 import { CHAPTERS2, LEVELS2 } from './advanced.js';
 import { CHAPTERS3, LEVELS3 } from './more.js';
+import { CHAPTERS4, LEVELS4 } from './trouble.js';
 
 export const CHAPTERS = [
   { id: 1, title: '家用網路', desc: '從第一條網路線開始，讓家裡的設備互通並連上網際網路。' },
@@ -616,8 +617,8 @@ export const LEVELS = [
   },
 ];
 
-CHAPTERS.push(...CHAPTERS2, ...CHAPTERS3);
-LEVELS.push(...LEVELS2, ...LEVELS3);
+CHAPTERS.push(...CHAPTERS2, ...CHAPTERS3, ...CHAPTERS4);
+LEVELS.push(...LEVELS2, ...LEVELS3, ...LEVELS4);
 LEVELS.sort((a, b) => a.chapter - b.chapter); // 穩定排序：補充關卡排到所屬章節的最後
 
 export const levelById = (id) => LEVELS.find((l) => l.id === id);

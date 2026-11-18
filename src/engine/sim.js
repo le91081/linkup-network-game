@@ -193,7 +193,8 @@ export function macsBehind(state, d, pid) {
 
 function prepPhysical(state) {
   const rt = state.rt, down = state.down || {}, cut = state.cut || {};
-  const shut = (D, pid) => !!(D.sw && D.sw.ports[pid] && D.sw.ports[pid].shut);
+  // 交換器的連接埠，或路由器的實體介面被 shutdown
+  const shut = (D, pid) => !!(D.sw && D.sw.ports[pid] && D.sw.ports[pid].shut) || D.ifaces.some((i) => i.shut && i.bind.t === 'port' && i.bind.port === pid);
   for (const d of Object.values(state.devices)) {
     if (!CATALOG[d.model] || !CATALOG[d.model].needsPoe) continue;
     let ok = false;
@@ -211,6 +212,10 @@ function prepPhysical(state) {
     const A = state.devices[c.a.dev], B = state.devices[c.b.dev];
     if (cut[c.id] || down[A.id] || down[B.id] || rt.off[A.id] || rt.off[B.id] || shut(A, c.a.port) || shut(B, c.b.port)) {
       rt.cable[c.id] = 'down';
+      const dead = [A, B].find((x) => down[x.id]);
+      const adm = shut(A, c.a.port) ? [A, c.a.port] : shut(B, c.b.port) ? [B, c.b.port] : null;
+      if (dead) rt.why[c.id] = `${dead.name} 已經關機`;
+      else if (adm) rt.why[c.id] = `${adm[0].name} 的 ${(adm[0].ports.find((p) => p.id === adm[1]) || {}).label || adm[1]} 被停用 (shutdown)`;
       continue;
     }
     const kind = CABLES[cableKind(c)], meters = cableDist(state, c);
@@ -959,6 +964,12 @@ function findOwner(state, ip) {
   return null;
 }
 
+/** 這台設備身上如果有一條「有原因的」斷線（被 shutdown、對面關機、線太長），附在錯誤訊息後面 */
+function deadLink(state, dev) {
+  const c = state.cables.find((x) => (x.a.dev === dev.id || x.b.dev === dev.id) && state.rt.why[x.id]);
+  return c ? `（${state.rt.why[c.id]}）` : '';
+}
+
 function noRouteReason(state, dev, dst) {
   const bad = dev.rt.routes.find((r) => r.bad && r.bits === 0);
   if (dev.kind === 'host') {
@@ -977,9 +988,9 @@ function noRouteReason(state, dev, dst) {
     if (bad) return `${dev.name} 的${bad.bad}`;
     return `${fmtIp(dst)} 不在 ${dev.name} 自己的子網路內，而且沒有設定預設閘道`;
   }
-  if (bad) return `${dev.name} 的${bad.bad}`;
+  if (bad) return `${dev.name} 的${bad.bad}${deadLink(state, dev)}`;
   const wan = dev.ifaces.find((x) => x.rt.ip == null && x.rt.note && (x.mode === 'dhcp' || x.mode === 'pppoe'));
-  return `${dev.name} 的路由表裡沒有通往 ${fmtIp(dst)} 的路由${wan ? `（${wan.label}：${wan.rt.note}）` : ''}`;
+  return `${dev.name} 的路由表裡沒有通往 ${fmtIp(dst)} 的路由${wan ? `（${wan.label}：${wan.rt.note}）` : deadLink(state, dev)}`;
 }
 
 function arpFail(state, dev, outIf, nh, viaGw, eps) {
@@ -1077,6 +1088,7 @@ function forward(state, ctx, startId, pkt) {
     log.push({ dev: dev.id, kind: 'drop', text: reason });
     return { ok: false, dev: dev.id, reason };
   };
+  if ((state.down || {})[dev.id]) return drop(`${dev.name} 已經關機`);
   if (state.rt.off[dev.id]) return drop(`${dev.name} 沒有電 — 它需要接在有 PoE 供電的連接埠上`);
   for (let n = 0; n < 48; n++) {
     let established = false, dnat = null;
@@ -1443,7 +1455,7 @@ export function runObjective(state, o) {
   }
   if (o.type === 'failover') {
     const s2 = cloneState(state);
-    s2.down = Object.fromEntries((o.down || []).map((id) => [id, true]));
+    s2.down = { ...(state.down || {}), ...Object.fromEntries((o.down || []).map((id) => [id, true])) };
     s2.cut = {};
     const what = (o.down || []).map((id) => state.devices[id].name + ' 斷電');
     for (const [dv, pid] of o.cut || []) {

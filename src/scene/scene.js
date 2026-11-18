@@ -569,7 +569,7 @@ export class Scene3D {
     const sig = state.cables.map((c) => `${c.id}:${c.a.dev}.${c.a.port}-${c.b.dev}.${c.b.port}:${state.rt.cable[c.id]}:${c.kind}`).join('|');
     if (sig !== this.cableSig) { this.cableSig = sig; this.rebuildCables(state); }
     const wsig = JSON.stringify([
-      Object.values(state.devices).filter((d) => d.wifi).map((d) => [d.id, apRange(d), !!state.rt.off[d.id], d.wifi.ssids.filter((x) => !x.off && x.name).length]),
+      Object.values(state.devices).filter((d) => d.wifi).map((d) => [d.id, apRange(d), !!state.rt.off[d.id] || !!(state.down || {})[d.id], d.wifi.ssids.filter((x) => !x.off && x.name).length]),
       Object.entries(state.rt.clients).map(([ap, l]) => [ap, l.map((c) => c.dev)]),
     ]);
     if (wsig !== this.wifiSig) { this.wifiSig = wsig; this.rebuildWifi(state); }
@@ -581,12 +581,14 @@ export class Scene3D {
     for (const d of Object.values(state.devices)) {
       const g = this.devices.get(d.id);
       if (!g) continue;
-      const off = !!state.rt.off[d.id];
+      const down = !!(state.down || {})[d.id];
+      const off = down || !!state.rt.off[d.id];
       refreshDevice(g, d, linked[d.id] || new Set(), off);
       const l = this.labels.get(d.id);
       l.nm.textContent = d.name;
       let sub = '', cls = '';
-      if (off) { sub = '沒有電（需要 PoE）'; cls = 'warn'; }
+      if (down) { sub = '已關機'; cls = 'warn'; }
+      else if (off) { sub = '沒有電（需要 PoE）'; cls = 'warn'; }
       else if (d.kind === 'host') {
         const i = primaryIface(d);
         const wl = d.ifaces.find((x) => x.bind.t === 'wlan');

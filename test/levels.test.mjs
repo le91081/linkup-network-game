@@ -135,6 +135,25 @@ expectFail('管理密碼仍是預設值', solved('l19', (s) => { s.devices.rt.mg
   else console.log('  ✔ STP 剛好封鎖一個非根橋的埠：' + JSON.stringify(blocked));
 }
 
+// ── 故障排除關卡：每一個故障都必須修好 ──
+console.log('\n故障排除關卡');
+expectFail('10-1 位址池仍然從 .10 開始', solved('l36', (s) => { s.devices.rt.ifaces[1].dhcp.start = '192.168.1.10'; }), 0, '都在用');
+expectFail('10-1 沒有保留位址', solved('l36', (s) => { s.devices.rt.ifaces[1].dhcp.reserved = []; }), 2, '不是 192.168.1.50');
+expectFail('10-1 筆電還是家裡的固定 IP', solved('l36', (s) => { s.devices.nb.ifaces[0].mode = 'static'; }), 3);
+expectFail('10-2 連接埠還是 shutdown', solved('l37', (s) => { s.devices.sw2.sw.ports['Gi0/1'].shut = true; }), 0, 'shutdown');
+expectFail('10-2 Trunk 允許清單少了 VLAN 20', solved('l37', (s) => { s.devices.sw2.sw.ports['Gi0/9'].allowed = '10'; }), 1);
+expectFail('10-2 研發的埠還在 VLAN 10', solved('l37', (s) => { s.devices.sw2.sw.ports['Gi0/2'].vlan = 10; }), 1);
+expectFail('10-2 Native VLAN 不一致', solved('l37', (s) => { s.devices.sw2.sw.ports['Gi0/9'].native = 99; }), 2, 'Native VLAN');
+expectFail('10-3 分公司 PC 的閘道錯誤', solved('l38', (s) => { s.devices['br-pc'].ifaces[0].gateway = '10.2.0.254'; }), 0);
+expectFail('10-3 回程路由打錯網段', solved('l38', (s) => { s.devices.hq.routes[0].dst = '10.3.0.0'; }), 0, '回程');
+expectFail('10-3 對外介面沒有 NAT', solved('l38', (s) => { s.devices.hq.ifaces[0].nat = false; }), 2, '私有 IP');
+expectFail('10-3 總公司 PC 的 DNS 指向路由器', solved('l38', (s) => { s.devices['hq-pc'].ifaces[0].dns = '10.1.0.1'; }), 2, 'DNS');
+{
+  const r = solved('l38', (s) => { s.devices.hq.ifaces[2].aclIn = [{ action: 'permit', proto: 'icmp', src: 'any', dst: 'any', port: '' }]; });
+  if (!r.res[0].pass || r.res[1].pass || !/ACL/.test(r.res[1].reason)) fail('10-3 只放行 ICMP 的 ACL：應該 ping 得到但 HTTPS 被擋');
+  else console.log('  ✔ 10-3 只放行 ICMP 的 ACL → ping 通、HTTPS 被擋：' + r.res[1].reason);
+}
+
 // ── 接近現實的行為：ARP、Hub 泛洪、DHCP 四步驟、保留位址、IP 衝突、連線紀錄 ──
 console.log('\n真實行為');
 {
@@ -198,6 +217,128 @@ console.log('\n真實行為');
     const { s } = solved('l20');
     const all = Object.values(s.devices).flatMap((d) => sessionLog(d));
     ok(all.length > 0 && !all.some((e) => e.dport === 500 || e.dport === 4500), '引擎內部的 IKE 協商不會混進連線紀錄');
+  }
+}
+
+// ── CLI：設定指令 ──
+console.log('\nCLI 設定指令');
+{
+  const { iosSession, runningConfig } = await import('../src/engine/ios.js');
+  const { CATALOG, makeDevice } = await import('../src/engine/model.js');
+  const { link, setIp } = await import('../src/levels/util.js');
+  const ok = (cond, title) => (cond ? console.log('  ✔ ' + title) : fail(title));
+  const hasCli = (d) => !d.locked && CATALOG[d.model].vendor === 'Cisco' && ['router', 'mswitch', 'l3switch'].includes(d.kind);
+  /** 在某台設備上依序輸入指令，回傳所有 % 開頭的錯誤訊息 */
+  const type = (s, id, lines) => {
+    const sess = iosSession(() => s.devices[id], () => s);
+    const errs = [];
+    for (const l of lines) for (const o of sess.exec(l).out) if (o.startsWith('%') && !o.includes('Creating vlan')) errs.push(`${l} → ${o}`);
+    return errs;
+  };
+  // 不能用指令重現的部分：遮蔽的密碼、註解、自動產生的 description、VPN
+  const keep = (l) => !/\*{8}/.test(l) && !/^ ?!/.test(l) && !/^ description /.test(l) && !/^crypto | encryption | hash | group \d| authentication pre-share/.test(l) && l !== '' && !/^Building/.test(l);
+
+  // 1. 把每一關解答的 running-config 整份貼到一台全新的同型號設備上，應該得到一模一樣的設定
+  let n = 0, bad = 0;
+  for (const lv of LEVELS) {
+    const { s } = solved(lv.id);
+    for (const d of Object.values(s.devices).filter(hasCli)) {
+      const want = runningConfig(s, d);
+      const s2 = cloneState(s);
+      s2.devices[d.id] = makeDevice(d.model, d.id, { name: d.name, pos: d.pos });
+      recompute(s2);
+      const errs = type(s2, d.id, ['configure terminal', ...want, 'end']);
+      recompute(s2);
+      const got = runningConfig(s2, s2.devices[d.id]);
+      const a = want.filter(keep), b = got.filter(keep);
+      n++;
+      if (errs.length || a.join('\n') !== b.join('\n')) {
+        bad++;
+        fail(`${lv.id} ${d.name}：貼回 running-config 之後設定不一致`);
+        for (const e of errs.slice(0, 4)) console.log('      錯誤 ' + e);
+        const miss = a.filter((x) => !b.includes(x)).slice(0, 4), extra = b.filter((x) => !a.includes(x)).slice(0, 4);
+        for (const x of miss) console.log('      少了 ' + x);
+        for (const x of extra) console.log('      多了 ' + x);
+      }
+    }
+  }
+  if (!bad) console.log(`  ✔ ${n} 台 Cisco 設備的 running-config 貼回空白設備後完全一致`);
+
+  // 2. 只用指令通關（含縮寫）
+  const cliSolve = (id, title, fn) => {
+    const lv = LEVELS.find((l) => l.id === id);
+    const s = lv.setup();
+    recompute(s);
+    const errs = fn(s);
+    recompute(s);
+    const res = evaluate(s, lv.objectives);
+    if (errs.length || res.some((r) => !r.pass)) {
+      fail(`${title}：${errs[0] || res.find((r) => !r.pass).reason}`);
+    } else console.log('  ✔ ' + title);
+  };
+  cliSolve('l07', '只用指令完成 2-3（VLAN 與 Trunk）', (s) => {
+    link(s, 'sw1:Gi0/9', 'sw2:Gi0/9');
+    return [
+      ...type(s, 'sw2', ['conf t', 'vlan 10', 'name Sales', 'vlan 20', 'name RnD', 'int gi0/1', 'sw mo acc', 'sw acc vl 10', 'int gi0/2', 'switchport access vlan 20',
+        'interface GigabitEthernet0/9', 'switchport mode trunk', 'end', 'wr']),
+      ...type(s, 'sw1', ['configure terminal', 'interface g0/9', 'switchport mode trunk', 'end']),
+    ];
+  });
+  cliSolve('l08', '只用指令完成 2-4（子介面與 DHCP 位址池）', (s) => {
+    setIp(s, 'fs', '192.168.30.10', '255.255.255.0', '192.168.30.1');
+    return [
+      ...type(s, 'sw', ['conf t', 'int gi0/9', 'switchport mode trunk']),
+      ...type(s, 'rt', ['conf t',
+        'ip dhcp excluded-address 192.168.10.1 192.168.10.99', 'ip dhcp excluded-address 192.168.20.1 192.168.20.99',
+        'ip dhcp pool SALES', 'network 192.168.10.0 255.255.255.0', 'default-router 192.168.10.1',
+        'ip dhcp pool RND', 'network 192.168.20.0 255.255.255.0', 'default-router 192.168.20.1',
+        'int gi0/0/1.10', 'encapsulation dot1q 10', 'ip address 192.168.10.1 255.255.255.0',
+        'int gi0/0/1.20', 'encap dot 20', 'ip add 192.168.20.1 255.255.255.0',
+        'int gi0/0/1.30', 'encap dot 30', 'ip add 192.168.30.1 255.255.255.0', 'end']),
+    ];
+  });
+  cliSolve('l10', '只用指令完成 3-2（靜態路由）', (s) => [
+    ...type(s, 'hq', ['conf t', 'int gi0/0/2', 'ip address 172.16.0.1 255.255.255.252', 'no shut', 'exit', 'ip route 10.2.0.0 255.255.255.0 172.16.0.2']),
+    ...type(s, 'br', ['conf t', 'int g0/0/0', 'ip add 172.16.0.2 255.255.255.252', 'ip route 0.0.0.0 0.0.0.0 172.16.0.1']),
+  ]);
+  cliSolve('l18', '只用指令完成 ACL 關卡（具名 ACL 與 access-group）', (s) => type(s, 'rt', ['conf t',
+    'ip access-list extended SERVERS', 'deny ip 10.0.20.0 0.0.0.255 10.0.30.0 0.0.0.255', 'permit tcp host 10.0.10.5 host 10.0.30.10 eq 22',
+    'deny tcp any host 10.0.30.10 eq ssh', 'permit ip any any', 'int gi0/0/2', 'ip access-group SERVERS out', 'end']));
+
+  cliSolve('l37', '只用指令完成 10-2（no shutdown、VLAN、Trunk 允許清單與 Native VLAN）', (s) => type(s, 'sw2', ['conf t',
+    'int gi0/1', 'no shut', 'int gi0/2', 'sw acc vlan 20', 'int gi0/9', 'switchport trunk allowed vlan 10,20', 'switchport trunk native vlan 1', 'end']));
+  cliSolve('l38', '用指令修好 10-3 的路由器（路由、NAT、ACL）', (s) => {
+    s.devices['br-pc'].ifaces[0].gateway = '10.2.0.1';
+    s.devices['hq-pc'].ifaces[0].dns = '8.8.8.8';
+    return type(s, 'hq', ['conf t', 'no ip route 10.3.0.0 255.255.255.0 172.16.0.2', 'ip route 10.2.0.0 255.255.255.0 172.16.0.2',
+      'int gi0/0/0', 'ip nat outside', 'exit', 'ip nat inside source list 1 interface Gi0/0/0 overload',
+      'int gi0/0/2', 'no ip access-group GI0_0_2_IN in', 'end']);
+  });
+
+  // 3. 錯誤處理與模式切換
+  {
+    const { s } = solved('l10');
+    const sess = iosSession(() => s.devices.hq, () => s);
+    const before = JSON.stringify(cloneState(s));
+    const r1 = sess.exec('conf t'), r2 = sess.exec('ip route 10.9.0.0 255.255.0 1.2.3.4'), r3 = sess.exec('banana');
+    ok(!r1.changed && r2.out[0].startsWith('%') && r3.out[0].startsWith('%') && JSON.stringify(cloneState(s)) === before, '打錯的指令會回報錯誤，而且不會改到設定');
+    sess.exec('int gi0/0/2');
+    ok(sess.prompt() === 'HQ-Router(config-if)#', '提示字元跟著模式改變');
+    sess.exec('sh');
+    recompute(s);
+    ok(s.devices.hq.ifaces.find((i) => i.id === 'Gi0/0/2').shut === true && evaluate(s, LEVELS.find((l) => l.id === 'l10').objectives).some((r) => !r.pass && /shutdown|停用/.test(r.reason)),
+      '介面模式的 sh 是 shutdown：專線斷掉，而且錯誤訊息指出介面被停用');
+    sess.exec('no shutdown');
+    sess.exec('router ospf 1');
+    ok(sess.prompt() === 'HQ-Router(config-router)#', '在介面模式直接輸入全域指令會切換模式');
+    const r = sess.exec('network 10.1.0.0 0.0.0.255 area 0');
+    ok(r.out.join().includes('Gi0/0/') && s.devices.hq.ifaces.some((i) => i.ospf), 'router ospf 的 network 會在符合的介面上啟用 OSPF');
+    sess.exec('end');
+    ok(sess.exec('show ip route').pass === true && sess.mode === 'exec', 'show 指令交給顯示層處理');
+    s.down = { hq: true };
+    recompute(s);
+    const res = evaluate(s, LEVELS.find((l) => l.id === 'l10').objectives);
+    ok(res.every((x) => !x.pass) && res.some((x) => /關機/.test(x.reason)), '設備關機後連線中斷，錯誤訊息指出是哪一台關機');
   }
 }
 

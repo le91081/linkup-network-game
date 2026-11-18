@@ -62,6 +62,7 @@ function ifaceCard(ctx, i, o = {}) {
     o.nat && toggle(ctx, ...bind(i, 'nat'), 'NAT（從此介面出去時偽裝成本介面 IP）'),
     o.ospf && toggle(ctx, ...bind(i, 'ospf'), 'OSPF（在此介面啟用動態路由）', { rerender: true }),
     o.ping && toggle(ctx, ...bind(i, 'ping'), '允許外部 ping 此介面'),
+    o.shut && toggle(ctx, ...bind(i, 'shut'), '停用此介面 (shutdown)'),
   ].filter(Boolean);
   if (toggles.length) parts.push(h('div', { class: 'toggles' }, toggles));
   if ((o.ospf && i.ospf) || o.helper) {
@@ -241,7 +242,7 @@ function rtIfaces(ctx, body) {
   for (const p of dev.ports) {
     const i = dev.ifaces.find((x) => x.bind.t === 'port' && x.bind.port === p.id);
     body.append(ifaceCard(ctx, i, {
-      title: p.label, port: p.id, gateway: true, nat: true, dhcp: true, ospf: true, helper: true, vrrp: true, v6: true,
+      title: p.label, port: p.id, gateway: true, nat: true, dhcp: true, ospf: true, helper: true, vrrp: true, v6: true, shut: true,
       modes: [['static', '固定 IP'], ['dhcp', '自動取得 (DHCP)'], ['pppoe', 'PPPoE 撥接']],
     }));
     const subs = dev.ifaces.filter((x) => x.bind.t === 'sub' && x.bind.port === p.id).sort((a, b) => a.bind.vlan - b.bind.vlan);
@@ -496,6 +497,8 @@ export function renderDevicePanel(app, root) {
     },
   };
   const body = h('div', { class: 'p-body' });
+  const isDown = !!(app.state.down || {})[dev.id];
+  if (isDown) body.append(note('warn', '這台設備目前是關機狀態（故障模擬），所有連接埠都沒有燈號。按右上角的電源鈕可以開機。'));
   const tabBar = tabs.length > 1 && h('div', { class: 'tabs' + (tabs.length > 7 ? ' many' : '') }, tabs.map(([id, label]) =>
     h('button', { type: 'button', class: 'tab' + (id === cur ? ' on' : ''), onclick: () => { app.panelTab[dev.id] = id; app.renderPanel(); } }, label)));
   root.dataset.view = viewKey;
@@ -505,6 +508,10 @@ export function renderDevicePanel(app, root) {
       h('div', { class: 'p-title' },
         app.level.sandbox ? inp(ctx, () => dev.name, (v) => { if (v) dev.name = v; }, { mono: false, ph: '設備名稱' }) : h('h2', { text: dev.name }),
         h('p', { text: m.title }), h('p', { class: 'muted', text: m.tagline })),
+      !dev.locked && h('button', {
+        class: 'mini power' + (isDown ? ' off' : ''), type: 'button', title: isDown ? '開機' : '關機 — 模擬這台設備故障，看看網路還通不通',
+        onclick: () => app.togglePower(dev.id),
+      }, icon('power', 15)),
       app.level.sandbox && h('button', { class: 'mini danger', type: 'button', title: '刪除這台設備', onclick: () => app.sandboxRemove(dev.id) }, icon('trash', 15)),
       h('button', { class: 'mini close', type: 'button', title: '關閉 (Esc)', onclick: () => app.select(null) }, icon('x', 16))),
     tabBar, body].filter(Boolean)); // replaceChildren 會把 false 變成文字，所以要先濾掉

@@ -1,170 +1,15 @@
-// IOS 風格的唯讀 CLI：把圖形介面的設定翻譯成等效的指令，並支援常用的 show 指令
+// IOS 風格的 CLI：用 show 指令查看狀態；configure terminal 之後可以直接用指令修改設定
 import { h } from './dom.js';
-import { fmtIp, fmtMask, parseIp, parseMask, netOf, maskOf, bcastOf, parseCidr } from '../engine/ip.js';
+import { fmtIp, parseIp } from '../engine/ip.js';
 import { fmtIp6 } from '../engine/ip6.js';
 import { transact, routeRows, macsBehind, isBridgePort, arpRows, sessionLog, hitsOf } from '../engine/sim.js';
 import { route6Rows } from '../engine/sim6.js';
 import { CATALOG, MEDIA, peerOf, portOf, linkInfo } from '../engine/model.js';
+import { iosSession, runningConfig, hostName as host, aclName, aclLine } from '../engine/ios.js';
 
-const host = (dev) => dev.name.replace(/[^\w-]+/g, '-').replace(/^-+|-+$/g, '') || 'Device';
-const wild = (bits) => fmtIp(~maskOf(bits) >>> 0);
 const pad = (s, n) => String(s).padEnd(n);
 const isSw = (d) => !!d.sw && d.sw.mode === 'vlan';
 const dotMac = (m) => m.replace(/:/g, '').replace(/(.{4})(?=.)/g, '$1.');
-
-function aclAddr(spec) {
-  const s = String(spec || 'any').trim().toLowerCase();
-  if (s === '' || s === 'any') return 'any';
-  const c = parseCidr(s);
-  if (!c) return s;
-  return c.bits === 32 ? 'host ' + fmtIp(c.net) : `${fmtIp(c.net)} ${wild(c.bits)}`;
-}
-const aclName = (i, dir) => `${i.label.replace(/[^\w.]+/g, '_')}_${dir}`.toUpperCase();
-
-/** 產生等效的 running-config */
-export function runningConfig(state, dev) {
-  const o = ['Building configuration...', '', '!', `hostname ${host(dev)}`, '!'];
-  const m = dev.mgmt;
-  if (m) o.push(`username ${m.user || 'admin'} privilege 15 secret ********`, '!');
-  if (dev.v6routing) o.push('ipv6 unicast-routing', '!');
-  if (isSw(dev)) {
-    const sw = dev.sw;
-    for (const v of sw.vlans.slice().sort((a, b) => a.id - b.id)) if (v.id !== 1) o.push(`vlan ${v.id}`, ` name ${v.name.replace(/\s+/g, '_')}`);
-    o.push('!', 'spanning-tree mode rapid-pvst');
-    const stp = sw.stp || {};
-    if (stp.on === false) o.push('no spanning-tree vlan 1-4094');
-    else if (stp.prio != null && +stp.prio !== 32768) o.push(`spanning-tree vlan 1-4094 priority ${+stp.prio}`);
-    const vl = sw.vlans.map((v) => v.id).sort((a, b) => a - b).join(',');
-    if (sw.snoop && sw.snoop.on) o.push('ip dhcp snooping', `ip dhcp snooping vlan ${vl}`);
-    if (sw.dai && sw.dai.on) o.push(`ip arp inspection vlan ${vl}`);
-    if (Object.values(sw.ports).some((p) => p.dot1x)) o.push('aaa new-model', 'aaa authentication dot1x default group radius', 'dot1x system-auth-control');
-    o.push('!');
-  }
-  // DHCP 位址池
-  for (const i of dev.ifaces) {
-    if (!i.dhcp || !i.dhcp.on || !i.rt || i.rt.ip == null) continue;
-    const a = parseIp(i.dhcp.start), b = parseIp(i.dhcp.end);
-    const net = netOf(i.rt.ip, i.rt.bits), bc = bcastOf(i.rt.ip, i.rt.bits);
-    if (a != null && a > net + 1) o.push(`ip dhcp excluded-address ${fmtIp(net + 1)} ${fmtIp(a - 1)}`);
-    if (b != null && b < bc - 1) o.push(`ip dhcp excluded-address ${fmtIp(b + 1)} ${fmtIp(bc - 1)}`);
-    o.push(`ip dhcp pool ${i.label.replace(/[^\w.]+/g, '_').toUpperCase()}`, ` network ${fmtIp(net)} ${fmtMask(i.rt.bits)}`,
-      ` default-router ${i.dhcp.gw || fmtIp(i.rt.ip)}`);
-    if (i.dhcp.dns) o.push(` dns-server ${i.dhcp.dns.replace(/[,\s]+/g, ' ')}`);
-    o.push('!');
-  }
-  const anyNat = dev.ifaces.some((i) => i.nat);
-  const l3lines = (i) => {
-    const l = [];
-    if (i.mode === 'dhcp') l.push(' ip address dhcp');
-    else if (i.mode === 'pppoe') l.push(' pppoe-client dial-pool-number 1', ` ! PPPoE 帳號 ${i.user || '(未設定)'}`);
-    else if (i.ip && parseMask(i.mask) != null) l.push(` ip address ${i.ip} ${fmtMask(parseMask(i.mask))}`);
-    else l.push(' no ip address');
-    if (anyNat) l.push(i.nat ? ' ip nat outside' : i.ip || i.mode !== 'static' ? ' ip nat inside' : null);
-    if (i.helper) l.push(` ip helper-address ${i.helper}`);
-    if (i.ospf && i.ospfCost) l.push(` ip ospf cost ${i.ospfCost}`);
-    if (i.aclIn && i.aclIn.length) l.push(` ip access-group ${aclName(i, 'in')} in`);
-    if (i.aclOut && i.aclOut.length) l.push(` ip access-group ${aclName(i, 'out')} out`);
-    if (i.vrrp && i.vrrp.on) l.push(` vrrp 1 ip ${i.vrrp.vip || '(未設定)'}`, ` vrrp 1 priority ${i.vrrp.prio || 100}`);
-    if (i.ip6) l.push(` ipv6 address ${i.ip6}`);
-    if (i.ip6 && !i.ra) l.push(' ipv6 nd ra suppress all');
-    return l.filter(Boolean);
-  };
-  for (const p of dev.ports) {
-    const peer = peerOf(state, dev.id, p.id);
-    const desc = peer ? [` description to ${host(state.devices[peer.dev])}`] : [];
-    const pc = dev.sw && dev.sw.ports[p.id];
-    if (pc && isSw(dev)) {
-      const def = pc.mode === 'access' && pc.vlan === 1 && !pc.shut && !peer && !pc.trust && !(+pc.lag > 0) && !(pc.ps && pc.ps.on) && !pc.bpduguard && !pc.dot1x;
-      if (def) continue;
-      o.push(`interface ${p.label}`, ...desc);
-      if (pc.mode === 'routed') {
-        const i = dev.ifaces.find((x) => x.bind.t === 'port' && x.bind.port === p.id);
-        o.push(' no switchport', ...(i ? l3lines(i) : []));
-      } else if (pc.mode === 'trunk') {
-        o.push(' switchport mode trunk');
-        if (pc.native !== 1) o.push(` switchport trunk native vlan ${pc.native}`);
-        if (pc.allowed && pc.allowed !== 'all') o.push(` switchport trunk allowed vlan ${pc.allowed}`);
-      } else {
-        o.push(' switchport mode access');
-        if (pc.vlan !== 1) o.push(` switchport access vlan ${pc.vlan}`);
-        o.push(' spanning-tree portfast');
-      }
-      if (+pc.lag > 0) o.push(` channel-group ${+pc.lag} mode ${pc.lagMode || 'active'}`);
-      if (pc.ps && pc.ps.on) {
-        o.push(' switchport port-security');
-        for (const mac of String(pc.ps.macs || '').split(/[,\s]+/).filter(Boolean)) o.push(` switchport port-security mac-address ${mac.replace(/:/g, '').replace(/(.{4})(?=.)/g, '$1.')}`);
-        o.push(` switchport port-security violation ${pc.ps.mode || 'restrict'}`);
-      }
-      if (pc.trust) o.push(' ip dhcp snooping trust', ...(dev.sw.dai && dev.sw.dai.on ? [' ip arp inspection trust'] : []));
-      if (pc.bpduguard) o.push(' spanning-tree bpduguard enable');
-      if (pc.dot1x) o.push(' authentication port-control auto', ' dot1x pae authenticator');
-      if (pc.shut) o.push(' shutdown');
-      o.push('!');
-    } else if (!pc) {
-      const i = dev.ifaces.find((x) => x.bind.t === 'port' && x.bind.port === p.id);
-      if (!i) continue;
-      o.push(`interface ${p.label}`, ...desc, ...l3lines(i), ' no shutdown', '!');
-      for (const s of dev.ifaces.filter((x) => x.bind.t === 'sub' && x.bind.port === p.id)) {
-        o.push(`interface ${s.label}`, ` encapsulation dot1Q ${s.bind.vlan}`, ...l3lines(s), '!');
-      }
-    }
-  }
-  for (const i of dev.ifaces.filter((x) => x.bind.t === 'svi')) {
-    if (!i.ip && dev.kind === 'mswitch') continue;
-    o.push(`interface Vlan${i.bind.vlan}`, ...l3lines(i), ' no shutdown', '!');
-  }
-  if (dev.kind === 'mswitch') {
-    const mg = dev.ifaces.find((x) => x.id === 'mgmt');
-    if (mg && mg.gateway) o.push(`ip default-gateway ${mg.gateway}`, '!');
-  }
-  const os = dev.ifaces.filter((i) => i.ospf && i.rt && i.rt.ip != null);
-  if (os.length) {
-    o.push('router ospf 1');
-    for (const i of os) o.push(` network ${fmtIp(netOf(i.rt.ip, i.rt.bits))} ${wild(i.rt.bits)} area 0`);
-    if (dev.ospfDefault) o.push(' default-information originate');
-    o.push('!');
-  }
-  for (const i of dev.ifaces) if (i.mode === 'static' && i.gateway && dev.routing) o.push(`ip route 0.0.0.0 0.0.0.0 ${i.gateway}`);
-  for (const r of dev.routes || []) {
-    if (!r.dst || !r.via) continue;
-    o.push(`ip route ${r.dst} ${parseMask(r.mask || '') != null ? fmtMask(parseMask(r.mask)) : r.mask} ${r.via}${+r.ad > 1 ? ' ' + r.ad : ''}`);
-  }
-  for (const r of dev.routes6 || []) if (r.dst && r.via) o.push(`ipv6 route ${r.dst} ${r.via}`);
-  const out = dev.ifaces.filter((i) => i.nat);
-  for (const i of out) o.push(`ip nat inside source list 1 interface ${i.label} overload`);
-  for (const n of dev.staticNat || []) if (n.pub && n.priv) o.push(`ip nat inside source static ${n.priv} ${n.pub}`);
-  for (const f of dev.portForwards || []) {
-    if (f.port && f.toIp && out[0]) o.push(`ip nat inside source static ${f.proto || 'tcp'} ${f.toIp} ${f.toPort || f.port} interface ${out[0].label} ${f.port}`);
-  }
-  if (out.length) o.push('access-list 1 permit any');
-  for (const i of dev.ifaces) {
-    for (const [key, dir] of [['aclIn', 'in'], ['aclOut', 'out']]) {
-      if (!i[key] || !i[key].length) continue;
-      o.push('!', `ip access-list extended ${aclName(i, dir)}`);
-      for (const r of i[key]) o.push(` ${r.action} ${r.proto || 'ip'} ${aclAddr(r.src)} ${aclAddr(r.dst)}${r.port && r.proto !== 'ip' && r.proto !== 'icmp' ? ' eq ' + r.port : ''}`);
-    }
-  }
-  for (const t of dev.vpns || []) {
-    o.push('!', `crypto isakmp policy 10`, ` encryption ${(t.enc || 'aes128') === 'aes256' ? 'aes 256' : 'aes'}`, ` hash ${t.hash || 'sha1'}`, ` group ${t.dh || 2}`, ' authentication pre-share',
-      `crypto isakmp key ******** address ${t.peer || '(未設定)'}`, `! 通道 ${t.name}：${t.local || '?'} ↔ ${t.remote || '?'}`);
-  }
-  if (dev.radius && dev.radius.ip) o.push('!', 'radius server AAA', ` address ipv4 ${dev.radius.ip} auth-port 1812 acct-port 1813`, ' key ********');
-  if (m) {
-    o.push('!');
-    if (m.ntp) o.push(`ntp server ${m.ntp}`);
-    if (m.syslog) o.push(`logging host ${m.syslog}`);
-    const snmp = m.snmp || 'v2c';
-    if (snmp === 'v2c') o.push(`snmp-server community ${m.community || 'public'} RO`);
-    else if (snmp === 'v3') o.push('snmp-server group NMS v3 priv', 'snmp-server user monitor NMS v3 auth sha ******** priv aes 128 ********');
-    o.push(m.http ? 'ip http server' : 'no ip http server', m.https ? 'ip http secure-server' : 'no ip http secure-server');
-    const allow = String(m.allow || '').split(/[,\s]+/).map(parseCidr).filter(Boolean);
-    if (allow.length) { o.push('ip access-list standard MGMT'); for (const c of allow) o.push(` permit ${fmtIp(c.net)} ${wild(c.bits)}`); }
-    const tr = [m.ssh && 'ssh', m.telnet && 'telnet'].filter(Boolean).join(' ') || 'none';
-    o.push('line vty 0 4', ` transport input ${tr}`, ...(allow.length ? [' access-class MGMT in'] : []), ' login local');
-  }
-  o.push('!', 'end');
-  return o;
-}
 
 const SHOW = {
   'show running-config': (st, d) => runningConfig(st, d),
@@ -174,7 +19,7 @@ const SHOW = {
     for (const i of d.ifaces) {
       if (!i.rt || i.rt.active === false) continue;
       const pc = d.sw && i.bind.port && d.sw.ports[i.bind.port];
-      const adm = pc && pc.shut;
+      const adm = (pc && pc.shut) || i.shut;
       o.push(pad(i.bind.t === 'svi' ? 'Vlan' + i.bind.vlan : i.label, 22) + pad(i.rt.ip != null ? fmtIp(i.rt.ip) : 'unassigned', 17)
         + pad(i.mode === 'static' ? 'manual' : i.mode.toUpperCase(), 8) + pad(adm ? 'administratively down' : i.rt.link ? 'up' : 'down', 22) + (i.rt.link ? 'up' : 'down'));
     }
@@ -304,7 +149,7 @@ const SHOW = {
     for (const i of d.ifaces) for (const [key, dir] of [['aclIn', 'in'], ['aclOut', 'out']]) {
       if (!i[key] || !i[key].length) continue;
       o.push(`Extended IP access list ${aclName(i, dir)}`);
-      i[key].forEach((r, n) => o.push(`    ${(n + 1) * 10} ${r.action} ${r.proto || 'ip'} ${aclAddr(r.src)} ${aclAddr(r.dst)}${r.port && r.proto !== 'ip' && r.proto !== 'icmp' ? ' eq ' + r.port : ''}${hitsOf(r) ? ` (${hitsOf(r)} matches)` : ''}`));
+      i[key].forEach((r, n) => o.push(`    ${(n + 1) * 10} ${aclLine(r)}${hitsOf(r) ? ` (${hitsOf(r)} matches)` : ''}`));
     }
     return o.length ? o : ['沒有設定任何 ACL'];
   },
@@ -352,46 +197,69 @@ const match = (tokens, cmd) => {
 
 export function buildCli(ctx, body) {
   const { app, dev } = ctx;
-  const prompt = host(dev) + '#';
-  const logs = (app.termLog['cli:' + dev.id] ||= [{ t: '唯讀的 IOS 風格介面：設定請用其他分頁的圖形介面，這裡可以看到等效的指令。輸入 ? 查看可用指令。', c: 'dim' }]);
+  const sess = ((app.cliSess ||= {})[dev.id] ||= iosSession(() => app.state.devices[dev.id] || dev, () => app.state));
+  const logs = (app.termLog['cli:' + dev.id] ||= [{
+    t: 'IOS 風格的 CLI。用 show 指令查看狀態；輸入 configure terminal 進入設定模式後可以直接下指令修改設定（和其他分頁改的是同一份設定）。輸入 ? 查看目前可用的指令。', c: 'dim',
+  }]);
   const hist = (app.termHist['cli:' + dev.id] ||= []);
   let hi = hist.length;
   const out = h('div', { class: 'term-out' });
-  const input = h('input', { class: 'term-input', spellcheck: 'false', autocomplete: 'off', placeholder: 'show running-config' });
+  const input = h('input', { class: 'term-input', spellcheck: 'false', autocomplete: 'off', placeholder: 'configure terminal' });
+  const promptEl = h('span', { class: 'prompt', text: sess.prompt() });
   const draw = () => {
-    out.replaceChildren(...logs.map((l) => h('div', { class: 'tl ' + (l.c || ''), text: l.t || ' ' })));
+    out.replaceChildren(...logs.map((l) => h('div', { class: 'tl ' + (l.c || ''), text: l.t || ' ' })));
     out.scrollTop = out.scrollHeight;
+    promptEl.textContent = sess.prompt();
   };
   const print = (t, c) => logs.push({ t, c });
-  const run = (line) => {
-    print(prompt + ' ' + line, 'cmd');
+
+  /** show 與 ping：回傳 false 表示不是這兩種指令 */
+  const showOrPing = (line) => {
     const tok = line.trim().toLowerCase().split(/\s+/).filter(Boolean);
-    const st = app.state;
-    if (!tok.length) { /* 空行 */ } else if (tok[0] === '?' || tok[0] === 'help') {
-      print('可用指令（可以縮寫，例如 sh ip int br）：', 'dim');
-      CMDS.forEach((c) => print('  ' + c, 'dim'));
-      print('  ping <IP>', 'dim');
-    } else if (tok[0] === 'cls' || tok[0] === 'clear') logs.length = 0;
-    else if ('ping'.startsWith(tok[0]) && tok[0].length >= 2) {
+    const st = app.state, d = st.devices[dev.id] || dev;
+    if (!tok.length) return true;
+    if ('ping'.startsWith(tok[0]) && tok[0].length >= 2) {
       const ip = parseIp(tok[1] || '');
       if (ip == null) print('% 用法：ping <IPv4 位址>', 'warn');
-      else if (!dev.ifaces.some((i) => i.rt && i.rt.ip != null)) print('% 這台設備沒有任何 IP 位址，無法送出封包', 'warn');
+      else if (!d.ifaces.some((i) => i.rt && i.rt.ip != null)) print('% 這台設備沒有任何 IP 位址，無法送出封包', 'warn');
       else {
-        const r = transact(st, dev.id, { proto: 'icmp', dst: ip });
-        app.showTrace(`${dev.name}# ${line}`, r.log, r.hops, r);
+        const r = transact(st, d.id, { proto: 'icmp', dst: ip });
+        app.showTrace(`${d.name}# ${line}`, r.log, r.hops, r);
         print(`Sending 5, 100-byte ICMP Echos to ${fmtIp(ip)}, timeout is 2 seconds:`);
         print(r.ok ? '!!!!!' : '.....', r.ok ? 'ok' : 'bad');
         print(`Success rate is ${r.ok ? 100 : 0} percent (${r.ok ? 5 : 0}/5)`);
         if (!r.ok) print('  ↳ ' + r.reason, 'hint');
       }
-    } else if (['configure', 'conf', 'enable', 'en', 'interface', 'int'].includes(tok[0]) || (tok[0] === 'no')) {
-      print('% 這個 CLI 是唯讀的。請在其他分頁用圖形介面修改，再用 show running-config 看對應的指令。', 'warn');
-    } else {
-      const cmd = CMDS.find((c) => match(tok, c));
-      if (cmd) SHOW[cmd](st, dev).forEach((l) => print(l, 'pre')); // 表格不折行，太寬時左右捲動
-      else print(`% Invalid input detected：不認識的指令「${line}」，輸入 ? 查看可用指令`, 'warn');
+      return true;
     }
-    draw();
+    if (tok[tok.length - 1] === '?' && 'show'.startsWith(tok[0])) { CMDS.forEach((c) => print('  ' + c, 'dim')); return true; }
+    const cmd = CMDS.find((c) => match(tok, c));
+    if (!cmd) return false;
+    SHOW[cmd](st, d).forEach((l) => print(l, 'pre')); // 表格不折行，太寬時左右捲動
+    return true;
+  };
+
+  const run = (line) => {
+    print(sess.prompt() + ' ' + line, 'cmd');
+    const text = line.trim(), low = text.toLowerCase();
+    const before = (app.state.devices[dev.id] || dev).name;
+    let renamed = false;
+    if (low === '?' || low === 'help') {
+      print(sess.mode === 'exec' ? '可用指令（可以縮寫，例如 conf t、sh ip int br）：' : '這個模式可用的指令（可以縮寫；前面加 no 是取消）：', 'dim');
+      sess.help().forEach((c) => print('  ' + c, 'dim'));
+      if (sess.mode !== 'exec') print('  exit 回上一層　end 回到最外層　do show … 在設定模式下查看狀態', 'dim');
+    } else if (low === 'cls' || low === 'clear') logs.length = 0;
+    else {
+      const r = sess.exec(text);
+      r.out.forEach((l) => print(l, l.startsWith('%') ? 'warn' : 'dim'));
+      if (r.pass && !showOrPing(r.doLine != null ? r.doLine : text)) print(`% Invalid input detected：不認識的指令「${text}」，輸入 ? 查看可用指令`, 'warn');
+      if (r.changed) {
+        ctx.commit(false);
+        renamed = (app.state.devices[dev.id] || dev).name !== before;
+      }
+    }
+    if (renamed) app.renderPanel(); // 設備改名了：面板標題要跟著更新
+    else draw();
   };
   input.addEventListener('keydown', (e) => {
     if (e.key === 'Enter') {
@@ -404,9 +272,9 @@ export function buildCli(ctx, body) {
     else if (e.key === 'ArrowDown') { hi = Math.min(hist.length, hi + 1); input.value = hist[hi] || ''; e.preventDefault(); }
     e.stopPropagation();
   });
-  const quick = ['show running-config', 'show ip interface brief', dev.routing ? 'show ip route' : 'show vlan brief',
-    isSw(dev) ? 'show spanning-tree' : 'show cdp neighbors', isSw(dev) ? 'show mac address-table' : 'show access-lists'];
-  body.append(h('div', { class: 'term', onclick: () => input.focus() }, out, h('div', { class: 'term-line' }, h('span', { class: 'prompt', text: prompt }), input)),
-    h('div', { class: 'chips' }, quick.map((x) => h('button', { class: 'chip btnchip', type: 'button', text: x, onclick: () => { hist.push(x); hi = hist.length; run(x); } }))));
+  const quick = ['show running-config', 'show ip interface brief', dev.routing ? 'show ip route' : 'show vlan brief', 'configure terminal', 'end'];
+  body.append(h('div', { class: 'term', onclick: () => input.focus() }, out, h('div', { class: 'term-line' }, promptEl, input)),
+    h('div', { class: 'chips' }, quick.map((x) => h('button', { class: 'chip btnchip', type: 'button', text: x, onclick: () => { hist.push(x); hi = hist.length; run(x); input.focus(); } }))));
   draw();
+  setTimeout(() => input.focus(), 30);
 }
