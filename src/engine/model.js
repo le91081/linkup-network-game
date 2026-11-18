@@ -331,14 +331,46 @@ const MEDIA_SPEED = { rj45: 1000, sfp: 10000, qsfp: 100000 };
 const SFP_SPEED = { rack1u: 25000, n93180: 25000, c2960: 1000, c2960p: 1000 };
 export const portSpeed = (dev, p) => (dev.kind === 'hub' ? 10 : p.media === 'sfp' ? SFP_SPEED[dev.model] || 10000 : MEDIA_SPEED[p.media]);
 export const fmtSpeed = (m) => (m >= 1000 ? m / 1000 + ' Gbps' : m + ' Mbps');
-/** 一條線協商出來的速率與雙工：取兩端較慢的那一邊；接到 Hub 就是半雙工 */
+/** 連接埠手動設定的速率與雙工（沒設定就是 null，代表自動協商）。交換器的設定在埠上，路由器在介面上 */
+export function phyConfig(dev, pid) {
+  if (dev.kind === 'hub') return { speed: 10, duplex: 'half' }; // Hub 不會協商，永遠是 10 Mbps 半雙工
+  const pc = dev.sw && dev.sw.ports && dev.sw.ports[pid];
+  const c = pc || dev.ifaces.find((x) => x.bind.t === 'port' && x.bind.port === pid) || {};
+  return { speed: c.speed && c.speed !== 'auto' ? +c.speed : null, duplex: c.duplex && c.duplex !== 'auto' ? c.duplex : null };
+}
+const DUP = { full: '全雙工', half: '半雙工' };
+/**
+ * 一條線兩端協商的結果，從 devId 這一端來看。
+ * - 兩端都自動協商：用兩端都支援的最高速率、全雙工。
+ * - 一端把速率和雙工都寫死（關閉協商）、另一端自動：自動的那一端量得出速率，但不知道對方的雙工，
+ *   10 / 100 Mbps 會退回半雙工 — 對方如果寫死全雙工，就是雙工不一致 (duplex mismatch)。
+ * - 兩端的速率寫死成不同的值：連線建立不起來。
+ * 回傳 { speed, duplex, peerDuplex, half, mismatch, text }，連線建立不起來則是 { down: 原因 }。
+ */
 export function linkInfo(state, devId, pid) {
   const peer = peerOf(state, devId, pid);
   if (!peer) return null;
   const A = state.devices[devId], B = state.devices[peer.dev];
-  const speed = Math.min(portSpeed(A, portOf(A, pid)), portSpeed(B, portOf(B, peer.port)));
-  const half = A.kind === 'hub' || B.kind === 'hub';
-  return { speed, half, text: `${fmtSpeed(speed)} · ${half ? '半雙工' : '全雙工'}` };
+  const pa = portOf(A, pid), pb = portOf(B, peer.port);
+  const max = Math.min(portSpeed(A, pa), portSpeed(B, pb));
+  const done = (speed, da, db) => ({
+    speed, duplex: da, peerDuplex: db, half: da === 'half' && db === 'half', mismatch: da !== db,
+    text: `${fmtSpeed(speed)} · ${da === db ? DUP[da] : `雙工不一致（這一端${DUP[da]}、對端${DUP[db]}）`}`,
+  });
+  if (pa.media !== 'rj45') return done(max, 'full', 'full'); // 光纖與 DAC：速率由收發器決定，一律全雙工
+  const ca = phyConfig(A, pid), cb = phyConfig(B, peer.port);
+  if (ca.speed != null && cb.speed != null && ca.speed !== cb.speed) return { down: `兩端的速率設定不同（${A.name} 是 ${ca.speed} Mbps、${B.name} 是 ${cb.speed} Mbps），連線建立不起來` };
+  const speed = ca.speed ?? cb.speed ?? max;
+  if (speed > max) return { down: `速率被設定成 ${speed} Mbps，但對面的連接埠最高只支援 ${max} Mbps` };
+  const fixA = ca.speed != null && ca.duplex != null, fixB = cb.speed != null && cb.duplex != null;
+  const fallback = speed >= 1000 ? 'full' : 'half';
+  if (fixA && !fixB) return done(speed, ca.duplex, cb.duplex ?? fallback);
+  if (fixB && !fixA) return done(speed, ca.duplex ?? fallback, cb.duplex);
+  if (fixA && fixB) return done(speed, ca.duplex, cb.duplex);
+  // 兩端都還在協商：有人只肯用半雙工就是半雙工；各自堅持不同的雙工則是不一致
+  if (ca.duplex && cb.duplex) return done(speed, ca.duplex, cb.duplex);
+  const d = ca.duplex || cb.duplex || 'full';
+  return done(speed, d, d);
 }
 
 /** 自由模式用：替新設備找一個還沒被用掉的 id */

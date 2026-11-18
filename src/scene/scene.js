@@ -727,7 +727,7 @@ export class Scene3D {
       this.packet.visible = true;
       this.tail.forEach((t) => (t.visible = true));
       const kind = PKT_TAG[h.proto];
-      this.setTag([esp ? 'ESP 加密' : '', kind ? kind + (h.proto === 'arp' ? ' 回覆' : '') : '', h.tag != null ? 'VLAN ' + h.tag : ''].filter(Boolean).join(' · '), esp ? 'esp' : kind ? h.proto : '');
+      this.setTag([esp ? (h.ssl ? 'TLS 加密' : 'ESP 加密') : '', kind ? kind + (h.proto === 'arp' ? ' 回覆' : '') : '', h.tag != null ? 'VLAN ' + h.tag : ''].filter(Boolean).join(' · '), esp ? 'esp' : kind ? h.proto : '');
       // Hub 會把同一份訊框複製到其他每一個埠
       const leaks = (h.leak || []).map((x) => this.seg(x)).filter(Boolean);
       const lg = leaks.map((_, i) => this.ghost(i, color, 0.55));

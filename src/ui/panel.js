@@ -6,7 +6,7 @@ import {
 } from './form.js';
 import { CATALOG, MEDIA, peerOf, newIface } from '../engine/model.js';
 import { parseIp, fmtIp } from '../engine/ip.js';
-import { routeRows, SERVICE_NAMES, hitsOf } from '../engine/sim.js';
+import { routeRows, SERVICE_NAMES, hitsOf, ospfOn, setOspf } from '../engine/sim.js';
 import { buildTerminal } from './terminal.js';
 import * as X from './panel-extra.js';
 import * as M from './panel-more.js';
@@ -62,7 +62,7 @@ function ifaceCard(ctx, i, o = {}) {
   }
   const toggles = [
     o.nat && toggle(ctx, ...bind(i, 'nat'), 'NAT（從此介面出去時偽裝成本介面 IP）', { rerender: true }),
-    o.ospf && toggle(ctx, ...bind(i, 'ospf'), 'OSPF（在此介面啟用動態路由）', { rerender: true }),
+    o.ospf && toggle(ctx, () => ospfOn(ctx.dev, i), (v) => setOspf(ctx.dev, i, v), 'OSPF（在此介面啟用動態路由）', { rerender: true }),
     o.ping && toggle(ctx, ...bind(i, 'ping'), '允許外部 ping 此介面'),
     o.shut && toggle(ctx, ...bind(i, 'shut'), '停用此介面 (shutdown)'),
   ].filter(Boolean);
@@ -73,11 +73,12 @@ function ifaceCard(ctx, i, o = {}) {
       : field('NAT 例外（往這些網段不轉換位址）', inp(ctx, ...bind(i, 'natSkip'), { ph: '例如站對站 VPN 的遠端網段 10.1.0.0/24', check: isCidrList }),
         '路由器會先做 NAT 再判斷要不要走 VPN。往對端內網的流量如果被 NAT，就不會進加密通道。'));
   }
-  if ((o.ospf && i.ospf) || o.helper) {
+  if ((o.ospf && ospfOn(ctx.dev, i)) || o.helper) {
     parts.push(grid2(
-      o.ospf && i.ospf && field('OSPF Cost', inp(ctx, ...bind(i, 'ospfCost'), { ph: '預設 1，越小越優先', check: isNum(1, 65535) })),
+      o.ospf && ospfOn(ctx.dev, i) && field('OSPF Cost', inp(ctx, ...bind(i, 'ospfCost'), { ph: '預設 1，越小越優先', check: isNum(1, 65535) })),
       o.helper && field('DHCP Relay', inp(ctx, ...bind(i, 'helper'), { ph: '遠端 DHCP 伺服器 IP（選填）', check: isIp }))));
   }
+  if (o.phy) parts.push(X.phyFields(ctx, i), X.phyNote(ctx, o.port));
   if (o.access) parts.push(X.accessRow(ctx, i));
   parts.push(ifaceNote(ctx, i));
   if (o.v6 && ctx.state.v6) parts.push(M.routerV6(ctx, i));
@@ -137,7 +138,7 @@ function swPorts(ctx, body) {
   const pinned = (app.pinned[dev.id] ||= new Set());
   body.append(faceplate(state, dev, { onPick: (p) => { pinned.add(p.id); app.renderPanel(); } }),
     h('p', { class: 'tip', text: '下方列出已接線或已調整過的連接埠；點面板上的埠可以把它加入清單預先設定。' }));
-  const adv = (pc) => pc.shut || pc.trust || +pc.lag > 0 || (pc.ps && pc.ps.on) || pc.bpduguard || pc.rootguard || pc.dot1x;
+  const adv = (pc) => pc.shut || pc.trust || +pc.lag > 0 || (pc.ps && pc.ps.on) || pc.bpduguard || pc.rootguard || pc.dot1x || (pc.speed && pc.speed !== 'auto') || (pc.duplex && pc.duplex !== 'auto');
   const isDefault = (pc) => pc.mode === 'access' && pc.vlan === 1 && !adv(pc);
   const shown = dev.ports.filter((p) => peerOf(state, dev.id, p.id) || !isDefault(sw.ports[p.id]) || pinned.has(p.id));
   if (!shown.length) body.append(note('muted', '所有連接埠都是預設值（Access · VLAN 1）。'));
@@ -168,13 +169,13 @@ function swPorts(ctx, body) {
         pc.mode === 'trunk' && field('允許的 VLAN', inp(ctx, ...bind(pc, 'allowed'), { ph: 'all 或 10,20', check: isVlanSpec })),
         routed && ri && field('IP 位址', inp(ctx, ...bind(ri, 'ip'), { ph: '例如 10.0.1.2', check: isIp })),
         routed && ri && field('子網路遮罩', inp(ctx, ...bind(ri, 'mask'), { ph: '255.255.255.252', check: isMask }))),
-      routed && ri && h('div', { class: 'toggles' }, toggle(ctx, ...bind(ri, 'ospf'), 'OSPF（在此介面啟用動態路由）')),
+      routed && ri && h('div', { class: 'toggles' }, toggle(ctx, () => ospfOn(dev, ri), (v) => setOspf(dev, ri, v), 'OSPF（在此介面啟用動態路由）')),
       routed && ri && ifaceNote(ctx, ri),
       !routed && X.portWarn(ctx, p, pc),
       !routed && h('button', {
         type: 'button', class: 'advbtn' + (open ? ' on' : ''),
         onclick: () => { if (app.adv.has(key)) app.adv.delete(key); else app.adv.add(key); app.renderPanel(); },
-      }, icon(open ? 'down' : 'chevron', 13), '進階：停用、Port-channel、Port Security、802.1X、BPDU / Root Guard'),
+      }, icon(open ? 'down' : 'chevron', 13), '進階：停用、速率 / 雙工、Port-channel、Port Security、802.1X、BPDU / Root Guard'),
       !routed && open && X.portAdvanced(ctx, p, pc)));
   }
 }
@@ -242,7 +243,7 @@ function swL3(ctx, body) {
   if (routed.length) {
     body.append(h('div', { class: 'card' }, cardHead('Routed 埠'),
       routed.map((i) => h('div', { class: 'line' }, h('b', { class: 'mono', text: i.label }),
-        ctx.live(() => h('span', { class: 'mono muted', text: i.rt?.ip != null ? `${fmtIp(i.rt.ip)}/${i.rt.bits}${i.ospf ? ' · OSPF' : ''}` : '未設定 IP' }))))));
+        ctx.live(() => h('span', { class: 'mono muted', text: i.rt?.ip != null ? `${fmtIp(i.rt.ip)}/${i.rt.bits}${ospfOn(dev, i) ? ' · OSPF' : ''}` : '未設定 IP' }))))));
   }
 }
 
@@ -251,7 +252,7 @@ function rtIfaces(ctx, body) {
   for (const p of dev.ports) {
     const i = dev.ifaces.find((x) => x.bind.t === 'port' && x.bind.port === p.id);
     body.append(ifaceCard(ctx, i, {
-      title: p.label, port: p.id, gateway: true, nat: true, dhcp: true, ospf: true, helper: true, vrrp: true, v6: true, shut: true,
+      title: p.label, port: p.id, gateway: true, nat: true, dhcp: true, ospf: true, helper: true, vrrp: true, v6: true, shut: true, phy: p.media === 'rj45',
       modes: [['static', '固定 IP'], ['dhcp', '自動取得 (DHCP)'], ['pppoe', 'PPPoE 撥接']],
     }));
     const subs = dev.ifaces.filter((x) => x.bind.t === 'sub' && x.bind.port === p.id).sort((a, b) => a.bind.vlan - b.bind.vlan);

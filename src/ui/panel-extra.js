@@ -54,10 +54,27 @@ export const portWarn = (ctx, p, pc) => ctx.live(() => {
     else if (pc.mode === 'trunk' && pc.native !== qc.native) out.push(`Native VLAN 不一致：這一端是 ${pc.native}，${there} 是 ${qc.native}。沒有標籤的訊框會被兩端放進不同的 VLAN。`);
     else if (pc.mode === 'access' && pc.vlan !== qc.vlan) out.push(`兩端的 Access VLAN 不同（這一端 ${pc.vlan}，${there} 是 ${qc.vlan}），兩個 VLAN 會被這條線接在一起。`);
   }
-  const li = linkInfo(state, dev.id, p.id);
-  if (li && li.half) out.push('對面是 Hub：這個埠降為 10 Mbps 半雙工，多台設備同時傳送會發生碰撞。');
+  out.push(...phyWarnings(state, dev, p.id));
   return out.map((t) => note('warn', t));
 });
+
+/** 實體層協商的問題：速率不合、雙工不一致、半雙工 */
+function phyWarnings(state, dev, pid) {
+  const li = linkInfo(state, dev.id, pid);
+  if (!li) return [];
+  if (li.down) return [li.down + '。'];
+  if (li.mismatch) return [`雙工不一致 (duplex mismatch)：這一端是${li.duplex === 'full' ? '全' : '半'}雙工、對端是${li.peerDuplex === 'full' ? '全' : '半'}雙工。線是通的，但會有大量碰撞與 CRC 錯誤，實際速度極慢 — 一端寫死、另一端自動協商時最常發生。`];
+  if (li.half) return [`這條線是 ${li.speed} Mbps 半雙工：同一時間只能有一端傳送，多台設備同時傳送會發生碰撞。`];
+  return [];
+}
+export const phyNote = (ctx, pid) => ctx.live(() => phyWarnings(ctx.state, ctx.dev, pid).map((t) => note('warn', t)));
+
+const SPEEDS = [['', '自動協商'], ['10', '10 Mbps'], ['100', '100 Mbps'], ['1000', '1 Gbps']];
+const DUPLEX = [['', '自動協商'], ['full', '全雙工'], ['half', '半雙工']];
+/** 速率與雙工的設定（只有銅纜的埠可以手動指定） */
+export const phyFields = (ctx, c) => grid2(
+  field('速率', sel(ctx, () => (c.speed && c.speed !== 'auto' ? String(c.speed) : ''), (v) => { c.speed = v; }, SPEEDS)),
+  field('雙工', sel(ctx, () => (c.duplex && c.duplex !== 'auto' ? c.duplex : ''), (v) => { c.duplex = v; }, DUPLEX)));
 
 /** FortiGate 每個介面各自決定開放哪些管理協定 (allowaccess) */
 export function accessRow(ctx, i) {
@@ -224,6 +241,7 @@ export function portAdvanced(ctx, p, pc) {
       return seen.map((m) => h('div', { class: 'line' }, h('b', { text: nameOf(ctx, m.dev) }), h('span', { class: 'mono muted', text: m.mac }),
         badge(okList.includes(m.mac) ? 'on' : 'warn', okList.includes(m.mac) ? '允許' : '擋下')));
     }),
+    p.media === 'rj45' && phyFields(ctx, pc),
     grid2(
       field('Port-channel 編號', inp(ctx, ...bind(pc, 'lag'), { ph: '不使用請留空', check: isNum(1, 48) })),
       field('LACP 模式', sel(ctx, ...bind(pc, 'lagMode'), [['active', 'active（主動協商）'], ['passive', 'passive（只回應）'], ['on', 'on（靜態，不協商）']]))),

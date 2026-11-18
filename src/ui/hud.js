@@ -179,7 +179,9 @@ function openFrame(l, state, x, y) {
     h('div', null, h('b', { text: name }), h('span', { class: 'mono', text }), extra && h('em', { text: extra })));
   const upper = f.proto === 'icmp'
     ? layer(3, 'ICMP', f.reply ? 'Echo Reply（type 0）' : 'Echo Request（type 8）', `識別碼 ${f.reply ? f.dport : f.sport} · ICMP 沒有埠號，靠識別碼配對請求與回應`)
-    : f.proto === 'esp'
+    : f.proto === 'esp' && f.ssl
+      ? layer(4, 'TCP + TLS（SSL-VPN）', '加密的內容', '原本的封包包在用戶端與 VPN 伺服器之間的 TLS 連線裡。對中途的設備來說，這只是一條普通的 TCP 連線，所以可以穿過 NAT')
+      : f.proto === 'esp'
       ? layer(3, 'ESP（IPsec）', '加密的內容', '原本的 IP 標頭、埠號與資料都包在裡面，中途的設備只看得到兩端 VPN 閘道的位址')
       : layer(4, f.proto.toUpperCase(), `埠 ${port(f.sport)}  →  埠 ${port(f.dport)}`,
         f.proto === 'tcp' ? (f.ack ? '旗標 ACK：三向交握的第三步，連線建立完成' : f.reply ? '旗標 SYN + ACK：三向交握的第二步' : '旗標 SYN：三向交握的第一步，請求建立連線') : 'UDP 不建立連線，直接送出');
@@ -187,7 +189,7 @@ function openFrame(l, state, x, y) {
     h('div', { class: 'fr-head' }, h('b', { text: '封包檢視' }), h('span', { text: `${state.devices[l.dev]?.name || ''} 送出的這一段` })),
     layer(2, f.wifi ? '乙太網路 / 802.11 無線' : '乙太網路', `${f.smac}  →  ${f.dmac}`,
       f.tags.length ? `經過 Trunk 時帶著 802.1Q 標籤：VLAN ${f.tags.join('、')}` : '來源 MAC → 目的 MAC，只在這一段線路上有效'),
-    layer(3, 'IPv4', `${fmtIp(f.src)}  →  ${fmtIp(f.dst)}`, `TTL ${f.ttl} · 協定號 ${PROTO_NO[f.proto]}（${f.proto.toUpperCase()}）`),
+    layer(3, 'IPv4', `${fmtIp(f.src)}  →  ${fmtIp(f.dst)}`, `TTL ${f.ttl} · 協定號 ${f.ssl ? '6（TCP）' : `${PROTO_NO[f.proto]}（${f.proto.toUpperCase()}）`}`),
     upper,
     h('p', { class: 'fr-note', text: '每經過一台路由器，MAC 位址就換成下一段的；IP 位址從頭到尾不變（經過 NAT 除外），TTL 每一站減 1。' }));
   document.body.append(popover);
@@ -209,7 +211,8 @@ export function openCableMenu(app, cableId, x, y) {
     h('span', { class: 'mono', text: `${A.name} [${portOf(A, c.a.port).label}]  ↔  ${B.name} [${portOf(B, c.b.port).label}]` }),
     h('span', { class: 'muted', style: { fontSize: '12px' }, text: `兩端相距 ${pairDist(st, A.id, B.id)} 公尺 · 這種線材最長 ${CABLES[cableKind(c)].max} 公尺` }),
     li && h('span', { class: 'muted', style: { fontSize: '12px' }, text: `自動協商：${li.text}` }),
-    li && li.half && h('span', { class: 'note warn', text: 'Hub 是半雙工：同一時間只能有一台設備傳送，否則會碰撞 (CSMA/CD)。' }),
+    li && li.half && h('span', { class: 'note warn', text: '半雙工：同一時間只能有一端傳送，否則會碰撞 (CSMA/CD)。' }),
+    li && li.mismatch && h('span', { class: 'note warn', text: '雙工不一致 (duplex mismatch)：線是通的，但全雙工的那一端不會等對方，會造成大量碰撞與 CRC 錯誤，實際速度極慢。兩端都改成自動協商，或兩端寫死成一樣。' }),
     st.rt.why[c.id] && h('span', { class: 'note warn', text: '沒有燈號：' + st.rt.why[c.id] }),
     st.rt.cable[c.id] === 'blocked' && h('span', { class: 'note muted', text: '這條線被 STP 封鎖當作備援，其他路徑斷掉時會自動啟用。' }),
     st.rt.cable[c.id] === 'susp' && h('span', { class: 'note warn', text: 'Port-channel 兩端的設定不相容，成員被暫停。' }),

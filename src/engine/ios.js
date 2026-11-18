@@ -4,7 +4,7 @@
 import { parseIp, fmtIp, parseMask, fmtMask, maskOf, netOf, bcastOf } from './ip.js';
 import { parseCidr6, parseIp6 } from './ip6.js';
 import { newIface, cloneState, CATALOG } from './model.js';
-import { macsBehind, recompute } from './sim.js';
+import { macsBehind, recompute, ospfOn } from './sim.js';
 
 // ───────────────────────── running-config 與 startup-config ─────────────────────────
 // IOS 設備改的是記憶體裡的 running-config；要下 write memory 才會存進 startup-config。
@@ -243,7 +243,7 @@ const HELP = {
     'switchport trunk native vlan <ID> / allowed vlan <清單>', 'no switchport（L3 交換器改成 Routed 埠）', 'ip nat inside|outside', 'ip helper-address <IP>',
     'ip ospf cost <值>', 'ip access-group <名稱> in|out', 'encapsulation dot1q <VLAN>（子介面）', 'vrrp 1 ip <虛擬 IP> / vrrp 1 priority <值>',
     'channel-group <編號> mode active|passive|on', 'switchport port-security [mac-address <MAC> | violation <模式>]',
-    'spanning-tree bpduguard enable / spanning-tree guard root', 'ip dhcp snooping trust', 'ipv6 address <位址/前綴>'],
+    'spanning-tree bpduguard enable / spanning-tree guard root', 'ip dhcp snooping trust', 'ipv6 address <位址/前綴>', 'speed 10|100|1000|auto、duplex auto|full|half'],
   vlan: ['name <名稱>'],
   router: ['network <網段> <萬用遮罩> area 0', 'default-information originate'],
   dhcp: ['network <網段> <遮罩>', 'default-router <IP>', 'dns-server <IP> [IP]', 'host <IP> <遮罩> 加上 hardware-address <MAC>（保留位址）'],
@@ -404,7 +404,21 @@ export function iosSession(getDev, getState) {
     ['no authentication port-control [...]', () => onL2((pc) => { pc.dot1x = false; })],
     ['dot1x port-control <x>', ([x]) => onL2((pc) => { pc.dot1x = 'auto'.startsWith(x.toLowerCase()); })],
     ['dot1x pae authenticator', () => onL2(() => {})],
+    // ── 實體層：速率與雙工（要放在 spanning-tree 之後，sp 的縮寫才不會被搶走） ──
+    ['speed <v>', ([v]) => (['auto', '10', '100', '1000'].includes(v.toLowerCase()) ? setPhy('speed', v.toLowerCase()) : err('speed 可用的值：10、100、1000、auto'))],
+    ['no speed', () => setPhy('speed', 'auto')],
+    ['duplex <v>', ([v]) => { const d = ['auto', 'full', 'half'].find((x) => x.startsWith(v.toLowerCase())); return d ? setPhy('duplex', d) : err('duplex 可用的值：auto、full、half'); }],
+    ['no duplex', () => setPhy('duplex', 'auto')],
   ];
+  function setPhy(key, v) {
+    return each((t) => {
+      const c = t.pc || (t.port && t.iface);
+      if (!c) return err('只有實體連接埠可以設定速率與雙工');
+      if (t.port.media !== 'rj45' && v !== 'auto') return err('光纖埠的速率由收發器決定，不能手動設定');
+      c[key] = v === 'auto' ? '' : v;
+      return undefined;
+    });
+  }
 
   // ── 全域設定模式 ──
   const needSw = () => (isSw(dev()) ? null : err('這個指令只適用於交換器'));
@@ -483,7 +497,7 @@ export function iosSession(getDev, getState) {
     }],
     ['no ipv6 route <prefix> [...]', ([prefix, via]) => { const d = dev(); if (d.routes6) d.routes6 = d.routes6.filter((r) => !(r.dst === prefix && (!via || r.via === via))); }],
     ['router ospf <pid>', () => { if (!('ospfDefault' in dev())) return err('這台設備不支援 OSPF'); enter('router', null); return undefined; }],
-    ['no router ospf <pid>', () => { for (const i of dev().ifaces) i.ospf = false; dev().ospfDefault = false; }],
+    ['no router ospf <pid>', () => { const d = dev(); for (const i of d.ifaces) i.ospf = false; d.ospfDefault = false; d.ospfNets = []; }],
     ['ip dhcp excluded-address <a> [...]', ([a, b]) => {
       const x = parseIp(a), y = b ? parseIp(b) : x;
       if (x == null || y == null || y < x) return err('用法：ip dhcp excluded-address <起始 IP> [結束 IP]');
@@ -720,18 +734,23 @@ export function iosSession(getDev, getState) {
       ['network <ip> <wild> area <a>', ([ip, wild]) => {
         const net = parseIp(ip), bits = wildBits(wild);
         if (net == null || bits == null) return err('用法：network <網段> <萬用遮罩> area 0，例如 network 10.0.0.0 0.0.0.255 area 0');
-        const hit = dev().ifaces.filter((i) => {
+        const d = dev(), stmt = { net: netOf(net, bits), bits };
+        addUnique((d.ospfNets ||= []), stmt);
+        const hit = d.ifaces.filter((i) => {
           const n = staticNet(i), a = n ? n.ip : i.rt && i.rt.ip;
-          return a != null && netOf(a, bits) === netOf(net, bits);
+          return a != null && netOf(a, bits) === stmt.net;
         });
-        for (const i of hit) i.ospf = true;
-        return hit.length ? `OSPF 已在 ${hit.map((i) => i.label).join('、')} 啟用` : '（目前沒有任何介面的 IP 落在這個範圍內，OSPF 沒有在任何介面啟用）';
+        return hit.length ? `OSPF 已在 ${hit.map((i) => i.label).join('、')} 啟用` : '（目前還沒有介面的 IP 落在這個範圍內；之後設定了符合的 IP，那個介面就會自動加入 OSPF）';
       }],
       ['no network <ip> <wild> area <a>', ([ip, wild]) => {
         const net = parseIp(ip), bits = wildBits(wild);
         if (net == null || bits == null) return err('用法：no network <網段> <萬用遮罩> area 0');
-        for (const i of dev().ifaces) { const n = staticNet(i); if (n && netOf(n.ip, bits) === netOf(net, bits)) i.ospf = false; }
-        return undefined;
+        const d = dev(), n0 = netOf(net, bits);
+        const had = (d.ospfNets || []).length;
+        d.ospfNets = (d.ospfNets || []).filter((n) => !(n.net === n0 && n.bits === bits));
+        let off = 0;
+        for (const i of d.ifaces) { const n = staticNet(i); if (i.ospf && n && netOf(n.ip, bits) === n0) { i.ospf = false; off++; } }
+        return d.ospfNets.length < had || off ? undefined : err('沒有這一條 network 敘述');
       }],
       ['default-information originate [...]', () => { dev().ospfDefault = true; }],
       ['no default-information originate', () => { dev().ospfDefault = false; }],
@@ -1075,7 +1094,7 @@ export function runningConfig(state, dev) {
     else l.push(' no ip address');
     if (anyNat) l.push(natOut(i) ? ' ip nat outside' : i.ip || i.mode !== 'static' ? ' ip nat inside' : null);
     if (i.helper) l.push(` ip helper-address ${i.helper}`);
-    if (i.ospf && i.ospfCost) l.push(` ip ospf cost ${i.ospfCost}`);
+    if (ospfOn(dev, i) && i.ospfCost) l.push(` ip ospf cost ${i.ospfCost}`);
     if (i.aclIn && i.aclIn.length) l.push(` ip access-group ${aclName(i, 'in')} in`);
     if (i.aclOut && i.aclOut.length) l.push(` ip access-group ${aclName(i, 'out')} out`);
     if (i.vrrp && i.vrrp.on) l.push(` vrrp 1 ip ${i.vrrp.vip || '(未設定)'}`, ` vrrp 1 priority ${i.vrrp.prio || 100}`);
@@ -1090,9 +1109,10 @@ export function runningConfig(state, dev) {
     const desc = other ? [` description to ${other.kind === 'internet' ? 'ISP' : hostName(other)}`] : [];
     const pc = dev.sw && dev.sw.ports[p.id];
     if (pc && isSw(dev)) {
-      const def = pc.mode === 'access' && pc.vlan === 1 && !pc.shut && !peer && !pc.trust && !(+pc.lag > 0) && !(pc.ps && pc.ps.on) && !pc.bpduguard && !pc.rootguard && !pc.dot1x;
+      const phy = [pc.speed && pc.speed !== 'auto' ? ` speed ${pc.speed}` : null, pc.duplex && pc.duplex !== 'auto' ? ` duplex ${pc.duplex}` : null].filter(Boolean);
+      const def = pc.mode === 'access' && pc.vlan === 1 && !pc.shut && !peer && !pc.trust && !(+pc.lag > 0) && !(pc.ps && pc.ps.on) && !pc.bpduguard && !pc.rootguard && !pc.dot1x && !phy.length;
       if (def) continue;
-      o.push(`interface ${p.label}`, ...desc);
+      o.push(`interface ${p.label}`, ...desc, ...phy);
       if (pc.mode === 'routed') {
         const i = dev.ifaces.find((x) => x.bind.t === 'port' && x.bind.port === p.id);
         o.push(' no switchport', ...(i ? l3lines(i) : []));
@@ -1120,7 +1140,9 @@ export function runningConfig(state, dev) {
     } else if (!pc) {
       const i = dev.ifaces.find((x) => x.bind.t === 'port' && x.bind.port === p.id);
       if (!i) continue;
-      o.push(`interface ${p.label}`, ...desc, ...l3lines(i), i.shut ? ' shutdown' : ' no shutdown', '!');
+      o.push(`interface ${p.label}`, ...desc, ...l3lines(i),
+        ...(i.speed && i.speed !== 'auto' ? [` speed ${i.speed}`] : []), ...(i.duplex && i.duplex !== 'auto' ? [` duplex ${i.duplex}`] : []),
+        i.shut ? ' shutdown' : ' no shutdown', '!');
       for (const s of dev.ifaces.filter((x) => x.bind.t === 'sub' && x.bind.port === p.id)) {
         o.push(`interface ${s.label}`, ` encapsulation dot1Q ${s.bind.vlan}`, ...l3lines(s), '!');
       }
@@ -1134,9 +1156,13 @@ export function runningConfig(state, dev) {
     const mg = dev.ifaces.find((x) => x.id === 'mgmt');
     if (mg && mg.gateway) o.push(`ip default-gateway ${mg.gateway}`, '!');
   }
-  const os = dev.ifaces.filter((i) => i.ospf && i.rt && i.rt.ip != null).sort((a, b) => netOf(a.rt.ip, a.rt.bits) - netOf(b.rt.ip, b.rt.bits));
-  if (os.length) {
+  // network 敘述照原樣列出；在圖形介面上個別啟用、而且沒有被任何敘述涵蓋的介面，各自列一條
+  const stmts = dev.ospfNets || [];
+  const os = dev.ifaces.filter((i) => i.ospf && i.rt && i.rt.ip != null && !stmts.some((n) => netOf(i.rt.ip, n.bits) === n.net))
+    .sort((a, b) => netOf(a.rt.ip, a.rt.bits) - netOf(b.rt.ip, b.rt.bits));
+  if (os.length || stmts.length) {
     o.push('router ospf 1');
+    for (const n of stmts) o.push(` network ${fmtIp(n.net)} ${wild(n.bits)} area 0`);
     for (const i of os) o.push(` network ${fmtIp(netOf(i.rt.ip, i.rt.bits))} ${wild(i.rt.bits)} area 0`);
     if (dev.ospfDefault) o.push(' default-information originate');
     o.push('!');

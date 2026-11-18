@@ -420,6 +420,26 @@ console.log('\nCLI 設定指令');
     ok(evaluate(s, lv.objectives).every((r) => r.pass), '已經存檔的設備斷電再開機，設定不會消失');
   }
 
+  // OSPF 的 network 敘述是持續生效的：先下 network，之後才設定 IP 的介面也會自動加入
+  {
+    const lv = LEVELS.find((l) => l.id === 'l10');
+    const s = lv.setup();
+    recompute(s);
+    const errs = [
+      ...type(s, 'hq', ['conf t', 'router ospf 1', 'network 172.16.0.0 0.0.0.3 area 0', 'network 10.1.0.0 0.0.0.255 area 0', 'default-information originate', 'exit',
+        'int gi0/0/2', 'ip address 172.16.0.1 255.255.255.252', 'end']),
+      ...type(s, 'br', ['conf t', 'router ospf 1', 'network 0.0.0.0 255.255.255.255 area 0', 'exit', 'int gi0/0/0', 'ip address 172.16.0.2 255.255.255.252', 'end']),
+    ];
+    recompute(s);
+    const res = evaluate(s, lv.objectives);
+    ok(!errs.length && res.every((r) => r.pass) && s.devices.br.rt.routes.some((r) => r.type === 'O' && r.bits === 0), `先下 network、後設 IP：OSPF 自動在新介面上啟用，分公司學到預設路由${res.find((r) => !r.pass) ? '：' + res.find((r) => !r.pass).reason : ''}`);
+    const cfg = runningConfig(s, s.devices.br);
+    ok(cfg.includes(' network 0.0.0.0 255.255.255.255 area 0') && cfg.filter((l) => l.startsWith(' network')).length === 1, 'running-config 照原樣保留 network 敘述');
+    type(s, 'br', ['conf t', 'router ospf 1', 'no network 0.0.0.0 255.255.255.255 area 0', 'end']);
+    recompute(s);
+    ok(evaluate(s, lv.objectives).some((r) => !r.pass), '移除 network 敘述後 OSPF 停止，路由消失');
+  }
+
   // 3. 錯誤處理與模式切換
   {
     const { s } = solved('l10');
@@ -437,7 +457,7 @@ console.log('\nCLI 設定指令');
     sess.exec('router ospf 1');
     ok(sess.prompt() === 'HQ-Router(config-router)#', '在介面模式直接輸入全域指令會切換模式');
     const r = sess.exec('network 10.1.0.0 0.0.0.255 area 0');
-    ok(r.out.join().includes('Gi0/0/') && s.devices.hq.ifaces.some((i) => i.ospf), 'router ospf 的 network 會在符合的介面上啟用 OSPF');
+    ok(r.out.join().includes('Gi0/0/') && s.devices.hq.ospfNets.length === 1 && runningConfig(s, s.devices.hq).includes(' network 10.1.0.0 0.0.0.255 area 0'), 'router ospf 的 network 會在符合的介面上啟用 OSPF');
     sess.exec('end');
     ok(sess.exec('show ip route').pass === true && sess.mode === 'exec', 'show 指令交給顯示層處理');
     s.down = { hq: true };
@@ -445,6 +465,33 @@ console.log('\nCLI 設定指令');
     const res = evaluate(s, LEVELS.find((l) => l.id === 'l10').objectives);
     ok(res.every((x) => !x.pass) && res.some((x) => /關機/.test(x.reason)), '設備關機後連線中斷，錯誤訊息指出是哪一台關機');
   }
+}
+
+// ── 速率與雙工的協商 ──
+{
+  const { linkInfo } = await import('../src/engine/model.js');
+  const { iosSession, runningConfig } = await import('../src/engine/ios.js');
+  const lv = LEVELS.find((l) => l.id === 'l07');
+  const mk = (a, b) => {
+    const s = lv.setup(); lv.solve(s); recompute(s);
+    const run = (id, lines) => { const sess = iosSession(() => s.devices[id], () => s); for (const l of ['conf t', 'int gi0/9', ...lines, 'end']) sess.exec(l); };
+    run('sw1', a); run('sw2', b);
+    recompute(s);
+    return { s, li: linkInfo(s, 'sw1', 'Gi0/9'), res: evaluate(s, lv.objectives) };
+  };
+  const auto = mk([], []);
+  const fixed = mk(['speed 100', 'duplex full'], []);
+  const both = mk(['speed 100', 'duplex full'], ['speed 100', 'duplex full']);
+  const diff = mk(['speed 100', 'duplex full'], ['speed 1000', 'duplex full']);
+  const checks = [
+    [auto.li.speed === 1000 && auto.li.duplex === 'full' && !auto.li.mismatch, '兩端都自動協商：1 Gbps 全雙工'],
+    [fixed.li.speed === 100 && fixed.li.mismatch && fixed.li.duplex === 'full' && fixed.li.peerDuplex === 'half' && fixed.res.every((r) => r.pass), '一端寫死 100 / full、另一端自動：對端退回半雙工，形成雙工不一致（線仍然是通的）'],
+    [both.li.speed === 100 && !both.li.mismatch, '兩端都寫死成一樣：100 Mbps 全雙工'],
+    [!!diff.li.down && diff.res.some((r) => !r.pass && /速率設定不同/.test(r.reason)), '兩端速率寫死成不同的值：連線建立不起來，錯誤訊息指出原因'],
+    [runningConfig(fixed.s, fixed.s.devices.sw1).includes(' speed 100') && runningConfig(fixed.s, fixed.s.devices.sw1).includes(' duplex full'), 'running-config 顯示手動設定的 speed 與 duplex'],
+  ];
+  console.log('');
+  for (const [cond, title] of checks) { if (cond) console.log('  ✔ ' + title); else fail(title); }
 }
 
 // ── DHCP 發放前的衝突偵測 ──

@@ -2,7 +2,7 @@
 // L1 供電 / 連線狀態、L2 橋接 / VLAN / STP / LACP / Port Security / DHCP Snooping / Wi-Fi、
 // L3 路由 / OSPF / VRRP、DHCP（含 Relay）、PPPoE、NAT、ACL、防火牆政策、IPsec 與遠端存取 VPN、DNS
 import { parseIp, fmtIp, parseMask, netOf, sameNet, isPrivate, parseCidr, parseVlanList, hostAddrProblem } from './ip.js';
-import { cloneState, primaryIface, CATALOG, CABLES, cableKind, cableDist } from './model.js';
+import { cloneState, primaryIface, CATALOG, CABLES, cableKind, cableDist, linkInfo } from './model.js';
 import { recompute6, transact6, globalIp6 } from './sim6.js';
 import { parseIp6 } from './ip6.js';
 
@@ -224,6 +224,8 @@ function prepPhysical(state) {
       rt.why[c.id] = `${kind.name}最長只能拉 ${kind.max} 公尺，但這兩台設備相距 ${meters} 公尺`;
       continue;
     }
+    const neg = linkInfo(state, A.id, c.a.port);
+    if (neg && neg.down) { rt.cable[c.id] = 'down'; rt.why[c.id] = neg.down; continue; }
     rt.links[A.id + ':' + c.a.port] = { dev: B.id, port: c.b.port, cable: c.id };
     rt.links[B.id + ':' + c.b.port] = { dev: A.id, port: c.a.port, cable: c.id };
     rt.cable[c.id] = 'up';
@@ -683,17 +685,36 @@ export function lookupRoute(d, ip) {
   return best;
 }
 
+/**
+ * 這個介面有沒有跑 OSPF：在介面上直接啟用，或它的 IP 落在某一條 network 敘述的範圍內。
+ * network 敘述是持續生效的 — 之後才設定 IP 的介面，只要位址符合就會自動加入。
+ */
+export function ospfOn(d, i) {
+  if (i.ospf) return true;
+  const ip = i.rt && i.rt.ip != null ? i.rt.ip : parseIp(i.ip || '');
+  return ip != null && (d.ospfNets || []).some((n) => netOf(ip, n.bits) === n.net);
+}
+/** 圖形介面的開關：關閉時連同涵蓋它的 network 敘述一起移除（其他被同一條敘述涵蓋的介面維持啟用） */
+export function setOspf(d, i, on) {
+  if (on) { i.ospf = true; return; }
+  const ip = i.rt && i.rt.ip != null ? i.rt.ip : parseIp(i.ip || '');
+  const hit = (n) => ip != null && netOf(ip, n.bits) === n.net;
+  for (const x of d.ifaces) if (x !== i && !x.ospf && ospfOn(d, x) && (d.ospfNets || []).some((n) => hit(n) && netOf(x.rt && x.rt.ip != null ? x.rt.ip : parseIp(x.ip || '') ?? -1, n.bits) === n.net)) x.ospf = true;
+  if (d.ospfNets) d.ospfNets = d.ospfNets.filter((n) => !hit(n));
+  i.ospf = false;
+}
+
 function computeOspf(state) {
-  const nodes = Object.values(state.devices).filter((d) => d.ifaces.some((i) => i.ospf && i.rt.ip != null && i.rt.link));
+  const nodes = Object.values(state.devices).filter((d) => d.ifaces.some((i) => ospfOn(d, i) && i.rt.ip != null && i.rt.link));
   const adj = {}, nets = {};
   for (const d of nodes) {
     adj[d.id] = []; nets[d.id] = [];
     for (const i of d.ifaces) {
-      if (!i.ospf || i.rt.ip == null || !i.rt.link) continue;
+      if (!ospfOn(d, i) || i.rt.ip == null || !i.rt.link) continue;
       nets[d.id].push({ net: netOf(i.rt.ip, i.rt.bits), bits: i.rt.bits });
       for (const e of l2Explore(state, d.id, i)) {
         const j = e.iface;
-        if (!j.ospf || j.rt.ip == null || j.rt.bits !== i.rt.bits || !sameNet(j.rt.ip, i.rt.ip, i.rt.bits)) continue;
+        if (!ospfOn(state.devices[e.dev], j) || j.rt.ip == null || j.rt.bits !== i.rt.bits || !sameNet(j.rt.ip, i.rt.ip, i.rt.bits)) continue;
         adj[d.id].push({ to: e.dev, iface: i, via: j.rt.ip, cost: Math.max(1, +i.ospfCost || 1) });
       }
     }
@@ -1264,8 +1285,9 @@ function forward(state, ctx, startId, pkt) {
         if (v.rule) log.push({ dev: dev.id, kind: 'fwd', text: `符合政策 #${v.rule}，放行（${inIf.label} → ${tun.iface.label}）` });
         if (!pkt.reply && stateful) (ctx.ct[dev.id] ||= []).push({ proto: pkt.proto, ...o, nSrc: pkt.src, nSport: pkt.sport, nDst: pkt.dst, nDport: pkt.dport });
       }
-      log.push({ dev: dev.id, kind: 'vpn', text: `加密：整個封包包進 ESP，外層位址 ${fmtIp(tun.localIp)} → ${fmtIp(tun.peerIp)}` });
-      const r = forward(state, ctx, dev.id, { proto: 'esp', src: tun.localIp, dst: tun.peerIp, sport: 0, dport: 0, ttl: 64, reply: pkt.reply });
+      const ssl = !tun.cfg; // 遠端存取是 SSL-VPN（包在 TLS 裡），站對站是 IPsec（包在 ESP 裡）
+      log.push({ dev: dev.id, kind: 'vpn', text: `加密：整個封包包進 ${ssl ? 'TLS（SSL-VPN 的 TCP 連線）' : 'ESP'}，外層位址 ${fmtIp(tun.localIp)} → ${fmtIp(tun.peerIp)}` });
+      const r = forward(state, ctx, dev.id, { proto: 'esp', src: tun.localIp, dst: tun.peerIp, sport: 0, dport: 0, ttl: 64, reply: pkt.reply, ssl });
       if (!r.ok) return r;
       dev = state.devices[r.dev];
       inIf = r.tun.iface;
@@ -1341,7 +1363,7 @@ function forward(state, ctx, startId, pkt) {
       text: (route.via != null ? `查路由 → 下一站 ${fmtIp(nh)}：` : '') + names.join(' → ') + (tags.length ? `　[802.1Q VLAN ${tags.join(',')}]` : '')
         + (tgt.path.some((h) => h.wifi) ? '　[Wi-Fi]' : ''),
       // 這一段第二層旅程上的訊框內容，給「封包檢視」用
-      frame: { smac: outIf.rt.mac, dmac: tgt.iface.rt.mac, tags, src: pkt.src, dst: pkt.dst, ttl: pkt.ttl, proto: pkt.proto, sport: pkt.sport, dport: pkt.dport, reply: pkt.reply, ack: !!pkt.ack, wifi: tgt.path.some((h) => h.wifi) },
+      frame: { smac: outIf.rt.mac, dmac: tgt.iface.rt.mac, tags, src: pkt.src, dst: pkt.dst, ttl: pkt.ttl, proto: pkt.proto, sport: pkt.sport, dport: pkt.dport, reply: pkt.reply, ack: !!pkt.ack, ssl: !!pkt.ssl, wifi: tgt.path.some((h) => h.wifi) },
     });
     let leaked = false;
     tgt.path.forEach((h, n) => {
@@ -1350,7 +1372,7 @@ function forward(state, ctx, startId, pkt) {
         leaked = true;
         log.push({ dev: h.from, kind: 'info', text: `${state.devices[h.from].name} 是 Hub：訊框被複製到其他所有連接埠，${leak.map((x) => state.devices[x.to].name).join('、')} 也收到了，發現不是給自己的就丟棄` });
       }
-      hops.push({ ...h, reply: pkt.reply, proto: pkt.proto, leak });
+      hops.push({ ...h, reply: pkt.reply, proto: pkt.proto, ssl: !!pkt.ssl, leak });
     });
     dev = state.devices[tgt.dev];
     inIf = tgt.iface;

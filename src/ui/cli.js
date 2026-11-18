@@ -4,7 +4,7 @@ import { fmtIp, parseIp } from '../engine/ip.js';
 import { fmtIp6 } from '../engine/ip6.js';
 import { transact, routeRows, macsBehind, isBridgePort, arpRows, sessionLog, hitsOf } from '../engine/sim.js';
 import { route6Rows } from '../engine/sim6.js';
-import { CATALOG, MEDIA, peerOf, portOf, linkInfo } from '../engine/model.js';
+import { CATALOG, MEDIA, peerOf, portOf, linkInfo, phyConfig } from '../engine/model.js';
 import { iosSession, runningConfig, startupConfig, hostName as host, aclName, aclLine } from '../engine/ios.js';
 
 const pad = (s, n) => String(s).padEnd(n);
@@ -186,7 +186,10 @@ const SHOW = {
       const li = up && linkInfo(st, d.id, p.id);
       const status = pc && pc.shut ? 'disabled' : d.rt.err[p.id] ? 'err-disabled' : up ? 'connected' : 'notconnect';
       const vlan = !pc || pc.mode === 'routed' ? 'routed' : pc.mode === 'trunk' ? 'trunk' : pc.vlan;
-      o.push(pad(p.label, 14) + pad(status, 14) + pad(vlan, 8) + pad(li ? (li.half ? 'a-half' : 'a-full') : 'auto', 9) + pad(li ? 'a-' + li.speed : 'auto', 9) + MEDIA[p.media].name);
+      // 前面有 a- 的是自動協商出來的結果，沒有的是手動寫死的設定
+      const cfg = phyConfig(d, p.id);
+      const dup = cfg.duplex || (li ? 'a-' + li.duplex : 'auto'), spd = cfg.speed != null ? String(cfg.speed) : li ? 'a-' + li.speed : 'auto';
+      o.push(pad(p.label, 14) + pad(status, 14) + pad(vlan, 8) + pad(dup, 9) + pad(spd, 9) + MEDIA[p.media].name);
     }
     return o;
   },
