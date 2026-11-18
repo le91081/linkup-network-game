@@ -343,7 +343,11 @@ function updateInsets() {
   const m = app.el.mission.getBoundingClientRect(), p = app.el.panel.getBoundingClientRect(), t = app.el.topbar.getBoundingClientRect();
   app.scene.setInsets({ left: m.right + 4, right: window.innerWidth - p.left + 4, top: t.bottom + 46, bottom: 236 });
   // 時鐘放在場景上方的正中間（任務面板與設定面板之間）
-  if (app.clockUi) app.clockUi.el.style.left = (m.right + p.left) / 2 + 'px';
+  if (app.clockUi) {
+    app.clockUi.el.style.left = (m.right + p.left) / 2 + 'px';
+    app.clockUi.avail = Math.max(120, Math.floor(p.left - m.right - 16));
+    hud.fitClock(app);
+  }
   document.getElementById('toasts').style.left = (m.right + p.left) / 2 + 'px';
 }
 
@@ -372,6 +376,12 @@ setInterval(() => {
 }, 250);
 
 window.addEventListener('resize', () => { updateInsets(); app.scene.fit(); });
+// 兩側面板的寬度變了（版面斷點、縮放）也要重新對齊時鐘與場景邊界
+if (typeof ResizeObserver === 'function') {
+  const ro = new ResizeObserver(() => updateInsets());
+  ro.observe(app.el.mission);
+  ro.observe(app.el.panel);
+}
 window.addEventListener('keydown', (e) => {
   const tag = document.activeElement?.tagName;
   const typing = tag === 'INPUT' || tag === 'SELECT' || tag === 'TEXTAREA';

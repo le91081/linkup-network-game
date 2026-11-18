@@ -25,9 +25,10 @@ npm run build    # 輸出到 dist/
 | Cisco 設備面板右上角的磁片 | 有尚未儲存的設定時會亮起，點一下等於 `write memory` |
 | 拖曳空白處 / 滾輪 / 右鍵拖曳 | 平移 / 縮放 / 旋轉 |
 | 執行測試 | 播放封包動畫並檢查任務目標，空白鍵快轉 |
+| 場景上方的時鐘 | 暫停 / 繼續模擬時間、切換 1× / 10× / 60×、直接前進 30 秒；出現「收斂中」時點一下會快轉到網路穩定為止 |
 | Shift + 拖曳設備（自由模式） | 移動設備 |
 
-- 電腦與伺服器有「終端機」分頁：`ping`（支援 IPv6）、`ipconfig`、`ipconfig /renew`、`arp -a`、`tracert`、`nslookup`、`curl`。
+- 電腦與伺服器有「終端機」分頁：`ping`（支援 IPv6）、`ipconfig`、`ipconfig /renew`、`ipconfig /release`、`arp -a`、`arp -d`、`tracert`、`nslookup`、`curl`、`iperf3 -c <IP>`（量實際傳輸速率，會讓時間前進 10 秒）。
 - Cisco 的路由器與交換器有「CLI」分頁：IOS 風格的命令列。`show running-config`、`show startup-config`、`show ip route`、`show vlan brief`、`show interfaces trunk`、`show arp` 等二十多個 `show` 指令用來查看狀態；輸入 `configure terminal` 之後可以直接用指令設定（見下方「CLI 設定指令」），改的和圖形介面是同一份設定。
 - FortiGate 防火牆也有「CLI」分頁，用的是 FortiOS 的階層式語法（`config firewall policy` → `edit 1` → `set …` → `next` → `end`）。
 - 網址加上 `?profile=名稱` 會使用另一份獨立的進度，適合多人共用一台電腦。
@@ -35,7 +36,7 @@ npm run build    # 輸出到 dist/
 - 頂端列的「測驗」是觀念題與子網路速算，「證照」是考試大綱與關卡的對照表。
 - 關卡選單最上方的「自由模式」是沙盒：自己擺設備、接線、設定。可以把測試存成「應該要通 / 應該不通」的目標一鍵重跑，也可以把整個拓撲匯出成 JSON 檔再匯入。
 
-## 關卡（10 章 38 關）
+## 關卡（10 章 39 關）
 
 | 章節 | 關卡數 | 主題 |
 | --- | --- | --- |
@@ -48,7 +49,7 @@ npm run build    # 輸出到 dist/
 | 7 VPN 與廣域備援 | 3 | 站對站 IPsec、遠端存取 VPN、雙線路浮動靜態路由 |
 | 8 高可用與進階路由 | 6 | STP、EtherChannel、VRRP / HSRP、DHCP Relay、OSPF Cost、VLSM |
 | 9 IPv6 | 2 | Link-local、SLAAC、IPv6 靜態路由、雙協定 |
-| 10 故障排除 | 3 | 網路已經設定好但被改壞了：IP 衝突與 DHCP 保留、Trunk / VLAN / shutdown、閘道 / 回程路由 / NAT / ACL / DNS |
+| 10 故障排除 | 4 | 網路已經設定好但被改壞了：IP 衝突與 DHCP 保留、Trunk / VLAN / shutdown、閘道 / 回程路由 / NAT / ACL / DNS、ping 會通但傳檔很慢（速率寫死、duplex mismatch、舊 Hub） |
 
 ## 證照對照
 
@@ -67,7 +68,7 @@ npm run build    # 輸出到 dist/
 ## CLI 設定指令
 
 支援的範圍是 `show running-config` 會印出來的那些指令，都可以縮寫（`conf t`、`int gi0/1`、`sw mo tr`），前面加 `no` 是取消。
-把一台設備的 running-config 整份貼到另一台同型號的設備上，會得到相同的設定（測試會對 52 台設備逐一驗證）。
+把一台設備的 running-config 整份貼到另一台同型號的設備上，會得到相同的設定（測試會對 54 台設備逐一驗證）。
 
 | 模式 | 指令 |
 | --- | --- |
@@ -83,6 +84,9 @@ npm run build    # 輸出到 dist/
 - **NAT 的範圍**：`ip nat inside source list <ACL>` 可以指定編號或具名的 ACL，`access-list <編號>` 也能用。
 - **DHCP 保留位址**：只有一台主機的位址池（`host` 加上 `hardware-address`）。
 - **實體層**：`speed`、`duplex`。
+- **STP 的邊緣埠**：`spanning-tree portfast`（介面，`disable` / `trunk`）、`spanning-tree portfast default`（全域）、`spanning-tree guard root`。
+- **DHCP 租約長度**：位址池裡的 `lease <天> [小時] [分鐘]` 或 `lease infinite`。
+- **跟時間有關的查看指令**：`show clock`、`show spanning-tree`（LSN / LRN / FWD）、`show ip ospf neighbor`（Dead Time）、`show ip dhcp binding`（到期時間）、`show arp`（Age）、`clear arp`。
 - **存檔**：`write memory` / `copy running-config startup-config`、`show startup-config`、`reload`。
 
 ### FortiGate（FortiOS）
@@ -102,6 +106,32 @@ npm run build    # 輸出到 dist/
 | `system global`、`system admin`、`system ntp`、`log syslogd setting`、`system snmp community` | 主機名稱與管理設定 |
 
 查看狀態：`get system interface`、`get router info routing-table all`、`get vpn ipsec tunnel summary`、`diagnose vpn tunnel list`、`diagnose sys session list`、`execute ping`。
+
+## 模擬時間
+
+所有設備共用一個時鐘（場景上方的 `T+00:00:00`），以下這些事情都要「等」，等待期間測試會失敗並說明還在等什麼：
+
+| 項目 | 時間 | 說明 |
+| --- | --- | --- |
+| STP 邊緣埠 | 30 秒 | 連線後先 listening 15 秒、learning 15 秒才轉送；開了 PortFast 的埠立刻轉送。等待中的網路線會閃橘色 |
+| 交換器之間的連線 | 2 秒 | 兩端都跑 Rapid STP，用提議 / 同意快速收斂 |
+| OSPF 鄰居建立 | 40 秒 | 乙太網路上要先等 DR 選舉 (Wait timer) 才會交換路由 |
+| OSPF 鄰居失聯 | 40 秒 | 隔著交換器、自己的介面沒有斷的時候，要等 Dead timer 才發現；這段時間封包照舊送往已經不在的鄰居 |
+| VRRP 接手 | 3 秒 | Backup 連續沒聽到通告才成為 Master；原本的 Master 回來時立刻搶回 |
+| DHCP 租約 | 預設 1 天 | 過一半時間自動續約；伺服器連不到時，到期前繼續使用，到期後退回 169.254.x.x |
+| ARP 快取 | 主機 2 分鐘、防火牆與家用路由器 5 分鐘、Cisco 4 小時 | 逐筆計時，用到就更新；介面斷線時清掉 |
+
+關卡裡的交換器已經預先開好 `spanning-tree portfast default`，不用每接一條線就等 30 秒；自由模式的設備是原廠預設值，要自己開。
+時間只在遊戲分頁開著、沒有對話框的時候前進。復原 / 重做不會把時鐘倒轉。
+
+## 頻寬與傳輸速率
+
+`iperf3 -c <IP>` 或「傳輸速率」目標會沿著實際路徑找出最慢的一段：
+
+- 全雙工連線約為標稱速率的 94%（扣掉訊框與 TCP 標頭）。
+- 半雙工（接到 Hub）約 40%。
+- Duplex mismatch 只剩標稱速率的 1%（上限 2 Mbps），並出現大量重送：ping 會通，傳檔卻慢得不能用。
+- Wi-Fi 約為連線速率的一半；IPsec 通道再扣 10%。
 
 ## 貼近真實網路的行為
 
@@ -125,11 +155,11 @@ npm run build    # 輸出到 dist/
 
 ## 模擬的範圍與簡化
 
-- 只要設定或接線有變動，所有設備的 ARP 快取就會清空（真實設備是逐筆逾時）。
-- Hub 只表現出泛洪與半雙工，不模擬碰撞造成的重送。
-- 沒有頻寬與時間的概念：雙工不一致只會出現警告，不會真的變慢；也沒有租約到期、STP 收斂時間、QoS。
-
-- STP 以每個 VLAN 各算一棵樹的方式近似 Rapid PVST+，只處理交換器直接相連的情況；非網管交換器形成迴圈會被判定為廣播風暴。
+- 交換器的 MAC 位址表是從拓撲直接算出來的，沒有逐筆學習與 300 秒逾時，也就沒有「不認得目的 MAC 而泛洪」的情況。
+- NAT 轉換表與防火牆的連線紀錄不會逾時。
+- 頻寬是每條路徑各自計算，多條連線同時搶同一條線路時不會互相擠壓；沒有 QoS。Hub 的碰撞只反映在速率打折上。
+- IPsec 通道的協商不花時間（真實設備大約 1 秒以內），SA 也不會到期重新協商。
+- STP 以每個 VLAN 各算一棵樹的方式近似 Rapid PVST+，只處理交換器直接相連的情況；非網管交換器形成迴圈會被判定為廣播風暴。邊緣埠用的是傳統的 30 秒計時（和 Cisco 預設的 PVST+ 一樣）。
 - IPsec 只有 IKEv1 與預先共用金鑰。圖形介面建立的 FortiGate 通道會自動帶出通往對端的路由（相當於用精靈建立）。SSL-VPN 的加密流量在引擎內部仍然當成一層封裝來處理。
 - Wi-Fi 的訊號只看距離與發射功率，沒有牆面衰減。
 - 802.1X 只驗證帳號密碼（沒有憑證）。
@@ -140,8 +170,9 @@ npm run build    # 輸出到 dist/
 
 1. IPv6 的 ACL、防火牆政策與 OSPFv3。
 2. Voice VLAN（需要新的 IP 電話設備）、TACACS+、IKEv2、IOS 的 Dialer 介面。
-3. QoS、SNMP Trap、設定備份等維運情境的關卡（目前的模擬沒有頻寬與時間的概念）。
+3. QoS 與多條連線互相搶頻寬、SNMP Trap、設定備份等維運情境的關卡。
 4. Wi-Fi 的牆面衰減、802.1X 的憑證驗證。
+5. MAC 位址表的動態學習與逾時、NAT / 連線紀錄的逾時、IPsec SA 的生命週期。
 
 ## 程式結構
 
@@ -152,7 +183,8 @@ src/engine/   模擬引擎（不依賴瀏覽器，可直接用 Node 測試）
   ios.js          IOS 風格的設定指令解譯器、show running-config、startup-config
   fortios.js      FortiOS 風格的設定樹（config / edit / set / next / end）
   sim.js          供電與連線狀態、L2（VLAN / STP / LACP / Port Security / DHCP Snooping / DAI / 802.1X / Wi-Fi）、
-                  L3（路由 / OSPF / VRRP）、DHCP 與 Relay、PPPoE、NAT、ACL、防火牆政策、VPN、DNS
+                  L3（路由 / OSPF / VRRP）、DHCP 與 Relay、PPPoE、NAT、ACL、防火牆政策、VPN、DNS、
+                  模擬時鐘（advance / settle / pendingOf）與傳輸速率（throughput）
   sim6.js         IPv6：SLAAC、鄰居探索、靜態路由
 src/levels/   關卡定義：設備、初始設定、任務目標、提示、參考解法（trouble.js 是故障排除章）
 src/data/     題庫與證照對照表

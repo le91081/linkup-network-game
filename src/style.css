@@ -553,3 +553,9 @@ h3.sec { font-size: 11.5px; letter-spacing: 0.08em; color: var(--faint); text-tr
 @keyframes ckpulse { 50% { background: rgba(245, 166, 35, 0.26); } }
 #toasts { top: 116px; }
 @media (max-width: 1180px) { #clock .ck-time { min-width: 84px; } #clock { gap: 5px; } }
+/* 空間不夠時逐級收起：c1 縮短文字、c2 收斂中不顯示 +30 秒、c3 一律不顯示 +30 秒 */
+#clock.c1 { gap: 4px; padding: 0 6px 0 4px; }
+#clock.c1 .ck-long { display: none; }
+#clock.c1 .ck-time { min-width: 0; }
+#clock.c1 .ck-sp { padding: 0 6px; }
+#clock.c2.pending .ck-skip, #clock.c3 .ck-skip { display: none; }

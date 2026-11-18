@@ -130,12 +130,26 @@ export function initClock(app) {
     type: 'button', class: 'ck-sp', data: { v }, text: v + '×', title: `時間以 ${v} 倍速前進`,
     onclick: () => { app.speed = v; app.paused = false; updateClock(app); },
   })));
-  const skip = h('button', { class: 'btn sm ghost', type: 'button', title: '讓時間直接前進 30 秒', onclick: () => app.skip(30) }, '+30 秒');
+  const skip = h('button', { class: 'btn sm ghost ck-skip', type: 'button', title: '讓時間直接前進 30 秒', onclick: () => app.skip(30) }, '+30 秒');
   const pend = h('button', { class: 'btn sm ck-pend', type: 'button', onclick: () => app.settleNow() });
   const el = h('div', { id: 'clock', class: 'glass', title: '模擬時間：STP、OSPF、VRRP、DHCP 租約、ARP 快取都照這個時鐘走' }, play, time, speeds, skip, pend);
   document.body.append(el);
-  app.clockUi = { el, time, play, speeds, pend };
+  app.clockUi = { el, time, play, speeds, pend, avail: 9999, fitKey: '' };
   updateClock(app);
+}
+
+/** 場景上方的空間不夠寬時，逐級收起次要的內容，不要蓋到兩側的面板 */
+export function fitClock(app) {
+  const u = app.clockUi;
+  if (!u) return;
+  const key = [u.avail, u.time.textContent.length, u.pend.style.display, u.pend.textContent.length].join('|');
+  if (key === u.fitKey) return;
+  u.fitKey = key;
+  u.el.classList.remove('c1', 'c2', 'c3');
+  for (const c of ['c1', 'c2', 'c3']) {
+    if (u.el.offsetWidth <= u.avail) break;
+    u.el.classList.add(c);
+  }
 }
 
 export function updateClock(app) {
@@ -150,9 +164,11 @@ export function updateClock(app) {
   u.pend.style.display = p.length ? '' : 'none';
   if (p.length) {
     const left = p[p.length - 1].at - app.state.clock;
-    u.pend.replaceChildren(icon('fast', 13), h('span', { text: `收斂中，還要 ${fmtDur(left)}` }));
-    u.pend.title = '點一下讓時間快轉到網路穩定為止\n\n' + [...new Set(p.map((x) => x.text))].slice(0, 8).join('\n');
+    u.pend.replaceChildren(icon('fast', 13), h('span', { class: 'ck-long', text: '收斂中，' }), h('span', { text: `還要 ${fmtDur(left)}` }));
+    u.pend.title = '網路還在收斂。點一下讓時間快轉到穩定為止\n\n' + [...new Set(p.map((x) => x.text))].slice(0, 8).join('\n');
   }
+  u.el.classList.toggle('pending', !!p.length);
+  fitClock(app);
 }
 
 // ───────────── 封包追蹤主控台 ─────────────
