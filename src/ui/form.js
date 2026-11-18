@@ -1,6 +1,6 @@
 // 設定面板共用的表單元件與驗證
 import { h, icon, toast } from './dom.js';
-import { peerOf, portOf, removeCable } from '../engine/model.js';
+import { peerOf, portOf, removeCable, linkInfo } from '../engine/model.js';
 import { parseIp, parseMask, parseCidr, fmtIp, fmtMask } from '../engine/ip.js';
 import { parseIp6, parseCidr6 } from '../engine/ip6.js';
 
@@ -62,6 +62,9 @@ export const cardHead = (title, ...rest) => h('div', { class: 'card-h' }, h('b',
 export const badge = (kind, text) => h('span', { class: 'link ' + kind }, h('i'), text);
 export const grid2 = (...kids) => h('div', { class: 'grid2' }, kids);
 
+const conflictNote = (ctx, rt) => note('warn',
+  `IP 位址衝突：${ctx.state.devices[rt.conflict]?.name || '另一台設備'} 也在用 ${fmtIp(rt.ip)}。兩台設備搶同一個 IP，連線會時通時不通。`);
+
 /** 介面目前的實際狀態（會隨設定即時更新） */
 export function ifaceNote(ctx, i) {
   return ctx.live(() => {
@@ -75,15 +78,17 @@ export function ifaceNote(ctx, i) {
       const bad = ctx.dev.rt.routes.find((r) => r.bad && r.iface === i && r.bits === 0);
       if (bad) return note('warn', bad.bad);
       if (!rt.link) return note('warn', i.bind.t === 'wlan' ? rt.note || 'Wi-Fi 尚未連線' : `已設定 ${fmtIp(rt.ip)}/${rt.bits}，但這個介面沒有連線`);
+      if (rt.conflict) return conflictNote(ctx, rt);
       return note('ok', `已套用 ${fmtIp(rt.ip)}/${rt.bits}`);
     }
     if (rt.ip == null) return note('warn', rt.note || '尚未取得 IP 位址');
     const src = { dhcp: 'DHCP', pppoe: 'PPPoE', apipa: 'APIPA（找不到 DHCP 伺服器）' }[rt.src];
-    return h('div', { class: 'kv ' + (rt.src === 'apipa' ? 'warn' : 'ok') },
+    return [h('div', { class: 'kv ' + (rt.src === 'apipa' ? 'warn' : 'ok') },
       kv('IP 位址', `${fmtIp(rt.ip)} / ${rt.bits}`), kv('子網路遮罩', fmtMask(rt.bits)),
       kv('預設閘道', rt.gw != null ? fmtIp(rt.gw) : '—'), kv('DNS', rt.dns.length ? rt.dns.map(fmtIp).join(', ') : '—'),
       kv('來源', src + (rt.server ? `（${ctx.state.devices[rt.server].name}${rt.relay ? '，經由 ' + ctx.state.devices[rt.relay].name + ' 轉送' : ''}）` : '')),
-      rt.src === 'apipa' && rt.note && kv('原因', rt.note));
+      rt.src === 'apipa' && rt.note && kv('原因', rt.note)),
+    rt.conflict && conflictNote(ctx, rt)];
   });
 }
 
@@ -93,7 +98,8 @@ export function linkBadge(ctx, pid) {
   const d = ctx.state.devices[p.dev];
   const up = ctx.state.rt.cable[p.cable] !== 'down';
   const why = ctx.state.rt.why[p.cable];
-  return h('span', { class: 'link ' + (up ? 'on' : 'warn'), title: why || null }, h('i'), `${d.name} · ${portOf(d, p.port).label}${up ? '' : '（無燈號）'}`,
+  const li = up && linkInfo(ctx.state, ctx.dev.id, pid);
+  return h('span', { class: 'link ' + (up ? 'on' : 'warn'), title: why || (li && '連線速率：' + li.text) || null }, h('i'), `${d.name} · ${portOf(d, p.port).label}${up ? '' : '（無燈號）'}`,
     h('button', {
       class: 'mini', type: 'button', title: '拔除這條網路線',
       onclick: () => { removeCable(ctx.state, p.cable); toast('已拔除網路線'); ctx.commit(true); },

@@ -1,5 +1,6 @@
 // 設定頁面（續）：RADIUS / 802.1X、靜態 NAT、IPv6、本機帳號與 SNMP
 import { h, button } from './dom.js';
+import { sessionLog, clearSessionLog, arpRows } from '../engine/sim.js';
 import { inp, sel, toggle, seg, field, note, kv, del, cardHead, grid2, bind, isIp, isIp6, isCidr6 } from './form.js';
 import { fmtIp } from '../engine/ip.js';
 import { fmtIp6 } from '../engine/ip6.js';
@@ -152,4 +153,44 @@ export function snmpFields(ctx) {
       ver === 'v2c' && field('Community', inp(ctx, () => m.community ?? 'public', (v) => { m.community = v; }))),
     ver === 'v2c' && note('warn', 'SNMP v1 / v2c 的 Community 字串在網路上是明文，而且 public 是人人都知道的預設值。'),
   ];
+}
+
+// ───────────────────────── 連線紀錄、NAT 轉換、ARP 快取 ─────────────────────────
+
+const svcOf = (e) => (e.proto === 'icmp' ? 'ICMP' : `${e.proto.toUpperCase()} ${e.dport}`);
+const LOG_TAG = { allow: ['ok', '放行'], deny: ['bad', '拒絕'], snat: ['nat', 'NAT'], dnat: ['nat', '轉發'] };
+
+function sessionRows(ctx) {
+  const log = sessionLog(ctx.dev);
+  if (!log.length) return [note('muted', '還沒有任何紀錄。執行測試或從終端機 ping 之後，經過這台設備的連線會列在這裡。')];
+  return log.map((e) => {
+    const [cls, tag] = LOG_TAG[e.act];
+    const main = e.act === 'snat' ? `${fmtIp(e.src)} ⇒ ${fmtIp(e.nsrc)}`
+      : e.act === 'dnat' ? `${fmtIp(e.dst)}:${e.dport} ⇒ ${fmtIp(e.ndst)}:${e.ndport}`
+        : `${fmtIp(e.src)} → ${fmtIp(e.dst)}`;
+    const sub = e.act === 'snat' ? `來源位址轉換 · 目的 ${fmtIp(e.dst)} · ${svcOf(e)}`
+      : e.act === 'dnat' ? `目的位址轉換 · 來自 ${fmtIp(e.src)} · ${e.proto.toUpperCase()}`
+        : `${svcOf(e)} · ${e.inIf} → ${e.outIf} · ${e.rule ? '政策 #' + e.rule : e.act === 'deny' ? '沒有符合的政策（隱含拒絕）' : '內建規則'}`;
+    return h('div', { class: 'srow ' + cls }, h('span', { class: 'tag', text: tag }), h('b', { class: 'mono', text: main }), h('span', { class: 'mono muted', text: sub }));
+  });
+}
+
+export function sessionCard(ctx, title = '連線紀錄與 NAT 轉換') {
+  return h('div', { class: 'card' },
+    cardHead(title, button('清除', { small: true, onclick: () => { clearSessionLog(ctx.dev); ctx.app.refreshLive(); } })),
+    ctx.live(() => sessionRows(ctx)));
+}
+
+export function logTab(ctx, body) {
+  body.append(
+    h('p', { class: 'tip', text: '防火牆會記下每一條經過它的新連線：被哪一條政策放行或拒絕、有沒有做位址轉換。排查問題時先來這裡看：封包有沒有到、是被誰處理的。' }),
+    sessionCard(ctx, '流量紀錄（最新的在上面）'));
+}
+
+export function arpCard(ctx) {
+  return h('div', { class: 'card' }, cardHead('ARP 快取'), ctx.live(() => {
+    const rows = arpRows(ctx.state, ctx.dev);
+    if (!rows.length) return note('muted', 'ARP 快取是空的 — 要送出封包時才會廣播詢問下一站的 MAC 位址。');
+    return rows.map((r) => h('div', { class: 'line' }, h('b', { class: 'mono', text: fmtIp(r.ip) }), h('span', { class: 'mono muted', text: r.mac })));
+  }));
 }

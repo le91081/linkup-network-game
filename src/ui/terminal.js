@@ -1,7 +1,7 @@
 // 主機上的終端機：ping / ipconfig / tracert / nslookup / curl
 import { h } from './dom.js';
 import { fmtIp, fmtMask, parseIp } from '../engine/ip.js';
-import { transact, resolveName } from '../engine/sim.js';
+import { transact, resolveName, dhcpTrace, arpRows } from '../engine/sim.js';
 import { transact6 } from '../engine/sim6.js';
 import { parseIp6, fmtIp6 } from '../engine/ip6.js';
 
@@ -14,6 +14,8 @@ const HELP = [
   '可用指令：',
   '  ping <IP 或網域>        測試連線（會在場景中播放封包動畫）',
   '  ipconfig                顯示本機的網路設定',
+  '  ipconfig /renew         重新向 DHCP 伺服器要一次 IP（播放 DORA 四個步驟）',
+  '  arp -a                  顯示 ARP 快取（IP 對應到哪個 MAC）',
   '  tracert <IP 或網域>     顯示封包經過的每一台路由器',
   '  nslookup <網域>         向 DNS 查詢網域的 IP',
   '  curl <IP 或網域>[:埠]   測試 TCP 連線（預設 443）',
@@ -45,7 +47,20 @@ export function buildTerminal(ctx, body) {
     const c = (cmd || '').toLowerCase();
     if (c === 'help' || c === '?') HELP.forEach((x) => print(x, 'dim'));
     else if (c === 'cls' || c === 'clear') logs.length = 0;
-    else if (c === 'ipconfig' || c === 'ifconfig' || (c === 'ip' && args[0])) {
+    else if (c === 'arp') {
+      const rows = arpRows(st(), dev);
+      if (!rows.length) print('找不到 ARP 項目。（先 ping 一個位址，電腦才會去問它的 MAC；設定變更後快取會清空）', 'dim');
+      else {
+        print('');
+        print('  網際網路位址      實體位址            類型', 'pre');
+        rows.forEach((r) => print(`  ${fmtIp(r.ip).padEnd(18)}${r.mac.replace(/:/g, '-').padEnd(20)}動態`, 'pre'));
+      }
+    } else if (c === 'ipconfig' || c === 'ifconfig' || (c === 'ip' && args[0])) {
+      if (/^\/?renew$/i.test(args[0] || '')) {
+        const tr = dhcpTrace(st(), dev.id);
+        app.showTrace(`${dev.name}> ${line}`, tr.log, tr.hops, { ok: tr.ok, reason: tr.reason, failDev: dev.id });
+        if (!tr.ok) print('更新介面時發生錯誤：' + tr.reason, 'bad');
+      }
       for (const i of dev.ifaces) {
         const rt = i.rt || {};
         print('');
@@ -88,9 +103,10 @@ export function buildTerminal(ctx, body) {
           if (c === 'ping') {
             print('');
             print(`Ping ${target === ip ? ip : `${target} [${ip}]`} (使用 32 位元組的資料):`);
-            const ms = Math.max(1, res.hops.length) + (res.l3.some((x) => st().devices[x.dev].kind === 'internet') ? 9 : 0);
+            const arp = res.hops.filter((x) => x.wave).length; // 第一個封包要先等 ARP，所以比較慢
+            const ms = Math.max(1, res.hops.filter((x) => !x.wave && x.proto !== 'arp').length) + (res.l3.some((x) => st().devices[x.dev].kind === 'internet') ? 9 : 0);
             for (let n = 0; n < 4; n++) {
-              print(res.ok ? `回覆自 ${ip}: 位元組=32 時間=${ms}ms TTL=${64 - res.l3.length}` : res.phase === 'reply' ? '要求等候逾時。' : '目的地主機無法連線。', res.ok ? 'ok' : 'bad');
+              print(res.ok ? `回覆自 ${ip}: 位元組=32 時間=${ms + (n === 0 ? arp * 2 : 0)}ms TTL=${64 - res.l3.length}` : res.phase === 'reply' ? '要求等候逾時。' : '目的地主機無法連線。', res.ok ? 'ok' : 'bad');
             }
             print('');
             print(`    封包: 已傳送 = 4，已收到 = ${res.ok ? 4 : 0}，已遺失 = ${res.ok ? 0 : 4}`);
@@ -152,7 +168,7 @@ export function buildTerminal(ctx, body) {
     e.stopPropagation();
   });
   const term = h('div', { class: 'term', onclick: () => input.focus() }, out, h('div', { class: 'term-line' }, h('span', { class: 'prompt', text: 'C:\\>' }), input));
-  body.append(term, h('div', { class: 'chips' }, ['ipconfig', 'ping 8.8.8.8', 'tracert 8.8.8.8', 'nslookup www.example.com', 'help'].map((x) =>
+  body.append(term, h('div', { class: 'chips' }, ['ipconfig', 'ping 8.8.8.8', 'tracert 8.8.8.8', 'nslookup www.example.com', 'arp -a', 'help'].map((x) =>
     h('button', { class: 'chip btnchip', type: 'button', text: x, onclick: () => { hist.push(x); hi = hist.length; run(x); } }))));
   draw();
   setTimeout(() => input.focus(), 30);

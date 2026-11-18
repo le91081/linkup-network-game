@@ -326,6 +326,21 @@ export function primaryIp(dev) {
 
 export const isIp = (s) => parseIp(s) != null;
 
+// ── 連接埠速率 ──
+const MEDIA_SPEED = { rj45: 1000, sfp: 10000, qsfp: 100000 };
+const SFP_SPEED = { rack1u: 25000, n93180: 25000, c2960: 1000, c2960p: 1000 };
+export const portSpeed = (dev, p) => (dev.kind === 'hub' ? 10 : p.media === 'sfp' ? SFP_SPEED[dev.model] || 10000 : MEDIA_SPEED[p.media]);
+export const fmtSpeed = (m) => (m >= 1000 ? m / 1000 + ' Gbps' : m + ' Mbps');
+/** 一條線協商出來的速率與雙工：取兩端較慢的那一邊；接到 Hub 就是半雙工 */
+export function linkInfo(state, devId, pid) {
+  const peer = peerOf(state, devId, pid);
+  if (!peer) return null;
+  const A = state.devices[devId], B = state.devices[peer.dev];
+  const speed = Math.min(portSpeed(A, portOf(A, pid)), portSpeed(B, portOf(B, peer.port)));
+  const half = A.kind === 'hub' || B.kind === 'hub';
+  return { speed, half, text: `${fmtSpeed(speed)} · ${half ? '半雙工' : '全雙工'}` };
+}
+
 /** 自由模式用：替新設備找一個還沒被用掉的 id */
 export function uniqueId(state, base) {
   let n = 1;

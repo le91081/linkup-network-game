@@ -10,7 +10,8 @@ const UP = new THREE.Vector3(0, 1, 0);
 const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
 const ease = (k) => (k < 0.5 ? 2 * k * k : 1 - Math.pow(-2 * k + 2, 2) / 2);
 
-const PKT_COLOR = { req: 0x7df3ff, reply: 0x7dffb0, dns: 0xc9b0ff, esp: 0xffc857 };
+const PKT_COLOR = { req: 0x7df3ff, reply: 0x7dffb0, dns: 0xc9b0ff, esp: 0xffc857, arp: 0xff9f5a, dhcp: 0xff8fd0 };
+const PKT_TAG = { arp: 'ARP', dhcp: 'DHCP' };
 
 export class Scene3D {
   constructor(host, handlers) {
@@ -94,6 +95,10 @@ export class Scene3D {
     });
     this.packet.visible = false;
     this.fx.add(this.packet);
+    // 廣播與 Hub 複製出來的訊框：同時在好幾條線上移動的小光點
+    this.ghosts = [];
+    this.ghostGeo = new THREE.SphereGeometry(0.1, 12, 8);
+    this.tagPos = null;
     this.tagEl = document.createElement('div');
     this.tagEl.className = 'pkt-tag';
     this.labelLayer.append(this.tagEl);
@@ -423,6 +428,9 @@ export class Scene3D {
     this.select(null);
     this.setHover(null);
     this.packet.visible = false;
+    this.tail.forEach((t) => (t.visible = false));
+    this.hideGhosts();
+    this.tagPos = null;
     this.tagEl.style.display = 'none';
     this.state = state;
 
@@ -635,50 +643,110 @@ export class Scene3D {
     this.bubbles = [];
   }
 
+  /** 一段行程對應的曲線（網路線或無線電波）與方向 */
+  seg(h) {
+    if (h.wifi) {
+      const up = this.wifi.get(h.from + '>' + h.to);
+      const curve = up || this.wifi.get(h.to + '>' + h.from);
+      return curve ? { curve, fwd: !!up, air: true } : null;
+    }
+    const c = this.cables.get(h.cable);
+    return c ? { curve: c.curve, fwd: c.a === h.from, air: false } : null;
+  }
+
+  ghost(i, color, opacity = 0.9) {
+    let g = this.ghosts[i];
+    if (!g) {
+      g = new THREE.Group();
+      const mat = new THREE.MeshBasicMaterial({ color, transparent: true });
+      const glow = new THREE.SpriteMaterial({ map: glowTexture(), color, transparent: true, blending: THREE.AdditiveBlending, depthWrite: false, depthTest: false });
+      const sp = new THREE.Sprite(glow);
+      sp.scale.setScalar(0.95);
+      g.add(new THREE.Mesh(this.ghostGeo, mat), sp);
+      g.userData = { mat, glow };
+      this.fx.add(g);
+      this.ghosts[i] = g;
+    }
+    g.userData.mat.color.setHex(color);
+    g.userData.glow.color.setHex(color);
+    g.userData.mat.opacity = opacity;
+    g.userData.glow.opacity = opacity * 0.8;
+    g.visible = true;
+    return g;
+  }
+
+  hideGhosts() { for (const g of this.ghosts) g.visible = false; }
+
+  setTag(text, cls) {
+    this.tagEl.style.display = text ? 'block' : 'none';
+    this.tagEl.textContent = text;
+    this.tagEl.className = 'pkt-tag' + (cls ? ' ' + cls : '');
+  }
+
   /** 沿著網路線播放封包的每一段行程 */
   async playHops(hops) {
     const token = ++this.playToken;
     const p = new THREE.Vector3();
+    const place = (obj, s, t) => { s.curve.getPointAt(clamp(t, 0, 1), p); obj.position.set(p.x, s.air ? p.y : 0.3, p.z); };
+    this.hideGhosts();
     for (const h of hops) {
       if (token !== this.playToken) return false;
-      let c = this.cables.get(h.cable), fwd, air = false;
-      if (h.wifi) {
-        const up = this.wifi.get(h.from + '>' + h.to);
-        const curve = up || this.wifi.get(h.to + '>' + h.from);
-        c = curve && { curve };
-        fwd = !!up;
-        air = true;
-      } else if (c) fwd = c.a === h.from;
-      if (!c || this.fast) continue;
+      if (this.fast) continue;
+      if (h.wave) {
+        // 廣播：同一層的每一條線同時送出一份
+        const color = PKT_COLOR[h.proto] || PKT_COLOR.req;
+        this.packet.visible = false;
+        this.tail.forEach((t) => (t.visible = false));
+        for (const level of h.wave) {
+          const segs = level.map((x) => ({ to: x.to, s: this.seg(x) })).filter((y) => y.s);
+          if (!segs.length) continue;
+          const gs = segs.map((_, i) => this.ghost(i, color));
+          this.tagPos = gs[0].position;
+          this.setTag((PKT_TAG[h.proto] || '') + ' 廣播', h.proto);
+          const len = Math.max(...segs.map((y) => y.s.curve.getLength()));
+          await this.anim(clamp(len * 46, 220, 560), (k) => {
+            if (token !== this.playToken) return;
+            segs.forEach((y, i) => place(gs[i], y.s, y.s.fwd ? k : 1 - k));
+          });
+          if (token !== this.playToken) return false;
+          this.hideGhosts();
+          for (const y of segs) this.pulse(y.to, color);
+        }
+        this.tagPos = null;
+        this.setTag('');
+        continue;
+      }
+      const c = this.seg(h);
+      if (!c) continue;
       const esp = h.proto === 'esp';
-      const color = esp ? PKT_COLOR.esp : h.reply ? PKT_COLOR.reply : h.proto === 'udp' ? PKT_COLOR.dns : PKT_COLOR.req;
+      const color = esp ? PKT_COLOR.esp : PKT_TAG[h.proto] ? PKT_COLOR[h.proto] : h.reply ? PKT_COLOR.reply : h.proto === 'udp' ? PKT_COLOR.dns : PKT_COLOR.req;
       this.pktMat.color.setHex(color);
       this.pktGlow.material.color.setHex(color);
       this.packet.visible = true;
       this.tail.forEach((t) => (t.visible = true));
-      const tagText = [esp ? 'ESP 加密' : '', h.tag != null ? 'VLAN ' + h.tag : ''].filter(Boolean).join(' · ');
-      this.tagEl.style.display = tagText ? 'block' : 'none';
-      this.tagEl.textContent = tagText;
-      this.tagEl.classList.toggle('esp', esp);
+      const kind = PKT_TAG[h.proto];
+      this.setTag([esp ? 'ESP 加密' : '', kind ? kind + (h.proto === 'arp' ? ' 回覆' : '') : '', h.tag != null ? 'VLAN ' + h.tag : ''].filter(Boolean).join(' · '), esp ? 'esp' : kind ? h.proto : '');
+      // Hub 會把同一份訊框複製到其他每一個埠
+      const leaks = (h.leak || []).map((x) => this.seg(x)).filter(Boolean);
+      const lg = leaks.map((_, i) => this.ghost(i, color, 0.55));
       const len = c.curve.getLength();
       await this.anim(clamp(len * 46, 190, 560), (k) => {
         if (token !== this.playToken) return;
-        const t = fwd ? k : 1 - k;
-        c.curve.getPointAt(t, p);
-        this.packet.position.set(p.x, air ? p.y : 0.3, p.z);
-        this.tail.forEach((m, i) => {
-          const tt = clamp(t + (fwd ? -1 : 1) * 0.045 * (i + 1), 0, 1);
-          c.curve.getPointAt(tt, p);
-          m.position.set(p.x, air ? p.y : 0.3, p.z);
-        });
+        const t = c.fwd ? k : 1 - k;
+        place(this.packet, c, t);
+        this.tail.forEach((m, i) => place(m, c, t + (c.fwd ? -1 : 1) * 0.045 * (i + 1)));
+        leaks.forEach((s, i) => place(lg[i], s, s.fwd ? k : 1 - k));
       });
       if (token !== this.playToken) return false;
+      this.hideGhosts();
       this.pulse(h.to, color);
     }
     if (token !== this.playToken) return false;
     this.packet.visible = false;
     this.tail.forEach((t) => (t.visible = false));
-    this.tagEl.style.display = 'none';
+    this.hideGhosts();
+    this.tagPos = null;
+    this.setTag('');
     return true;
   }
 
@@ -722,8 +790,8 @@ export class Scene3D {
       const s = this.toScreen(v);
       b.el.style.transform = `translate(-50%, -100%) translate(${s.x.toFixed(1)}px, ${s.y.toFixed(1)}px)`;
     }
-    if (this.packet.visible && this.tagEl.style.display !== 'none') {
-      const s = this.toScreen(this.packet.position);
+    if ((this.packet.visible || this.tagPos) && this.tagEl.style.display !== 'none') {
+      const s = this.toScreen(this.tagPos || this.packet.position);
       this.tagEl.style.transform = `translate(-50%, -100%) translate(${s.x.toFixed(1)}px, ${(s.y - 14).toFixed(1)}px)`;
     }
   }

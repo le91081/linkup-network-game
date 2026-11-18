@@ -135,6 +135,72 @@ expectFail('管理密碼仍是預設值', solved('l19', (s) => { s.devices.rt.mg
   else console.log('  ✔ STP 剛好封鎖一個非根橋的埠：' + JSON.stringify(blocked));
 }
 
+// ── 接近現實的行為：ARP、Hub 泛洪、DHCP 四步驟、保留位址、IP 衝突、連線紀錄 ──
+console.log('\n真實行為');
+{
+  const { dhcpTrace, sessionLog, hitsOf, arpRows } = await import('../src/engine/sim.js');
+  const { makeState, makeDevice, linkInfo } = await import('../src/engine/model.js');
+  const { link, setIp, ifc } = await import('../src/levels/util.js');
+  const ok = (cond, title) => (cond ? console.log('  ✔ ' + title) : fail(title));
+  {
+    const { s } = solved('l01');
+    recompute(s); // 清空剛才測試留下的 ARP 快取
+    const ip = parseIp('192.168.1.20');
+    const a = transact(s, 'pc-a', { proto: 'icmp', dst: ip });
+    const b = transact(s, 'pc-a', { proto: 'icmp', dst: ip });
+    ok(a.ok && a.hops.some((h) => h.wave) && a.log.some((l) => l.kind === 'arp'), '第一個封包會先送出 ARP 廣播');
+    ok(b.ok && !b.hops.some((h) => h.wave) && !b.log.some((l) => l.kind === 'arp'), 'ARP 快取：第二個封包不再廣播');
+    ok(arpRows(s, s.devices['pc-a']).some((r) => r.ip === ip) && arpRows(s, s.devices['pc-b']).length === 1, '兩端都記下了對方的 MAC');
+    ok(a.log.some((l) => l.frame && l.frame.smac === s.devices['pc-a'].ifaces[0].rt.mac && l.frame.ttl === 64), '追蹤紀錄附上訊框標頭（MAC / IP / TTL）');
+    recompute(s);
+    ok(arpRows(s, s.devices['pc-a']).length === 0, '設定變更後 ARP 快取清空');
+  }
+  {
+    const s = makeState([makeDevice('hub4', 'hub', { name: 'Hub', pos: [0, 0] }),
+      ...['a', 'b', 'c'].map((x, n) => makeDevice('pc', 'pc-' + x, { name: 'PC-' + x.toUpperCase(), pos: [n * 4 - 4, 3] }))]);
+    link(s, 'pc-a:eth0', 'hub:1'); link(s, 'pc-b:eth0', 'hub:2'); link(s, 'pc-c:eth0', 'hub:3');
+    setIp(s, 'pc-a', '192.168.1.10'); setIp(s, 'pc-b', '192.168.1.20'); setIp(s, 'pc-c', '192.168.1.30');
+    recompute(s);
+    const r = transact(s, 'pc-a', { proto: 'icmp', dst: parseIp('192.168.1.20') });
+    const leak = r.hops.flatMap((h) => h.leak || []);
+    ok(r.ok && leak.some((x) => x.to === 'pc-c') && !leak.some((x) => x.to === 'pc-b'), 'Hub 把訊框複製給不相干的 PC-C');
+    const li = linkInfo(s, 'pc-a', 'eth0');
+    ok(li.half && li.speed === 10, '接到 Hub 的連線降為 10 Mbps 半雙工');
+    ok(!s.devices['pc-b'].ifaces[0].rt.conflict, '沒有重複的 IP 時不會誤報衝突');
+    setIp(s, 'pc-c', '192.168.1.20');
+    recompute(s);
+    ok(s.devices['pc-b'].ifaces[0].rt.conflict === 'pc-c' && s.devices['pc-c'].ifaces[0].rt.conflict === 'pc-b', '偵測到 IP 位址衝突');
+  }
+  {
+    const { s } = solved('l03');
+    const t = dhcpTrace(s, 'pc-1');
+    const steps = t.log.map((l) => l.text.match(/^DHCP (\w+)/)?.[1]).filter(Boolean);
+    ok(t.ok && steps.join() === 'Discover,Offer,Request,Ack' && t.hops.filter((h) => h.wave).length === 2, 'DHCP 依序走完 Discover → Offer → Request → Ack');
+    const mac = s.devices['pc-1'].ifaces[0].rt.mac;
+    ifc(s, 'rt', 'lan').dhcp.reserved = [{ mac: mac.toUpperCase(), ip: '192.168.50.150' }];
+    recompute(s);
+    const got = (id) => s.devices[id].ifaces.find((i) => i.rt.src === 'dhcp')?.rt.ip;
+    ok(got('pc-1') === parseIp('192.168.50.150') && got('nb') != null && got('nb') !== got('pc-1'), 'DHCP 保留位址：指定的 MAC 拿到固定的 IP');
+    recompute(s);
+    ok(got('pc-1') === parseIp('192.168.50.150'), '保留位址在重新計算後維持不變');
+    s.devices['pc-1'].ifaces[0].mode = 'static';
+    recompute(s);
+    ok(!dhcpTrace(s, 'pc-1').ok, '沒有使用 DHCP 的設備無法 renew');
+  }
+  {
+    const { s } = solved('l09');
+    const fw = s.devices.fw, log = sessionLog(fw);
+    ok(log.some((e) => e.act === 'allow' && e.rule > 0) && log.some((e) => e.act === 'deny') && log.some((e) => e.act === 'snat') && log.some((e) => e.act === 'dnat'),
+      '防火牆記下放行、拒絕與 NAT 轉換');
+    ok(fw.policies.some((p) => hitsOf(p) > 0), '政策有命中次數');
+  }
+  {
+    const { s } = solved('l20');
+    const all = Object.values(s.devices).flatMap((d) => sessionLog(d));
+    ok(all.length > 0 && !all.some((e) => e.dport === 500 || e.dport === 4500), '引擎內部的 IKE 協商不會混進連線紀錄');
+  }
+}
+
 // ── 題庫與證照對照表的資料檢查 ──
 {
   const { QUESTIONS, TOPICS, LEVEL_TOPIC } = await import('../src/data/quiz.js');

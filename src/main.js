@@ -29,6 +29,8 @@ const app = {
   results: [], running: false, hintsShown: 0,
   selected: null, panelTab: {}, pinned: {}, adv: new Set(), termLog: {}, termHist: {}, refreshers: [],
 
+  undoStack: [], redoStack: [], snap: '',
+
   saveStore() {
     try { localStorage.setItem(STORE_KEY, JSON.stringify(app.store)); } catch { /* ignore */ }
   },
@@ -52,6 +54,7 @@ const app = {
     Object.assign(app, {
       level: lv, levelIdx: idx, state: st, results: [], running: false, selected: null,
       hintsShown: app.store.hints[lv.id] || 0, panelTab: {}, pinned: {}, adv: new Set(), termLog: {}, termHist: {}, refreshers: [],
+      undoStack: [], redoStack: [], snap: JSON.stringify(cloneState(st)),
     });
     app.store.last = lv.id;
     app.runToken = (app.runToken || 0) + 1;
@@ -72,6 +75,16 @@ const app = {
   changed() {
     recompute(app.state);
     app.scene.sync(app.state);
+    const now = JSON.stringify(cloneState(app.state));
+    if (now !== app.snap) {
+      if (!app.restoring) {
+        app.undoStack.push(app.snap);
+        if (app.undoStack.length > 80) app.undoStack.shift();
+        app.redoStack = [];
+      }
+      app.snap = now;
+      hud.updateHistory(app);
+    }
     let marked = false;
     for (const r of app.results) if (r && r !== 'running' && !r.stale) { r.stale = true; marked = true; }
     if (marked) hud.renderMission(app);
@@ -82,6 +95,31 @@ const app = {
       app.store.saves[app.level.id] = cloneState(app.state);
       app.saveStore();
     }, 400);
+  },
+
+  /** 重新整理面板上會即時更新的區塊（命中次數、紀錄、ARP 快取…） */
+  refreshLive() { for (const f of app.refreshers) f(); },
+
+  undo() { app.timeTravel(app.undoStack, app.redoStack, '已復原上一個變更'); },
+  redo() { app.timeTravel(app.redoStack, app.undoStack, '已重做'); },
+  timeTravel(from, to, msg) {
+    if (app.running || !from.length) return;
+    to.push(app.snap);
+    const sel = app.selected;
+    app.state = JSON.parse(from.pop());
+    recompute(app.state);
+    app.scene.playToken++; // 中止還在播的封包動畫
+    app.scene.load(app.state, { keep: true });
+    app.selected = app.state.devices[sel] ? sel : null;
+    app.scene.select(app.selected);
+    app.restoring = true;
+    app.changed();
+    app.restoring = false;
+    hud.closePopover();
+    hud.updateHistory(app);
+    hud.renderMission(app);
+    app.renderPanel();
+    toast(msg);
   },
 
   renderPanel() {
@@ -157,6 +195,7 @@ const app = {
       const r = runObjective(app.state, o);
       app.con.group(`目標 ${i + 1}　${o.label}`);
       app.con.lines(r.log, app.state);
+      app.refreshLive();
       await app.scene.playHops(r.hops);
       if (app.runToken !== token) return;
       feedback(o, r);
@@ -178,6 +217,7 @@ const app = {
     $('console').classList.remove('min');
     app.con.group(title);
     app.con.lines(log, app.state);
+    app.refreshLive();
     app.scene.fast = false;
     app.scene.clearBubbles();
     app.scene.playHops(hops).then((finished) => {
@@ -250,6 +290,13 @@ window.addEventListener('keydown', (e) => {
     else app.select(null);
   } else if (e.code === 'Space' && !typing && app.running) {
     app.fastForward();
+    e.preventDefault();
+  } else if ((e.ctrlKey || e.metaKey) && ['z', 'y'].includes(e.key.toLowerCase()) && !hud.modalOpen()) {
+    // 正在輸入文字時，讓瀏覽器自己處理輸入框的復原
+    const el = document.activeElement;
+    const editing = tag === 'TEXTAREA' || (tag === 'INPUT' && !['checkbox', 'radio', 'button'].includes(el.type));
+    if (editing) return;
+    if (e.key.toLowerCase() === 'y' || e.shiftKey) app.redo(); else app.undo();
     e.preventDefault();
   }
 });

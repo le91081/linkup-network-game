@@ -1,7 +1,8 @@
 // HUD：頂端列、任務面板、封包追蹤主控台、各種對話框
 import { h, icon, button, toast, faceplate } from './dom.js';
 import { LEVELS, CHAPTERS } from '../levels/index.js';
-import { CATALOG, CABLES, cableKinds, cableKind, pairDist, cableAt, portOf, removeCable } from '../engine/model.js';
+import { CATALOG, CABLES, cableKinds, cableKind, pairDist, cableAt, portOf, removeCable, linkInfo } from '../engine/model.js';
+import { fmtIp } from '../engine/ip.js';
 import { renderSandbox } from './sandbox.js';
 import { LEVEL_CERTS } from '../data/certs.js';
 import { openQuiz, openCerts, openLevelQuiz, hasLevelQuiz } from './quiz.js';
@@ -19,6 +20,9 @@ export function renderTopbar(app) {
     h('div', { class: 'brand', html: LOGO + '<span>Link<em>Up</em></span>' }),
     h('div', { class: 'crumb' }, h('span', { text: ch ? `第 ${ch.id} 章 · ${ch.title}` : '自由模式' }), h('b', { text: ch ? `${levelNo(lv)}　${lv.title}` : lv.subtitle })),
     h('div', { class: 'spacer' }),
+    h('div', { class: 'histbtns' },
+      h('button', { class: 'btn ghost icon', id: 'btn-undo', type: 'button', title: '復原上一個變更（Ctrl + Z）', disabled: !app.undoStack.length, onclick: () => app.undo() }, icon('undo', 16)),
+      h('button', { class: 'btn ghost icon', id: 'btn-redo', type: 'button', title: '重做（Ctrl + Y）', disabled: !app.redoStack.length, onclick: () => app.redo() }, icon('redo', 16))),
     button('測驗', { ic: 'book', kind: 'ghost', onclick: () => openQuiz(app) }),
     button('證照', { ic: 'award', kind: 'ghost', onclick: () => openCerts(app) }),
     button('提示', { ic: 'bulb', kind: 'ghost', onclick: () => openHints(app) }),
@@ -26,6 +30,14 @@ export function renderTopbar(app) {
     button('說明', { ic: 'help', kind: 'ghost', onclick: () => openHelp(app) }),
     button('關卡', { ic: 'grid', onclick: () => openLevels(app) }),
   );
+}
+
+/** 復原 / 重做按鈕能不能按 */
+export function updateHistory(app) {
+  for (const [id, stack] of [['btn-undo', app.undoStack], ['btn-redo', app.redoStack]]) {
+    const b = document.getElementById(id);
+    if (b) b.disabled = !stack.length;
+  }
 }
 
 // ───────────── 任務面板 ─────────────
@@ -79,7 +91,9 @@ export function renderGuide(app, root) {
         h('div', { class: 'keys' },
           h('div', null, h('kbd', { text: '拖曳設備' }), '拉到另一台設備上放開 → 接上網路線'),
           h('div', null, h('kbd', { text: '點設備' }), '開啟設定頁面'),
-          h('div', null, h('kbd', { text: '點網路線' }), '拔除'),
+          h('div', null, h('kbd', { text: '點網路線' }), '查看速率與距離、拔除'),
+          h('div', null, h('kbd', { text: '點追蹤紀錄' }), '標著「封包」的那幾行可以打開，看 MAC / IP / 埠號'),
+          h('div', null, h('kbd', { text: 'Ctrl + Z' }), '復原上一個變更，Ctrl + Y 重做'),
           h('div', null, h('kbd', { text: '拖曳空白處' }), '平移畫面，滾輪縮放，右鍵拖曳旋轉'),
           h('div', null, h('kbd', { text: '空白鍵' }), '快轉封包動畫'))),
       h('div', { class: 'card' }, h('div', { class: 'card-h' }, h('b', { text: '圖例' })),
@@ -93,7 +107,9 @@ export function renderGuide(app, root) {
           h('span', null, h('i', { style: { background: '#f7e04a' } }), '單模光纖'),
           h('span', null, h('i', { class: 'dotp', style: { background: '#ffc857' } }), 'VPN 加密封包'),
           h('span', null, h('i', { style: { background: '#4a5470' } }), '沒有燈號的線'),
-          h('span', null, h('i', { style: { background: '#9a7a2e' } }), '被 STP 封鎖')))),
+          h('span', null, h('i', { style: { background: '#9a7a2e' } }), '被 STP 封鎖'),
+          h('span', null, h('i', { class: 'dotp', style: { background: '#ff9f5a' } }), 'ARP（詢問 MAC）'),
+          h('span', null, h('i', { class: 'dotp', style: { background: '#ff8fd0' } }), 'DHCP 交握')))),
   );
 }
 
@@ -116,8 +132,12 @@ export function initConsole(app) {
     group(title) { body.append(h('div', { class: 'cg', text: title })); sub.textContent = title; end(); },
     lines(log, state) {
       for (const l of log) {
-        body.append(h('div', { class: 'cl k-' + l.kind, onclick: () => app.scene.pulse(l.dev, 0xffffff) },
-          h('span', { class: 'who', text: state.devices[l.dev]?.name || '' }), h('span', { class: 'msg', text: l.text })));
+        body.append(h('div', {
+          class: 'cl k-' + l.kind + (l.frame ? ' has-frame' : ''), title: l.frame ? '點一下檢視這個封包的標頭' : null,
+          onclick: (e) => { app.scene.pulse(l.dev, 0xffffff); if (l.frame) openFrame(l, state, e.clientX, e.clientY); },
+        },
+          h('span', { class: 'who', text: state.devices[l.dev]?.name || '' }),
+          h('span', { class: 'msg' }, l.text, l.frame && h('i', { class: 'fr-chip', text: '封包' }))));
       }
       end();
     },
@@ -146,16 +166,50 @@ export function closePopover() {
   document.removeEventListener('pointerdown', onDocDown, true);
 }
 
+const PORT_NAMES = { 22: 'SSH', 23: 'Telnet', 53: 'DNS', 67: 'DHCP', 80: 'HTTP', 123: 'NTP', 161: 'SNMP', 443: 'HTTPS', 500: 'IKE', 514: 'Syslog', 1812: 'RADIUS', 3306: 'MySQL', 3389: 'RDP', 4500: 'IPsec NAT-T' };
+const PROTO_NO = { icmp: 1, tcp: 6, udp: 17, esp: 50 };
+
+/** 封包檢視：追蹤紀錄裡某一段訊框的第二、三、四層標頭 */
+function openFrame(l, state, x, y) {
+  closePopover();
+  const f = l.frame;
+  const port = (p) => (PORT_NAMES[p] ? `${p}（${PORT_NAMES[p]}）` : String(p));
+  const layer = (no, name, text, extra) => h('div', { class: 'fr-layer l' + no },
+    h('span', { class: 'fr-no', text: 'L' + no }),
+    h('div', null, h('b', { text: name }), h('span', { class: 'mono', text }), extra && h('em', { text: extra })));
+  const upper = f.proto === 'icmp'
+    ? layer(3, 'ICMP', f.reply ? 'Echo Reply（type 0）' : 'Echo Request（type 8）', `識別碼 ${f.reply ? f.dport : f.sport} · ICMP 沒有埠號，靠識別碼配對請求與回應`)
+    : f.proto === 'esp'
+      ? layer(3, 'ESP（IPsec）', '加密的內容', '原本的 IP 標頭、埠號與資料都包在裡面，中途的設備只看得到兩端 VPN 閘道的位址')
+      : layer(4, f.proto.toUpperCase(), `埠 ${port(f.sport)}  →  埠 ${port(f.dport)}`,
+        f.proto === 'tcp' ? (f.reply ? '旗標 SYN + ACK：三向交握的第二步' : '旗標 SYN：三向交握的第一步，請求建立連線') : 'UDP 不建立連線，直接送出');
+  popover = h('div', { class: 'popover frame', style: { left: Math.max(12, Math.min(x - 60, innerWidth - 404)) + 'px' } },
+    h('div', { class: 'fr-head' }, h('b', { text: '封包檢視' }), h('span', { text: `${state.devices[l.dev]?.name || ''} 送出的這一段` })),
+    layer(2, f.wifi ? '乙太網路 / 802.11 無線' : '乙太網路', `${f.smac}  →  ${f.dmac}`,
+      f.tags.length ? `經過 Trunk 時帶著 802.1Q 標籤：VLAN ${f.tags.join('、')}` : '來源 MAC → 目的 MAC，只在這一段線路上有效'),
+    layer(3, 'IPv4', `${fmtIp(f.src)}  →  ${fmtIp(f.dst)}`, `TTL ${f.ttl} · 協定號 ${PROTO_NO[f.proto]}（${f.proto.toUpperCase()}）`),
+    upper,
+    h('p', { class: 'fr-note', text: '每經過一台路由器，MAC 位址就換成下一段的；IP 位址從頭到尾不變（經過 NAT 除外），TTL 每一站減 1。' }));
+  document.body.append(popover);
+  // 盡量放在點擊位置的上方，但不能超出視窗
+  const ph = popover.offsetHeight;
+  popover.style.top = Math.max(8, Math.min(y - ph - 14, innerHeight - ph - 8)) + 'px';
+  setTimeout(() => document.addEventListener('pointerdown', onDocDown, true), 0);
+}
+
 export function openCableMenu(app, cableId, x, y) {
   closePopover();
   const st = app.state;
   const c = st.cables.find((k) => k.id === cableId);
   if (!c) return;
   const A = st.devices[c.a.dev], B = st.devices[c.b.dev];
-  popover = h('div', { class: 'popover', style: { left: Math.min(x + 6, innerWidth - 300) + 'px', top: Math.min(y + 10, innerHeight - 130) + 'px' } },
+  const li = !st.rt.why[c.id] && st.rt.cable[c.id] !== 'down' && linkInfo(st, c.a.dev, c.a.port);
+  popover = h('div', { class: 'popover', style: { left: Math.min(x + 6, innerWidth - 300) + 'px', top: Math.min(y + 10, innerHeight - 190) + 'px' } },
     h('b', { text: CABLES[cableKind(c)].name }),
     h('span', { class: 'mono', text: `${A.name} [${portOf(A, c.a.port).label}]  ↔  ${B.name} [${portOf(B, c.b.port).label}]` }),
     h('span', { class: 'muted', style: { fontSize: '12px' }, text: `兩端相距 ${pairDist(st, A.id, B.id)} 公尺 · 這種線材最長 ${CABLES[cableKind(c)].max} 公尺` }),
+    li && h('span', { class: 'muted', style: { fontSize: '12px' }, text: `自動協商：${li.text}` }),
+    li && li.half && h('span', { class: 'note warn', text: 'Hub 是半雙工：同一時間只能有一台設備傳送，否則會碰撞 (CSMA/CD)。' }),
     st.rt.why[c.id] && h('span', { class: 'note warn', text: '沒有燈號：' + st.rt.why[c.id] }),
     st.rt.cable[c.id] === 'blocked' && h('span', { class: 'note muted', text: '這條線被 STP 封鎖當作備援，其他路徑斷掉時會自動啟用。' }),
     st.rt.cable[c.id] === 'susp' && h('span', { class: 'note warn', text: 'Port-channel 兩端的設定不相容，成員被暫停。' }),

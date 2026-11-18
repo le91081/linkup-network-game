@@ -5,8 +5,8 @@ import {
   isIp, isMask, isIpList, isAddr, isCidrList, isMacList, isPortNo, isNum,
 } from './form.js';
 import { fmtIp } from '../engine/ip.js';
-import { CATALOG, peerOf, portOf, newSsid, cableAt } from '../engine/model.js';
-import { visibleSsids, WIFI_SEC, macsBehind, isBridgePort } from '../engine/sim.js';
+import { CATALOG, peerOf, portOf, newSsid, cableAt, linkInfo } from '../engine/model.js';
+import { visibleSsids, WIFI_SEC, macsBehind, isBridgePort, hitsOf } from '../engine/sim.js';
 import * as M from './panel-more.js';
 
 const nameOf = (ctx, id) => ctx.state.devices[id]?.name || id;
@@ -16,6 +16,46 @@ const nameOf = (ctx, id) => ctx.state.devices[id]?.name || id;
 export const assocBadge = (ctx, i) => ctx.live(() => {
   const a = i.rt.assoc;
   return a ? badge('on', `已連線 · ${nameOf(ctx, a.ap)}`) : badge('off', '未連線');
+});
+
+/** 訊號強度、頻段與連線速率 */
+export const wifiSignal = (ctx, i) => ctx.live(() => {
+  const a = i.rt.assoc;
+  if (!a) return null;
+  const bars = a.rssi >= -52 ? 4 : a.rssi >= -62 ? 3 : a.rssi >= -72 ? 2 : 1;
+  return [
+    h('div', { class: 'sigline', title: '訊號強度依距離與基地台的發射功率估算' },
+      h('span', { class: 'sigbars' }, [1, 2, 3, 4].map((n) => h('i', { class: n <= bars ? 'on' : '', style: { height: 2 + n * 2.75 + 'px' } }))),
+      h('span', { class: 'mono', text: `${a.band} · 頻道 ${a.ch} · ${a.rssi} dBm · ${a.rate} Mbps` })),
+    bars === 1 && note('warn', '訊號很弱：離基地台太遠，速率很低也容易斷線。把基地台移近，或調高它的發射功率。'),
+    a.noisy && note('warn', `基地台在 ${a.band} 與鄰近基地台的頻道重疊，速率只剩一半。`),
+  ];
+});
+
+/** 政策或 ACL 規則被命中的次數 */
+export const hitBadge = (ctx, rule) => ctx.live(() => {
+  const n = hitsOf(rule);
+  return h('span', { class: 'hits' + (n ? ' hot' : ''), title: '這條規則被比對命中的次數（執行測試或 ping 之後會增加）', text: `命中 ${n}` });
+});
+
+/** 兩端設定不一致時的提醒（真實設備上會看到 CDP 的 native VLAN mismatch 之類的訊息） */
+export const portWarn = (ctx, p, pc) => ctx.live(() => {
+  const { state, dev } = ctx;
+  const n = peerOf(state, dev.id, p.id);
+  if (!n) return null;
+  const peer = state.devices[n.dev];
+  const qc = peer.sw && peer.sw.mode === 'vlan' && peer.sw.ports[n.port];
+  const there = `${peer.name} 的 ${portOf(peer, n.port).label}`;
+  const cap = (m) => (m === 'trunk' ? 'Trunk' : 'Access');
+  const out = [];
+  if (qc && qc.mode !== 'routed') {
+    if (pc.mode !== qc.mode) out.push(`兩端模式不一致：這一端是 ${cap(pc.mode)}，${there} 是 ${cap(qc.mode)}，帶標籤的 VLAN 過不去。`);
+    else if (pc.mode === 'trunk' && pc.native !== qc.native) out.push(`Native VLAN 不一致：這一端是 ${pc.native}，${there} 是 ${qc.native}。沒有標籤的訊框會被兩端放進不同的 VLAN。`);
+    else if (pc.mode === 'access' && pc.vlan !== qc.vlan) out.push(`兩端的 Access VLAN 不同（這一端 ${pc.vlan}，${there} 是 ${qc.vlan}），兩個 VLAN 會被這條線接在一起。`);
+  }
+  const li = linkInfo(state, dev.id, p.id);
+  if (li && li.half) out.push('對面是 Hub：這個埠降為 10 Mbps 半雙工，多台設備同時傳送會發生碰撞。');
+  return out.map((t) => note('warn', t));
 });
 
 export function wifiPicker(ctx, i) {
@@ -67,7 +107,7 @@ function clientsCard(ctx) {
     const list = state.rt.clients[dev.id] || [];
     if (!list.length) return note('muted', '目前沒有任何設備連上來。');
     return list.map((c) => h('div', { class: 'line' }, h('b', { text: nameOf(ctx, c.dev) }),
-      h('span', { class: 'mono muted', text: `${dev.wifi.ssids[c.iface.rt.assoc.idx]?.name || ''}${c.iface.rt.ip != null ? ' · ' + fmtIp(c.iface.rt.ip) : ''}` })));
+      h('span', { class: 'mono muted', text: `${dev.wifi.ssids[c.iface.rt.assoc.idx]?.name || ''}${c.iface.rt.ip != null ? ' · ' + fmtIp(c.iface.rt.ip) : ''} · ${c.iface.rt.assoc.band} ${c.iface.rt.assoc.rssi} dBm` })));
   }));
 }
 
@@ -329,7 +369,7 @@ export function aclTab(ctx, body) {
             del(() => { list.splice(n, 1); ctx.commit(true); })),
           h('div', { class: 'acl-l2' },
             inp(ctx, ...bind(r, 'src'), { ph: '來源：any 或 10.0.20.0/24', check: isAddr }), h('span', { text: '→' }),
-            inp(ctx, ...bind(r, 'dst'), { ph: '目的：any 或 10.0.30.10', check: isAddr }))));
+            inp(ctx, ...bind(r, 'dst'), { ph: '目的：any 或 10.0.30.10', check: isAddr }), hitBadge(ctx, r))));
       });
       if (list.length) card.append(h('div', { class: 'acl-deny', text: '（隱含）拒絕 ip any → any' }));
     }

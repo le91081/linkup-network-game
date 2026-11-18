@@ -482,3 +482,46 @@ h3.sec { font-size: 11.5px; letter-spacing: 0.08em; color: var(--faint); text-tr
   .g-row { grid-template-columns: 1fr; gap: 1px; padding: 6px 11px; }
   .crumb span { display: none; }
 }
+
+/* ───────── 更接近現實：ARP / DHCP、封包檢視、紀錄、訊號 ───────── */
+.cl.k-arp .msg { color: #ffc08f; }
+.cl.k-dhcp .msg { color: #ffb3e0; }
+.cl.has-frame { cursor: pointer; border-radius: 6px; }
+.cl.has-frame:hover { background: rgba(110, 168, 255, 0.09); }
+.fr-chip { font: 600 10px var(--sans); font-style: normal; margin-left: 8px; padding: 1px 6px; border-radius: 5px; background: rgba(110, 168, 255, 0.16); color: #b9d3ff; white-space: nowrap; }
+.pkt-tag.arp { background: #ff9f5a; }
+.pkt-tag.dhcp { background: #ff8fd0; color: #3a0d27; }
+.popover.frame { width: 392px; max-width: calc(100vw - 24px); gap: 7px; padding: 12px; }
+.fr-head { display: flex; align-items: baseline; gap: 8px; }
+.fr-head span { color: var(--muted); font-size: 12px; }
+.fr-layer { display: grid; grid-template-columns: 26px minmax(0, 1fr); gap: 8px; padding: 7px 9px; border-radius: 9px; background: rgba(6, 10, 22, 0.45); border-left: 3px solid var(--blue); }
+.fr-layer.l2 { border-left-color: #4fd8c4; }
+.fr-layer.l4 { border-left-color: #a58bff; }
+.fr-no { font: 700 12px var(--mono); color: var(--muted); padding-top: 1px; }
+.fr-layer > div { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.fr-layer b { font-size: 12.5px; }
+.popover .fr-layer .mono { font-size: 12px; color: var(--text); overflow-wrap: anywhere; }
+.fr-layer em { font-style: normal; font-size: 11.5px; color: var(--muted); line-height: 1.45; }
+.fr-note { font-size: 11.5px; color: var(--muted); line-height: 1.5; }
+.hits { font: 600 10.5px var(--mono); color: var(--faint); white-space: nowrap; }
+.hits.hot { color: #9ff0bd; }
+.acl-l2 { grid-template-columns: minmax(0, 1fr) 14px minmax(0, 1fr) auto; }
+.rsv { display: flex; flex-direction: column; gap: 6px; }
+.trow.c-rsv { grid-template-columns: minmax(0, 1.3fr) minmax(0, 1fr) 26px; }
+.srow { display: grid; grid-template-columns: 40px minmax(0, 1fr); gap: 1px 8px; align-items: center; font-size: 12px; padding: 5px 8px; border-radius: 8px; background: rgba(6, 10, 22, 0.4); }
+.srow .tag { grid-row: 1 / span 2; font-size: 10.5px; font-weight: 700; text-align: center; border-radius: 5px; padding: 1px 0; }
+.srow b { font-weight: 600; overflow-wrap: anywhere; }
+.srow .muted { grid-column: 2; font-size: 11px; overflow-wrap: anywhere; }
+.srow.ok .tag { background: rgba(74, 222, 128, 0.15); color: #9ff0bd; }
+.srow.bad .tag { background: rgba(255, 107, 122, 0.17); color: #ffb3bb; }
+.srow.nat .tag { background: rgba(165, 139, 255, 0.18); color: #d9ceff; }
+.card-h > .btn { margin-left: auto; }
+.sigline { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--muted); }
+.sigbars { display: inline-flex; align-items: flex-end; gap: 2px; height: 13px; flex: none; }
+.sigbars i { width: 3px; border-radius: 1px; background: rgba(150, 170, 225, 0.25); }
+.sigbars i.on { background: var(--ok); }
+.histbtns { display: flex; gap: 2px; }
+.btn.icon { padding: 0 8px; }
+.tabs.many .tab { padding: 0 7px; }
+.term-out { overflow-x: auto; }
+.tl.pre { white-space: pre; word-break: normal; overflow-wrap: normal; }

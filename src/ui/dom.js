@@ -52,6 +52,8 @@ const ICONS = {
   mouse: '<rect x="7" y="3.5" width="10" height="17" rx="5"/><path d="M12 7.5v3"/>',
   book: '<path d="M5 4.5h9.5A3.5 3.5 0 0 1 18 8v11.5H8.5A3.5 3.5 0 0 1 5 16z"/><path d="M5 16a3.5 3.5 0 0 1 3.5-3.5H18"/>',
   award: '<circle cx="12" cy="9" r="5.5"/><path d="M8.5 13.6L7 21l5-2.8 5 2.8-1.5-7.4"/>',
+  undo: '<path d="M8.5 5L4 9.5 8.5 14"/><path d="M4 9.5h9.5a5 5 0 0 1 0 10H11"/>',
+  redo: '<path d="M15.5 5L20 9.5 15.5 14"/><path d="M20 9.5h-9.5a5 5 0 0 0 0 10H13"/>',
 };
 
 export function icon(name, size = 16) {

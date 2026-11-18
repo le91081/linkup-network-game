@@ -2,11 +2,11 @@
 import { h, icon, button, faceplate, toast } from './dom.js';
 import {
   inp, sel, toggle, seg, field, note, kv, del, cardHead, grid2, bind, linkBadge, ifaceNote,
-  isIp, isMask, isIpList, isVlanSpec, isPortNo, isAddr, isNum,
+  isIp, isMask, isIpList, isVlanSpec, isPortNo, isAddr, isNum, isMacList,
 } from './form.js';
 import { CATALOG, MEDIA, peerOf, newIface } from '../engine/model.js';
 import { parseIp, fmtIp } from '../engine/ip.js';
-import { routeRows, SERVICE_NAMES } from '../engine/sim.js';
+import { routeRows, SERVICE_NAMES, hitsOf } from '../engine/sim.js';
 import { buildTerminal } from './terminal.js';
 import * as X from './panel-extra.js';
 import * as M from './panel-more.js';
@@ -21,6 +21,13 @@ function dhcpBlock(ctx, i) {
       field('結束 IP', inp(ctx, ...bind(d, 'end'), { ph: '例如 192.168.1.200', check: isIp })),
       field('發給用戶端的 DNS', inp(ctx, ...bind(d, 'dns'), { ph: ctx.dev.dnsProxy ? '留空＝由本機代理' : '例如 168.95.1.1', check: isIpList })),
       field('發給用戶端的閘道', inp(ctx, ...bind(d, 'gw'), { ph: '留空＝本介面 IP', check: isIp }))),
+    d.on && h('div', { class: 'rsv' },
+      h('div', { class: 'acl-h' }, h('span', { text: '保留位址' }), h('em', { text: '指定的 MAC 永遠拿到同一個 IP' }),
+        button('新增', { ic: 'plus', small: true, onclick: () => { (d.reserved ||= []).push({ mac: '', ip: '' }); ctx.commit(true); } })),
+      (d.reserved || []).map((r, n) => h('div', { class: 'trow c-rsv' },
+        inp(ctx, ...bind(r, 'mac'), { ph: 'MAC，例如 02:1a:2b:3c:4d:5e', check: isMacList }),
+        inp(ctx, ...bind(r, 'ip'), { ph: '要固定發給它的 IP', check: isIp }),
+        del(() => { d.reserved.splice(n, 1); ctx.commit(true); })))),
     d.on && ctx.live(() => {
       const rt = i.rt || {};
       if (rt.ip == null) return note('warn', '介面本身要先有 IP，DHCP 伺服器才能運作');
@@ -30,7 +37,8 @@ function dhcpBlock(ctx, i) {
       if (b < a || !net(a) || !net(b)) return note('warn', `位址池必須落在介面的子網路 ${fmtIp(rt.ip)}/${rt.bits} 之內`);
       const tbl = Object.entries(ctx.state.leases[`${ctx.dev.id}/${i.id}`] || {});
       if (!tbl.length) return note('muted', '目前沒有用戶端租用位址');
-      return note('ok', '已發出：' + tbl.map(([k, ip]) => `${ctx.state.devices[k.split('/')[0]].name} ${fmtIp(ip)}`).join('、'));
+      const held = new Set((d.reserved || []).map((r) => parseIp(r.ip || '')));
+      return note('ok', '已發出：' + tbl.map(([k, ip]) => `${ctx.state.devices[k.split('/')[0]].name} ${fmtIp(ip)}${held.has(ip) ? '（保留）' : ''}`).join('、'));
     }));
 }
 
@@ -86,7 +94,7 @@ function hostNet(ctx, body) {
   const modeSeg = (i) => seg(ctx, ...bind(i, 'mode'), [['dhcp', '自動取得 (DHCP)'], ['static', '手動設定']]);
   for (const i of dev.ifaces) {
     if (i.bind.t === 'wlan') {
-      body.append(h('div', { class: 'card' }, cardHead('Wi-Fi', X.assocBadge(ctx, i)), X.wifiPicker(ctx, i), modeSeg(i), ipFields(i), ifaceNote(ctx, i), M.hostV6(ctx, i), macLine(ctx, i)));
+      body.append(h('div', { class: 'card' }, cardHead('Wi-Fi', X.assocBadge(ctx, i)), X.wifiPicker(ctx, i), X.wifiSignal(ctx, i), modeSeg(i), ipFields(i), ifaceNote(ctx, i), M.hostV6(ctx, i), macLine(ctx, i)));
     } else {
       body.append(h('div', { class: 'card' }, cardHead(i.label, linkBadge(ctx, i.bind.port)), modeSeg(i), ipFields(i), ifaceNote(ctx, i),
         dev.dot1x && i === dev.ifaces[0] && M.hostDot1x(ctx), M.hostV6(ctx, i), macLine(ctx, i)));
@@ -152,6 +160,7 @@ function swPorts(ctx, body) {
         routed && ri && field('子網路遮罩', inp(ctx, ...bind(ri, 'mask'), { ph: '255.255.255.252', check: isMask }))),
       routed && ri && h('div', { class: 'toggles' }, toggle(ctx, ...bind(ri, 'ospf'), 'OSPF（在此介面啟用動態路由）')),
       routed && ri && ifaceNote(ctx, ri),
+      !routed && X.portWarn(ctx, p, pc),
       !routed && h('button', {
         type: 'button', class: 'advbtn' + (open ? ' on' : ''),
         onclick: () => { if (app.adv.has(key)) app.adv.delete(key); else app.adv.add(key); app.renderPanel(); },
@@ -314,7 +323,9 @@ function statusTab(ctx, body) {
       }
       return rows.length ? rows : note('muted', '目前沒有發出任何租約。');
     })));
+    body.append(M.arpCard(ctx));
   }
+  if (dev.kind === 'router' || dev.kind === 'homerouter') body.append(M.sessionCard(ctx));
   body.append(X.neighborsCard(ctx));
 }
 
@@ -385,6 +396,7 @@ function fwPolicies(ctx, body) {
     body.append(h('div', { class: 'card policy ' + (p.action === 'accept' ? 'accept' : 'deny') },
       h('div', { class: 'card-h' }, h('span', { class: 'pno', text: '#' + (n + 1) }),
         inp(ctx, ...bind(p, 'name'), { mono: false, ph: '政策名稱' }),
+        X.hitBadge(ctx, p),
         h('button', { class: 'mini', type: 'button', title: '上移', disabled: n === 0, onclick: () => move(-1) }, icon('up', 14)),
         h('button', { class: 'mini', type: 'button', title: '下移', disabled: n === dev.policies.length - 1, onclick: () => move(1) }, icon('down', 14)),
         del(() => { dev.policies.splice(n, 1); ctx.commit(true); })),
@@ -448,7 +460,7 @@ function baseTabs(dev) {
     case 'l3switch': return [T.swports, T.vlan, T.l3, T.route, T.sec, T.mgmt, T.status];
     case 'router': return [T.ifs, T.route, T.nat, T.acl, T.vpn, T.mgmt, T.status];
     case 'homerouter': return [['wan', '網際網路 (WAN)', hrWan], ['lan', '區域網路 (LAN)', hrLan], ['wifi', '無線網路', X.ssidTab], ['nat', '連接埠轉發', forwardsTab], T.status];
-    case 'firewall': return [['if', '介面', fwIfaces], ['pol', '政策', fwPolicies], ['nat', '虛擬 IP', forwardsTab], T.vpn, T.route, T.mgmt, T.status];
+    case 'firewall': return [['if', '介面', fwIfaces], ['pol', '政策', fwPolicies], ['nat', '虛擬 IP', forwardsTab], T.vpn, T.route, T.mgmt, ['log', '紀錄', M.logTab], T.status];
     default: return [['info', '線路資訊', inetInfo]];
   }
 }
@@ -484,7 +496,7 @@ export function renderDevicePanel(app, root) {
     },
   };
   const body = h('div', { class: 'p-body' });
-  const tabBar = tabs.length > 1 && h('div', { class: 'tabs' }, tabs.map(([id, label]) =>
+  const tabBar = tabs.length > 1 && h('div', { class: 'tabs' + (tabs.length > 7 ? ' many' : '') }, tabs.map(([id, label]) =>
     h('button', { type: 'button', class: 'tab' + (id === cur ? ' on' : ''), onclick: () => { app.panelTab[dev.id] = id; app.renderPanel(); } }, label)));
   root.dataset.view = viewKey;
   root.replaceChildren(...[

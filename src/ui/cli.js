@@ -2,14 +2,15 @@
 import { h } from './dom.js';
 import { fmtIp, fmtMask, parseIp, parseMask, netOf, maskOf, bcastOf, parseCidr } from '../engine/ip.js';
 import { fmtIp6 } from '../engine/ip6.js';
-import { transact, routeRows, macsBehind, isBridgePort } from '../engine/sim.js';
+import { transact, routeRows, macsBehind, isBridgePort, arpRows, sessionLog, hitsOf } from '../engine/sim.js';
 import { route6Rows } from '../engine/sim6.js';
-import { CATALOG, peerOf, portOf } from '../engine/model.js';
+import { CATALOG, MEDIA, peerOf, portOf, linkInfo } from '../engine/model.js';
 
 const host = (dev) => dev.name.replace(/[^\w-]+/g, '-').replace(/^-+|-+$/g, '') || 'Device';
 const wild = (bits) => fmtIp(~maskOf(bits) >>> 0);
 const pad = (s, n) => String(s).padEnd(n);
 const isSw = (d) => !!d.sw && d.sw.mode === 'vlan';
+const dotMac = (m) => m.replace(/:/g, '').replace(/(.{4})(?=.)/g, '$1.');
 
 function aclAddr(spec) {
   const s = String(spec || 'any').trim().toLowerCase();
@@ -303,9 +304,38 @@ const SHOW = {
     for (const i of d.ifaces) for (const [key, dir] of [['aclIn', 'in'], ['aclOut', 'out']]) {
       if (!i[key] || !i[key].length) continue;
       o.push(`Extended IP access list ${aclName(i, dir)}`);
-      i[key].forEach((r, n) => o.push(`    ${(n + 1) * 10} ${r.action} ${r.proto || 'ip'} ${aclAddr(r.src)} ${aclAddr(r.dst)}${r.port && r.proto !== 'ip' && r.proto !== 'icmp' ? ' eq ' + r.port : ''}`));
+      i[key].forEach((r, n) => o.push(`    ${(n + 1) * 10} ${r.action} ${r.proto || 'ip'} ${aclAddr(r.src)} ${aclAddr(r.dst)}${r.port && r.proto !== 'ip' && r.proto !== 'icmp' ? ' eq ' + r.port : ''}${hitsOf(r) ? ` (${hitsOf(r)} matches)` : ''}`));
     }
     return o.length ? o : ['沒有設定任何 ACL'];
+  },
+  'show arp': (st, d) => {
+    const o = [pad('Protocol', 10) + pad('Address', 18) + pad('Age (min)', 11) + pad('Hardware Addr', 17) + 'Type'];
+    for (const i of d.ifaces) if (i.rt && i.rt.ip != null) o.push(pad('Internet', 10) + pad(fmtIp(i.rt.ip), 18) + pad('-', 11) + pad(dotMac(i.rt.mac), 17) + 'ARPA');
+    for (const r of arpRows(st, d)) o.push(pad('Internet', 10) + pad(fmtIp(r.ip), 18) + pad('0', 11) + pad(dotMac(r.mac), 17) + 'ARPA');
+    return o;
+  },
+  'show ip nat translations': (st, d) => {
+    const rows = sessionLog(d).filter((e) => e.act === 'snat' || e.act === 'dnat');
+    if (!rows.length) return ['目前沒有任何 NAT 轉換（先讓流量經過這台設備，例如從內部的電腦 ping 外面）'];
+    const o = [pad('Pro', 6) + pad('Inside global', 23) + pad('Inside local', 23) + 'Outside global'];
+    for (const e of rows) {
+      const out = e.proto === 'icmp' ? e.sport : e.dport; // ICMP 沒有埠號，IOS 會顯示識別碼
+      if (e.act === 'snat') o.push(pad(e.proto, 6) + pad(`${fmtIp(e.nsrc)}:${e.sport}`, 23) + pad(`${fmtIp(e.src)}:${e.sport}`, 23) + `${fmtIp(e.dst)}:${out}`);
+      else o.push(pad(e.proto, 6) + pad(`${fmtIp(e.dst)}:${e.dport}`, 23) + pad(`${fmtIp(e.ndst)}:${e.ndport}`, 23) + `${fmtIp(e.src)}:${e.sport}`);
+    }
+    return o;
+  },
+  'show interfaces status': (st, d) => {
+    const o = [pad('Port', 14) + pad('Status', 14) + pad('Vlan', 8) + pad('Duplex', 9) + pad('Speed', 9) + 'Type'];
+    for (const p of d.ports) {
+      const pc = d.sw && d.sw.ports[p.id];
+      const up = !!st.rt.links[d.id + ':' + p.id];
+      const li = up && linkInfo(st, d.id, p.id);
+      const status = pc && pc.shut ? 'disabled' : d.rt.err[p.id] ? 'err-disabled' : up ? 'connected' : 'notconnect';
+      const vlan = !pc || pc.mode === 'routed' ? 'routed' : pc.mode === 'trunk' ? 'trunk' : pc.vlan;
+      o.push(pad(p.label, 14) + pad(status, 14) + pad(vlan, 8) + pad(li ? (li.half ? 'a-half' : 'a-full') : 'auto', 9) + pad(li ? 'a-' + li.speed : 'auto', 9) + MEDIA[p.media].name);
+    }
+    return o;
   },
   'show vrrp brief': (st, d) => {
     const v = d.ifaces.filter((i) => i.vrrp && i.vrrp.on);
@@ -358,7 +388,7 @@ export function buildCli(ctx, body) {
       print('% 這個 CLI 是唯讀的。請在其他分頁用圖形介面修改，再用 show running-config 看對應的指令。', 'warn');
     } else {
       const cmd = CMDS.find((c) => match(tok, c));
-      if (cmd) SHOW[cmd](st, dev).forEach((l) => print(l));
+      if (cmd) SHOW[cmd](st, dev).forEach((l) => print(l, 'pre')); // 表格不折行，太寬時左右捲動
       else print(`% Invalid input detected：不認識的指令「${line}」，輸入 ? 查看可用指令`, 'warn');
     }
     draw();
