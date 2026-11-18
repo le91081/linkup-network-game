@@ -2,7 +2,7 @@
 import { h, icon, button, faceplate, toast } from './dom.js';
 import {
   inp, sel, toggle, seg, field, note, kv, del, cardHead, grid2, bind, linkBadge, ifaceNote,
-  isIp, isMask, isIpList, isVlanSpec, isPortNo, isAddr, isNum, isMacList,
+  isIp, isMask, isIpList, isVlanSpec, isPortNo, isAddr, isNum, isMacList, isCidrList,
 } from './form.js';
 import { CATALOG, MEDIA, peerOf, newIface } from '../engine/model.js';
 import { parseIp, fmtIp } from '../engine/ip.js';
@@ -59,12 +59,18 @@ function ifaceCard(ctx, i, o = {}) {
       field('上網密碼', inp(ctx, ...bind(i, 'pass'), { ph: '密碼' }))));
   }
   const toggles = [
-    o.nat && toggle(ctx, ...bind(i, 'nat'), 'NAT（從此介面出去時偽裝成本介面 IP）'),
+    o.nat && toggle(ctx, ...bind(i, 'nat'), 'NAT（從此介面出去時偽裝成本介面 IP）', { rerender: true }),
     o.ospf && toggle(ctx, ...bind(i, 'ospf'), 'OSPF（在此介面啟用動態路由）', { rerender: true }),
     o.ping && toggle(ctx, ...bind(i, 'ping'), '允許外部 ping 此介面'),
     o.shut && toggle(ctx, ...bind(i, 'shut'), '停用此介面 (shutdown)'),
   ].filter(Boolean);
   if (toggles.length) parts.push(h('div', { class: 'toggles' }, toggles));
+  if (o.nat && i.nat && ctx.dev.kind === 'router') {
+    parts.push(i.natAcl
+      ? note('muted', `哪些流量要做 NAT 由 ACL「${i.natAcl}」決定（用 CLI 的 ip nat inside source list 設定）。`)
+      : field('NAT 例外（往這些網段不轉換位址）', inp(ctx, ...bind(i, 'natSkip'), { ph: '例如站對站 VPN 的遠端網段 10.1.0.0/24', check: isCidrList }),
+        '路由器會先做 NAT 再判斷要不要走 VPN。往對端內網的流量如果被 NAT，就不會進加密通道。'));
+  }
   if ((o.ospf && i.ospf) || o.helper) {
     parts.push(grid2(
       o.ospf && i.ospf && field('OSPF Cost', inp(ctx, ...bind(i, 'ospfCost'), { ph: '預設 1，越小越優先', check: isNum(1, 65535) })),

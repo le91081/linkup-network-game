@@ -14,10 +14,50 @@ const isSw = (d) => !!d.sw && d.sw.mode === 'vlan';
 const TYPES = { gi: 'gigabitethernet', te: 'tengigabitethernet', fa: 'fastethernet', eth: 'ethernet' };
 const PROMPT = {
   exec: '#', config: '(config)#', if: '(config-if)#', vlan: '(config-vlan)#', router: '(config-router)#', dhcp: '(dhcp-config)#',
-  line: '(config-line)#', acl: '(config-ext-nacl)#', stdacl: '(config-std-nacl)#', radius: '(config-radius-server)#', skip: '(config-isakmp)#',
+  line: '(config-line)#', acl: '(config-ext-nacl)#', stdacl: '(config-std-nacl)#', radius: '(config-radius-server)#',
+  isakmp: '(config-isakmp)#', tset: '(cfg-crypto-trans)#', cmap: '(config-crypto-map)#',
 };
 const SERVICE_PORT = { www: 80, http: 80, https: 443, domain: 53, dns: 53, ssh: 22, telnet: 23, ftp: 21, smtp: 25, ntp: 123, snmp: 161, tftp: 69 };
-const MASKED = '********';
+
+// 設定檔裡的密碼不是明文：和真的 IOS 一樣，印出來的字串可以原樣貼回另一台設備
+const hex = (s) => [...String(s)].map((c) => c.charCodeAt(0).toString(16).padStart(4, '0')).join('');
+const unhex = (h) => (h.match(/.{4}/g) || []).map((x) => String.fromCharCode(parseInt(x, 16))).join('');
+const secret9 = (s) => '$9$' + hex(s);
+/** 解析 [類型] 密碼：0 或沒寫類型是明文，7 與 9 是 running-config 印出來的編碼 */
+function readSecret(tok) {
+  if (tok.length < 2 || !/^[0579]$/.test(tok[0])) return tok[0] || '';
+  const v = tok[1];
+  if (tok[0] === '9' && /^\$9\$([0-9a-f]{4})*$/i.test(v)) return unhex(v.slice(3));
+  if (tok[0] === '7' && /^([0-9a-f]{4})+$/i.test(v)) return unhex(v);
+  return v;
+}
+
+// ── IPsec VPN（crypto map）和設定物件之間的對應 ──
+const ENC_IOS = { aes128: 'aes', aes256: 'aes 256' };
+const HASH_IOS = { sha1: 'sha', sha256: 'sha256' };
+const cmapOf = (t) => t.cmap || 'CMAP';
+const seqOf = (d, t) => t.seq || (d.vpns.indexOf(t) + 1) * 10;
+const tsetOf = (t) => t.tset || `ESP-${(t.enc2 || t.enc || 'aes128').toUpperCase()}-${(t.hash2 || t.hash || 'sha1').toUpperCase()}`;
+const vpnAclOf = (t) => t.acl || 'VPN-' + String(t.name || 'VPN').replace(/[^\w.-]+/g, '_').toUpperCase();
+const splitList = (s) => String(s || '').split(/[,\s]+/).filter(Boolean);
+/** 通道的本地 / 遠端網段 → 定義「哪些流量要加密」的 ACL 規則 */
+const selRules = (t) => splitList(t.local).flatMap((src) => splitList(t.remote).map((dst) => ({ action: 'permit', proto: 'ip', src, dst, port: '' })));
+/** 這台設備的第一階段政策：用指令設定過就是那一份，否則從各通道的設定整理出來 */
+function isakmpOf(d) {
+  if (d.isakmp && d.isakmp.length) return d.isakmp;
+  const out = [];
+  for (const t of d.vpns || []) {
+    const p = { enc: t.enc || 'aes128', hash: t.hash || 'sha1', dh: String(t.dh || '2') };
+    if (!out.some((x) => x.enc === p.enc && x.hash === p.hash && x.dh === p.dh)) out.push({ n: (out.length + 1) * 10, ...p });
+  }
+  return out;
+}
+/** ACL 改了之後，把它套回引用這份 ACL 的通道 */
+function syncVpnAcl(d, name) {
+  const rules = ((d.aclDefs || {})[name] || []).filter((r) => r.action === 'permit');
+  const uniq = (k) => [...new Set(rules.map((r) => (r[k] === 'any' ? '0.0.0.0/0' : r[k])))].join(', ');
+  for (const t of d.vpns || []) if (t.acl === name) { t.local = uniq('src'); t.remote = uniq('dst'); }
+}
 
 const err = (s) => '% ' + s;
 const isErr = (r) => typeof r === 'string' && r.startsWith('%');
@@ -107,14 +147,30 @@ function applyPoolRange(dev, i) {
   i.dhcp.start = fmtIp(a); i.dhcp.end = fmtIp(b);
 }
 
+/** 保留位址在 IOS 裡是一個只有一台主機的位址池 (manual binding) */
+export const rsvName = (r) => r.pool || 'HOST-' + String(r.ip || '').replace(/\./g, '-');
+const colonMac = (s) => { const h = String(s || '').toLowerCase().replace(/[.:-]/g, ''); return /^[0-9a-f]{12}$/.test(h) ? h.match(/../g).join(':') : null; };
+
 /** 還沒有對應介面的位址池（先建 pool、後設介面 IP 的情況）在這裡補接上去 */
 function attachPools(dev) {
-  const rest = [];
+  let rest = [];
   for (const p of dev.dhcpPools || []) {
     const i = p.net != null && dev.ifaces.find((x) => { const n = staticNet(x); return n && n.bits === p.bits && n.net === p.net; });
     if (!i) { rest.push(p); continue; }
     Object.assign(i.dhcp, { on: true, pool: p.name, gw: p.gw || '', dns: p.dns || '' });
     applyPoolRange(dev, i);
+  }
+  // 單一主機的位址池：掛到有 DHCP 伺服器、而且包含這個 IP 的介面上
+  const pending = rest;
+  rest = [];
+  for (const p of pending) {
+    const ip = parseIp(p.host || '');
+    const i = ip != null && p.mac && dev.ifaces.find((x) => { const n = staticNet(x); return n && x.dhcp && x.dhcp.on && netOf(ip, n.bits) === n.net; });
+    if (!i) { rest.push(p); continue; }
+    const list = (i.dhcp.reserved ||= []);
+    const cur = list.find((r) => rsvName(r) === p.name);
+    if (cur) Object.assign(cur, { mac: p.mac, ip: p.host });
+    else list.push({ mac: p.mac, ip: p.host, pool: p.name });
   }
   if (dev.dhcpPools) dev.dhcpPools = rest;
 }
@@ -159,12 +215,14 @@ const HELP = {
     'spanning-tree bpduguard enable / spanning-tree guard root', 'ip dhcp snooping trust', 'ipv6 address <位址/前綴>'],
   vlan: ['name <名稱>'],
   router: ['network <網段> <萬用遮罩> area 0', 'default-information originate'],
-  dhcp: ['network <網段> <遮罩>', 'default-router <IP>', 'dns-server <IP> [IP]'],
+  dhcp: ['network <網段> <遮罩>', 'default-router <IP>', 'dns-server <IP> [IP]', 'host <IP> <遮罩> 加上 hardware-address <MAC>（保留位址）'],
   line: ['transport input ssh | telnet | all | none', 'access-class <名稱> in', 'login local'],
   acl: ['permit|deny <ip|tcp|udp|icmp> <來源> <目的> [eq <埠>]', '來源 / 目的的寫法：any、host <IP>、<網段> <萬用遮罩>', 'no <序號>   刪除一條規則'],
   stdacl: ['permit <網段> <萬用遮罩> | permit host <IP>'],
   radius: ['address ipv4 <IP>', 'key <共用密鑰>'],
-  skip: ['（這個模擬不支援用指令設定 VPN，請到「VPN」分頁）'],
+  isakmp: ['encryption aes | aes 256', 'hash sha | sha256', 'group 2 | 5 | 14 | 19', 'authentication pre-share'],
+  tset: ['mode tunnel'],
+  cmap: ['set peer <對端 IP>', 'set transform-set <名稱>', 'set pfs group14', 'match address <ACL 名稱>', 'description <通道名稱>'],
 };
 
 /**
@@ -245,6 +303,8 @@ export function iosSession(getDev, getState) {
       t.iface.bind.vlan = +v;
       return undefined;
     })],
+    ['crypto map <name>', ([name]) => onL3((i) => { i.cmap = name; })],
+    ['no crypto map [...]', () => onL3((i) => { i.cmap = ''; })],
     ['shutdown', () => each((t) => { if (t.pc) t.pc.shut = true; else if (t.port && t.iface) t.iface.shut = true; })],
     ['no shutdown', () => each((t) => { if (t.pc) t.pc.shut = false; else if (t.port && t.iface) t.iface.shut = false; })],
     ['description [...]', () => undefined],
@@ -410,7 +470,8 @@ export function iosSession(getDev, getState) {
       const e = needRouting(); if (e) return e;
       const d = dev(), N = name.toUpperCase();
       const i = d.ifaces.find((x) => x.dhcp && x.dhcp.on && poolName(x) === N);
-      let p = i ? { name: N, iface: i } : (d.dhcpPools ||= []).find((x) => x.name === N);
+      const rsv = d.ifaces.flatMap((x) => (x.dhcp && x.dhcp.reserved) || []).find((r) => rsvName(r) === N);
+      let p = i ? { name: N, iface: i } : rsv ? { name: N, rsv } : (d.dhcpPools ||= []).find((x) => x.name === N);
       if (!p) { p = { name: N, net: null, bits: null, gw: '', dns: '' }; d.dhcpPools.push(p); }
       enter('dhcp', p);
       return undefined;
@@ -418,6 +479,7 @@ export function iosSession(getDev, getState) {
     ['no ip dhcp pool <name>', ([name]) => {
       const d = dev(), N = name.toUpperCase();
       for (const i of d.ifaces) if (i.dhcp && i.dhcp.on && poolName(i) === N) i.dhcp.on = false;
+      for (const i of d.ifaces) if (i.dhcp && i.dhcp.reserved) i.dhcp.reserved = i.dhcp.reserved.filter((r) => rsvName(r) !== N);
       if (d.dhcpPools) d.dhcpPools = d.dhcpPools.filter((x) => x.name !== N);
     }],
     ['ip dhcp snooping vlan <list>', () => needSw() || undefined],
@@ -440,10 +502,12 @@ export function iosSession(getDev, getState) {
     ['no spanning-tree vlan <list> priority', () => needSw() || void ((dev().sw.stp ||= {}).prio = 32768)],
     ['spanning-tree vlan <list>', () => needSw() || void ((dev().sw.stp ||= {}).on = true)],
     ['no spanning-tree vlan <list>', () => needSw() || void ((dev().sw.stp ||= {}).on = false)],
-    ['ip nat inside source list <acl> interface <if> [...]', ([, name]) => {
+    ['ip nat inside source list <acl> interface <if> [...]', ([acl, name]) => {
       const i = ifByName(name); if (isErr(i)) return i;
       syncNat();
       i.natRule = true; setNat(i);
+      i.natAcl = acl === '1' && !(dev().aclDefs || {})['1'] ? '' : acl.toUpperCase(); // list 1 permit any 是預設：全部轉換
+      i.natSkip = '';
       return i.nat ? undefined : `（${i.label} 還要在介面模式下 ip nat outside，才會開始轉換位址）`;
     }],
     ['no ip nat inside source list <acl> interface <if> [...]', ([, name]) => { const i = ifByName(name); if (isErr(i)) return i; syncNat(); i.natRule = false; setNat(i); return undefined; }],
@@ -466,8 +530,35 @@ export function iosSession(getDev, getState) {
       return undefined;
     }],
     ['no ip nat inside source static <priv> <pub>', ([priv, pub]) => { const d = dev(); if (d.staticNat) d.staticNat = d.staticNat.filter((n) => !(n.priv === priv && n.pub === pub)); }],
-    ['access-list <n> <...>', () => undefined],
-    ['ip access-list extended <name>', ([name]) => { if (!dev().routing) return err('這台設備不支援 ACL'); enter('acl', name.toUpperCase()); return undefined; }],
+    ['access-list <n> <...>', ([n, rest]) => {
+      const d = dev(), t = rest.split(/\s+/);
+      if (!/^\d+$/.test(n)) return err('用法：access-list <編號> permit|deny …（1-99 是標準 ACL，100-199 是延伸 ACL）');
+      let rule = null;
+      if (+n < 100) {
+        // 標準 ACL 只比對來源位址
+        const action = ['permit', 'deny'].find((a) => a.startsWith((t[0] || ' ').toLowerCase()));
+        const a = (t[1] || '').toLowerCase();
+        let src = null;
+        if (a === 'any') src = 'any';
+        else if (a === 'host' && parseIp(t[2] || '') != null) src = t[2];
+        else if (parseIp(a) != null) { const bits = t[2] ? wildBits(t[2]) : 32; if (bits != null) src = bits === 32 ? a : `${fmtIp(netOf(parseIp(a), bits))}/${bits}`; }
+        if (action && src) rule = { action, proto: 'ip', src, dst: 'any', port: '' };
+      } else rule = parseAclRule(t);
+      if (!rule) return err(+n < 100 ? '用法：access-list <1-99> permit|deny <any | host IP | 網段 萬用遮罩>' : '用法：access-list <100-199> permit|deny <ip|tcp|udp|icmp> <來源> <目的> [eq <埠>]');
+      if (n === '1' && !(d.aclDefs || {})['1'] && same(rule, { action: 'permit', proto: 'ip', src: 'any', dst: 'any', port: '' })) return undefined; // 預設的 NAT 清單
+      addUnique(((d.aclDefs ||= {})[n] ||= []), rule);
+      syncVpnAcl(d, n);
+      return undefined;
+    }],
+    ['no access-list <n>', ([n]) => { const d = dev(); if (d.aclDefs) delete d.aclDefs[n]; }],
+    ['ip access-list extended <name>', ([name]) => {
+      const d = dev(), N = name.toUpperCase();
+      if (!d.routing) return err('這台設備不支援 ACL');
+      // 圖形介面建立的 VPN 通道沒有具名的 ACL：第一次用指令編輯時，先把它目前的網段變成規則
+      for (const t of d.vpns || []) if (!t.acl && vpnAclOf(t) === N && !(d.aclDefs || {})[N]) { t.acl = N; (d.aclDefs ||= {})[N] = selRules(t); }
+      enter('acl', N);
+      return undefined;
+    }],
     ['no ip access-list extended <name>', ([name]) => {
       const d = dev(), N = name.toUpperCase();
       if (d.aclDefs) delete d.aclDefs[N];
@@ -500,7 +591,7 @@ export function iosSession(getDev, getState) {
       const k = t.findIndex((x) => ['secret', 'password'].includes(x.toLowerCase()));
       if (!m || k < 0 || !t[k + 1]) return err('用法：username <帳號> privilege 15 secret <密碼>');
       m.user = t[0];
-      if (t[k + 1] !== MASKED) m.pass = t[k + 1];
+      m.pass = readSecret(t.slice(k + 1));
       return undefined;
     }],
     ['enable secret <...>', () => undefined],
@@ -508,8 +599,88 @@ export function iosSession(getDev, getState) {
     ['aaa <...>', () => undefined],
     ['dot1x system-auth-control', () => undefined],
     ['radius server <name>', () => { if (!dev().radius) return err('這台設備不支援 RADIUS'); enter('radius', null); return undefined; }],
-    ['crypto <...>', () => { enter('skip', null); return '這個模擬不支援用指令設定 VPN，請到「VPN」分頁。'; }],
+    // ── IPsec VPN ──
+    ['crypto isakmp policy <n>', ([n]) => {
+      const d = dev();
+      if (!d.vpns) return err('這台設備不支援 IPsec VPN');
+      if (!/^\d+$/.test(n) || +n < 1) return err('優先順序必須是 1 以上的數字（越小越優先）');
+      d.isakmp = isakmpOf(d).map((x) => ({ ...x }));
+      let p = d.isakmp.find((x) => x.n === +n);
+      if (!p) { p = { n: +n, enc: 'aes128', hash: 'sha1', dh: '2' }; d.isakmp.push(p); d.isakmp.sort((a, b) => a.n - b.n); }
+      enter('isakmp', p);
+      return undefined;
+    }],
+    ['no crypto isakmp policy <n>', ([n]) => { const d = dev(); if (d.vpns) d.isakmp = isakmpOf(d).filter((x) => x.n !== +n); }],
+    ['crypto isakmp enable', () => undefined],
+    ['crypto isakmp key <...>', ([rest]) => {
+      const d = dev(), t = rest.split(/\s+/);
+      const a = t.findIndex((x, n) => n > 0 && x.length >= 3 && 'address'.startsWith(x.toLowerCase()));
+      const key = a > 0 ? readSecret(t.slice(0, a)) : '', peer = t[a + 1] || '';
+      if (!d.vpns) return err('這台設備不支援 IPsec VPN');
+      if (!key || parseIp(peer) == null) return err('用法：crypto isakmp key <金鑰> address <對端 IP>');
+      (d.ikeKeys ||= {})[peer] = key;
+      for (const v of d.vpns) if (v.peer === peer) v.psk = key;
+      return undefined;
+    }],
+    ['no crypto isakmp key <...>', ([rest]) => {
+      const d = dev(), peer = rest.split(/\s+/).pop();
+      if (d.ikeKeys) delete d.ikeKeys[peer];
+      for (const v of d.vpns || []) if (v.peer === peer) v.psk = '';
+    }],
+    ['crypto ipsec transform-set <name> <...>', ([name, rest]) => {
+      const d = dev(), w = rest.toLowerCase().split(/\s+/);
+      if (!d.vpns) return err('這台設備不支援 IPsec VPN');
+      const ei = w.indexOf('esp-aes');
+      if (ei < 0) return err('這個模擬支援 esp-aes 與 esp-aes 256（DES / 3DES 已經不安全）');
+      const hash2 = w.includes('esp-sha256-hmac') ? 'sha256' : w.includes('esp-sha-hmac') ? 'sha1' : null;
+      if (!hash2) return err('transform-set 還需要驗證演算法：esp-sha-hmac 或 esp-sha256-hmac');
+      const set = { enc2: w[ei + 1] === '256' ? 'aes256' : 'aes128', hash2 };
+      (d.tsets ||= {})[name] = set;
+      for (const v of d.vpns) if (v.tset === name) Object.assign(v, set);
+      enter('tset', null);
+      return undefined;
+    }],
+    ['no crypto ipsec transform-set <name>', ([name]) => {
+      const d = dev();
+      if ((d.vpns || []).some((v) => v.tset === name)) return err(`transform-set ${name} 正被 crypto map 使用，不能刪除`);
+      if (d.tsets) delete d.tsets[name];
+      return undefined;
+    }],
+    ['crypto map <name> <seq> ipsec-isakmp', (a) => cmapEnter(a)],
+    ['crypto map <name> <seq>', (a) => cmapEnter(a)],
+    ['no crypto map <name> [...]', ([name, seq]) => {
+      const d = dev();
+      if (!d.vpns) return undefined;
+      d.vpns = d.vpns.filter((v) => !(cmapOf(v) === name && (!seq || seqOf(d, v) === +seq)));
+      if (!d.vpns.some((v) => cmapOf(v) === name)) for (const i of d.ifaces) if (i.cmap === name) i.cmap = '';
+      return undefined;
+    }],
+    ['crypto <...>', () => err('這個模擬支援的 VPN 指令：crypto isakmp policy、crypto isakmp key、crypto ipsec transform-set、crypto map')],
   ];
+
+  function setRsvMac(text) {
+    const mac = colonMac(text), p = S.cur;
+    if (!mac) return err('MAC 位址的格式：0011.2233.4455；client-identifier 則是前面多一個 01');
+    if (p.iface) return err('這個位址池已經是一個網段，保留位址請另外建一個位址池');
+    if (p.rsv) p.rsv.mac = mac; else { p.mac = mac; attachPools(dev()); }
+    return undefined;
+  }
+
+  function cmapEnter([name, seq]) {
+    const d = dev();
+    if (!d.vpns || d.kind !== 'router') return err('這台設備不支援 crypto map');
+    if (!/^\d+$/.test(seq) || +seq < 1) return err('用法：crypto map <名稱> <序號> ipsec-isakmp');
+    let t = d.vpns.find((v) => cmapOf(v) === name && seqOf(d, v) === +seq), note;
+    if (t) t.seq = +seq;
+    else {
+      const p = isakmpOf(d)[0] || { enc: 'aes128', hash: 'sha1', dh: '2' };
+      t = { name: `${name}-${+seq}`, cmap: name, seq: +seq, peer: '', psk: '', local: '', remote: '', enc: p.enc, hash: p.hash, dh: p.dh };
+      d.vpns.push(t);
+      note = 'NOTE: This new crypto map will remain disabled until a peer and a valid access list have been configured.';
+    }
+    enter('cmap', t);
+    return note;
+  }
 
   const SUB = {
     if: IF,
@@ -555,6 +726,16 @@ export function iosSession(getDev, getState) {
         const p = S.cur; (p.iface ? p.iface.dhcp : p).dns = ips.join(', ');
         return undefined;
       }],
+      // 保留位址：host + hardware-address（或 client-identifier）
+      ['host <ip> [...]', ([ip]) => {
+        if (parseIp(ip) == null) return err('用法：host <IP> <遮罩>');
+        const p = S.cur;
+        if (p.iface) return err('這個位址池已經是一個網段，保留位址請另外建一個位址池');
+        if (p.rsv) p.rsv.ip = ip; else { p.host = ip; attachPools(dev()); }
+        return undefined;
+      }],
+      ['hardware-address <mac> [...]', ([mac]) => setRsvMac(mac)],
+      ['client-identifier <id>', ([id]) => setRsvMac(id.replace(/[.:-]/g, '').replace(/^01(?=[0-9a-f]{12}$)/i, ''))],
       ['lease <...>', () => undefined],
       ['domain-name <...>', () => undefined],
     ],
@@ -586,12 +767,14 @@ export function iosSession(getDev, getState) {
         const lists = aclLists(d, S.cur);
         if (!(n >= 0) || !lists.some((l) => l[n])) return err('沒有這個序號的規則（序號是 10、20、30…）');
         for (const l of lists) l.splice(n, 1);
+        syncVpnAcl(d, S.cur);
         return undefined;
       }],
       ['<...>', ([line]) => {
         const rule = parseAclRule(line.split(/\s+/));
         if (!rule) return err('用法：permit|deny <ip|tcp|udp|icmp> <來源> <目的> [eq <埠>]，位址寫 any、host <IP> 或 <網段> <萬用遮罩>');
         for (const l of aclLists(dev(), S.cur)) addUnique(l, { ...rule });
+        syncVpnAcl(dev(), S.cur);
         return undefined;
       }],
     ],
@@ -616,9 +799,37 @@ export function iosSession(getDev, getState) {
     ],
     radius: [
       ['address ipv4 <ip> [...]', ([ip]) => { if (parseIp(ip) == null) return err('IP 位址的格式不正確'); dev().radius.ip = ip; return undefined; }],
-      ['key <...>', ([k]) => { if (k !== MASKED) dev().radius.secret = k; }],
+      ['key <...>', ([k]) => { dev().radius.secret = readSecret(k.split(/\s+/)); }],
     ],
-    skip: [['<...>', () => undefined]],
+    isakmp: [
+      ['encryption aes [...]', ([bits]) => { if (bits && !['128', '256'].includes(bits)) return err('金鑰長度支援 128 與 256'); S.cur.enc = bits === '256' ? 'aes256' : 'aes128'; return undefined; }],
+      ['encryption <x>', ([x]) => err(`這個模擬不支援 ${x}（DES / 3DES 已經不安全），請用 aes 或 aes 256`)],
+      ['hash <h>', ([h]) => { const v = { sha: 'sha1', sha1: 'sha1', sha256: 'sha256' }[h.toLowerCase()]; if (!v) return err('hash 支援 sha（SHA-1）與 sha256'); S.cur.hash = v; return undefined; }],
+      ['group <g>', ([g]) => { if (!['2', '5', '14', '19'].includes(g)) return err('DH 群組支援 2、5、14、19'); S.cur.dh = g; return undefined; }],
+      ['authentication <a>', ([a]) => ('pre-share'.startsWith(a.toLowerCase()) ? undefined : err('這個模擬只支援 pre-share（預先共用金鑰）'))],
+      ['lifetime <n>', () => undefined],
+    ],
+    tset: [['mode <m>', () => undefined]],
+    cmap: [
+      ['set peer <ip>', ([ip]) => {
+        if (parseIp(ip) == null) return err('IP 位址的格式不正確');
+        const d = dev(), t = S.cur;
+        t.peer = ip;
+        if (d.ikeKeys && d.ikeKeys[ip]) t.psk = d.ikeKeys[ip];
+        return t.psk ? undefined : `（還沒有給 ${ip} 的預先共用金鑰：crypto isakmp key <金鑰> address ${ip}）`;
+      }],
+      ['set transform-set <name>', ([name]) => {
+        const set = (dev().tsets || {})[name];
+        if (!set) return err(`ERROR: transform set with tag ${name} does not exist.（先用 crypto ipsec transform-set 定義）`);
+        Object.assign(S.cur, { tset: name }, set);
+        return undefined;
+      }],
+      ['set pfs <g>', ([g]) => { const m = g.toLowerCase().match(/^group(2|5|14|19)$/); if (!m) return err('用法：set pfs group14（支援 group2、group5、group14、group19）'); S.cur.pfs = m[1]; return undefined; }],
+      ['no set pfs', () => { S.cur.pfs = ''; }],
+      ['set security-association <...>', () => undefined],
+      ['match address <name>', ([name]) => { S.cur.acl = name.toUpperCase(); syncVpnAcl(dev(), S.cur.acl); return undefined; }],
+      ['description <...>', ([text]) => { S.cur.name = text; }],
+    ],
   };
 
   function aclLists(d, name) {
@@ -639,7 +850,7 @@ export function iosSession(getDev, getState) {
     const tok = text.split(/\s+/).filter(Boolean);
     const out = [];
     const done = (changed) => ({ out, changed: !!changed });
-    if (!tok.length || tok[0].startsWith('!')) { if (S.mode === 'skip' && tok.length) S.mode = 'config'; return done(false); }
+    if (!tok.length || tok[0].startsWith('!')) return done(false);
     const t0 = tok[0].toLowerCase();
     if (S.mode === 'exec') {
       if (match(tok, 'configure terminal') || match(tok, 'configure')) { S.mode = 'config'; out.push('Enter configuration commands, one per line.  End with CNTL/Z.'); return done(false); }
@@ -655,7 +866,7 @@ export function iosSession(getDev, getState) {
     if (tok.length >= 2 && 'show'.startsWith(t0) && t0.length >= 2) { out.push('% 在設定模式要查看狀態請在前面加 do，例如 do show ip interface brief'); return done(false); }
     // ACL 模式的規則是整行一起解析，只有長得像規則的才交給它，其餘當成全域指令（可以直接跳到別的設定）
     const aclMode = S.mode === 'acl' || S.mode === 'stdacl';
-    const trySub = S.mode !== 'config' && S.mode !== 'skip' && (!aclMode || /^(\d+\s+)?(permit|deny)\b/i.test(text) || /^no\s+\d+$/i.test(text));
+    const trySub = S.mode !== 'config' && (!aclMode || /^(\d+\s+)?(permit|deny)\b/i.test(text) || /^no\s+\d+$/i.test(text));
     let res = trySub ? run(SUB[S.mode], tok, out) : { hit: false };
     if (!res.hit && S.mode === 'config') res = run(CONFIG, tok, out);
     else if (!res.hit) {
@@ -663,7 +874,6 @@ export function iosSession(getDev, getState) {
       const prev = S.mode, prevCur = S.cur;
       S.mode = 'config'; S.cur = null;
       res = run(CONFIG, tok, out);
-      if (!res.hit && prev === 'skip') { S.mode = 'skip'; return done(false); } // VPN 區塊裡的細項：略過
       if (!res.hit || isErr(res.r)) { S.mode = prev; S.cur = prevCur; }
     }
     if (!res.hit) { out.push(err(`Invalid input detected：不認識的指令「${text}」，輸入 ? 查看這個模式可用的指令`)); return done(false); }
@@ -727,7 +937,7 @@ export const aclLine = (r) => `${r.action} ${r.proto || 'ip'} ${aclAddr(r.src)} 
 export function runningConfig(state, dev) {
   const o = ['Building configuration...', '', '!', `hostname ${hostName(dev)}`, '!'];
   const m = dev.mgmt;
-  if (m) o.push(`username ${m.user || 'admin'} privilege 15 secret ${MASKED}`, '!');
+  if (m) o.push(`username ${m.user || 'admin'} privilege 15 secret 9 ${secret9(m.pass || '')}`, '!');
   if (dev.v6routing) o.push('ipv6 unicast-routing', '!');
   if (isSw(dev)) {
     const sw = dev.sw;
@@ -752,13 +962,44 @@ export function runningConfig(state, dev) {
     o.push(`ip dhcp pool ${poolName(i)}`, ` network ${fmtIp(net)} ${fmtMask(i.rt.bits)}`, ` default-router ${i.dhcp.gw || fmtIp(i.rt.ip)}`);
     if (i.dhcp.dns) o.push(` dns-server ${i.dhcp.dns.replace(/[,\s]+/g, ' ')}`);
     o.push('!');
+    for (const r of i.dhcp.reserved || []) {
+      if (parseIp(r.ip || '') == null || !colonMac(r.mac)) continue;
+      o.push(`ip dhcp pool ${rsvName(r)}`, ` host ${r.ip} ${fmtMask(i.rt.bits)}`, ` hardware-address ${dotMac(colonMac(r.mac))}`, '!');
+    }
   }
   for (const p of dev.dhcpPools || []) {
     o.push(`ip dhcp pool ${p.name}`);
+    if (p.host) o.push(` host ${p.host}`);
+    if (p.mac) o.push(` hardware-address ${dotMac(p.mac)}`);
     if (p.net != null) o.push(` network ${fmtIp(p.net)} ${fmtMask(p.bits)}`);
     if (p.gw) o.push(` default-router ${p.gw}`);
     if (p.dns) o.push(` dns-server ${p.dns.replace(/[,\s]+/g, ' ')}`);
     o.push('!');
+  }
+  // IPsec VPN：第一階段政策、金鑰、第二階段的 transform-set，最後用 crypto map 把它們和對端、ACL 綁在一起
+  const vp = dev.vpns || [];
+  const cmIf = new Map(); // 圖形介面建立的通道沒有明確套用 crypto map：視為套用在通往對端的那個介面上
+  for (const T of (dev.rt && dev.rt.tunnels) || []) {
+    const i = T.cfg && !T.cfg.cmap && T.localIp != null && dev.ifaces.find((x) => x.rt && x.rt.ip === T.localIp);
+    if (i) cmIf.set(i, cmapOf(T.cfg));
+  }
+  if (vp.length || (dev.isakmp && dev.isakmp.length)) {
+    for (const p of isakmpOf(dev)) o.push(`crypto isakmp policy ${p.n}`, ` encryption ${ENC_IOS[p.enc] || 'aes'}`, ` hash ${HASH_IOS[p.hash] || 'sha'}`, ' authentication pre-share', ` group ${p.dh}`);
+    for (const t of vp) if (t.psk && t.peer) o.push(`crypto isakmp key ${t.psk} address ${t.peer}`);
+    o.push('!');
+    const sets = new Map(Object.entries(dev.tsets || {}));
+    for (const t of vp) if (!sets.has(tsetOf(t))) sets.set(tsetOf(t), { enc2: t.enc2 || t.enc || 'aes128', hash2: t.hash2 || t.hash || 'sha1' });
+    for (const [name, s] of sets) o.push(`crypto ipsec transform-set ${name} esp-${ENC_IOS[s.enc2]} esp-${HASH_IOS[s.hash2]}-hmac`, ' mode tunnel');
+    if (sets.size) o.push('!');
+    for (const t of vp) {
+      o.push(`crypto map ${cmapOf(t)} ${seqOf(dev, t)} ipsec-isakmp`);
+      if (t.name && t.name !== `${cmapOf(t)}-${seqOf(dev, t)}`) o.push(` description ${t.name}`);
+      if (t.peer) o.push(` set peer ${t.peer}`);
+      o.push(` set transform-set ${tsetOf(t)}`);
+      if (t.pfs) o.push(` set pfs group${t.pfs}`);
+      o.push(` match address ${vpnAclOf(t)}`);
+    }
+    if (vp.length) o.push('!');
   }
   const natOut = (i) => i.nat || (i.natOut && !i.natRule);
   const natRule = (i) => i.nat || (i.natRule && !i.natOut);
@@ -777,6 +1018,7 @@ export function runningConfig(state, dev) {
     if (i.vrrp && i.vrrp.on) l.push(` vrrp 1 ip ${i.vrrp.vip || '(未設定)'}`, ` vrrp 1 priority ${i.vrrp.prio || 100}`);
     if (i.ip6) l.push(` ipv6 address ${i.ip6}`);
     if (i.ip6 && !i.ra) l.push(' ipv6 nd ra suppress all');
+    if (i.cmap || cmIf.has(i)) l.push(` crypto map ${i.cmap || cmIf.get(i)}`);
     return l.filter(Boolean);
   };
   for (const p of dev.ports) {
@@ -843,12 +1085,18 @@ export function runningConfig(state, dev) {
   }
   for (const r of dev.routes6 || []) if (r.dst && r.via) o.push(`ipv6 route ${r.dst} ${r.via}`);
   const out = dev.ifaces.filter(natRule);
-  for (const i of out) o.push(`ip nat inside source list 1 interface ${i.label} overload`);
+  // NAT 的範圍：指定的 ACL、圖形介面填的「NAT 例外」（轉成一份 ACL），或預設的 list 1（全部轉換）
+  const natList = (i) => i.natAcl || (splitList(i.natSkip).length ? 'NAT-' + i.label.replace(/[^\w.]+/g, '_').toUpperCase() : '1');
+  for (const i of out) o.push(`ip nat inside source list ${natList(i)} interface ${i.label} overload`);
   for (const n of dev.staticNat || []) if (n.pub && n.priv) o.push(`ip nat inside source static ${n.priv} ${n.pub}`);
   for (const f of dev.portForwards || []) {
     if (f.port && f.toIp && out[0]) o.push(`ip nat inside source static ${f.proto || 'tcp'} ${f.toIp} ${f.toPort || f.port} interface ${out[0].label} ${f.port}`);
   }
-  if (out.length) o.push('access-list 1 permit any');
+  if (out.some((i) => natList(i) === '1') && !(dev.aclDefs || {})['1']) o.push('access-list 1 permit any');
+  for (const i of out) {
+    if (i.natAcl || !splitList(i.natSkip).length) continue;
+    o.push('!', `ip access-list extended ${natList(i)}`, ...splitList(i.natSkip).map((n) => ' ' + aclLine({ action: 'deny', proto: 'ip', src: 'any', dst: n, port: '' })), ' permit ip any any');
+  }
   for (const i of dev.ifaces) {
     for (const [key, dir] of [['aclIn', 'in'], ['aclOut', 'out']]) {
       if (!i[key] || !i[key].length) continue;
@@ -856,23 +1104,30 @@ export function runningConfig(state, dev) {
       for (const r of i[key]) o.push(' ' + aclLine(r));
     }
   }
+  for (const t of vp) {
+    const rules = selRules(t);
+    if (!rules.length) continue;
+    o.push('!', `ip access-list extended ${vpnAclOf(t)}`);
+    for (const r of rules) o.push(' ' + aclLine(r));
+  }
   for (const [name, list] of Object.entries(dev.aclDefs || {})) {
-    if (!list.length) continue;
+    if (!list.length || vp.some((t) => vpnAclOf(t) === name)) continue;
+    if (/^\d+$/.test(name)) { // 編號的 ACL：1-99 是標準（只有來源），100 以上是延伸
+      o.push('!');
+      for (const r of list) o.push(`access-list ${name} ${+name < 100 ? `${r.action} ${aclAddr(r.src)}` : aclLine(r)}`);
+      continue;
+    }
     o.push('!', `ip access-list extended ${name}`);
     for (const r of list) o.push(' ' + aclLine(r));
   }
-  for (const t of dev.vpns || []) {
-    o.push('!', 'crypto isakmp policy 10', ` encryption ${(t.enc || 'aes128') === 'aes256' ? 'aes 256' : 'aes'}`, ` hash ${t.hash || 'sha1'}`, ` group ${t.dh || 2}`, ' authentication pre-share',
-      `crypto isakmp key ${MASKED} address ${t.peer || '(未設定)'}`, `! 通道 ${t.name}：${t.local || '?'} ↔ ${t.remote || '?'}`);
-  }
-  if (dev.radius && dev.radius.ip) o.push('!', 'radius server AAA', ` address ipv4 ${dev.radius.ip} auth-port 1812 acct-port 1813`, ` key ${MASKED}`);
+  if (dev.radius && dev.radius.ip) o.push('!', 'radius server AAA', ` address ipv4 ${dev.radius.ip} auth-port 1812 acct-port 1813`, ` key 7 ${hex(dev.radius.secret || '')}`);
   if (m) {
     o.push('!');
     if (m.ntp) o.push(`ntp server ${m.ntp}`);
     if (m.syslog) o.push(`logging host ${m.syslog}`);
     const snmp = m.snmp || 'v2c';
     if (snmp === 'v2c') o.push(`snmp-server community ${m.community || 'public'} RO`);
-    else if (snmp === 'v3') o.push('snmp-server group NMS v3 priv', `snmp-server user monitor NMS v3 auth sha ${MASKED} priv aes 128 ${MASKED}`);
+    else if (snmp === 'v3') o.push('snmp-server group NMS v3 priv'); // SNMPv3 的使用者不會出現在 running-config 裡，真的 IOS 也是如此
     o.push(m.http ? 'ip http server' : 'no ip http server', m.https ? 'ip http secure-server' : 'no ip http secure-server');
     const allow = String(m.allow || '').split(/[,\s]+/).filter(Boolean).map((s) => { const x = s.match(/^([\d.]+)(?:\/(\d+))?$/); const ip = x && parseIp(x[1]); return ip == null ? null : { net: ip, bits: x[2] == null ? 32 : +x[2] }; }).filter(Boolean);
     const an = m.aclName || 'MGMT';

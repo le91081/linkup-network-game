@@ -235,8 +235,8 @@ console.log('\nCLI 設定指令');
     for (const l of lines) for (const o of sess.exec(l).out) if (o.startsWith('%') && !o.includes('Creating vlan')) errs.push(`${l} → ${o}`);
     return errs;
   };
-  // 不能用指令重現的部分：遮蔽的密碼、註解、自動產生的 description、VPN
-  const keep = (l) => !/\*{8}/.test(l) && !/^ ?!/.test(l) && !/^ description /.test(l) && !/^crypto | encryption | hash | group \d| authentication pre-share/.test(l) && l !== '' && !/^Building/.test(l);
+  // 比對時略過註解與分隔線
+  const keep = (l) => !/^ ?!/.test(l) && l !== '' && !/^Building/.test(l);
 
   // 1. 把每一關解答的 running-config 整份貼到一台全新的同型號設備上，應該得到一模一樣的設定
   let n = 0, bad = 0;
@@ -252,6 +252,9 @@ console.log('\nCLI 設定指令');
       const got = runningConfig(s2, s2.devices[d.id]);
       const a = want.filter(keep), b = got.filter(keep);
       n++;
+      // 貼回去之後不只文字要一樣，網路也要照常運作（密碼、金鑰都要還原得回來）
+      const broken = evaluate(s2, lv.objectives).filter((r) => !r.pass);
+      if (broken.length) { bad++; fail(`${lv.id} ${d.name}：貼回 running-config 之後關卡不再通過 — ${broken[0].reason}`); }
       if (errs.length || a.join('\n') !== b.join('\n')) {
         bad++;
         fail(`${lv.id} ${d.name}：貼回 running-config 之後設定不一致`);
@@ -337,6 +340,57 @@ console.log('\nCLI 設定指令');
     ok(many.line === null && many.options.join() === 'interface,route', '補齊：有多個候選時列出來');
     sess.exec('conf t'); sess.exec('int gi0/0/1');
     ok(sess.complete('ip na').line === 'ip nat ' && sess.complete('ip nat ').options.join() === 'inside,outside' && sess.complete('do sh', shows).line === 'do show ', '補齊：介面模式與 do show');
+  }
+
+  // 站對站 VPN：分公司換成 Cisco 路由器，整台用指令設定，和總公司的 FortiGate 互通
+  {
+    const { removeCable } = await import('../src/engine/model.js');
+    const lv = LEVELS.find((l) => l.id === 'l20');
+    const build = (natExempt) => {
+      const s = lv.setup();
+      for (const c of s.cables.filter((x) => x.a.dev === 'br' || x.b.dev === 'br')) removeCable(s, c.id);
+      s.devices.br = makeDevice('isr4321', 'br', { name: 'Branch-RT', pos: [7, -4.5] });
+      link(s, 'inet:line2', 'br:Gi0/0/0'); link(s, 'br:Gi0/0/1', 'br-sw:1');
+      recompute(s);
+      const errs = type(s, 'br', ['conf t',
+        'int gi0/0/0', 'ip address 198.51.100.34 255.255.255.252', 'ip nat outside', 'no shut',
+        'int gi0/0/1', 'ip address 10.2.0.1 255.255.255.0', 'ip nat inside',
+        'ip route 0.0.0.0 0.0.0.0 198.51.100.33',
+        ...(natExempt
+          ? ['ip access-list extended NAT', 'deny ip 10.2.0.0 0.0.0.255 10.1.0.0 0.0.0.255', 'permit ip 10.2.0.0 0.0.0.255 any', 'ip nat inside source list NAT interface Gi0/0/0 overload']
+          : ['access-list 1 permit any', 'ip nat inside source list 1 interface Gi0/0/0 overload']),
+        'crypto isakmp policy 10', 'encryption aes 256', 'hash sha256', 'authentication pre-share', 'group 14',
+        'crypto isakmp key Tw!S2S#2026 address 203.0.113.18',
+        'crypto ipsec transform-set TS esp-aes 256 esp-sha256-hmac', 'mode tunnel',
+        'ip access-list extended VPN-HQ', 'permit ip 10.2.0.0 0.0.0.255 10.1.0.0 0.0.0.255',
+        'crypto map CMAP 10 ipsec-isakmp', 'set peer 203.0.113.18', 'set transform-set TS', 'match address VPN-HQ',
+        'int gi0/0/0', 'crypto map CMAP', 'end']);
+      recompute(s);
+      return { s, errs, res: evaluate(s, lv.objectives) };
+    };
+    const good = build(true);
+    ok(!good.errs.length && good.s.devices.br.vpns[0].rt.up && good.res.every((r) => r.pass), 'Cisco 路由器用 crypto map 和 FortiGate 建立站對站 VPN，四個目標全部通過');
+    ok(good.res[0].log.some((l) => l.kind === 'vpn'), '往總公司的流量確實走加密通道');
+    const noExempt = build(false);
+    ok(noExempt.s.devices.br.vpns[0].rt.up && !noExempt.res[0].pass && noExempt.res[0].log.some((l) => /先做 NAT/.test(l.text)) && noExempt.res[2].pass,
+      '沒有設 NAT 例外：通道是 Up，但流量先被 NAT 而沒有進通道（上網不受影響）');
+    const s3 = build(true).s;
+    type(s3, 'br', ['conf t', 'int gi0/0/0', 'no crypto map']);
+    recompute(s3);
+    ok(!s3.devices.br.vpns[0].rt.up && /crypto map/.test(s3.devices.br.vpns[0].rt.why), 'crypto map 沒有套用到對外介面時通道不會建立');
+    const s4 = build(true).s;
+    type(s4, 'br', ['conf t', 'crypto ipsec transform-set TS esp-aes esp-sha-hmac']);
+    recompute(s4);
+    ok(!s4.devices.br.vpns[0].rt.up && /第二階段/.test(s4.devices.br.vpns[0].rt.why), '第二階段的 transform-set 和對端不一致時，錯誤訊息指出是第二階段');
+    // 整份設定貼到另一台空白路由器，VPN 要照樣建立
+    const want = runningConfig(good.s, good.s.devices.br);
+    const s5 = cloneState(good.s);
+    s5.devices.br = makeDevice('isr4321', 'br', { name: 'Branch-RT', pos: [7, -4.5] });
+    recompute(s5);
+    const e5 = type(s5, 'br', ['conf t', ...want, 'end']);
+    recompute(s5);
+    ok(!e5.length && runningConfig(s5, s5.devices.br).filter(keep).join('\n') === want.filter(keep).join('\n') && evaluate(s5, lv.objectives).every((r) => r.pass),
+      '含 VPN 與 NAT 例外的 running-config 貼到空白路由器後，通道照樣建立');
   }
 
   // 3. 錯誤處理與模式切換

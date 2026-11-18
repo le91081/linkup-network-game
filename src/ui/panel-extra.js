@@ -6,10 +6,11 @@ import {
 } from './form.js';
 import { fmtIp } from '../engine/ip.js';
 import { CATALOG, peerOf, portOf, newSsid, cableAt, linkInfo } from '../engine/model.js';
-import { visibleSsids, WIFI_SEC, macsBehind, isBridgePort, hitsOf } from '../engine/sim.js';
+import { visibleSsids, WIFI_SEC, macsBehind, isBridgePort, hitsOf, P1 } from '../engine/sim.js';
 import * as M from './panel-more.js';
 
 const nameOf = (ctx, id) => ctx.state.devices[id]?.name || id;
+const DH_GROUPS = [['2', 'DH 2（1024-bit）'], ['5', 'DH 5（1536-bit）'], ['14', 'DH 14（2048-bit）'], ['19', 'DH 19（ECP-256）']];
 
 // ───────────────────────── Wi-Fi 用戶端 ─────────────────────────
 
@@ -383,7 +384,7 @@ export function aclTab(ctx, body) {
 
 export function vpnTab(ctx, body) {
   const { dev, state } = ctx;
-  body.append(h('p', { class: 'tip', text: '站對站 VPN：兩端的對端 IP、預先共用金鑰、加密提案都要對得上，本地 / 遠端網段要互為鏡像。' }));
+  body.append(h('p', { class: 'tip', text: '站對站 VPN：兩端的對端 IP、預先共用金鑰要對得上，本地 / 遠端網段要互為鏡像。協商分兩個階段，兩個階段的加密提案都要一致。' }));
   dev.vpns.forEach((t, n) => {
     const rename = (v) => {
       const from = 'vpn:' + (t.name || 'VPN');
@@ -401,9 +402,13 @@ export function vpnTab(ctx, body) {
         field('預先共用金鑰 (PSK)', inp(ctx, ...bind(t, 'psk'), { ph: '兩端必須相同' })),
         field('本地網段', inp(ctx, ...bind(t, 'local'), { ph: '例如 10.2.0.0/24', check: isCidrList })),
         field('遠端網段', inp(ctx, ...bind(t, 'remote'), { ph: '例如 10.1.0.0/24', check: isCidrList })),
-        field('加密', sel(ctx, () => t.enc || 'aes128', (v) => { t.enc = v; }, [['aes128', 'AES128'], ['aes256', 'AES256']])),
-        field('雜湊', sel(ctx, () => t.hash || 'sha1', (v) => { t.hash = v; }, [['sha1', 'SHA1'], ['sha256', 'SHA256']])),
-        field('DH 群組', sel(ctx, () => t.dh || '2', (v) => { t.dh = v; }, [['2', 'DH 2（1024-bit）'], ['5', 'DH 5（1536-bit）'], ['14', 'DH 14（2048-bit）'], ['19', 'DH 19（ECP-256）']]))),
+        !(dev.isakmp && dev.isakmp.length) && field('第一階段 (IKE) 加密', sel(ctx, () => t.enc || 'aes128', (v) => { t.enc = v; }, [['aes128', 'AES128'], ['aes256', 'AES256']])),
+        !(dev.isakmp && dev.isakmp.length) && field('第一階段雜湊', sel(ctx, () => t.hash || 'sha1', (v) => { t.hash = v; }, [['sha1', 'SHA1'], ['sha256', 'SHA256']])),
+        !(dev.isakmp && dev.isakmp.length) && field('第一階段 DH 群組', sel(ctx, () => t.dh || '2', (v) => { t.dh = v; }, DH_GROUPS)),
+        field('第二階段 (IPsec) 加密', sel(ctx, () => t.enc2 || '', (v) => { t.enc2 = v; }, [['', '和第一階段相同'], ['aes128', 'AES128'], ['aes256', 'AES256']])),
+        field('第二階段雜湊', sel(ctx, () => t.hash2 || '', (v) => { t.hash2 = v; }, [['', '和第一階段相同'], ['sha1', 'SHA1'], ['sha256', 'SHA256']])),
+        field('PFS（第二階段再做一次 DH）', sel(ctx, () => t.pfs || '', (v) => { t.pfs = v; }, [['', '不使用'], ...DH_GROUPS]))),
+      dev.isakmp && dev.isakmp.length > 0 && note('muted', `第一階段的提案由 CLI 的 crypto isakmp policy 管理，整台設備共用：${dev.isakmp.map((p) => `#${p.n} ${P1(p)}`).join('；')}`),
       ctx.live(() => (t.rt && t.rt.up ? note('ok', '通道已建立 (Up)') : note('warn', '通道未建立：' + ((t.rt && t.rt.why) || '設定中')))),
       dev.kind === 'firewall' && note('muted', `政策的介面請選「VPN ${t.name || 'VPN'}」，內網 ↔ VPN 兩個方向都要放行。`)));
   });

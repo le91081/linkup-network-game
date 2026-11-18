@@ -722,7 +722,11 @@ function routesAll(state) {
 
 // ───────────────────────────── VPN 通道 ─────────────────────────────
 
-const PROPOSAL = (t) => `${(t.enc || 'aes128').toUpperCase()} / ${(t.hash || 'sha1').toUpperCase()} / DH ${t.dh || '2'}`;
+// IPsec 分兩個階段協商：第一階段 (IKE) 建立管理通道，第二階段 (IPsec SA) 才是真正加密資料的通道
+export const P1 = (t) => `${(t.enc || 'aes128').toUpperCase()} / ${(t.hash || 'sha1').toUpperCase()} / DH ${t.dh || '2'}`;
+export const P2 = (t) => `${(t.enc2 || t.enc || 'aes128').toUpperCase()} / ${(t.hash2 || t.hash || 'sha1').toUpperCase()}${t.pfs ? ' / PFS ' + t.pfs : ''}`;
+/** 一台設備願意接受的第一階段提案：IOS 的 crypto isakmp policy 是整台共用、可以有好幾組；其他設備是每個通道一組 */
+const p1set = (d, t) => (d.isakmp && d.isakmp.length ? d.isakmp.map(P1) : [P1(t)]);
 const sameSel = (a, b) => a.length === b.length && a.every((x) => b.some((y) => y.net === x.net && y.bits === x.bits));
 const tunIface = (id, label) => ({ id, label, bind: { t: 'tun' }, rt: { ip: null, vips: [], link: true }, nat: false });
 
@@ -745,6 +749,7 @@ function prepTunnels(state) {
       else {
         const r = lookupRoute(d, T.peerIp);
         if (!r) T.why = `沒有通往對端 ${fmtIp(T.peerIp)} 的路由`;
+        else if (t.cmap && r.iface.cmap !== t.cmap) T.why = `crypto map ${t.cmap} 還沒有套用到對外的介面 ${r.iface.label}（在介面模式下輸入 crypto map ${t.cmap}）`;
         else T.localIp = r.iface.rt.ip;
       }
     }
@@ -757,7 +762,8 @@ function prepTunnels(state) {
     else if (!P) T.why = `${pd.name} 上沒有指向 ${fmtIp(T.localIp)} 的通道設定`;
     else if (P.cfg.off) T.why = `${pd.name} 那一端的通道已停用`;
     else if (P.cfg.psk !== T.cfg.psk) T.why = '兩端的預先共用金鑰 (PSK) 不一致 — IKE 驗證失敗';
-    else if (PROPOSAL(P.cfg) !== PROPOSAL(T.cfg)) T.why = `加密提案不一致（本端 ${PROPOSAL(T.cfg)}，對端 ${PROPOSAL(P.cfg)}）— IKE 協商失敗`;
+    else if (!p1set(state.devices[T.dev], T.cfg).some((x) => p1set(pd, P.cfg).includes(x))) T.why = `第一階段的加密提案不一致（本端 ${p1set(state.devices[T.dev], T.cfg).join('、')}，對端 ${p1set(pd, P.cfg).join('、')}）— IKE 協商失敗`;
+    else if (P2(P.cfg) !== P2(T.cfg)) T.why = `第二階段 (IPsec) 的加密提案不一致（本端 ${P2(T.cfg)}，對端 ${P2(P.cfg)}）— IKE 通過了，但資料通道建不起來`;
     else if (!sameSel(T.local, P.remote) || !sameSel(T.remote, P.local)) T.why = '兩端的本地 / 遠端網段沒有互相對應';
     else {
       const r = transact(state, T.dev, { proto: 'udp', dst: T.peerIp, dport: 500, quiet: true });
@@ -1051,6 +1057,16 @@ function arpFail(state, dev, outIf, nh, viaGw, eps) {
   return `ARP 沒有回應：${owner.name} 是 ${fmtIp(nh)}，但從 ${dev.name} 的第二層（接線 / VLAN / 無線）到不了它${extra}`;
 }
 
+/**
+ * 從 outIf 出去時要不要做 NAT。路由器可以用 ACL 指定哪些流量才轉換（ip nat inside source list），
+ * 或在圖形介面填「NAT 例外」的目的網段；兩者都沒有就是全部轉換。
+ */
+function natPermits(dev, outIf, pkt) {
+  if (selMatch(cidrList(outIf.natSkip), pkt.dst)) return false;
+  const rules = outIf.natAcl && (dev.aclDefs || {})[outIf.natAcl];
+  return !rules || !rules.length || aclCheck(rules, pkt) === null;
+}
+
 function matchPortForward(dev, inIf, pkt) {
   for (const f of dev.portForwards || []) {
     if (f.off || (f.proto || 'tcp') !== pkt.proto || +f.port !== pkt.dport) continue;
@@ -1174,7 +1190,15 @@ function forward(state, ctx, startId, pkt) {
     }
 
     // VPN：符合通道的本地 / 遠端網段就加密後送給對端
-    const tun = pkt.proto !== 'esp' && findTunnel(dev, pkt);
+    let tun = pkt.proto !== 'esp' && findTunnel(dev, pkt);
+    if (tun && dev.kind === 'router' && inIf && !pkt.reply && tun.up) {
+      // 路由器的處理順序是「先 NAT，再比對要不要加密」。來源位址一旦被換掉，就不再符合 VPN 的加密範圍
+      const wan = lookupRoute(dev, tun.peerIp);
+      if (wan && wan.iface !== inIf && wan.iface.nat && natPermits(dev, wan.iface, pkt)) {
+        log.push({ dev: dev.id, kind: 'info', text: `注意：${dev.name} 會先做 NAT 再檢查 VPN。這個封包的來源會被換成 ${wan.iface.label} 的位址，就不符合通道「${tun.name}」的加密範圍了 — 往對端內網的流量要設成 NAT 例外` });
+        tun = null;
+      }
+    }
     if (tun) {
       if (!tun.up) return drop(`VPN 通道「${tun.name}」沒有建立：${tun.why}`);
       if (inIf && !established) {
@@ -1211,7 +1235,7 @@ function forward(state, ctx, startId, pkt) {
         let nSrc = pkt.src;
         const st = (dev.staticNat || []).find((x) => parseIp(x.priv || '') === pkt.src && outIf.rt.vips.includes(parseIp(x.pub || '')));
         if (st) nSrc = parseIp(st.pub); // 靜態 NAT 的主機固定用自己的公用 IP 出去
-        else if (v.nat && outIf !== inIf && outIf.rt.ip != null) nSrc = outIf.rt.ip;
+        else if (v.nat && outIf !== inIf && outIf.rt.ip != null && natPermits(dev, outIf, pkt)) nSrc = outIf.rt.ip;
         if (nSrc !== pkt.src || dnat || stateful) {
           (ctx.ct[dev.id] ||= []).push({ proto: pkt.proto, ...o, nSrc, nSport: pkt.sport, nDst: pkt.dst, nDport: pkt.dport });
         }
