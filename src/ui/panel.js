@@ -6,7 +6,7 @@ import {
 } from './form.js';
 import { CATALOG, MEDIA, peerOf, newIface } from '../engine/model.js';
 import { parseIp, fmtIp } from '../engine/ip.js';
-import { routeRows, SERVICE_NAMES, hitsOf, ospfOn, setOspf } from '../engine/sim.js';
+import { routeRows, SERVICE_NAMES, hitsOf, ospfOn, setOspf, fmtDur } from '../engine/sim.js';
 import { buildTerminal } from './terminal.js';
 import * as X from './panel-extra.js';
 import * as M from './panel-more.js';
@@ -22,7 +22,9 @@ function dhcpBlock(ctx, i) {
       field('起始 IP', inp(ctx, ...bind(d, 'start'), { ph: '例如 192.168.1.100', check: isIp })),
       field('結束 IP', inp(ctx, ...bind(d, 'end'), { ph: '例如 192.168.1.200', check: isIp })),
       field('發給用戶端的 DNS', inp(ctx, ...bind(d, 'dns'), { ph: ctx.dev.dnsProxy ? '留空＝由本機代理' : '例如 168.95.1.1', check: isIpList })),
-      field('發給用戶端的閘道', inp(ctx, ...bind(d, 'gw'), { ph: '留空＝本介面 IP', check: isIp }))),
+      field('發給用戶端的閘道', inp(ctx, ...bind(d, 'gw'), { ph: '留空＝本介面 IP', check: isIp })),
+      field('租約時間', sel(ctx, () => String(d.lease || ''), (v) => { d.lease = v ? +v : ''; }, [['', '1 天（預設）'], ['300', '5 分鐘'], ['3600', '1 小時'], ['28800', '8 小時'], ['604800', '7 天']]),
+        '用戶端過了一半的時間會自動續約；到期還續不到就會失去位址。')),
     d.on && h('div', { class: 'rsv' },
       h('div', { class: 'acl-h' }, h('span', { text: '保留位址' }), h('em', { text: '指定的 MAC 永遠拿到同一個 IP' }),
         button('新增', { ic: 'plus', small: true, onclick: () => { (d.reserved ||= []).push({ mac: '', ip: '' }); ctx.commit(true); } })),
@@ -40,7 +42,8 @@ function dhcpBlock(ctx, i) {
       const tbl = Object.entries(ctx.state.leases[`${ctx.dev.id}/${i.id}`] || {});
       if (!tbl.length) return note('muted', '目前沒有用戶端租用位址');
       const held = new Set((d.reserved || []).map((r) => parseIp(r.ip || '')));
-      return note('ok', '已發出：' + tbl.map(([k, ip]) => `${ctx.state.devices[k.split('/')[0]].name} ${fmtIp(ip)}${held.has(ip) ? '（保留）' : ''}`).join('、'));
+      const hold = (ctx.state.dyn.hold || {})[`${ctx.dev.id}/${i.id}`] || {};
+      return note('ok', '已發出：' + tbl.map(([k, ip]) => `${ctx.state.devices[k.split('/')[0]].name} ${fmtIp(ip)}${held.has(ip) ? '（保留）' : ''}${hold[k] ? `（剩 ${fmtDur(hold[k].exp - ctx.state.clock)}）` : ''}`).join('、'));
     }));
 }
 
@@ -322,7 +325,8 @@ function statusTab(ctx, body) {
       const n = dev.rt.nbrs || [];
       if (!n.length) return note('muted', '沒有 OSPF 鄰居。兩端的介面都要有同網段的 IP 並勾選 OSPF。');
       return n.map((x) => h('div', { class: 'line' }, h('b', { text: state.devices[x.dev].name }),
-        h('span', { class: 'mono muted', text: `${fmtIp(x.ip)} · 經由 ${dev.ifaces.find((i) => i.id === x.iface)?.label} · cost ${x.cost}` })));
+        h('span', { class: 'mono muted', text: `${fmtIp(x.ip)} · 經由 ${dev.ifaces.find((i) => i.id === x.iface)?.label} · cost ${x.cost}` }),
+        X.nbrBadge(x)));
     })));
   }
   if (dev.routing) {
@@ -330,7 +334,9 @@ function statusTab(ctx, body) {
       const rows = [];
       for (const [key, tbl] of Object.entries(state.leases)) {
         if (!key.startsWith(dev.id + '/')) continue;
-        for (const [c, ip] of Object.entries(tbl)) rows.push(h('div', { class: 'line' }, h('b', { text: state.devices[c.split('/')[0]].name }), h('span', { class: 'mono muted', text: fmtIp(ip) })));
+        const hold = (state.dyn.hold || {})[key] || {};
+        for (const [c, ip] of Object.entries(tbl)) rows.push(h('div', { class: 'line' }, h('b', { text: state.devices[c.split('/')[0]].name }),
+          h('span', { class: 'mono muted', text: fmtIp(ip) + (hold[c] ? ` · 剩 ${fmtDur(hold[c].exp - state.clock)}` : '') })));
       }
       const hit = Object.entries(state.rt.dhcpConflict || {}).filter(([k]) => k.startsWith(dev.id + '/')).flatMap(([, v]) => v);
       if (hit.length) rows.push(note('warn', `發放前先 ping 過，發現 ${hit.map(fmtIp).join('、')} 已經有設備在用，所以跳過沒有發出去。固定 IP 最好移到位址池之外。`));

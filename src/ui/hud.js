@@ -3,6 +3,7 @@ import { h, icon, button, toast, faceplate } from './dom.js';
 import { LEVELS, CHAPTERS } from '../levels/index.js';
 import { CATALOG, CABLES, cableKinds, cableKind, pairDist, cableAt, portOf, removeCable, linkInfo } from '../engine/model.js';
 import { fmtIp } from '../engine/ip.js';
+import { pendingOf, fmtDur } from '../engine/sim.js';
 import { renderSandbox } from './sandbox.js';
 import { LEVEL_CERTS } from '../data/certs.js';
 import { openQuiz, openCerts, openLevelQuiz, hasLevelQuiz } from './quiz.js';
@@ -94,6 +95,7 @@ export function renderGuide(app, root) {
           h('div', null, h('kbd', { text: '點網路線' }), '查看速率與距離、拔除'),
           h('div', null, h('kbd', { text: '點追蹤紀錄' }), '標著「封包」的那幾行可以打開，看 MAC / IP / 埠號'),
           h('div', null, h('kbd', { text: 'Ctrl + Z' }), '復原上一個變更，Ctrl + Y 重做'),
+          h('div', null, h('kbd', { text: '時鐘' }), '場景上方的時鐘可以暫停、加速，或快轉到網路穩定'),
           h('div', null, h('kbd', { text: '拖曳空白處' }), '平移畫面，滾輪縮放，右鍵拖曳旋轉'),
           h('div', null, h('kbd', { text: '空白鍵' }), '快轉封包動畫'))),
       h('div', { class: 'card' }, h('div', { class: 'card-h' }, h('b', { text: '圖例' })),
@@ -109,8 +111,48 @@ export function renderGuide(app, root) {
           h('span', null, h('i', { style: { background: '#4a5470' } }), '沒有燈號的線'),
           h('span', null, h('i', { style: { background: '#9a7a2e' } }), '被 STP 封鎖'),
           h('span', null, h('i', { class: 'dotp', style: { background: '#ff9f5a' } }), 'ARP（詢問 MAC）'),
-          h('span', null, h('i', { class: 'dotp', style: { background: '#ff8fd0' } }), 'DHCP 交握')))),
+          h('span', null, h('i', { class: 'dotp', style: { background: '#ff8fd0' } }), 'DHCP 交握'),
+          h('span', null, h('i', { style: { background: '#f5a623' } }), 'STP 還在等待（閃爍）')))),
   );
+}
+
+// ───────────── 模擬時鐘 ─────────────
+export const fmtClock = (t) => {
+  const s = Math.floor(t), d = Math.floor(s / 86400);
+  const two = (n) => String(n).padStart(2, '0');
+  return (d ? `${d} 天 ` : '') + `${two(Math.floor((s % 86400) / 3600))}:${two(Math.floor((s % 3600) / 60))}:${two(s % 60)}`;
+};
+
+export function initClock(app) {
+  const time = h('b', { class: 'mono ck-time' });
+  const play = h('button', { class: 'mini', type: 'button', onclick: () => { app.paused = !app.paused; updateClock(app); } });
+  const speeds = h('div', { class: 'ck-speeds' }, [1, 10, 60].map((v) => h('button', {
+    type: 'button', class: 'ck-sp', data: { v }, text: v + '×', title: `時間以 ${v} 倍速前進`,
+    onclick: () => { app.speed = v; app.paused = false; updateClock(app); },
+  })));
+  const skip = h('button', { class: 'btn sm ghost', type: 'button', title: '讓時間直接前進 30 秒', onclick: () => app.skip(30) }, '+30 秒');
+  const pend = h('button', { class: 'btn sm ck-pend', type: 'button', onclick: () => app.settleNow() });
+  const el = h('div', { id: 'clock', class: 'glass', title: '模擬時間：STP、OSPF、VRRP、DHCP 租約、ARP 快取都照這個時鐘走' }, play, time, speeds, skip, pend);
+  document.body.append(el);
+  app.clockUi = { el, time, play, speeds, pend };
+  updateClock(app);
+}
+
+export function updateClock(app) {
+  const u = app.clockUi;
+  if (!u || !app.state) return;
+  u.time.textContent = 'T+' + fmtClock(app.state.clock || 0);
+  u.play.replaceChildren(icon(app.paused ? 'play' : 'pause', 13));
+  u.play.title = app.paused ? '時間暫停中，點一下繼續' : '暫停時間';
+  for (const b of u.speeds.children) b.classList.toggle('on', !app.paused && +b.dataset.v === app.speed);
+  u.el.classList.toggle('paused', !!app.paused);
+  const p = pendingOf(app.state);
+  u.pend.style.display = p.length ? '' : 'none';
+  if (p.length) {
+    const left = p[p.length - 1].at - app.state.clock;
+    u.pend.replaceChildren(icon('fast', 13), h('span', { text: `收斂中，還要 ${fmtDur(left)}` }));
+    u.pend.title = '點一下讓時間快轉到網路穩定為止\n\n' + [...new Set(p.map((x) => x.text))].slice(0, 8).join('\n');
+  }
 }
 
 // ───────────── 封包追蹤主控台 ─────────────

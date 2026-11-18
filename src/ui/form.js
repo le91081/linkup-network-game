@@ -2,6 +2,7 @@
 import { h, icon, toast } from './dom.js';
 import { peerOf, portOf, removeCable, linkInfo } from '../engine/model.js';
 import { parseIp, parseMask, parseCidr, fmtIp, fmtMask } from '../engine/ip.js';
+import { fmtDur } from '../engine/sim.js';
 import { parseIp6, parseCidr6 } from '../engine/ip6.js';
 
 export const isIp6 = (v) => parseIp6(v) != null;
@@ -90,7 +91,9 @@ export function ifaceNote(ctx, i) {
       kv('IP 位址', `${fmtIp(rt.ip)} / ${rt.bits}`), kv('子網路遮罩', fmtMask(rt.bits)),
       kv('預設閘道', rt.gw != null ? fmtIp(rt.gw) : '—'), kv('DNS', rt.dns.length ? rt.dns.map(fmtIp).join(', ') : '—'),
       kv('來源', src + (rt.server ? `（${ctx.state.devices[rt.server].name}${rt.relay ? '，經由 ' + ctx.state.devices[rt.relay].name + ' 轉送' : ''}）` : '')),
+      rt.exp != null && kv('租約', `還有 ${fmtDur(rt.exp - ctx.state.clock)}`),
       rt.src === 'apipa' && rt.note && kv('原因', rt.note)),
+    rt.held && note('warn', `目前要不到新的租約（${rt.held}），先沿用還沒到期的位址。到期之前連上伺服器就會自動續約。`),
     rt.conflict && conflictNote(ctx, rt)];
   });
 }

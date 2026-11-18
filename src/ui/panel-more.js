@@ -191,6 +191,6 @@ export function arpCard(ctx) {
   return h('div', { class: 'card' }, cardHead('ARP 快取'), ctx.live(() => {
     const rows = arpRows(ctx.state, ctx.dev);
     if (!rows.length) return note('muted', 'ARP 快取是空的 — 要送出封包時才會廣播詢問下一站的 MAC 位址。');
-    return rows.map((r) => h('div', { class: 'line' }, h('b', { class: 'mono', text: fmtIp(r.ip) }), h('span', { class: 'mono muted', text: r.mac })));
+    return rows.map((r) => h('div', { class: 'line' }, h('b', { class: 'mono', text: fmtIp(r.ip) }), h('span', { class: 'mono muted', text: `${r.mac} · ${r.age} 秒前` })));
   }));
 }

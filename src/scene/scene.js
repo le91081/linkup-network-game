@@ -546,6 +546,8 @@ export class Scene3D {
       if (st === 'down') { color = 0x4a5470; emis = 0.02; } // 沒有燈號
       else if (st === 'blocked') { color = 0x9a7a2e; emis = 0.08; } // 被 STP 封鎖
       else if (st === 'susp') { color = 0xa04e5c; emis = 0.1; } // Port-channel 暫停
+      const waiting = st !== 'down' && state.rt.wait && state.rt.wait[c.id] > 0; // 有燈號，但 STP 還沒讓它轉送資料
+      if (waiting) { color = 0xf5a623; emis = 0.3; }
       const mesh = new THREE.Mesh(
         new THREE.TubeGeometry(curve, 56, 0.055, 8, false),
         new THREE.MeshStandardMaterial({ color, emissive: color, emissiveIntensity: emis, roughness: 0.55 }),
@@ -560,13 +562,13 @@ export class Scene3D {
         return m;
       });
       this.cableGroup.add(mesh, pick, ...plugs);
-      this.cables.set(c.id, { a: c.a.dev, b: c.b.dev, curve, mesh, pick, plugs });
+      this.cables.set(c.id, { a: c.a.dev, b: c.b.dev, curve, mesh, pick, plugs, waiting });
     }
   }
 
   sync(state) {
     this.state = state;
-    const sig = state.cables.map((c) => `${c.id}:${c.a.dev}.${c.a.port}-${c.b.dev}.${c.b.port}:${state.rt.cable[c.id]}:${c.kind}`).join('|');
+    const sig = state.cables.map((c) => `${c.id}:${c.a.dev}.${c.a.port}-${c.b.dev}.${c.b.port}:${state.rt.cable[c.id]}:${c.kind}:${state.rt.wait && state.rt.wait[c.id] > 0 ? 'w' : ''}`).join('|');
     if (sig !== this.cableSig) { this.cableSig = sig; this.rebuildCables(state); }
     const wsig = JSON.stringify([
       Object.values(state.devices).filter((d) => d.wifi).map((d) => [d.id, apRange(d), !!state.rt.off[d.id] || !!(state.down || {})[d.id], d.wifi.ssids.filter((x) => !x.off && x.name).length]),
@@ -612,8 +614,16 @@ export class Scene3D {
 
   // ───────────── 動畫 ─────────────
   anim(dur, step, always = false) {
+    // 分頁在背景時瀏覽器不會畫畫面，動畫也就永遠播不完：直接跳到結尾，測試才不會卡住
+    if (document.hidden) { step(1); return Promise.resolve(); }
     return new Promise((resolve) => {
-      this.anims.push({ t0: performance.now(), dur, step, resolve, always });
+      const a = { t0: performance.now(), dur, step, resolve, always };
+      this.anims.push(a);
+      // 視窗被遮住或面板收起來時，瀏覽器可能不再呼叫繪圖的回呼：用計時器保底
+      setTimeout(() => {
+        const n = this.anims.indexOf(a);
+        if (n >= 0) { this.anims.splice(n, 1); step(1); resolve(); }
+      }, dur + 500);
     });
   }
 
@@ -772,6 +782,8 @@ export class Scene3D {
       if (k >= 1) { this.fx.remove(p.m); p.m.material.dispose(); this.pulses.splice(i, 1); }
     }
     if (this.selRing.visible) this.selRing.material.opacity = 0.75 + 0.2 * Math.sin(now / 260);
+    // 還在 STP listening / learning 的線：像交換器上的琥珀色燈號一樣閃爍
+    for (const c of this.cables.values()) if (c.waiting) c.mesh.material.emissiveIntensity = 0.12 + 0.45 * (0.5 + 0.5 * Math.sin(now / 170));
 
     this.renderer.render(this.scene, this.cam);
 

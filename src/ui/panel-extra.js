@@ -6,7 +6,7 @@ import {
 } from './form.js';
 import { fmtIp } from '../engine/ip.js';
 import { CATALOG, peerOf, portOf, newSsid, cableAt, linkInfo } from '../engine/model.js';
-import { visibleSsids, WIFI_SEC, macsBehind, isBridgePort, hitsOf, P1, accessOf } from '../engine/sim.js';
+import { visibleSsids, WIFI_SEC, macsBehind, isBridgePort, hitsOf, P1, accessOf, portfastOn } from '../engine/sim.js';
 import * as M from './panel-more.js';
 
 const nameOf = (ctx, id) => ctx.state.devices[id]?.name || id;
@@ -55,8 +55,20 @@ export const portWarn = (ctx, p, pc) => ctx.live(() => {
     else if (pc.mode === 'access' && pc.vlan !== qc.vlan) out.push(`兩端的 Access VLAN 不同（這一端 ${pc.vlan}，${there} 是 ${qc.vlan}），兩個 VLAN 會被這條線接在一起。`);
   }
   out.push(...phyWarnings(state, dev, p.id));
+  const left = dev.rt.wait && dev.rt.wait[p.id];
+  if (left > 0) {
+    out.push(qc ? `STP 正在和 ${peer.name} 協商，再 ${Math.ceil(left)} 秒開始轉送。`
+      : `這個埠剛啟用，STP 還在 ${left > 15 ? 'listening' : 'learning'}，再 ${Math.ceil(left)} 秒才會開始轉送資料。接電腦或伺服器的埠可以在進階設定打開 PortFast。`);
+  }
   return out.map((t) => note('warn', t));
 });
+
+/** OSPF 鄰居的狀態 */
+export function nbrBadge(x) {
+  if (x.state === 'forming') return badge('warn', `建立中 · 再 ${Math.ceil(x.left)} 秒`);
+  if (x.state === 'dying') return badge('warn', `沒有回應 · ${Math.ceil(x.left)} 秒後移除`);
+  return badge('on', 'FULL');
+}
 
 /** 實體層協商的問題：速率不合、雙工不一致、半雙工 */
 function phyWarnings(state, dev, pid) {
@@ -219,6 +231,7 @@ export function portAdvanced(ctx, p, pc) {
     h('div', { class: 'toggles' },
       toggle(ctx, ...bind(pc, 'shut'), '停用此連接埠 (shutdown)'),
       toggle(ctx, ...bind(pc, 'trust'), 'DHCP Snooping 信任埠（通往合法 DHCP 伺服器）'),
+      toggle(ctx, () => portfastOn(dev, pc), (v) => { pc.portfast = v; }, 'PortFast（接終端設備的埠：連線後立刻轉送，不等 30 秒）'),
       toggle(ctx, ...bind(pc, 'bpduguard'), 'BPDU Guard（對面是交換器就關閉此埠）'),
       toggle(ctx, ...bind(pc, 'rootguard'), 'Root Guard（不允許這個埠後面的交換器成為根橋）'),
       toggle(ctx, ...bind(pc, 'dot1x'), '802.1X（通過 RADIUS 驗證才放行）'),
@@ -269,7 +282,10 @@ export function secTab(ctx, body) {
   const stp = (sw.stp ||= { on: true, prio: 32768 });
   const snoop = (sw.snoop ||= { on: false });
   body.append(h('div', { class: 'card' }, cardHead('生成樹協定 (STP)'),
-    h('div', { class: 'toggles' }, toggle(ctx, ...bind(stp, 'on'), '啟用 STP（偵測並封鎖第二層的迴圈）')),
+    h('div', { class: 'toggles' },
+      toggle(ctx, ...bind(stp, 'on'), '啟用 STP（偵測並封鎖第二層的迴圈）'),
+      toggle(ctx, () => !!stp.portfastDefault, (v) => { stp.portfastDefault = v; }, 'PortFast 預設啟用（所有 Access 埠連線後立刻轉送）')),
+    note('muted', '沒有 PortFast 的埠，連線後要先經過 listening 與 learning 各 15 秒才會轉送資料。交換器之間的連線用 RSTP 協商，大約 2 秒。'),
     field('橋接器優先權', sel(ctx, ...bind(stp, 'prio', Number), Array.from({ length: 16 }, (_, n) => [n * 4096, `${n * 4096}${n === 8 ? '（預設）' : ''}`])), '數字越小越優先，最小的那一台會成為根橋 (Root Bridge)'),
     ctx.live(() => {
       const s = dev.rt.stp;
@@ -542,7 +558,8 @@ export function vrrpBlock(ctx, i) {
       const s = i.rt.vrrp;
       if (!s) return null;
       if (s.state === 'master') return note('ok', `Master：目前由這台回應虛擬 IP${s.peers ? '' : '（沒有看到其他成員）'}`);
-      if (s.state === 'backup') return note('muted', 'Backup：待命中，Master 故障時接手');
+      if (s.state === 'backup' && s.wait > 0) return note('warn', `Backup：聽不到 Master 的通告，再 ${Math.ceil(s.wait)} 秒接手。這段時間沒有人回應虛擬 IP。`);
+      if (s.state === 'backup') return note('muted', 'Backup：待命中，Master 故障約 3 秒後接手');
       return note('warn', s.why);
     }));
 }

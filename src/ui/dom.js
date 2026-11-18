@@ -54,6 +54,7 @@ const ICONS = {
   award: '<circle cx="12" cy="9" r="5.5"/><path d="M8.5 13.6L7 21l5-2.8 5 2.8-1.5-7.4"/>',
   undo: '<path d="M8.5 5L4 9.5 8.5 14"/><path d="M4 9.5h9.5a5 5 0 0 1 0 10H11"/>',
   power: '<path d="M12 3.5v8.5"/><path d="M7.2 6.8a7 7 0 1 0 9.6 0"/>',
+  pause: '<path d="M8.5 5v14M15.5 5v14" stroke-width="2.6"/>',
   save: '<path d="M5 4.5h11.5L19.5 7.5V19.5H5z"/><path d="M8 4.5v5h7v-5M8 19.5v-6h8.5v6"/>',
   download: '<path d="M12 4v11M7.5 10.5L12 15l4.5-4.5M5 19.5h14"/>',
   upload: '<path d="M12 15V4M7.5 8.5L12 4l4.5 4.5M5 19.5h14"/>',

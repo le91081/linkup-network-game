@@ -1,7 +1,7 @@
 // 主機上的終端機：ping / ipconfig / tracert / nslookup / curl
 import { h } from './dom.js';
 import { fmtIp, fmtMask, parseIp } from '../engine/ip.js';
-import { transact, resolveName, dhcpTrace, arpRows } from '../engine/sim.js';
+import { transact, resolveName, dhcpTrace, arpRows, clearArp, dhcpRelease, dhcpRenew, fmtDur } from '../engine/sim.js';
 import { transact6 } from '../engine/sim6.js';
 import { parseIp6, fmtIp6 } from '../engine/ip6.js';
 
@@ -15,7 +15,9 @@ const HELP = [
   '  ping <IP 或網域>        測試連線（會在場景中播放封包動畫）',
   '  ipconfig                顯示本機的網路設定',
   '  ipconfig /renew         重新向 DHCP 伺服器要一次 IP（播放 DORA 四個步驟）',
+  '  ipconfig /release       歸還 DHCP 位址',
   '  arp -a                  顯示 ARP 快取（IP 對應到哪個 MAC）',
+  '  arp -d                  清空 ARP 快取',
   '  tracert <IP 或網域>     顯示封包經過的每一台路由器',
   '  nslookup <網域>         向 DNS 查詢網域的 IP',
   '  curl <IP 或網域>[:埠]   測試 TCP 連線（預設 443）',
@@ -47,16 +49,20 @@ export function buildTerminal(ctx, body) {
     const c = (cmd || '').toLowerCase();
     if (c === 'help' || c === '?') HELP.forEach((x) => print(x, 'dim'));
     else if (c === 'cls' || c === 'clear') logs.length = 0;
+    else if (c === 'arp' && /^-d/i.test(args[0] || '')) { clearArp(st(), dev); app.refreshLive(); }
     else if (c === 'arp') {
       const rows = arpRows(st(), dev);
-      if (!rows.length) print('找不到 ARP 項目。（先 ping 一個位址，電腦才會去問它的 MAC；設定變更後快取會清空）', 'dim');
+      if (!rows.length) print('找不到 ARP 項目。（先 ping 一個位址，電腦才會去問它的 MAC；項目兩分鐘沒用到就會過期）', 'dim');
       else {
         print('');
         print('  網際網路位址      實體位址            類型', 'pre');
         rows.forEach((r) => print(`  ${fmtIp(r.ip).padEnd(18)}${r.mac.replace(/:/g, '-').padEnd(20)}動態`, 'pre'));
       }
     } else if (c === 'ipconfig' || c === 'ifconfig' || (c === 'ip' && args[0])) {
+      if (/^\/?release$/i.test(args[0] || '')) { dhcpRelease(st(), dev.id); ctx.commit(false); }
       if (/^\/?renew$/i.test(args[0] || '')) {
+        dhcpRenew(st(), dev.id);
+        ctx.commit(false);
         const tr = dhcpTrace(st(), dev.id);
         app.showTrace(`${dev.name}> ${line}`, tr.log, tr.hops, { ok: tr.ok, reason: tr.reason, failDev: dev.id });
         if (!tr.ok) print('更新介面時發生錯誤：' + tr.reason, 'bad');
@@ -73,6 +79,7 @@ export function buildTerminal(ctx, body) {
         }
         print(`   實體位址 (MAC) . . . : ${rt.mac}`);
         print(`   DHCP 已啟用 . . . . . : ${i.mode === 'dhcp' ? '是' : '否'}`);
+        if (rt.exp != null) print(`   租約到期 . . . . . . : ${fmtDur(rt.exp - st().clock)}後${rt.held ? '（目前連不到 DHCP 伺服器）' : ''}`, rt.held ? 'warn' : '');
         print(`   IPv4 位址 . . . . . . : ${fmtIp(rt.ip)}${rt.src === 'apipa' ? '（APIPA，自動設定）' : ''}`, rt.src === 'apipa' ? 'warn' : '');
         print(`   子網路遮罩  . . . . . : ${fmtMask(rt.bits)}`);
         print(`   預設閘道 . . . . . . : ${rt.gw != null ? fmtIp(rt.gw) : ''}`);

@@ -245,6 +245,7 @@ const SEC = {
           ...(parseMask(i.mask || '') != null ? { netmask: [fmtMask(parseMask(i.mask))] } : {}),
           interface: [i.id],
           ...Object.fromEntries(list(i.dhcp.dns).slice(0, 3).map((x, k) => [`dns-server${k + 1}`, [x]])),
+          ...(+i.dhcp.lease > 0 ? { 'lease-time': [String(+i.dhcp.lease)] } : {}),
         },
         sub: {
           'ip-range': i.dhcp.start && i.dhcp.end ? [{ key: '1', f: { 'start-ip': [i.dhcp.start], 'end-ip': [i.dhcp.end] } }] : [],
@@ -265,7 +266,9 @@ const SEC = {
       const prev = !isNew && this.servers(d)[+key - 1];
       if (prev && prev !== i) prev.dhcp.on = false;
       const rsv = (sub['reserved-address'] || []).map((e) => ({ ip: (e.f.ip || [''])[0], mac: (e.f.mac || [''])[0].toLowerCase() })).filter((x) => x.ip && x.mac);
-      Object.assign(i.dhcp, { on: true, start: a, end: b, gw: gw && gw !== i.ip ? gw : '', dns: dns.join(', '), reserved: rsv });
+      const lease = (f['lease-time'] || [''])[0];
+      if (lease && !(+lease >= 300)) return ERR('lease-time 是秒數，最短 300');
+      Object.assign(i.dhcp, { on: true, start: a, end: b, gw: gw && gw !== i.ip ? gw : '', dns: dns.join(', '), reserved: rsv, lease: lease ? +lease : '' });
       return undefined;
     },
     remove(d, key) { const i = this.servers(d)[+key - 1]; if (!i) return notFound('沒有這個編號的 DHCP 伺服器'); i.dhcp.on = false; return undefined; },

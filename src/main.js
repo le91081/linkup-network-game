@@ -2,7 +2,7 @@
 import './style.css';
 import { Scene3D } from './scene/scene.js';
 import { LEVELS } from './levels/index.js';
-import { recompute, runObjective } from './engine/sim.js';
+import { recompute, runObjective, advance, settle, pendingOf, fmtDur } from './engine/sim.js';
 import { cloneState, addCable, cableAt, portOf } from './engine/model.js';
 import * as hud from './ui/hud.js';
 import { renderDevicePanel } from './ui/panel.js';
@@ -14,6 +14,8 @@ import { isIos, iosDirty, saveStartup, restoreStartup } from './engine/ios.js';
 const PROFILE = (new URLSearchParams(location.search).get('profile') || '').replace(/[^\w-]/g, '').slice(0, 24);
 const STORE_KEY = 'linkup.v1' + (PROFILE ? '.' + PROFILE : '');
 const GREEN = 0x4ade80, RED = 0xff5d6c;
+/** 復原 / 重做比對的是「設定」：時間與隨時間變化的狀態不算在內，復原也不會讓時間倒流 */
+const snapOf = (st) => { const c = cloneState(st); delete c.clock; delete c.dyn; return JSON.stringify(c); };
 const $ = (id) => document.getElementById(id);
 
 function loadStore() {
@@ -33,6 +35,7 @@ const app = {
   selected: null, panelTab: {}, pinned: {}, adv: new Set(), termLog: {}, termHist: {}, refreshers: [],
 
   undoStack: [], redoStack: [], snap: '',
+  speed: 1, paused: false,
 
   saveStore() {
     try { localStorage.setItem(STORE_KEY, JSON.stringify(app.store)); } catch { /* ignore */ }
@@ -59,7 +62,7 @@ const app = {
     Object.assign(app, {
       level: lv, levelIdx: idx, state: st, results: [], running: false, selected: null,
       hintsShown: app.store.hints[lv.id] || 0, panelTab: {}, pinned: {}, adv: new Set(), termLog: {}, termHist: {}, refreshers: [],
-      undoStack: [], redoStack: [], snap: JSON.stringify(cloneState(st)), cliSess: {},
+      undoStack: [], redoStack: [], snap: snapOf(st), cliSess: {},
     });
     app.store.last = lv.id;
     app.runToken = (app.runToken || 0) + 1;
@@ -74,13 +77,46 @@ const app = {
     app.scene.playToken++;
     app.scene.load(st);
     app.scene.fast = false;
+    hud.updateClock(app);
+  },
+
+  /** 模擬時間前進 n 秒 */
+  tick(n) {
+    const before = pendingOf(app.state).map((p) => p.text + p.at).join('|');
+    advance(app.state, n);
+    app.scene.sync(app.state);
+    app.refreshLive();
+    hud.updateClock(app);
+    // 有東西收斂完成了：之前的測試結果不再準確
+    if (pendingOf(app.state).map((p) => p.text + p.at).join('|') !== before) {
+      let marked = false;
+      for (const r of app.results) if (r && r !== 'running' && !r.stale) { r.stale = true; marked = true; }
+      if (marked) hud.renderMission(app);
+    }
+    if (!app.tickSave) {
+      app.tickSave = setTimeout(() => { app.tickSave = null; app.store.saves[app.level.id] = cloneState(app.state); app.saveStore(); }, 5000);
+    }
+  },
+  skip(n) { app.tick(n); toast(`時間前進了 ${fmtDur(n)}`); },
+  /** 快轉到網路穩定為止 */
+  settleNow() {
+    const t0 = app.state.clock;
+    settle(app.state);
+    const dt = Math.round(app.state.clock - t0);
+    app.tick(0);
+    if (dt) {
+      for (const r of app.results) if (r && r !== 'running') r.stale = true;
+      hud.renderMission(app);
+    }
+    toast(dt ? `快轉了 ${fmtDur(dt)}，網路已經穩定` : '網路已經是穩定的', 'ok');
   },
 
   /** 任何設定或接線變動之後呼叫 */
   changed() {
     recompute(app.state);
     app.scene.sync(app.state);
-    const now = JSON.stringify(cloneState(app.state));
+    hud.updateClock(app);
+    const now = snapOf(app.state);
     if (now !== app.snap) {
       if (!app.restoring) {
         app.undoStack.push(app.snap);
@@ -110,8 +146,9 @@ const app = {
   timeTravel(from, to, msg) {
     if (app.running || !from.length) return;
     to.push(app.snap);
-    const sel = app.selected;
+    const sel = app.selected, cur = app.state;
     app.state = JSON.parse(from.pop());
+    app.state.clock = cur.clock; app.state.dyn = cur.dyn; // 只復原設定，時間繼續往前走
     app.cliSess = {}; // CLI 的設定模式指向舊的物件，全部回到最外層
     recompute(app.state);
     app.scene.playToken++; // 中止還在播的封包動畫
@@ -207,6 +244,13 @@ const app = {
   async run(indices) {
     const objs = app.objectives();
     if (app.running || !objs.length) return;
+    // 網路還在收斂：幾秒內就會好的直接等它；要等比較久的照樣測，失敗原因會說明還要多久
+    const pend = pendingOf(app.state);
+    if (pend.length) {
+      const left = Math.ceil(pend[pend.length - 1].at - app.state.clock);
+      if (left <= 5) { settle(app.state); app.tick(0); toast(`等了 ${left} 秒讓網路收斂`); }
+      else toast(`網路還在收斂（${pend[pend.length - 1].text}），還要 ${fmtDur(left)}。可以等它，或按時鐘旁的「收斂中」快轉。`, 'info', 6000);
+    }
     const lv = app.level;
     const token = (app.runToken = (app.runToken || 0) + 1);
     const list = indices || objs.map((_, i) => i);
@@ -297,7 +341,10 @@ function feedback(o, r) {
 
 function updateInsets() {
   const m = app.el.mission.getBoundingClientRect(), p = app.el.panel.getBoundingClientRect(), t = app.el.topbar.getBoundingClientRect();
-  app.scene.setInsets({ left: m.right + 4, right: window.innerWidth - p.left + 4, top: t.bottom + 4, bottom: 236 });
+  app.scene.setInsets({ left: m.right + 4, right: window.innerWidth - p.left + 4, top: t.bottom + 46, bottom: 236 });
+  // 時鐘放在場景上方的正中間（任務面板與設定面板之間）
+  if (app.clockUi) app.clockUi.el.style.left = (m.right + p.left) / 2 + 'px';
+  document.getElementById('toasts').style.left = (m.right + p.left) / 2 + 'px';
 }
 
 // ───────────── 啟動 ─────────────
@@ -311,6 +358,18 @@ app.scene = new Scene3D(app.el.stage, {
   onMoved: () => app.sandboxMoved(),
 });
 installSandbox(app, { renderMission: () => hud.renderMission(app) });
+hud.initClock(app);
+
+// 模擬時間跟著真實時間走（可以暫停或加速）。對話框開著、或分頁在背景時暫停
+let lastTick = performance.now(), carry = 0;
+setInterval(() => {
+  const t = performance.now(), dt = Math.min(2, (t - lastTick) / 1000);
+  lastTick = t;
+  if (app.paused || document.hidden || !app.state || hud.modalOpen()) return;
+  carry += dt * app.speed;
+  const n = Math.floor(carry);
+  if (n >= 1) { carry -= n; app.tick(n); }
+}, 250);
 
 window.addEventListener('resize', () => { updateInsets(); app.scene.fit(); });
 window.addEventListener('keydown', (e) => {

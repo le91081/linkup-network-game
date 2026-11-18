@@ -187,7 +187,7 @@ function attachPools(dev) {
   for (const p of dev.dhcpPools || []) {
     const i = p.net != null && dev.ifaces.find((x) => { const n = staticNet(x); return n && n.bits === p.bits && n.net === p.net; });
     if (!i) { rest.push(p); continue; }
-    Object.assign(i.dhcp, { on: true, pool: p.name, gw: p.gw || '', dns: p.dns || '' });
+    Object.assign(i.dhcp, { on: true, pool: p.name, gw: p.gw || '', dns: p.dns || '', lease: p.lease || '' });
     applyPoolRange(dev, i);
   }
   // 單一主機的位址池：掛到有 DHCP 伺服器、而且包含這個 IP 的介面上
@@ -246,7 +246,7 @@ const HELP = {
     'spanning-tree bpduguard enable / spanning-tree guard root', 'ip dhcp snooping trust', 'ipv6 address <位址/前綴>', 'speed 10|100|1000|auto、duplex auto|full|half'],
   vlan: ['name <名稱>'],
   router: ['network <網段> <萬用遮罩> area 0', 'default-information originate'],
-  dhcp: ['network <網段> <遮罩>', 'default-router <IP>', 'dns-server <IP> [IP]', 'host <IP> <遮罩> 加上 hardware-address <MAC>（保留位址）'],
+  dhcp: ['network <網段> <遮罩>', 'default-router <IP>', 'dns-server <IP> [IP]', 'lease <天> [小時] [分鐘]', 'host <IP> <遮罩> 加上 hardware-address <MAC>（保留位址）'],
   line: ['transport input ssh | telnet | all | none', 'access-class <名稱> in', 'login local'],
   acl: ['permit|deny <ip|tcp|udp|icmp> <來源> <目的> [eq <埠>]', '來源 / 目的的寫法：any、host <IP>、<網段> <萬用遮罩>', 'no <序號>   刪除一條規則'],
   stdacl: ['permit <網段> <萬用遮罩> | permit host <IP>'],
@@ -788,7 +788,15 @@ export function iosSession(getDev, getState) {
       }],
       ['hardware-address <mac> [...]', ([mac]) => setRsvMac(mac)],
       ['client-identifier <id>', ([id]) => setRsvMac(id.replace(/[.:-]/g, '').replace(/^01(?=[0-9a-f]{12}$)/i, ''))],
-      ['lease <...>', () => undefined],
+      ['lease <...>', ([rest]) => {
+        const t = rest.toLowerCase().split(/\s+/);
+        const secs = t[0] === 'infinite' ? 315360000 : (+t[0] || 0) * 86400 + (+t[1] || 0) * 3600 + (+t[2] || 0) * 60;
+        if (!(secs > 0) || t.slice(0, 3).some((x) => x !== 'infinite' && !/^\d+$/.test(x))) return err('用法：lease <天> [小時] [分鐘]，或 lease infinite');
+        const p = S.cur;
+        if (p.rsv) return undefined;
+        (p.iface ? p.iface.dhcp : p).lease = secs === 86400 ? '' : secs;
+        return undefined;
+      }],
       ['domain-name <...>', () => undefined],
     ],
     line: [
@@ -1004,6 +1012,7 @@ export function iosSession(getDev, getState) {
 // ───────────────────────── show running-config ─────────────────────────
 
 const wild = (bits) => fmtIp(~maskOf(bits) >>> 0);
+const leaseText = (s) => (s >= 315360000 ? 'infinite' : `${Math.floor(s / 86400)} ${Math.floor((s % 86400) / 3600)} ${Math.floor((s % 3600) / 60)}`);
 const dotMac = (m) => m.replace(/:/g, '').replace(/(.{4})(?=.)/g, '$1.');
 
 function aclAddr(spec) {
@@ -1046,6 +1055,7 @@ export function runningConfig(state, dev) {
     if (b != null && b < bc - 1) o.push(`ip dhcp excluded-address ${fmtIp(b + 1)} ${fmtIp(bc - 1)}`);
     o.push(`ip dhcp pool ${poolName(i)}`, ` network ${fmtIp(net)} ${fmtMask(i.rt.bits)}`, ` default-router ${i.dhcp.gw || fmtIp(i.rt.ip)}`);
     if (i.dhcp.dns) o.push(` dns-server ${i.dhcp.dns.replace(/[,\s]+/g, ' ')}`);
+    if (+i.dhcp.lease > 0 && +i.dhcp.lease !== 86400) o.push(` lease ${leaseText(+i.dhcp.lease)}`);
     o.push('!');
     for (const r of i.dhcp.reserved || []) {
       if (parseIp(r.ip || '') == null || !colonMac(r.mac)) continue;

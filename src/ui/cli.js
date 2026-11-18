@@ -2,7 +2,7 @@
 import { h } from './dom.js';
 import { fmtIp, parseIp } from '../engine/ip.js';
 import { fmtIp6 } from '../engine/ip6.js';
-import { transact, routeRows, macsBehind, isBridgePort, arpRows, sessionLog, hitsOf } from '../engine/sim.js';
+import { transact, routeRows, macsBehind, isBridgePort, arpRows, clearArp, sessionLog, hitsOf, fmtDur, portfastOn } from '../engine/sim.js';
 import { route6Rows } from '../engine/sim6.js';
 import { CATALOG, MEDIA, peerOf, portOf, linkInfo, phyConfig } from '../engine/model.js';
 import { iosSession, runningConfig, startupConfig, hostName as host, aclName, aclLine } from '../engine/ios.js';
@@ -100,7 +100,14 @@ const SHOW = {
         `  Bridge ID  Priority    ${s.prio}`, `             Address     ${s.mac}`, '', pad('Interface', 16) + pad('Role', 6) + pad('Sts', 5) + 'Type');
       for (const [pid, roles] of Object.entries(s.roles)) {
         const r = roles[v];
-        if (r) o.push(pad(pid, 16) + pad({ root: 'Root', desg: 'Desg', altn: 'Altn' }[r], 6) + pad(r === 'altn' ? 'BLK' : 'FWD', 5) + 'P2p');
+        if (r) o.push(pad(pid, 16) + pad({ root: 'Root', desg: 'Desg', altn: 'Altn' }[r], 6) + pad(r === 'altn' ? 'BLK' : stpState(d, pid), 5) + 'P2p');
+      }
+      // 接終端設備的埠：一律是 Designated；還沒走完 listening / learning 的會顯示 LSN / LRN
+      for (const p of d.ports) {
+        const pc = d.sw.ports[p.id];
+        if (!st.rt.links[d.id + ':' + p.id] || pc.mode === 'routed' || (s.roles[p.id] && s.roles[p.id][v])) continue;
+        if (pc.mode === 'access' && pc.vlan !== +v) continue;
+        o.push(pad(p.label, 16) + pad('Desg', 6) + pad(stpState(d, p.id), 5) + (portfastOn(d, pc) ? 'P2p Edge' : 'P2p'));
       }
       o.push('');
     }
@@ -137,20 +144,33 @@ const SHOW = {
   'show ip ospf neighbor': (st, d) => {
     const n = d.rt.nbrs || [];
     if (!n.length) return ['沒有 OSPF 鄰居'];
-    return [pad('Neighbor ID', 18) + pad('State', 12) + pad('Address', 17) + 'Interface',
-      ...n.map((x) => pad(host(st.devices[x.dev]).slice(0, 16), 18) + pad('FULL/ -', 12) + pad(fmtIp(x.ip), 17) + (d.ifaces.find((i) => i.id === x.iface) || {}).label)];
+    const two = (v) => String(Math.max(0, Math.ceil(v))).padStart(2, '0');
+    return [pad('Neighbor ID', 18) + pad('State', 14) + pad('Dead Time', 11) + pad('Address', 17) + 'Interface',
+      ...n.map((x) => pad(host(st.devices[x.dev]).slice(0, 16), 18) + pad(x.state === 'forming' ? '2WAY/DROTHER' : 'FULL/ -', 14)
+        + pad('00:00:' + two(x.state === 'dying' ? x.left : x.state === 'forming' ? 40 - ((40 - x.left) % 10) : x.dead), 11) + pad(fmtIp(x.ip), 17) + (d.ifaces.find((i) => i.id === x.iface) || {}).label)];
   },
   'show ip dhcp binding': (st, d) => {
-    const o = [pad('IP address', 18) + pad('Client', 22) + 'Type'];
+    const o = [pad('IP address', 18) + pad('Client', 22) + pad('Lease expiration', 20) + 'Type'];
     for (const [key, tbl] of Object.entries(st.leases)) {
       if (!key.startsWith(d.id + '/')) continue;
-      for (const [c, ip] of Object.entries(tbl)) o.push(pad(fmtIp(ip), 18) + pad(st.devices[c.split('/')[0]].name, 22) + 'Automatic');
+      const hold = (st.dyn.hold || {})[key] || {};
+      for (const [c, ip] of Object.entries(tbl)) o.push(pad(fmtIp(ip), 18) + pad(st.devices[c.split('/')[0]].name, 22) + pad(hold[c] ? fmtDur(hold[c].exp - st.clock) + '後' : '-', 20) + 'Automatic');
     }
     return o.length > 1 ? o : ['沒有任何租約'];
   },
   'show ip dhcp conflict': (st, d) => {
     const hit = Object.entries(st.rt.dhcpConflict || {}).filter(([k]) => k.startsWith(d.id + '/')).flatMap(([, v]) => v);
     return hit.length ? [pad('IP address', 18) + pad('Detection method', 19) + 'Detection time', ...hit.map((ip) => pad(fmtIp(ip), 18) + pad('Ping', 19) + 'now')] : ['沒有偵測到位址衝突'];
+  },
+  'show clock': (st, d) => {
+    // 沒有對時的設備，時鐘是從開機算起的預設時間（前面有 *），各設備的紀錄就對不起來
+    const ntp = d.mgmt && parseIp(d.mgmt.ntp || '');
+    const synced = ntp != null && transact(st, d.id, { proto: 'icmp', dst: ntp, quiet: true }).ok;
+    const t = new Date(Date.UTC(synced ? 2026 : 1993, synced ? 10 : 2, synced ? 18 : 1, synced ? 8 : 0, 0, 0) + Math.floor(st.clock || 0) * 1000);
+    const two = (n) => String(n).padStart(2, '0');
+    const day = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'][t.getUTCDay()], mon = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'][t.getUTCMonth()];
+    return [`${synced ? '' : '*'}${two(t.getUTCHours())}:${two(t.getUTCMinutes())}:${two(t.getUTCSeconds())}.000 UTC ${day} ${mon} ${t.getUTCDate()} ${t.getUTCFullYear()}`,
+      synced ? `Time source is NTP (${fmtIp(ntp)})` : ntp != null ? `No time source（連不到 NTP 伺服器 ${fmtIp(ntp)}）` : 'No time source（沒有設定 NTP：ntp server <IP>）'];
   },
   'show access-lists': (st, d) => {
     const o = [];
@@ -164,7 +184,7 @@ const SHOW = {
   'show arp': (st, d) => {
     const o = [pad('Protocol', 10) + pad('Address', 18) + pad('Age (min)', 11) + pad('Hardware Addr', 17) + 'Type'];
     for (const i of d.ifaces) if (i.rt && i.rt.ip != null) o.push(pad('Internet', 10) + pad(fmtIp(i.rt.ip), 18) + pad('-', 11) + pad(dotMac(i.rt.mac), 17) + 'ARPA');
-    for (const r of arpRows(st, d)) o.push(pad('Internet', 10) + pad(fmtIp(r.ip), 18) + pad('0', 11) + pad(dotMac(r.mac), 17) + 'ARPA');
+    for (const r of arpRows(st, d)) o.push(pad('Internet', 10) + pad(fmtIp(r.ip), 18) + pad(Math.floor(r.age / 60), 11) + pad(dotMac(r.mac), 17) + 'ARPA');
     return o;
   },
   'show ip nat translations': (st, d) => {
@@ -197,9 +217,11 @@ const SHOW = {
     const v = d.ifaces.filter((i) => i.vrrp && i.vrrp.on);
     if (!v.length) return ['沒有設定 VRRP'];
     return [pad('Interface', 16) + pad('Grp', 5) + pad('Pri', 5) + pad('State', 9) + 'Group addr',
-      ...v.map((i) => pad(i.label, 16) + pad(1, 5) + pad(i.vrrp.prio || 100, 5) + pad(i.rt.vrrp ? { master: 'Master', backup: 'Backup', init: 'Init' }[i.rt.vrrp.state] : 'Init', 9) + (i.vrrp.vip || ''))];
+      ...v.map((i) => pad(i.label, 16) + pad(1, 5) + pad(i.vrrp.prio || 100, 5) + pad(i.rt.vrrp ? { master: 'Master', backup: 'Backup', init: 'Init' }[i.rt.vrrp.state] : 'Init', 9) + (i.vrrp.vip || '')
+        + (i.rt.vrrp && i.rt.vrrp.wait > 0 ? `   (Master down，${Math.ceil(i.rt.vrrp.wait)} 秒後接手)` : ''))];
   },
 };
+const stpState = (d, pid) => (d.rt.wait && d.rt.wait[pid] > 15 ? 'LSN' : d.rt.wait && d.rt.wait[pid] > 0 ? 'LRN' : 'FWD');
 const CMDS = Object.keys(SHOW);
 const match = (tokens, cmd) => {
   const w = cmd.split(' ');
@@ -244,6 +266,7 @@ export function buildCli(ctx, body) {
       return true;
     }
     if (tok[tok.length - 1] === '?' && 'show'.startsWith(tok[0])) { CMDS.forEach((c) => print('  ' + c, 'dim')); return true; }
+    if (tok[0] === 'clear' && (tok[1] || '').startsWith('arp')) { clearArp(st, d); app.refreshLive(); return true; }
     const cmd = CMDS.find((c) => match(tok, c));
     if (!cmd) return false;
     SHOW[cmd](st, d).forEach((l) => print(l, 'pre')); // 表格不折行，太寬時左右捲動

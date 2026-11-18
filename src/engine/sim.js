@@ -1341,6 +1341,8 @@ function noRouteReason(state, dev, dst) {
     return `${fmtIp(dst)} 不在 ${dev.name} 自己的子網路內，而且沒有設定預設閘道`;
   }
   if (bad) return `${dev.name} 的${bad.bad}${deadLink(state, dev)}`;
+  const forming = (dev.rt.nbrs || []).filter((n) => n.state === 'forming');
+  if (forming.length) return `${dev.name} 的路由表裡還沒有通往 ${fmtIp(dst)} 的路由：OSPF 鄰居關係還在建立，再 ${Math.ceil(Math.max(...forming.map((n) => n.left)))} 秒才會交換路由`;
   const wan = dev.ifaces.find((x) => x.rt.ip == null && x.rt.note && (x.mode === 'dhcp' || x.mode === 'pppoe'));
   return `${dev.name} 的路由表裡沒有通往 ${fmtIp(dst)} 的路由${wan ? `（${wan.label}：${wan.rt.note}）` : deadLink(state, dev)}`;
 }
