@@ -10,6 +10,83 @@ const UP = new THREE.Vector3(0, 1, 0);
 const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
 const ease = (k) => (k < 0.5 ? 2 * k * k : 1 - Math.pow(-2 * k + 2, 2) / 2);
 
+// ── 網路線的走線 ──
+const FLOOR = 0.075; // 線躺在桌面上的高度
+const MARGIN = 0.2; // 繞過機身時和機身保持的距離
+const LANE = 0.13; // 同一側有好幾條線要繞時，一條比一條靠外
+
+/** 線段 a→b（只看水平面）有沒有穿過往外放大 m 之後的矩形 */
+function crossesRect(a, b, r, m) {
+  let t0 = 0, t1 = 1;
+  for (const [s, d, lo, hi] of [[a.x, b.x - a.x, r.x0 - m, r.x1 + m], [a.z, b.z - a.z, r.z0 - m, r.z1 + m]]) {
+    if (Math.abs(d) < 1e-9) {
+      if (s <= lo || s >= hi) return false;
+      continue;
+    }
+    let u0 = (lo - s) / d, u1 = (hi - s) / d;
+    if (u0 > u1) [u0, u1] = [u1, u0];
+    t0 = Math.max(t0, u0);
+    t1 = Math.min(t1, u1);
+    if (t1 - t0 < 1e-6) return false;
+  }
+  return true;
+}
+
+/**
+ * 從連接埠出來之後要怎麼繞過自己的機身。start 是線落到桌面的那一點（已經在機身外面），
+ * target 是要去的方向。直接走不會穿過機身就不用繞；會的話從左右兩邊挑比較短的那一邊。
+ */
+function detour(e, start, target, lanes, commit) {
+  const r = e.rect, m = MARGIN - 0.04;
+  if (!crossesRect(start, target, r, m)) return [];
+  const faceZ = e.n.z !== 0; // 埠在正面或背面：先沿著 x 方向繞到側邊
+  const opts = [-1, 1].map((s) => {
+    const key = (faceZ ? 'x' : 'z') + s;
+    const off = MARGIN + LANE * (lanes[key] || 0);
+    const pts = [];
+    if (faceZ) {
+      const x = s < 0 ? r.x0 - off : r.x1 + off;
+      pts.push(new THREE.Vector3(x, FLOOR, start.z));
+      if (crossesRect(pts[0], target, r, m)) pts.push(new THREE.Vector3(x, FLOOR, e.n.z > 0 ? r.z0 - off : r.z1 + off));
+    } else {
+      const z = s < 0 ? r.z0 - off : r.z1 + off;
+      pts.push(new THREE.Vector3(start.x, FLOOR, z));
+      if (crossesRect(pts[0], target, r, m)) pts.push(new THREE.Vector3(e.n.x > 0 ? r.x0 - off : r.x1 + off, FLOOR, z));
+    }
+    let len = 0, q = start;
+    for (const p of [...pts, target]) { len += q.distanceTo(p); q = p; }
+    return { key, pts, len };
+  });
+  const best = opts[0].len <= opts[1].len ? opts[0] : opts[1];
+  if (commit) lanes[best.key] = (lanes[best.key] || 0) + 1;
+  return best.pts;
+}
+
+/**
+ * 網路線的曲線。水平方向平滑地通過每一個折點；高度另外算：整條線躺在桌面上，
+ * 只有靠近兩端的連接埠時才抬起來（插在孔裡的那一小段是水平的）。
+ * 高度如果也交給樣條去內插，長的線段會被前面的下降帶著往下衝，鑽到桌面底下。
+ */
+class CableCurve extends THREE.Curve {
+  constructor(pts, ends) {
+    super();
+    this.base = new THREE.CatmullRomCurve3(pts.map((p) => new THREE.Vector3(p.x, FLOOR, p.z)), false, 'centripetal');
+    this.ends = ends; // [{ x, z, y, out }]：孔的位置、高度，以及離孔多遠才落到桌面
+  }
+
+  getPoint(t, target = new THREE.Vector3()) {
+    this.base.getPoint(t, target);
+    let y = FLOOR;
+    for (const e of this.ends) {
+      const d = Math.hypot(target.x - e.x, target.z - e.z);
+      const k = clamp((d - 0.24) / Math.max(0.05, e.out - 0.24), 0, 1);
+      y = Math.max(y, FLOOR + (e.y - FLOOR) * (1 - k * k * (3 - 2 * k)));
+    }
+    target.y = y;
+    return target;
+  }
+}
+
 const PKT_COLOR = { req: 0x7df3ff, reply: 0x7dffb0, dns: 0xc9b0ff, esp: 0xffc857, arp: 0xff9f5a, dhcp: 0xff8fd0 };
 const PKT_TAG = { arp: 'ARP', dhcp: 'DHCP' };
 
@@ -502,45 +579,59 @@ export class Scene3D {
     this.hovCable = null;
   }
 
+  /** 一條線的一端：連接埠在場景裡的位置、朝外的方向、孔的大小，以及這台設備機身佔的範圍 */
+  portEnd(devId, portId, otherId) {
+    const g = this.devices.get(devId), u = g.userData;
+    const r = u.rect || [-u.w / 2, u.w / 2, -u.d / 2, u.d / 2];
+    const rect = { x0: g.position.x + r[0], x1: g.position.x + r[1], z0: g.position.z + r[2], z1: g.position.z + r[3] };
+    const p = u.ports && u.ports[portId];
+    if (p) {
+      return {
+        dev: devId, rect, w: p.w, h: p.h, media: p.media,
+        p: new THREE.Vector3(g.position.x + p.x, p.y, g.position.z + p.z), n: new THREE.Vector3(p.nx, 0, p.nz),
+      };
+    }
+    // 模型上沒有這個埠：接在朝向對方的那一側
+    const o = this.devices.get(otherId);
+    const dx = o.position.x - g.position.x, dz = o.position.z - g.position.z;
+    const n = Math.abs(dz) >= Math.abs(dx) ? new THREE.Vector3(0, 0, dz > 0 ? 1 : -1) : new THREE.Vector3(dx > 0 ? 1 : -1, 0, 0);
+    const pos = new THREE.Vector3(n.x > 0 ? rect.x1 : n.x < 0 ? rect.x0 : g.position.x, 0.1, n.z > 0 ? rect.z1 : n.z < 0 ? rect.z0 : g.position.z);
+    return { dev: devId, rect, w: 0.16, h: 0.13, media: 'rj45', p: pos, n };
+  }
+
   rebuildCables(state) {
     this.clearCables();
-    const ends = {};
-    const sideOf = (A, B) => {
-      const dx = B.pos[0] - A.pos[0], dz = B.pos[1] - A.pos[1];
-      if (Math.abs(dz) >= 1.6) return dz > 0 ? 'front' : 'back';
-      return dx > 0 ? 'right' : 'left';
+    const lanes = {}; // 設備 → 每一側已經有幾條線繞過去
+    const plugMat = {
+      rj45: new THREE.MeshStandardMaterial({ color: 0xe8edf6, roughness: 0.35, transparent: true, opacity: 0.92 }),
+      sfp: new THREE.MeshStandardMaterial({ color: 0x9aa4b8, roughness: 0.35, metalness: 0.75 }),
     };
-    const list = state.cables.map((c) => {
-      const A = state.devices[c.a.dev], B = state.devices[c.b.dev];
-      const ea = { other: B, side: sideOf(A, B) }, eb = { other: A, side: sideOf(B, A) };
-      ((ends[A.id] ||= {})[ea.side] ||= []).push(ea);
-      ((ends[B.id] ||= {})[eb.side] ||= []).push(eb);
-      return { c, ea, eb };
-    });
-    const NORMAL = { front: [0, 1], back: [0, -1], right: [1, 0], left: [-1, 0] };
-    for (const [id, sides] of Object.entries(ends)) {
-      const g = this.devices.get(id), u = g.userData;
-      for (const [side, arr] of Object.entries(sides)) {
-        const fb = side === 'front' || side === 'back';
-        arr.sort((p, q) => (fb ? p.other.pos[0] - q.other.pos[0] : p.other.pos[1] - q.other.pos[1]));
-        arr.forEach((e, k) => {
-          const t = (k + 1) / (arr.length + 1) - 0.5;
-          const [nx, nz] = NORMAL[side];
-          e.n = new THREE.Vector3(nx, 0, nz);
-          e.p = new THREE.Vector3(
-            g.position.x + (fb ? t * u.w * 0.92 : (nx * u.w) / 2),
-            0.07,
-            g.position.z + (fb ? (nz * u.d) / 2 : t * u.d * 0.8),
-          );
-        });
+    for (const c of state.cables) {
+      if (!this.devices.has(c.a.dev) || !this.devices.has(c.b.dev)) continue;
+      const ea = this.portEnd(c.a.dev, c.a.port, c.b.dev), eb = this.portEnd(c.b.dev, c.b.port, c.a.dev);
+      // 每一端：插在孔裡的一小段是直的，出來之後往下落到桌面
+      const lead = (e) => {
+        const out = 0.4 + Math.max(0, e.p.y - FLOOR); // 孔越高，落地點離機身越遠，上下兩排的線才不會疊在一起
+        return {
+          out,
+          inside: e.p.clone().addScaledVector(e.n, -0.03),
+          plug: e.p.clone().addScaledVector(e.n, 0.26),
+          floor: new THREE.Vector3(e.p.x + e.n.x * out, FLOOR, e.p.z + e.n.z * out),
+        };
+      };
+      const la = lead(ea), lb = lead(eb);
+      const lanesA = (lanes[ea.dev] ||= {}), lanesB = (lanes[eb.dev] ||= {});
+      let wa = detour(ea, la.floor, lb.floor, lanesA, false);
+      const wb = detour(eb, lb.floor, wa.length ? wa[wa.length - 1] : la.floor, lanesB, true);
+      wa = detour(ea, la.floor, wb.length ? wb[wb.length - 1] : lb.floor, lanesA, true);
+      const pts = [];
+      for (const p of [la.inside, la.plug, la.floor, ...wa, ...wb.slice().reverse(), lb.floor, lb.plug, lb.inside]) {
+        if (!pts.length || pts[pts.length - 1].distanceTo(p) > 0.08) pts.push(p);
       }
-    }
-    const plugMat = new THREE.MeshStandardMaterial({ color: 0xdfe5f0, roughness: 0.5 });
-    for (const { c, ea, eb } of list) {
-      const k = clamp(ea.p.distanceTo(eb.p) * 0.42, 0.7, 3.6);
-      const curve = new THREE.CubicBezierCurve3(
-        ea.p, ea.p.clone().addScaledVector(ea.n, k), eb.p.clone().addScaledVector(eb.n, k), eb.p,
-      );
+      const curve = new CableCurve(pts, [[ea, la], [eb, lb]].map(([e, l]) => ({ x: e.p.x, z: e.p.z, y: e.p.y, out: l.out })));
+      const len = curve.getLength();
+      // 高密度交換器的孔比較小，線也跟著細一點
+      const radius = clamp(0.5 * Math.min(ea.w, eb.w, ea.h * 1.4, eb.h * 1.4), 0.03, 0.05);
       const st = state.rt.cable[c.id];
       let color = CABLES[cableKind(c)].color, emis = 0.25;
       if (st === 'down') { color = 0x4a5470; emis = 0.02; } // 沒有燈號
@@ -549,16 +640,20 @@ export class Scene3D {
       const waiting = st !== 'down' && state.rt.wait && state.rt.wait[c.id] > 0; // 有燈號，但 STP 還沒讓它轉送資料
       if (waiting) { color = 0xf5a623; emis = 0.3; }
       const mesh = new THREE.Mesh(
-        new THREE.TubeGeometry(curve, 56, 0.055, 8, false),
+        new THREE.TubeGeometry(curve, clamp(Math.round(len / 0.09), 40, 260), radius, 7, false),
         new THREE.MeshStandardMaterial({ color, emissive: color, emissiveIntensity: emis, roughness: 0.55 }),
       );
       mesh.userData.emis = emis;
       mesh.castShadow = true;
-      const pick = new THREE.Mesh(new THREE.TubeGeometry(curve, 24, 0.24, 5, false), new THREE.MeshBasicMaterial({ visible: false }));
+      const pick = new THREE.Mesh(new THREE.TubeGeometry(curve, clamp(Math.round(len / 0.4), 16, 80), 0.24, 5, false), new THREE.MeshBasicMaterial({ visible: false }));
       pick.userData.cableId = c.id;
+      // 插頭：大小跟著孔走，一小截插在孔裡，其餘露在外面
       const plugs = [ea, eb].map((e) => {
-        const m = new THREE.Mesh(new THREE.BoxGeometry(e.n.x ? 0.26 : 0.17, 0.13, e.n.x ? 0.17 : 0.26), plugMat);
-        m.position.copy(e.p).addScaledVector(e.n, 0.08);
+        const fiber = e.media !== 'rj45';
+        const w = Math.min(0.16, e.w * 0.86), h = Math.min(fiber ? 0.08 : 0.12, e.h * 0.86), l = 0.24;
+        const m = new THREE.Mesh(new THREE.BoxGeometry(e.n.x ? l : w, h, e.n.x ? w : l), fiber ? plugMat.sfp : plugMat.rj45);
+        m.position.copy(e.p).addScaledVector(e.n, l / 2 - 0.03);
+        m.castShadow = true;
         return m;
       });
       this.cableGroup.add(mesh, pick, ...plugs);
@@ -575,17 +670,20 @@ export class Scene3D {
       Object.entries(state.rt.clients).map(([ap, l]) => [ap, l.map((c) => c.dev)]),
     ]);
     if (wsig !== this.wifiSig) { this.wifiSig = wsig; this.rebuildWifi(state); }
-    const linked = {};
+    // 每個埠的燈號：有連線是綠色，被 STP 封鎖、Port-channel 暫停或還在等待是琥珀色，沒有連線不亮
+    const led = {};
     for (const c of state.cables) {
-      (linked[c.a.dev] ||= new Set()).add(c.a.port);
-      (linked[c.b.dev] ||= new Set()).add(c.b.port);
+      const st = state.rt.cable[c.id];
+      const v = st === 'down' ? '' : st === 'blocked' || st === 'susp' || (state.rt.wait && state.rt.wait[c.id] > 0) ? 'amber' : 'up';
+      (led[c.a.dev] ||= {})[c.a.port] = v;
+      (led[c.b.dev] ||= {})[c.b.port] = v;
     }
     for (const d of Object.values(state.devices)) {
       const g = this.devices.get(d.id);
       if (!g) continue;
       const down = !!(state.down || {})[d.id];
       const off = down || !!state.rt.off[d.id];
-      refreshDevice(g, d, linked[d.id] || new Set(), off);
+      refreshDevice(g, d, (pid) => (led[d.id] || {})[pid] || '', off);
       const l = this.labels.get(d.id);
       l.nm.textContent = d.name;
       let sub = '', cls = '';
@@ -699,7 +797,7 @@ export class Scene3D {
   async playHops(hops) {
     const token = ++this.playToken;
     const p = new THREE.Vector3();
-    const place = (obj, s, t) => { s.curve.getPointAt(clamp(t, 0, 1), p); obj.position.set(p.x, s.air ? p.y : 0.3, p.z); };
+    const place = (obj, s, t) => { s.curve.getPointAt(clamp(t, 0, 1), p); obj.position.set(p.x, s.air ? p.y : p.y + 0.22, p.z); };
     this.hideGhosts();
     for (const h of hops) {
       if (token !== this.playToken) return false;

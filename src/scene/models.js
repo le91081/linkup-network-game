@@ -32,12 +32,9 @@ function box(g, w, h, d, material, x = 0, y = 0, z = 0, r = 0.05) {
   return m;
 }
 
-// ── 前面板貼圖：畫出連接埠與燈號 ──
-function paintFace(u, dev, linked) {
-  const { ctx, canvas, tex } = u.face;
-  const W = canvas.width, H = canvas.height;
-  ctx.fillStyle = u.face.bg;
-  ctx.fillRect(0, 0, W, H);
+// ── 連接埠在前面板上的排列（單位是貼圖的像素）。貼圖和網路線的插頭共用這一份座標，
+//    插頭才會剛好插在畫出來的那個孔上 ──
+function portGrid(dev, W, H) {
   const n = dev.ports.length;
   const rows = n > 16 ? 2 : 1;
   const cols = Math.ceil(n / rows);
@@ -45,17 +42,52 @@ function paintFace(u, dev, linked) {
   const cw = (W - padX * 2) / cols;
   const ch = (H - padY * 2) / rows;
   const size = Math.min(cw * 0.78, ch * 0.74);
-  dev.ports.forEach((p, i) => {
+  return dev.ports.map((p, i) => {
     const col = Math.floor(i / rows), row = i % rows;
-    const cx = padX + cw * (col + 0.5), cy = padY + ch * (row + 0.5);
     const pw = p.media === 'qsfp' ? size * 1.15 : size, ph = p.media === 'rj45' ? size : size * 0.62;
-    ctx.fillStyle = '#04060a';
-    ctx.fillRect(cx - pw / 2, cy - ph / 2 + 2, pw, ph);
-    const on = linked.has(p.id);
-    ctx.fillStyle = on ? '#5dfc9b' : '#39425a';
-    ctx.fillRect(cx - pw / 2, cy - ph / 2 - 3, pw, 3.5);
+    // 孔的中心比格子中心低 2 像素，上方留給燈號
+    return { id: p.id, media: p.media, cx: padX + cw * (col + 0.5), cy: padY + ch * (row + 0.5) + 2, pw, ph };
   });
+}
+
+const LED = { up: '#5dfc9b', amber: '#ffb53d', '': '#39425a' };
+
+// ── 前面板貼圖：畫出連接埠與燈號。led(埠) 回傳 'up'（綠）、'amber'（STP 封鎖或等待中）或 ''（沒有連線） ──
+function paintFace(u, dev, led) {
+  const { ctx, canvas, tex } = u.face;
+  const sig = dev.ports.map((p) => led(p.id)).join(',');
+  if (u.face.sig === sig) return; // 燈號沒有變就不用重畫、重新上傳貼圖
+  u.face.sig = sig;
+  const W = canvas.width, H = canvas.height;
+  ctx.fillStyle = u.face.bg;
+  ctx.fillRect(0, 0, W, H);
+  for (const p of portGrid(dev, W, H)) {
+    ctx.fillStyle = '#04060a';
+    ctx.fillRect(p.cx - p.pw / 2, p.cy - p.ph / 2, p.pw, p.ph);
+    ctx.fillStyle = LED[led(p.id)] || LED[''];
+    ctx.fillRect(p.cx - p.pw / 2, p.cy - p.ph / 2 - 5, p.pw, 3.5);
+  }
   tex.needsUpdate = true;
+}
+
+/**
+ * 主機上的網路孔：做出一個看得見的插座，並記下它的位置與朝外的方向（設備的本地座標）。
+ * (x, y, z) 是孔的中心，(nx, nz) 是朝外的方向，網路線會從這裡插進去。
+ */
+function jack(g, u, id, x, y, z, nx, nz, o = {}) {
+  const w = o.w || 0.2, h = o.h || 0.16, t = o.t || 0.08;
+  const dims = (lat, hh, dep) => (nx ? [dep, hh, lat] : [lat, hh, dep]);
+  const at = (lat, yy, out) => [x + (nx ? 0 : lat) + nx * out, yy, z + (nx ? lat : 0) + nz * out];
+  box(g, ...dims(w + 0.06, h + 0.07, t), mat(PALETTE.mid, { metal: 0.45, rough: 0.4 }), ...at(0, y + 0.005, -t / 2), 0.012);
+  box(g, ...dims(w, h, 0.012), mat(0x04060a, { rough: 0.9 }), ...at(0, y, 0.001), 0.003);
+  const led = box(g, ...dims(0.06, 0.022, 0.012), glow(PALETTE.screenOff, 0.4), ...at(w / 2 - 0.03, y + h / 2 + 0.02, 0.002), 0.003);
+  (u.ports ||= {})[id] = { x, y, z, nx, nz, w, h, media: o.media || 'rj45' };
+  (u.jackLed ||= {})[id] = led;
+}
+
+/** 一排網路孔：設備有幾個埠就做幾個，從 (x0) 開始每隔 dx 一個 */
+function jacks(g, u, dev, x0, dx, y, z, nx, nz, o) {
+  dev.ports.forEach((p, i) => jack(g, u, p.id, nx ? x0 : x0 + i * dx, y, nx ? z + i * dx : z, nx, nz, { media: p.media, ...o }));
 }
 
 function facePlate(g, u, w, h, z, y, bg = '#161c2b') {
@@ -81,7 +113,18 @@ function netBox(g, dev, u, o) {
   // 發光飾條（依設備類別上色）
   const stripe = box(g, w * 0.86, 0.035, 0.07, glow(ACCENT[dev.kind], 1.3), 0, h + 0.012, d / 2 - 0.16, 0.015);
   u.stripe = stripe;
-  facePlate(g, u, w - 0.16, h - 0.1, d / 2, h / 2, bg);
+  const fw = w - 0.16, fh = h - 0.1;
+  facePlate(g, u, fw, fh, d / 2, h / 2, bg);
+  // 每個連接埠在機身上的位置：從貼圖的像素座標換算回來
+  const { width: W, height: H } = u.face.canvas;
+  u.ports = {};
+  for (const p of portGrid(dev, W, H)) {
+    u.ports[p.id] = {
+      x: (p.cx / W - 0.5) * fw, y: h / 2 + (0.5 - p.cy / H) * fh, z: d / 2 + 0.004,
+      nx: 0, nz: 1, w: (p.pw / W) * fw, h: (p.ph / H) * fh, media: p.media,
+    };
+  }
+  u.rect = [-w / 2, w / 2, -d / 2, d / 2];
 }
 
 const BUILDERS = {
@@ -98,6 +141,9 @@ const BUILDERS = {
     box(g, 0.14, 0.5, 0.1, mat(PALETTE.mid), 0, 0.27, -0.26);
     box(g, 0.75, 0.05, 0.46, mat(PALETTE.mid), 0, 0.025, -0.2);
     box(g, 1.2, 0.05, 0.4, mat(PALETTE.light), 0, 0.03, 0.55, 0.02);
+    // 網路孔在底座後方（從正面可以從螢幕下緣的空隙看到）
+    jacks(g, u, dev, 0.22, 0.3, 0.12, -0.43, 0, -1);
+    u.rect = [-0.9, 0.9, -0.45, 0.77];
   },
   laptop(g, dev, u) {
     Object.assign(u, { w: 1.7, h: 1.15, d: 1.6 });
@@ -111,6 +157,9 @@ const BUILDERS = {
     u.screen = new THREE.Mesh(new THREE.PlaneGeometry(1.46, 0.88), glow(PALETTE.screenOff, 0.4));
     u.screen.position.set(0, 0.51, 0.03);
     lid.add(u.screen);
+    // 筆電的網路孔在機身左側
+    jacks(g, u, dev, -0.8, 0.2, 0.065, -0.12, -1, 0, { w: 0.15, h: 0.07, t: 0.06 });
+    u.rect = [-0.8, 0.8, -0.72, 0.68];
   },
   printer(g, dev, u) {
     Object.assign(u, { w: 1.7, h: 0.9, d: 1.6 });
@@ -119,12 +168,16 @@ const BUILDERS = {
     box(g, 1.2, 0.2, 0.04, mat(PALETTE.black), 0, 0.3, 0.51, 0.01);
     box(g, 1.0, 0.025, 0.55, mat(0xffffff, { rough: 0.9 }), 0, 0.24, 0.72, 0.01);
     u.led = box(g, 0.12, 0.03, 0.05, glow(PALETTE.screenOff, 0.4), 0.6, 0.67, 0.4, 0.01);
+    jacks(g, u, dev, 0.5, 0.3, 0.17, -0.7, 0, -1);
+    u.rect = [-0.8, 0.8, -0.7, 1.0];
   },
   nas(g, dev, u) {
     Object.assign(u, { w: 1.2, h: 1.15, d: 1.4 });
     box(g, 0.95, 1.1, 1.2, mat(PALETTE.darker, { rough: 0.45 }), 0, 0.55, 0, 0.07);
     for (const x of [-0.21, 0.21]) box(g, 0.36, 0.82, 0.04, mat(PALETTE.dark), x, 0.5, 0.61, 0.02);
     u.led = box(g, 0.5, 0.035, 0.03, glow(PALETTE.screenOff, 0.4), 0, 1.0, 0.61, 0.012);
+    jacks(g, u, dev, -0.16, 0.32, 0.22, -0.6, 0, -1);
+    u.rect = [-0.475, 0.475, -0.6, 0.63];
   },
   tower(g, dev, u) {
     Object.assign(u, { w: 1.2, h: 1.55, d: 1.6 });
@@ -132,6 +185,8 @@ const BUILDERS = {
     box(g, 0.62, 1.05, 0.04, mat(PALETTE.black), 0, 0.62, 0.71, 0.02);
     for (let i = 0; i < 4; i++) box(g, 0.5, 0.05, 0.03, mat(PALETTE.mid, { metal: 0.4 }), 0, 0.28 + i * 0.2, 0.73, 0.01);
     u.led = box(g, 0.5, 0.035, 0.03, glow(PALETTE.screenOff, 0.4), 0, 1.32, 0.72, 0.012);
+    jacks(g, u, dev, -0.15, 0.3, 0.3, -0.7, 0, -1);
+    u.rect = [-0.39, 0.39, -0.7, 0.75];
   },
   rack1u(g, dev, u) {
     Object.assign(u, { w: 2.6, h: 0.62, d: 1.7 });
@@ -142,6 +197,9 @@ const BUILDERS = {
       box(g, 0.2, 0.12, 0.03, mat(PALETTE.black), -0.98 + i * 0.24, 0.19 + r * 0.23, 0.755, 0.01);
     }
     u.led = box(g, 0.28, 0.035, 0.03, glow(PALETTE.screenOff, 0.4), 1.02, 0.42, 0.757, 0.012);
+    // 機架式伺服器的網路卡在背面
+    jacks(g, u, dev, 0.5, 0.34, 0.2, -0.75, 0, -1, { w: 0.2, h: 0.1 });
+    u.rect = [-1.3, 1.3, -0.8, 0.8];
   },
   phone(g, dev, u) {
     Object.assign(u, { w: 0.95, h: 1.1, d: 0.95 });
@@ -170,6 +228,9 @@ const BUILDERS = {
     u.led.rotation.x = Math.PI / 2;
     u.led.position.y = 1.955;
     g.add(u.led);
+    // 基地台的網路孔在底座後方
+    jacks(g, u, dev, 0, 0.3, 0.08, -0.34, 0, -1, { w: 0.16, h: 0.09, t: 0.07 });
+    u.rect = [-0.36, 0.36, -0.36, 0.36];
   },
   hub: (g, dev, u) => netBox(g, dev, u, { w: 1.6, h: 0.36, d: 1.0, color: 0xcfd5e2, bg: '#2a3144' }),
   'switch-s': (g, dev, u) => netBox(g, dev, u, { w: 1.9, h: 0.36, d: 1.05, color: 0x31507f, bg: '#141b2b' }),
@@ -220,6 +281,9 @@ const BUILDERS = {
     spin.add(orbit);
     u.spin = spin;
     u.noShadowParts = [wire];
+    // ISP 線路從底座正面接出來
+    jacks(g, u, dev, 0, 0.3, 0.1, 0.9, 0, 1);
+    u.rect = [-0.95, 0.95, -0.95, 0.95];
   },
 };
 
@@ -244,10 +308,18 @@ export function buildDevice(dev) {
   return g;
 }
 
-/** 依目前狀態更新燈號 / 螢幕顏色 */
-export function refreshDevice(g, dev, linked, off) {
+/** 依目前狀態更新燈號 / 螢幕顏色。led(埠) 回傳 'up'、'amber' 或 '' */
+export function refreshDevice(g, dev, led, off) {
   const u = g.userData;
-  if (u.face) paintFace(u, dev, off ? new Set() : linked);
+  const ledOf = off ? () => '' : led;
+  if (u.face) paintFace(u, dev, ledOf);
+  if (u.jackLed) {
+    for (const [id, m] of Object.entries(u.jackLed)) {
+      const s = ledOf(id);
+      const c = s === 'up' ? PALETTE.green : s === 'amber' ? PALETTE.amber : PALETTE.screenOff;
+      if (m.material.userData.c !== c) { m.material = glow(c, s ? 1.9 : 0.4); m.material.userData.c = c; }
+    }
+  }
   if (u.stripe) u.stripe.visible = !off;
   const lamp = u.screen || u.led;
   if (lamp) {
