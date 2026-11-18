@@ -22,12 +22,15 @@ npm run build    # 輸出到 dist/
 | 點追蹤紀錄裡標著「封包」的那一行 | 檢視那一段訊框的 MAC、IP、TTL 與埠號 |
 | Ctrl + Z / Ctrl + Y | 復原 / 重做上一個設定或接線變更 |
 | 設備面板右上角的電源鈕 | 把設備關機或開機，模擬故障來驗證備援 |
+| Cisco 設備面板右上角的磁片 | 有尚未儲存的設定時會亮起，點一下等於 `write memory` |
 | 拖曳空白處 / 滾輪 / 右鍵拖曳 | 平移 / 縮放 / 旋轉 |
 | 執行測試 | 播放封包動畫並檢查任務目標，空白鍵快轉 |
 | Shift + 拖曳設備（自由模式） | 移動設備 |
 
 - 電腦與伺服器有「終端機」分頁：`ping`（支援 IPv6）、`ipconfig`、`ipconfig /renew`、`arp -a`、`tracert`、`nslookup`、`curl`。
-- Cisco 的路由器與交換器有「CLI」分頁：IOS 風格的命令列。`show running-config`、`show ip route`、`show vlan brief`、`show interfaces trunk`、`show arp` 等近二十個 `show` 指令用來查看狀態；輸入 `configure terminal` 之後可以直接用指令設定（見下方「CLI 設定指令」），改的和圖形介面是同一份設定。
+- Cisco 的路由器與交換器有「CLI」分頁：IOS 風格的命令列。`show running-config`、`show startup-config`、`show ip route`、`show vlan brief`、`show interfaces trunk`、`show arp` 等二十多個 `show` 指令用來查看狀態；輸入 `configure terminal` 之後可以直接用指令設定（見下方「CLI 設定指令」），改的和圖形介面是同一份設定。
+- FortiGate 防火牆也有「CLI」分頁，用的是 FortiOS 的階層式語法（`config firewall policy` → `edit 1` → `set …` → `next` → `end`）。
+- 網址加上 `?profile=名稱` 會使用另一份獨立的進度，適合多人共用一台電腦。
 - 防火牆有「紀錄」分頁，家用路由器與路由器的「狀態」分頁有連線紀錄與 NAT 轉換表；政策與 ACL 規則會顯示命中次數。
 - 頂端列的「測驗」是觀念題與子網路速算，「證照」是考試大綱與關卡的對照表。
 - 關卡選單最上方的「自由模式」是沙盒：自己擺設備、接線、設定。可以把測試存成「應該要通 / 應該不通」的目標一鍵重跑，也可以把整個拓撲匯出成 JSON 檔再匯入。
@@ -74,6 +77,32 @@ npm run build    # 輸出到 dist/
 
 在設定模式下要看狀態請用 `do show …`。按 Tab 可以補齊指令，指令打到一半加上 `?` 會列出接下來可以輸入的字。
 
+另外還支援：
+
+- **VPN**：`crypto isakmp policy`（encryption / hash / group）、`crypto isakmp key … address …`、`crypto ipsec transform-set`、`crypto map … ipsec-isakmp`（`set peer`、`set transform-set`、`set pfs`、`match address`），以及介面上的 `crypto map`。
+- **NAT 的範圍**：`ip nat inside source list <ACL>` 可以指定編號或具名的 ACL，`access-list <編號>` 也能用。
+- **DHCP 保留位址**：只有一台主機的位址池（`host` 加上 `hardware-address`）。
+- **實體層**：`speed`、`duplex`。
+- **存檔**：`write memory` / `copy running-config startup-config`、`show startup-config`、`reload`。
+
+### FortiGate（FortiOS）
+
+`show` 印出來的整份設定可以貼到另一台 FortiGate。支援的區段：
+
+| 區段 | 內容 |
+| --- | --- |
+| `system interface` | 介面的 mode、ip、allowaccess（每個介面各自開放的管理協定） |
+| `system dhcp server` | 位址範圍（`config ip-range`）、閘道、DNS、保留位址 |
+| `firewall address` / `addrgrp` | 位址物件與群組；政策裡用名稱引用 |
+| `firewall vip` | 連接埠轉發，或一對一的靜態 NAT |
+| `firewall policy` | 介面、位址、服務、動作、NAT；`move` 調整順序、`delete` 刪除 |
+| `vpn ipsec phase1-interface` / `phase2-interface` | 站對站 IPsec：提案可以列好幾組，第二階段預設開啟 PFS |
+| `vpn ssl settings` / `vpn ssl web portal`、`user local` / `user group` | 遠端存取的 SSL-VPN |
+| `router static` | 靜態路由；用指令建立的通道要有一筆 `set device "<通道>"` 的路由才會導流量 |
+| `system global`、`system admin`、`system ntp`、`log syslogd setting`、`system snmp community` | 主機名稱與管理設定 |
+
+查看狀態：`get system interface`、`get router info routing-table all`、`get vpn ipsec tunnel summary`、`diagnose vpn tunnel list`、`diagnose sys session list`、`execute ping`。
+
 ## 貼近真實網路的行為
 
 - **ARP**：第一次要送封包給某個 IP 之前，會先廣播詢問它的 MAC（橘色光點擴散到整個廣播網域），問到之後記在 ARP 快取裡，下一個封包就不再詢問。
@@ -84,28 +113,35 @@ npm run build    # 輸出到 dist/
 - **偵測常見的設定錯誤**：IP 位址衝突、Trunk 與 Access 對接、Native VLAN 不一致、兩端 Access VLAN 不同。
 - **無線訊號**：依距離與發射功率估算 RSSI，近的用 5GHz、遠的退回 2.4GHz，頻道重疊時速率減半。
 - **Root Guard**：啟用的埠如果收到更優先的根橋 BPDU 就進入 root-inconsistent 而被擋下；開在朝向根橋的埠上（錯誤設定）一樣會被擋。
+- **TCP 三向交握**：TCP 連線會走完 SYN → SYN-ACK → ACK；防火牆與 NAT 設備用連線紀錄比對後續的封包，不會重新比對政策。
+- **DHCP 發放前先確認**：伺服器發出新位址前會先 ping，已經有人在用就跳過並記成衝突；但設備離線期間發出去的租約不會重新檢查，回來之後照樣衝突。
+- **IPsec 兩階段**：第一階段 (IKE) 與第二階段 (IPsec SA、PFS) 分開協商，哪一個階段不一致會分別指出。IOS 的 ISAKMP 政策整台共用。
+- **先 NAT 再加密**：路由器會先做 NAT 才比對 crypto map，站對站 VPN 沒有設 NAT 例外的話，通道是 Up 的但流量進不去。
+- **running-config 與 startup-config**：IOS 設備改的是 running-config，沒有 `write memory` 就 `reload` 或斷電，設定會回到上一次存檔的樣子。
+- **速率與雙工**：一端寫死、另一端自動協商時，自動的那一端會退回半雙工，形成 duplex mismatch；兩端速率寫死成不同的值則連線建立不起來。
+- **OSPF 的 network 敘述**：持續生效，之後才設定 IP 的介面只要位址符合就自動加入。
+- **管理存取**：FortiGate 每個介面各自決定開放 ping / HTTPS / SSH / HTTP / Telnet。
 - **故障模擬**：任何設備都可以關機，路由器的介面與交換器的連接埠可以 `shutdown`；錯誤訊息會指出是哪一台關機或哪個介面被停用。
 
 ## 模擬的範圍與簡化
 
 - 只要設定或接線有變動，所有設備的 ARP 快取就會清空（真實設備是逐筆逾時）。
 - Hub 只表現出泛洪與半雙工，不模擬碰撞造成的重送。
-- 連線速率只取兩端連接埠較慢的那一邊，不模擬線材等級或手動設定速率造成的雙工不一致。
+- 沒有頻寬與時間的概念：雙工不一致只會出現警告，不會真的變慢；也沒有租約到期、STP 收斂時間、QoS。
 
 - STP 以每個 VLAN 各算一棵樹的方式近似 Rapid PVST+，只處理交換器直接相連的情況；非網管交換器形成迴圈會被判定為廣播風暴。
-- VPN 是 policy-based 的 IPsec；遠端存取 VPN 不區分 SSL 與 IPsec。
+- IPsec 只有 IKEv1 與預先共用金鑰。圖形介面建立的 FortiGate 通道會自動帶出通往對端的路由（相當於用精靈建立）。SSL-VPN 的加密流量在引擎內部仍然當成一層封裝來處理。
 - Wi-Fi 的訊號只看距離與發射功率，沒有牆面衰減。
 - 802.1X 只驗證帳號密碼（沒有憑證）。
 - IPv6 目前只有位址、SLAAC、靜態路由與 ping；ACL、防火牆、NAT、OSPF 仍然只作用在 IPv4。
-- CLI 沒有 startup-config，`write memory` 只會回應 OK；VPN、PPPoE 帳號密碼與防火牆政策仍然要用圖形介面設定。
-- OSPF 的 `network` 只會套用到當下已經有 IP 的介面。
+- PPPoE 的帳號密碼要在圖形介面設定（IOS 沒有做 Dialer 介面）。兩種 CLI 都只涵蓋這個遊戲有模擬的功能。
 
 ## 還可以做的
 
 1. IPv6 的 ACL、防火牆政策與 OSPFv3。
-2. Voice VLAN（需要新的 IP 電話設備）、TACACS+。
+2. Voice VLAN（需要新的 IP 電話設備）、TACACS+、IKEv2、IOS 的 Dialer 介面。
 3. QoS、SNMP Trap、設定備份等維運情境的關卡（目前的模擬沒有頻寬與時間的概念）。
-4. 用指令設定 VPN 與防火牆政策。
+4. Wi-Fi 的牆面衰減、802.1X 的憑證驗證。
 
 ## 程式結構
 
@@ -113,7 +149,8 @@ npm run build    # 輸出到 dist/
 src/engine/   模擬引擎（不依賴瀏覽器，可直接用 Node 測試）
   ip.js、ip6.js   IPv4 / IPv6 位址工具
   model.js        設備型錄（真實機型）、線材與狀態物件
-  ios.js          IOS 風格的設定指令解譯器，以及 show running-config
+  ios.js          IOS 風格的設定指令解譯器、show running-config、startup-config
+  fortios.js      FortiOS 風格的設定樹（config / edit / set / next / end）
   sim.js          供電與連線狀態、L2（VLAN / STP / LACP / Port Security / DHCP Snooping / DAI / 802.1X / Wi-Fi）、
                   L3（路由 / OSPF / VRRP）、DHCP 與 Relay、PPPoE、NAT、ACL、防火牆政策、VPN、DNS
   sim6.js         IPv6：SLAAC、鄰居探索、靜態路由

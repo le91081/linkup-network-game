@@ -2,7 +2,7 @@
 import { h, icon, button, faceplate, toast } from './dom.js';
 import {
   inp, sel, toggle, seg, field, note, kv, del, cardHead, grid2, bind, linkBadge, ifaceNote,
-  isIp, isMask, isIpList, isVlanSpec, isPortNo, isAddr, isNum, isMacList, isCidrList,
+  isIp, isMask, isIpList, isVlanSpec, isPortNo, isAddr, isAddrList, isNum, isMacList, isCidrList,
 } from './form.js';
 import { CATALOG, MEDIA, peerOf, newIface } from '../engine/model.js';
 import { parseIp, fmtIp } from '../engine/ip.js';
