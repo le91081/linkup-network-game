@@ -5,6 +5,7 @@ import { parseIp, fmtIp, parseMask, netOf, sameNet, isPrivate, parseCidr, parseV
 import { cloneState, primaryIface, CATALOG, CABLES, cableKind, cableDist, linkInfo } from './model.js';
 import { recompute6, transact6, globalIp6 } from './sim6.js';
 import { parseIp6 } from './ip6.js';
+import { opsBefore, opsAfter, logEvent } from './ops.js';
 
 const DROP = Symbol('drop');
 const isVlanSw = (d) => !!d.sw && d.sw.mode === 'vlan';
@@ -191,6 +192,77 @@ export function macsBehind(state, d, pid) {
   }
   return res.filter((m, n) => res.findIndex((y) => y.mac === m.mac) === n);
 }
+
+// ── MAC 位址表 ──
+// 交換器從收到的訊框學到「這個來源 MAC 在哪個埠」，一段時間沒有再看到就忘記。
+// 表是空的並不代表不通：不認得的目的 MAC 會被送往整個 VLAN（泛洪），對方一回覆就學起來了。
+export const MAC_AGE = 300;
+export const macAgeOf = (d) => (d.sw && +d.sw.macAge > 0 ? +d.sw.macAge : MAC_AGE);
+const learns = (d) => !!d && !!d.sw && d.sw.mode !== 'hub'; // Hub 不看位址，什麼都不學
+
+function macLearn(state, d, key, mac, port) {
+  if (!learns(d) || !mac) return;
+  (state.dyn.mac[d.id] ||= {})[key + '|' + mac] = { port, t: state.clock };
+}
+
+function macKnown(state, d, key, mac) {
+  const e = (state.dyn.mac[d.id] || {})[key + '|' + mac];
+  return e && state.clock - e.t < macAgeOf(d) ? e : null;
+}
+
+/** 訊框沿著 path 走：路上每一台交換器都從進來的那個埠學到來源 MAC。回傳訊框在每一站的內部 VLAN */
+function learnPath(state, path, mac) {
+  const keys = [];
+  for (const h of path) {
+    const d = state.devices[h.to];
+    let key = null;
+    if (h.wifi) {
+      // 無線用戶端 → 基地台：學在無線介面上
+      const c = (state.rt.clients[h.to] || []).find((x) => x.dev === h.from);
+      if (c) { key = c.key; macLearn(state, d, key, mac, 'wlan'); }
+    } else if (d && d.sw && isBridgePort(d, h.toPort)) {
+      const k = ingressKey(d, h.toPort, h.tag, null, {});
+      if (k !== DROP) { key = k; macLearn(state, d, key, mac, h.toPort); }
+    }
+    keys.push(key);
+  }
+  return keys;
+}
+/** 同一條路反過來走 */
+const reversed = (path) => [...path].reverse().map((h) => ({ ...h, from: h.to, fromPort: h.toPort, to: h.from, toPort: h.fromPort }));
+
+/** 不認得目的 MAC 時，訊框還會被送往哪些埠（進來的埠和原本就要走的埠除外） */
+function floodPorts(state, sw, key, inPort, outPort) {
+  const out = [];
+  for (const pid of Object.keys(sw.sw.ports)) {
+    if (pid === inPort || pid === outPort || !isBridgePort(sw, pid)) continue;
+    const l = state.rt.links[sw.id + ':' + pid];
+    if (l && egressTag(sw, pid, key) !== DROP) out.push({ cable: l.cable, from: sw.id, to: l.dev });
+  }
+  return out;
+}
+
+/** MAC 位址表目前的內容（過期的不算）。STATIC 是 Port Security 指定的位址 */
+export function macRows(state, d) {
+  const rows = [];
+  const label = (pid) => (pid === 'wlan' ? 'Wi-Fi' : (d.ports.find((p) => p.id === pid) || {}).label || pid);
+  const vlan = (k) => (k === 'u' ? 1 : +k);
+  if (isVlanSw(d)) {
+    for (const [pid, pc] of Object.entries(d.sw.ports)) {
+      if (!pc.ps || !pc.ps.on) continue;
+      for (const m of macList(pc.ps.macs)) rows.push({ vlan: pc.mode === 'trunk' ? pc.native : pc.vlan, mac: m, port: pid, label: label(pid), type: 'STATIC' });
+    }
+  }
+  const age = macAgeOf(d);
+  for (const [k, e] of Object.entries((state.dyn && state.dyn.mac && state.dyn.mac[d.id]) || {})) {
+    const cut = k.indexOf('|'), key = k.slice(0, cut), mac = k.slice(cut + 1), old = state.clock - e.t;
+    if (old >= age || rows.some((r) => r.mac === mac && r.vlan === vlan(key))) continue;
+    rows.push({ vlan: vlan(key), mac, port: e.port, label: label(e.port), type: 'DYNAMIC', age: Math.floor(old), left: Math.ceil(age - old) });
+  }
+  return rows.sort((a, b) => a.vlan - b.vlan || a.label.localeCompare(b.label, 'en', { numeric: true }) || a.mac.localeCompare(b.mac));
+}
+/** clear mac address-table dynamic */
+export function clearMac(state, d) { if (state.dyn && state.dyn.mac) delete state.dyn.mac[d.id]; }
 
 // ───────────────────── 供電、連線、LACP、STP、Wi-Fi ─────────────────────
 
@@ -717,7 +789,13 @@ function acquire(state, old, d, i) {
     let dns = dnsList(s.dhcp.dns);
     if (!dns.length && sd.dnsProxy) dns = [s.rt.ip];
     set(ip, s.rt.bits, parseIp(s.dhcp.gw) ?? s.rt.ip, dns, 'dhcp', sd.id);
-    rememberLease(state, d, i, sd.id + '/' + s.id, touchLease(state, sd.id + '/' + s.id, d.id + '/' + i.id, ip));
+    const lk = sd.id + '/' + s.id, ck = d.id + '/' + i.id;
+    rememberLease(state, d, i, lk, touchLease(state, lk, ck, ip));
+    // 這一刻真的有 DHCP 封包在走（新的租約或續約）：沿路的交換器學到用戶端與伺服器的 MAC
+    if (state.dyn.hold[lk][ck].t0 === state.clock && !state.dyn.boot) {
+      for (const x of eps) learnPath(state, x.path, i.rt.mac);
+      learnPath(state, reversed(e.path), s.rt.mac);
+    }
     return true;
   }
   if (!i.rt.note) {
@@ -975,6 +1053,74 @@ const p2set = (t) => {
   return props.flatMap(([e, h]) => pfs.map((g) => `${e.toUpperCase()} / ${h.toUpperCase()}${g ? ' / PFS ' + g : ''}`));
 };
 const sameSel = (a, b) => a.length === b.length && a.every((x) => b.some((y) => y.net === x.net && y.bits === x.bits));
+
+// ── IPsec 的時間面 ──
+export const IKE_TIME = 2; // 兩個階段協商完成大約要這麼久
+/** 第一階段 (IKE SA) 的壽命，預設一天。IOS 的 isakmp policy 整台共用 */
+const life1Of = (d, t) => (d.isakmp && d.isakmp.length ? Math.min(...d.isakmp.map((p) => +p.life || 86400)) : +t.life1 || 86400);
+/** 第二階段 (IPsec SA) 的壽命：IOS 預設一小時，FortiGate 預設十二小時 */
+const life2Of = (d, t) => +t.life2 || +d.ipsecLife || (d.kind === 'firewall' ? 43200 : 3600);
+/**
+ * 對端失聯之後多久才會發現 (Dead Peer Detection)。回傳 null 代表沒有這個機制，只能等 SA 到期。
+ * FortiGate 預設開啟：每 20 秒探測一次、三次沒回應就判定失聯。IOS 要自己設定 crypto isakmp keepalive。
+ */
+function dpdTime(d, t) {
+  if (d.kind === 'firewall') return t.dpd === 'disable' ? null : (+t.dpdRetry || 3) * (+t.dpdInterval || 20);
+  const k = d.ikeKeepalive;
+  return k && +k.sec > 0 ? +k.sec + 5 * (+k.retry || 2) : null;
+}
+
+function tunnelTimers(state, all) {
+  const sa = state.dyn.sa, now = state.clock, down = state.down || {}, live = new Set();
+  for (const T of all) {
+    const d = state.devices[T.dev], key = T.dev + '/' + T.name;
+    if (down[T.dev] || state.rt.off[T.dev]) continue; // 設備關機：SA 跟著消失
+    let rec = sa[key];
+    if (!T.why) {
+      const pd = state.devices[T.peer.dev];
+      const sig = JSON.stringify([T.peerIp, T.localIp, T.cfg.psk, T.cfg.local, T.cfg.remote, p1set(d, T.cfg), p2set(T.cfg)]);
+      // 第一次建立、設定改過、或對端曾經失聯：重新協商
+      if (!rec || rec.sig !== sig || rec.lost != null) rec = sa[key] = { sig, since: state.dyn.boot ? -1e9 : now, tx: 0, rx: 0, r1: 0, r2: 0 };
+      live.add(key);
+      rec.life1 = Math.min(life1Of(d, T.cfg), life1Of(pd, T.peer.cfg));
+      rec.life2 = Math.min(life2Of(d, T.cfg), life2Of(pd, T.peer.cfg));
+      const ready = rec.since + IKE_TIME;
+      if (now < ready) {
+        T.nego = ready - now;
+        T.why = `IKE 協商中，再 ${Math.ceil(T.nego)} 秒建立`;
+        state.rt.pending.push({ at: ready, dev: d.id, kind: 'vpn', text: `${d.name}：VPN 通道「${T.name}」協商中 (IKE)` });
+        continue;
+      }
+      if (rec.t1 == null) rec.t1 = rec.t2 = state.dyn.boot ? now : ready;
+      // 金鑰到期就重新協商。新的 SA 先建好才換過去，流量不會中斷
+      while (now >= rec.t1 + rec.life1) { rec.t1 += rec.life1; rec.r1++; }
+      while (now >= rec.t2 + rec.life2) { rec.t2 += rec.life2; rec.r2++; }
+      rec.up = true;
+    } else if (rec && rec.up && T.dead) {
+      // 對端突然失聯：手上的 SA 還在，封包照樣加密送出去。要等 DPD 探測失敗（或 SA 到期）才會把通道拆掉
+      if (rec.lost == null) rec.lost = now;
+      const dpd = dpdTime(d, T.cfg);
+      const until = dpd != null ? rec.lost + dpd : rec.t2 + rec.life2;
+      if (now >= until) continue;
+      live.add(key);
+      T.stale = { until, why: T.why, dpd: dpd != null };
+      T.why = '';
+      state.rt.pending.push({ at: until, dev: d.id, kind: 'vpn', text: `${d.name}：還沒發現 VPN 通道「${T.name}」的對端已經失聯（${dpd != null ? 'DPD 探測中' : '沒有設定 keepalive，要等 SA 到期'}）` });
+    }
+  }
+  for (const k of Object.keys(sa)) if (!live.has(k)) delete sa[k];
+}
+
+/** 站對站通道目前的 SA：剩餘壽命、重新協商的次數、加解密的封包數。還沒建立就回傳 null */
+export function saInfo(state, devId, name) {
+  const r = state.dyn && state.dyn.sa && state.dyn.sa[devId + '/' + name];
+  if (!r || !r.up) return null;
+  const now = state.clock;
+  return {
+    life1: r.life1, life2: r.life2, left1: Math.ceil(r.t1 + r.life1 - now), left2: Math.ceil(r.t2 + r.life2 - now),
+    rekey1: r.r1, rekey2: r.r2, tx: r.tx, rx: r.rx, age: Math.floor(now - r.t2), lost: r.lost != null ? Math.floor(now - r.lost) : null,
+  };
+}
 const tunIface = (id, label) => ({ id, label, bind: { t: 'tun' }, rt: { ip: null, vips: [], link: true }, nat: false });
 
 function prepTunnels(state) {
@@ -1005,7 +1151,7 @@ function prepTunnels(state) {
     if (T.why) continue;
     const pd = findOwner(state, T.peerIp);
     const P = pd && all.find((x) => x.dev === pd.id && x.peerIp === T.localIp);
-    if (!pd) T.why = `對端 ${fmtIp(T.peerIp)} 沒有回應`;
+    if (!pd) { T.why = `對端 ${fmtIp(T.peerIp)} 沒有回應`; T.dead = true; }
     else if (!P) T.why = `${pd.name} 上沒有指向 ${fmtIp(T.localIp)} 的通道設定`;
     else if (P.cfg.off) T.why = `${pd.name} 那一端的通道已停用`;
     else if (P.cfg.psk !== T.cfg.psk) T.why = '兩端的預先共用金鑰 (PSK) 不一致 — IKE 驗證失敗';
@@ -1014,10 +1160,15 @@ function prepTunnels(state) {
     else if (!sameSel(T.local, P.remote) || !sameSel(T.remote, P.local)) T.why = '兩端的本地 / 遠端網段沒有互相對應';
     else {
       const r = transact(state, T.dev, { proto: 'udp', dst: T.peerIp, dport: 500, quiet: true });
-      if (!r.ok) T.why = 'IKE 封包到不了對端：' + r.reason;
+      if (!r.ok) { T.why = 'IKE 封包到不了對端：' + r.reason; T.dead = true; }
+      else T.peer = P;
     }
   }
-  for (const T of all) { T.up = !T.why; T.cfg.rt = { up: T.up, why: T.why }; }
+  tunnelTimers(state, all);
+  for (const T of all) {
+    T.up = !T.why;
+    T.cfg.rt = { up: T.up, why: T.why, nego: T.nego || 0, stale: T.stale ? T.stale.until : 0, staleWhy: T.stale ? T.stale.why : '' };
+  }
 
   // 遠端存取 VPN（用戶端撥入）
   const old = state.vpnLeases || {};
@@ -1123,7 +1274,8 @@ function daiBlock(state, path, srcIf, dstIf) {
 export function recompute(state) {
   if (typeof state.clock !== 'number') state.clock = 0;
   if (!state.dyn) state.dyn = { boot: true }; // 第一次計算：目前的狀態當作已經運作很久
-  for (const k of ['port', 'adj', 'lsa', 'vrrp', 'lease', 'hold', 'arp']) state.dyn[k] ||= {};
+  for (const k of ['port', 'adj', 'lsa', 'vrrp', 'lease', 'hold', 'arp', 'mac', 'ct', 'sa', 'clk', 'log', 'syslog', 'ev']) state.dyn[k] ||= {};
+  opsBefore(state);
   let auth = { dot1x: {}, ent: {} };
   // 802.1X 可能要算好幾輪。前幾輪只是試算，計時的狀態以最後一輪為準，所以每一輪都從同一份起點開始
   const dyn0 = JSON.stringify(state.dyn);
@@ -1135,6 +1287,7 @@ export function recompute(state) {
     auth = next; // 802.1X 的結果改變了連接埠的狀態，要重算一次
   }
   if (state.v6) recompute6(state);
+  opsAfter(state);
   delete state.dyn.boot;
   return state;
 }
@@ -1239,6 +1392,24 @@ function computePass(state, auth) {
     for (const [ip, e] of Object.entries(cache)) {
       const i = d.ifaces.find((x) => x.id === e.i);
       if (!i || !i.rt.link || down[d.id]) delete cache[ip];
+    }
+  }
+  // MAC 位址表：連接埠斷線時，從那個埠學到的位址馬上清掉；設備關機整張表就沒了。
+  // 生成樹的拓撲一變 (Topology Change)，所有交換器都會把學到的位址清掉重學
+  const stpSig = devs.filter(isVlanSw).map((d) => d.id + ':' + (d.rt.stp && d.rt.stp.blocked ? [...d.rt.stp.blocked].sort().join(',') : '')).join(';');
+  const tc = state.dyn.stpSig != null && state.dyn.stpSig !== stpSig;
+  state.dyn.stpSig = stpSig;
+  for (const d of devs) {
+    const tbl = state.dyn.mac[d.id];
+    if (tbl) {
+      if (down[d.id] || state.rt.off[d.id] || tc) delete state.dyn.mac[d.id];
+      else for (const [k, e] of Object.entries(tbl)) if (now - e.t >= macAgeOf(d) || (e.port !== 'wlan' && !state.rt.links[d.id + ':' + e.port])) delete tbl[k];
+    }
+    // 連線表：閒置太久的項目移除
+    const ct = state.dyn.ct[d.id];
+    if (ct) {
+      if (down[d.id] || state.rt.off[d.id]) delete state.dyn.ct[d.id];
+      else state.dyn.ct[d.id] = ct.filter((e) => now - e.t < sessionTtl(d, e));
     }
   }
   return state;
@@ -1437,6 +1608,7 @@ function deliver(dev, inIf, pkt) {
     if (pkt.dport === 67 && dev.dhcpScopes) return ok;
     if ((pkt.dport === 1812 || pkt.dport === 1813) && dev.radiusServer) return ok;
     if ((pkt.dport === 500 || pkt.dport === 4500) && dev.vpns && dev.vpns.length) return ok;
+    if (pkt.dport === 123 && dev.rt.ntpServe) return ok; // 設成 ntp master，或自己已經對好時的設備可以替別人報時
   }
   if (pkt.proto === 'tcp' && dev.vpnServer && dev.vpnServer.on && pkt.dport === (+dev.vpnServer.port || 10443)) return ok; // SSL-VPN
   if (pkt.proto === 'tcp' && dev.mgmt && MGMT[pkt.dport]) {
@@ -1478,9 +1650,11 @@ function forward(state, ctx, startId, pkt) {
       const flow = !pkt.reply && pkt.ack && ct && ct.find((x) => x.proto === pkt.proto && x.src === pkt.src && x.sport === pkt.sport && x.dst === pkt.dst && x.dport === pkt.dport);
       if (flow) {
         established = true;
+        flow.t = state.clock; flow.st = 'est';
         pkt.src = flow.nSrc; pkt.sport = flow.nSport; pkt.dst = flow.nDst; pkt.dport = flow.nDport;
       } else if (e && pkt.reply) {
         established = true;
+        e.t = state.clock; // 有封包經過，閒置的計時重新開始
         if (e.src !== pkt.dst || e.dst !== pkt.src) {
           log.push({ dev: dev.id, kind: 'nat', text: `NAT 還原：${fmtIp(pkt.src)} → ${fmtIp(pkt.dst)}　改回　${fmtIp(e.dst)} → ${fmtIp(e.src)}` });
         }
@@ -1524,14 +1698,23 @@ function forward(state, ctx, startId, pkt) {
       if (inIf && !established) {
         const v = filter(dev, inIf, tun.iface, pkt, dnat);
         if (stateful) sess(dev, { act: v.ok ? 'allow' : 'deny', proto: pkt.proto, ...o, rule: v.rule || 0, inIf: inIf.label, outIf: tun.iface.label });
-        if (!v.ok) return drop(v.reason);
+        if (!v.ok) { denyLog(state, dev, pkt, o, inIf, tun.iface, v.rule); return drop(v.reason); }
         if (v.rule) log.push({ dev: dev.id, kind: 'fwd', text: `符合政策 #${v.rule}，放行（${inIf.label} → ${tun.iface.label}）` });
-        if (!pkt.reply && stateful) (ctx.ct[dev.id] ||= []).push({ proto: pkt.proto, ...o, nSrc: pkt.src, nSport: pkt.sport, nDst: pkt.dst, nDport: pkt.dport });
+        if (!pkt.reply && stateful) track(state, ctx, dev, { proto: pkt.proto, ...o, nSrc: pkt.src, nSport: pkt.sport, nDst: pkt.dst, nDport: pkt.dport, inIf: inIf.label, outIf: tun.iface.label, rule: v.rule || 0 });
       }
       const ssl = !tun.cfg; // 遠端存取是 SSL-VPN（包在 TLS 裡），站對站是 IPsec（包在 ESP 裡）
       log.push({ dev: dev.id, kind: 'vpn', text: `加密：整個封包包進 ${ssl ? 'TLS（SSL-VPN 的 TCP 連線）' : 'ESP'}，外層位址 ${fmtIp(tun.localIp)} → ${fmtIp(tun.peerIp)}` });
       const r = forward(state, ctx, dev.id, { proto: 'esp', src: tun.localIp, dst: tun.peerIp, sport: 0, dport: 0, ttl: 64, reply: pkt.reply, ssl });
-      if (!r.ok) return r;
+      if (!r.ok) {
+        if (!tun.stale) return r;
+        return drop(`VPN 通道「${tun.name}」在 ${dev.name} 上看起來還是 Up（SA 還沒過期），封包照樣加密送了出去，但對端已經失聯：${tun.stale.why}。${dev.name} 還要 ${fmtDur(tun.stale.until - state.clock)} 才會發現${tun.stale.dpd ? '（DPD 探測中）' : '（沒有設定 keepalive，只能等 SA 到期）'}`);
+      }
+      if (!QUIET && tun.cfg) {
+        // 加密、解密的封包數（show crypto ipsec sa 的 #pkts encaps / decaps）
+        const sa1 = state.dyn.sa[dev.id + '/' + tun.name], sa2 = r.tun && state.dyn.sa[r.dev + '/' + r.tun.name];
+        if (sa1) sa1.tx++;
+        if (sa2) sa2.rx++;
+      }
       dev = state.devices[r.dev];
       inIf = r.tun.iface;
       log.push({ dev: dev.id, kind: 'vpn', text: `解密：還原出內層封包 ${fmtIp(pkt.src)} → ${fmtIp(pkt.dst)}（從 ${inIf.label} 進來）` });
@@ -1550,7 +1733,7 @@ function forward(state, ctx, startId, pkt) {
     if (inIf && !established) {
       const v = filter(dev, inIf, outIf, pkt, dnat);
       if (stateful) sess(dev, { act: v.ok ? 'allow' : 'deny', proto: pkt.proto, ...o, rule: v.rule || 0, inIf: inIf.label, outIf: outIf.label });
-      if (!v.ok) return drop(v.reason);
+      if (!v.ok) { denyLog(state, dev, pkt, o, inIf, outIf, v.rule); return drop(v.reason); }
       if (v.rule) log.push({ dev: dev.id, kind: 'fwd', text: `符合政策 #${v.rule}，放行（${inIf.label} → ${outIf.label}）` });
       if (!pkt.reply) {
         let nSrc = pkt.src;
@@ -1558,7 +1741,7 @@ function forward(state, ctx, startId, pkt) {
         if (st) nSrc = parseIp(st.pub); // 靜態 NAT 的主機固定用自己的公用 IP 出去
         else if (v.nat && outIf !== inIf && outIf.rt.ip != null && natPermits(dev, outIf, pkt)) nSrc = outIf.rt.ip;
         if (nSrc !== pkt.src || dnat || stateful) {
-          (ctx.ct[dev.id] ||= []).push({ proto: pkt.proto, ...o, nSrc, nSport: pkt.sport, nDst: pkt.dst, nDport: pkt.dport });
+          track(state, ctx, dev, { proto: pkt.proto, ...o, nSrc, nSport: pkt.sport, nDst: pkt.dst, nDport: pkt.dport, inIf: inIf.label, outIf: outIf.label, rule: v.rule || 0 });
         }
         if (nSrc !== pkt.src) {
           sess(dev, { act: 'snat', proto: pkt.proto, src: pkt.src, sport: pkt.sport, nsrc: nSrc, dst: pkt.dst, dport: pkt.dport });
@@ -1590,6 +1773,7 @@ function forward(state, ctx, startId, pkt) {
       log.push({ dev: dev.id, kind: 'arp', text: `ARP 廣播：誰是 ${fmtIp(nh)}？同一個廣播網域的每台設備都會收到` });
       const wave = buildWave(eps);
       if (wave.length) hops.push({ wave, proto: 'arp' });
+      for (const e of eps) learnPath(state, e.path, outIf.rt.mac); // 廣播經過的每一台交換器都學到發問者的 MAC
     }
     if (!tgt) return drop(dai || arpFail(state, dev, outIf, nh, route.via != null, eps));
     const tmac = answerMac(tgt, nh);
@@ -1599,6 +1783,7 @@ function forward(state, ctx, startId, pkt) {
       if (outIf.rt.ip != null) (state.dyn.arp[tgt.dev] ||= {})[outIf.rt.ip] = { mac: outIf.rt.mac, t: state.clock, i: tgt.iface.id }; // 被問的那一方也順便記下發問者
       log.push({ dev: tgt.dev, kind: 'arp', text: `ARP 回覆：${fmtIp(nh)} 的 MAC 位址是 ${tmac}${tmac === VRRP_MAC ? '（VRRP 的虛擬 MAC）' : ''}（${dev.name} 記入 ARP 快取）` });
       for (const h of [...tgt.path].reverse()) hops.push({ cable: h.cable, wifi: h.wifi, from: h.to, to: h.from, tag: h.tag, reply: true, proto: 'arp' });
+      learnPath(state, reversed(tgt.path), tmac); // ARP 回覆是單點傳送：沿路的交換器學到回覆者的 MAC
     }
     if (cands.length > 1 && !dai) {
       log.push({ dev: dev.id, kind: 'info', text: `注意：這個網段上有 ${cands.length} 台設備都聲稱自己是 ${fmtIp(nh)}（IP 衝突或 ARP 欺騙），封包被送往最先回應的 ${state.devices[tgt.dev].name}` });
@@ -1612,10 +1797,22 @@ function forward(state, ctx, startId, pkt) {
       // 這一段第二層旅程上的訊框內容，給「封包檢視」用
       frame: { smac: outIf.rt.mac, dmac: tmac, tags, src: pkt.src, dst: pkt.dst, ttl: pkt.ttl, proto: pkt.proto, sport: pkt.sport, dport: pkt.dport, reply: pkt.reply, ack: !!pkt.ack, ssl: !!pkt.ssl, wifi: tgt.path.some((h) => h.wifi) },
     });
-    let leaked = false;
+    // 沿路的交換器從進來的埠學到來源 MAC。目的 MAC 不在表裡（太久沒看到而過期）的話，只能往整個 VLAN 泛洪
+    const keys = learnPath(state, tgt.path, outIf.rt.mac);
+    let leaked = false, flooded = false;
     tgt.path.forEach((h, n) => {
-      const leak = hubLeak(state, tgt.path, n);
-      if (leak && !leaked) {
+      const hub = hubLeak(state, tgt.path, n);
+      let leak = hub;
+      const sw = state.devices[h.from];
+      if (n > 0 && !h.wifi && learns(sw) && keys[n - 1] != null && !macKnown(state, sw, keys[n - 1], tmac)) {
+        const extra = floodPorts(state, sw, keys[n - 1], tgt.path[n - 1].toPort, h.fromPort);
+        if (extra.length) leak = [...(leak || []), ...extra];
+        if (!flooded) {
+          flooded = true;
+          log.push({ dev: sw.id, kind: 'info', text: `${sw.name} 的 MAC 位址表裡沒有 ${tmac}（超過 ${macAgeOf(sw)} 秒沒看到它送出的訊框，項目已經過期）：不知道它在哪個埠，只好送往這個 VLAN 的每一個埠 (unknown unicast flooding)。對方一回覆，交換器就會重新學起來` });
+        }
+      }
+      if (hub && !leaked) {
         leaked = true;
         log.push({ dev: h.from, kind: 'info', text: `${state.devices[h.from].name} 是 Hub：訊框被複製到其他所有連接埠，${leak.map((x) => state.devices[x.to].name).join('、')} 也收到了，發現不是給自己的就丟棄` });
       }
@@ -1628,6 +1825,48 @@ function forward(state, ctx, startId, pkt) {
 }
 
 // ───────────────────── 連線紀錄、命中次數、廣播 ─────────────────────
+
+// ── 連線表：防火牆的 session、路由器的 NAT 轉換 ──
+// 每一筆都有閒置逾時：沒有新的封包經過，時間到就從表裡移除。
+const SESSION_TTL = {
+  // 路由器 (IOS)：ip nat translation 的預設值
+  router: { tcp: 86400, syn: 60, fin: 60, udp: 300, dns: 60, icmp: 60 },
+  // FortiGate：session-ttl 預設 3600 秒、UDP 180 秒、半開的連線 10 秒
+  firewall: { tcp: 3600, syn: 10, fin: 120, udp: 180, dns: 180, icmp: 60 },
+  // 家用路由器
+  homerouter: { tcp: 1800, syn: 120, fin: 120, udp: 180, dns: 180, icmp: 30 },
+};
+/** 這一筆連線可以閒置多久（秒）。可以用 ip nat translation … 或 config system session-ttl 調整 */
+export function sessionTtl(dev, e) {
+  const base = SESSION_TTL[dev.kind] || SESSION_TTL.router, o = dev.natTimeout || {};
+  const k = e.proto === 'tcp' ? (e.st === 'est' ? 'tcp' : e.st === 'fin' ? 'fin' : 'syn') : e.proto === 'udp' ? (e.dport === 53 ? 'dns' : 'udp') : 'icmp';
+  return +o[k] > 0 ? +o[k] : base[k];
+}
+function track(state, ctx, dev, e) {
+  (ctx.ct[dev.id] ||= []).push(e);
+  if (QUIET) return;
+  e.t0 = e.t = state.clock;
+  e.st = e.proto === 'tcp' ? 'syn' : 'new';
+  const tbl = (state.dyn.ct[dev.id] ||= []);
+  tbl.push(e);
+  if (tbl.length > 200) tbl.shift();
+}
+/** 連線表目前的內容（過期的不算），最新的在前面。left 是還能閒置幾秒 */
+export function sessionRows(state, dev) {
+  const now = state.clock;
+  return ((state.dyn && state.dyn.ct && state.dyn.ct[dev.id]) || [])
+    .map((e) => { const ttl = sessionTtl(dev, e); return { ...e, ttl, left: Math.ceil(ttl - (now - e.t)), age: Math.floor(now - e.t0) }; })
+    .filter((e) => e.left > 0).reverse();
+}
+/** clear ip nat translation * / diagnose sys session clear */
+export function clearSessions(state, dev) { if (state.dyn && state.dyn.ct) delete state.dyn.ct[dev.id]; }
+
+const PROTO_NUM = { icmp: 1, tcp: 6, udp: 17 };
+/** 防火牆拒絕連線時留下的流量紀錄（會送到 Syslog 伺服器） */
+function denyLog(state, dev, pkt, o, inIf, outIf, rule) {
+  if (QUIET || dev.kind !== 'firewall') return;
+  logEvent(state, dev, 5, '', '', `logid="0000000013" type="traffic" subtype="forward" level="notice" vd="root" srcip=${fmtIp(o.src)} srcport=${o.sport} srcintf="${inIf.id}" dstip=${fmtIp(o.dst)} dstport=${o.dport} dstintf="${outIf.id}" policyid=${rule || 0} proto=${PROTO_NUM[pkt.proto] || 0} action="deny"`);
+}
 
 let QUIET = false; // 引擎內部的控制流量（IKE、RADIUS、DHCP Relay）不記入紀錄
 let logSeq = 0;
@@ -1768,6 +2007,8 @@ function transactInner(state, fromId, spec) {
     const c = forward(state, ctx, fromId, ack);
     if (!c.ok) return done({ ok: false, reason: '三向交握的最後一步 (ACK) 沒有送達：' + c.reason, failDev: c.dev, phase: 'ack', responder: a.dev });
     ctx.log.push({ dev: c.dev, kind: 'ok', text: 'TCP 連線建立完成（SYN → SYN-ACK → ACK），可以開始傳送資料' });
+    // 測試用的連線建立之後就由用戶端關閉 (FIN)：連線表裡的項目進入關閉中的狀態，很快就會被清掉
+    for (const l of Object.values(ctx.ct)) for (const e of l) if (e.st === 'est') e.st = 'fin';
     return done({ ok: true, responder: a.dev, srcIp, seenSrc });
   }
   ctx.log.push({ dev: fromId, kind: 'ok', text: '收到回應，連線成功' });
