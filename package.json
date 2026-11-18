@@ -1,0 +1,19 @@
+{
+  "name": "linkup-network-game",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "LinkUp — 從一條網路線到資料中心的網路工程解謎遊戲",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "test": "node test/levels.test.mjs"
+  },
+  "dependencies": {
+    "three": "^0.170.0"
+  },
+  "devDependencies": {
+    "vite": "^5.4.11"
+  }
+}

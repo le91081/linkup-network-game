@@ -1,0 +1,93 @@
+# LinkUp — 從一條網路線到資料中心
+
+親手接線、親手設定，讓封包抵達目的地的網路工程解謎遊戲。
+three.js 負責 3D 場景，設定頁面是 HTML，底層是一套自己寫的網路模擬引擎。
+
+## 執行
+
+```bash
+npm install
+npm run dev      # http://localhost:5173
+npm test         # 驗證所有關卡、負面案例與題庫資料
+npm run build    # 輸出到 dist/
+```
+
+## 玩法
+
+| 操作 | 效果 |
+| --- | --- |
+| 在設備上按住拖曳到另一台設備 | 接上網路線（需要時會讓你選連接埠與線材） |
+| 點設備 | 開啟它的管理頁面 |
+| 點網路線 | 查看線材與距離、拔除 |
+| 拖曳空白處 / 滾輪 / 右鍵拖曳 | 平移 / 縮放 / 旋轉 |
+| 執行測試 | 播放封包動畫並檢查任務目標，空白鍵快轉 |
+| Shift + 拖曳設備（自由模式） | 移動設備 |
+
+- 電腦與伺服器有「終端機」分頁：`ping`（支援 IPv6）、`ipconfig`、`tracert`、`nslookup`、`curl`。
+- Cisco 的路由器與交換器有「CLI」分頁：唯讀的 IOS 風格介面，可以用 `show running-config` 看圖形介面設定所對應的指令，也支援 `show ip route`、`show vlan brief`、`show spanning-tree` 等十多個 `show` 指令。
+- 頂端列的「測驗」是觀念題與子網路速算，「證照」是考試大綱與關卡的對照表。
+- 關卡選單最上方的「自由模式」是沒有任務目標的沙盒，可以自己擺設備、接線、測試。
+
+## 關卡（9 章 35 關）
+
+| 章節 | 關卡數 | 主題 |
+| --- | --- | --- |
+| 1 家用網路 | 4 | Hub、Switch、固定 IP、DHCP、PPPoE、NAT、DNS |
+| 2 小型辦公室 | 4 | 固定 IP 線路、連接埠轉發、VLAN、Trunk、子介面 |
+| 3 企業網路 | 3 | 防火牆政策與 DMZ、靜態路由與回程路由、一對一靜態 NAT |
+| 4 資料中心 | 3 | ToR 與 SVI、Spine-Leaf 與 OSPF、銅纜 / 多模 / 單模光纖與距離 |
+| 5 無線網路 | 3 | SSID、WPA2 / WPA3、PoE、頻道規劃、訪客 SSID 對應 VLAN |
+| 6 網路安全 | 7 | DHCP Snooping、Port Security、ACL、管理加固、DAI、BPDU Guard、802.1X / RADIUS |
+| 7 VPN 與廣域備援 | 3 | 站對站 IPsec、遠端存取 VPN、雙線路浮動靜態路由 |
+| 8 高可用與進階路由 | 6 | STP、EtherChannel、VRRP / HSRP、DHCP Relay、OSPF Cost、VLSM |
+| 9 IPv6 | 2 | Link-local、SLAAC、IPv6 靜態路由、雙協定 |
+
+## 證照對照
+
+`src/data/certs.js` 把每一關對應到考試大綱的條目，遊戲內的「證照地圖」會顯示涵蓋與完成的進度。
+
+| 考試 | 有對應關卡的條目 | 還沒有關卡的條目 |
+| --- | --- | --- |
+| Cisco CCNA 200-301 v1.1 | 53 條中的 39 條 | 1.5、1.12、2.3、2.6、4.7、4.9、5.2 與第 6 領域（自動化） |
+| CompTIA Network+ N10-009 | 25 條中的 23 條 | 1.3（雲端）、3.1（組織流程） |
+| CompTIA Security+ SY0-701 | 只列出與網路相關的 11 條，全部有對應 | — |
+
+沒有關卡的條目大多是觀念題，題庫裡有對應的題目（TCP / UDP、CDP / LLDP、QoS、TFTP、AAA、REST API、JSON、Ansible 等）。
+條目編號依公開的考試大綱，標題是中文摘要。CCNA v2.0 預計在 2027 年 2 月取代 v1.1，改版後需要重新對照。
+題庫（76 題觀念題加上隨機產生的子網路計算題）是自行編寫的練習題，不是實際試題。
+
+## 模擬的範圍與簡化
+
+- STP 以每個 VLAN 各算一棵樹的方式近似 Rapid PVST+，只處理交換器直接相連的情況；非網管交換器形成迴圈會被判定為廣播風暴。
+- VPN 是 policy-based 的 IPsec；遠端存取 VPN 不區分 SSL 與 IPsec。
+- Wi-Fi 的訊號只看距離與發射功率，沒有牆面衰減。
+- 802.1X 只驗證帳號密碼（沒有憑證）。
+- IPv6 目前只有位址、SLAAC、靜態路由與 ping；ACL、防火牆、NAT、OSPF 仍然只作用在 IPv4。
+- CLI 是唯讀的，不能用指令修改設定。
+
+## 還可以做的
+
+1. 可以輸入設定指令的 CLI（`configure terminal`）。
+2. IPv6 的 ACL、防火牆政策與 OSPFv3。
+3. Voice VLAN、PortFast、Root Guard、TACACS+。
+4. QoS、SNMP Trap、設定備份等維運情境的關卡。
+5. 自由模式的匯出 / 匯入，以及自訂任務目標。
+
+## 程式結構
+
+```
+src/engine/   模擬引擎（不依賴瀏覽器，可直接用 Node 測試）
+  ip.js、ip6.js   IPv4 / IPv6 位址工具
+  model.js        設備型錄（真實機型）、線材與狀態物件
+  sim.js          供電與連線狀態、L2（VLAN / STP / LACP / Port Security / DHCP Snooping / DAI / 802.1X / Wi-Fi）、
+                  L3（路由 / OSPF / VRRP）、DHCP 與 Relay、PPPoE、NAT、ACL、防火牆政策、VPN、DNS
+  sim6.js         IPv6：SLAAC、鄰居探索、靜態路由
+src/levels/   關卡定義：設備、初始設定、任務目標、提示、參考解法
+src/data/     題庫與證照對照表
+src/scene/    three.js 場景、設備模型、網路線、無線涵蓋範圍與封包動畫
+src/ui/       設定面板、終端機、CLI、任務面板、測驗、自由模式與對話框
+test/         對每個關卡套用參考解法，並用負面案例確認引擎真的會擋
+```
+
+新增關卡：在 `src/levels/` 的 `LEVELS` 加一筆，寫好 `setup()`、`objectives` 與 `solve()`，
+在 `src/data/certs.js` 補上對應的考試條目，再跑 `npm test`。
