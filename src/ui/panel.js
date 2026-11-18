@@ -128,7 +128,7 @@ function swPorts(ctx, body) {
   const pinned = (app.pinned[dev.id] ||= new Set());
   body.append(faceplate(state, dev, { onPick: (p) => { pinned.add(p.id); app.renderPanel(); } }),
     h('p', { class: 'tip', text: '下方列出已接線或已調整過的連接埠；點面板上的埠可以把它加入清單預先設定。' }));
-  const adv = (pc) => pc.shut || pc.trust || +pc.lag > 0 || (pc.ps && pc.ps.on) || pc.bpduguard || pc.dot1x;
+  const adv = (pc) => pc.shut || pc.trust || +pc.lag > 0 || (pc.ps && pc.ps.on) || pc.bpduguard || pc.rootguard || pc.dot1x;
   const isDefault = (pc) => pc.mode === 'access' && pc.vlan === 1 && !adv(pc);
   const shown = dev.ports.filter((p) => peerOf(state, dev.id, p.id) || !isDefault(sw.ports[p.id]) || pinned.has(p.id));
   if (!shown.length) body.append(note('muted', '所有連接埠都是預設值（Access · VLAN 1）。'));
@@ -165,7 +165,7 @@ function swPorts(ctx, body) {
       !routed && h('button', {
         type: 'button', class: 'advbtn' + (open ? ' on' : ''),
         onclick: () => { if (app.adv.has(key)) app.adv.delete(key); else app.adv.add(key); app.renderPanel(); },
-      }, icon(open ? 'down' : 'chevron', 13), '進階：停用、Port-channel、Port Security、802.1X、BPDU Guard'),
+      }, icon(open ? 'down' : 'chevron', 13), '進階：停用、Port-channel、Port Security、802.1X、BPDU / Root Guard'),
       !routed && open && X.portAdvanced(ctx, p, pc)));
   }
 }

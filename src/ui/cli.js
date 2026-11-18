@@ -199,7 +199,7 @@ export function buildCli(ctx, body) {
   const { app, dev } = ctx;
   const sess = ((app.cliSess ||= {})[dev.id] ||= iosSession(() => app.state.devices[dev.id] || dev, () => app.state));
   const logs = (app.termLog['cli:' + dev.id] ||= [{
-    t: 'IOS 風格的 CLI。用 show 指令查看狀態；輸入 configure terminal 進入設定模式後可以直接下指令修改設定（和其他分頁改的是同一份設定）。輸入 ? 查看目前可用的指令。', c: 'dim',
+    t: 'IOS 風格的 CLI。用 show 指令查看狀態；輸入 configure terminal 進入設定模式後可以直接下指令修改設定（和其他分頁改的是同一份設定）。輸入 ? 查看目前可用的指令，按 Tab 可以補齊。', c: 'dim',
   }]);
   const hist = (app.termHist['cli:' + dev.id] ||= []);
   let hi = hist.length;
@@ -244,7 +244,11 @@ export function buildCli(ctx, body) {
     const text = line.trim(), low = text.toLowerCase();
     const before = (app.state.devices[dev.id] || dev).name;
     let renamed = false;
-    if (low === '?' || low === 'help') {
+    if (text.length > 1 && text.endsWith('?')) {
+      // 指令打到一半加上 ?：列出接下來可以輸入的字
+      const r = sess.complete(text.slice(0, -1), CMDS);
+      print(r.options.length ? '  ' + r.options.join('   ') : '  （沒有符合的指令，或接下來要輸入的是數值 / 位址）', 'dim');
+    } else if (low === '?' || low === 'help') {
       print(sess.mode === 'exec' ? '可用指令（可以縮寫，例如 conf t、sh ip int br）：' : '這個模式可用的指令（可以縮寫；前面加 no 是取消）：', 'dim');
       sess.help().forEach((c) => print('  ' + c, 'dim'));
       if (sess.mode !== 'exec') print('  exit 回上一層　end 回到最外層　do show … 在設定模式下查看狀態', 'dim');
@@ -268,6 +272,12 @@ export function buildCli(ctx, body) {
       if (!line) return;
       hist.push(line); hi = hist.length;
       run(line);
+    } else if (e.key === 'Tab') {
+      // Tab 補齊：只有一個候選就補完，有好幾個就列出來
+      e.preventDefault();
+      const r = sess.complete(input.value, CMDS);
+      if (r.line) input.value = r.line;
+      if (r.options.length > 1) { print(sess.prompt() + ' ' + input.value, 'cmd'); print('  ' + r.options.join('   '), 'dim'); draw(); }
     } else if (e.key === 'ArrowUp') { if (hi > 0) { hi--; input.value = hist[hi]; } e.preventDefault(); }
     else if (e.key === 'ArrowDown') { hi = Math.min(hist.length, hi + 1); input.value = hist[hi] || ''; e.preventDefault(); }
     e.stopPropagation();

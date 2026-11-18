@@ -185,10 +185,12 @@ export function portAdvanced(ctx, p, pc) {
       toggle(ctx, ...bind(pc, 'shut'), '停用此連接埠 (shutdown)'),
       toggle(ctx, ...bind(pc, 'trust'), 'DHCP Snooping 信任埠（通往合法 DHCP 伺服器）'),
       toggle(ctx, ...bind(pc, 'bpduguard'), 'BPDU Guard（對面是交換器就關閉此埠）'),
+      toggle(ctx, ...bind(pc, 'rootguard'), 'Root Guard（不允許這個埠後面的交換器成為根橋）'),
       toggle(ctx, ...bind(pc, 'dot1x'), '802.1X（通過 RADIUS 驗證才放行）'),
       toggle(ctx, ...bind(ps, 'on'), 'Port Security（只接受指定的 MAC 位址）', { rerender: true })),
     ctx.live(() => [
       dev.rt.err[p.id] === 'bpdu' && note('warn', 'err-disabled：BPDU Guard 偵測到對面是一台交換器，這個埠已經被關閉。'),
+      dev.rt.err[p.id] === 'root' && note('warn', 'root-inconsistent：對面的交換器宣稱自己是更優先的根橋，Root Guard 把這個埠擋下了。對方不再搶根橋之後會自動恢復。'),
       pc.dot1x && (dev.rt.unauth && dev.rt.unauth[p.id] ? note('warn', '802.1X 尚未通過：' + dev.rt.unauth[p.id]) : note('ok', '802.1X 驗證通過，連接埠已放行。')),
     ]),
     ps.on && field('允許的 MAC 位址', h('div', { class: 'addrow' }, macInp, button('帶入目前看到的', {

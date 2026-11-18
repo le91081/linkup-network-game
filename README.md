@@ -72,7 +72,7 @@ npm run build    # 輸出到 dist/
 | 介面 | `ip address`、`shutdown`、`switchport mode / access vlan / trunk native vlan / trunk allowed vlan`、`no switchport`、`encapsulation dot1q`、`ip nat inside / outside`、`ip helper-address`、`ip ospf cost`、`ip access-group`、`vrrp`、`channel-group`、`switchport port-security`、`spanning-tree bpduguard`、`ip dhcp snooping trust`、`ipv6 address` |
 | 其他 | VLAN 的 `name`、OSPF 的 `network` 與 `default-information originate`、DHCP 位址池的 `network` / `default-router` / `dns-server`、ACL 的 `permit` / `deny`、`line vty` 的 `transport input` / `access-class` |
 
-在設定模式下要看狀態請用 `do show …`。
+在設定模式下要看狀態請用 `do show …`。按 Tab 可以補齊指令，指令打到一半加上 `?` 會列出接下來可以輸入的字。
 
 ## 貼近真實網路的行為
 
@@ -83,6 +83,7 @@ npm run build    # 輸出到 dist/
 - **連線紀錄**：防火牆記錄每一條新連線是被哪一條政策放行或拒絕，以及來源 / 目的位址的轉換。
 - **偵測常見的設定錯誤**：IP 位址衝突、Trunk 與 Access 對接、Native VLAN 不一致、兩端 Access VLAN 不同。
 - **無線訊號**：依距離與發射功率估算 RSSI，近的用 5GHz、遠的退回 2.4GHz，頻道重疊時速率減半。
+- **Root Guard**：啟用的埠如果收到更優先的根橋 BPDU 就進入 root-inconsistent 而被擋下；開在朝向根橋的埠上（錯誤設定）一樣會被擋。
 - **故障模擬**：任何設備都可以關機，路由器的介面與交換器的連接埠可以 `shutdown`；錯誤訊息會指出是哪一台關機或哪個介面被停用。
 
 ## 模擬的範圍與簡化
@@ -96,15 +97,15 @@ npm run build    # 輸出到 dist/
 - Wi-Fi 的訊號只看距離與發射功率，沒有牆面衰減。
 - 802.1X 只驗證帳號密碼（沒有憑證）。
 - IPv6 目前只有位址、SLAAC、靜態路由與 ping；ACL、防火牆、NAT、OSPF 仍然只作用在 IPv4。
-- CLI 沒有 startup-config，`write memory` 只會回應 OK；VPN、PPPoE 帳號密碼與防火牆政策仍然要用圖形介面設定，也沒有 Tab 補齊。
+- CLI 沒有 startup-config，`write memory` 只會回應 OK；VPN、PPPoE 帳號密碼與防火牆政策仍然要用圖形介面設定。
 - OSPF 的 `network` 只會套用到當下已經有 IP 的介面。
 
 ## 還可以做的
 
 1. IPv6 的 ACL、防火牆政策與 OSPFv3。
-2. Voice VLAN、Root Guard、TACACS+。
+2. Voice VLAN（需要新的 IP 電話設備）、TACACS+。
 3. QoS、SNMP Trap、設定備份等維運情境的關卡（目前的模擬沒有頻寬與時間的概念）。
-4. CLI 的 Tab 補齊，以及用指令設定 VPN。
+4. 用指令設定 VPN 與防火牆政策。
 
 ## 程式結構
 

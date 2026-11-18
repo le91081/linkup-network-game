@@ -243,6 +243,50 @@ function prepPhysical(state) {
       }
     }
   }
+  // Root Guard：啟用的埠只能是 Designated。如果從這個埠收到「根橋在對面」的 BPDU（superior BPDU），
+  // 埠就進入 root-inconsistent 而被擋下。擋下之後拓撲改變，所以要重複檢查到穩定為止。
+  {
+    const swOn = (x) => isVlanSw(x) && !(x.sw.stp && x.sw.stp.on === false) && !down[x.id];
+    const bridgeId = (x) => { const s = x.sw.stp || {}; return [s.prio == null || s.prio === '' ? 32768 : +s.prio, macOf(x.id, 'br')]; };
+    const better = (a, b) => a[0] < b[0] || (a[0] === b[0] && a[1] < b[1]);
+    /** 從 start 出發、不經過 skipDev 這台交換器，能走到的所有交換器 */
+    const reach = (start, skipDev) => {
+      const seen = new Map([[start.id, start]]), todo = [start];
+      while (todo.length) {
+        const x = todo.pop();
+        for (const p of x.ports) {
+          const l = rt.links[x.id + ':' + p.id];
+          if (!l || l.dev === skipDev || seen.has(l.dev)) continue;
+          const y = state.devices[l.dev];
+          if (!swOn(y) || !isBridgePort(x, p.id) || !isBridgePort(y, l.port)) continue;
+          seen.set(y.id, y); todo.push(y);
+        }
+      }
+      return seen;
+    };
+    for (let round = 0, again = true; again && round < 16; round++) {
+      again = false;
+      scan: for (const d of Object.values(state.devices)) {
+        if (!swOn(d)) continue;
+        for (const [pid, pc] of Object.entries(d.sw.ports)) {
+          const l = rt.links[d.id + ':' + pid];
+          if (!l || !pc.rootguard || !isBridgePort(d, pid)) continue;
+          const x = state.devices[l.dev];
+          if (!swOn(x) || !isBridgePort(x, l.port)) continue;
+          let root = d;
+          for (const y of reach(d, null).values()) if (better(bridgeId(y), bridgeId(root))) root = y;
+          if (root === d || !reach(x, d.id).has(root.id)) continue; // 自己就是根橋，或對面不會送來根橋的 BPDU
+          d.rt.err[pid] = 'root';
+          delete rt.links[d.id + ':' + pid];
+          delete rt.links[l.dev + ':' + l.port];
+          rt.cable[l.cable] = 'down';
+          rt.why[l.cable] = `${d.name} 的 ${pid} 啟用了 Root Guard，卻從這個埠收到更優先的根橋 BPDU（${root.name}），連接埠已被擋下 (root-inconsistent)`;
+          again = true;
+          break scan;
+        }
+      }
+    }
+  }
   // BPDU Guard：接使用者的埠如果收到 BPDU（對面是一台交換器），就把埠關掉
   for (const d of Object.values(state.devices)) {
     if (!isVlanSw(d)) continue;

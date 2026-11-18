@@ -156,7 +156,7 @@ const HELP = {
     'switchport trunk native vlan <ID> / allowed vlan <清單>', 'no switchport（L3 交換器改成 Routed 埠）', 'ip nat inside|outside', 'ip helper-address <IP>',
     'ip ospf cost <值>', 'ip access-group <名稱> in|out', 'encapsulation dot1q <VLAN>（子介面）', 'vrrp 1 ip <虛擬 IP> / vrrp 1 priority <值>',
     'channel-group <編號> mode active|passive|on', 'switchport port-security [mac-address <MAC> | violation <模式>]',
-    'spanning-tree bpduguard enable', 'ip dhcp snooping trust', 'ipv6 address <位址/前綴>'],
+    'spanning-tree bpduguard enable / spanning-tree guard root', 'ip dhcp snooping trust', 'ipv6 address <位址/前綴>'],
   vlan: ['name <名稱>'],
   router: ['network <網段> <萬用遮罩> area 0', 'default-information originate'],
   dhcp: ['network <網段> <遮罩>', 'default-router <IP>', 'dns-server <IP> [IP]'],
@@ -297,6 +297,8 @@ export function iosSession(getDev, getState) {
     ['no spanning-tree portfast', () => onL2(() => {})],
     ['spanning-tree bpduguard <x>', ([x]) => onL2((pc) => { pc.bpduguard = 'enable'.startsWith(x.toLowerCase()); })],
     ['no spanning-tree bpduguard [...]', () => onL2((pc) => { pc.bpduguard = false; })],
+    ['spanning-tree guard root', () => onL2((pc) => { pc.rootguard = true; })],
+    ['no spanning-tree guard [...]', () => onL2((pc) => { pc.rootguard = false; })],
     ['ip dhcp snooping trust', () => onL2((pc) => { pc.trust = true; })],
     ['no ip dhcp snooping trust', () => onL2((pc) => { pc.trust = false; })],
     ['ip arp inspection trust', () => onL2((pc) => { pc.trust = true; })],
@@ -670,8 +672,35 @@ export function iosSession(getDev, getState) {
     return done(true);
   }
 
+  /**
+   * Tab 補齊與「?」：依目前的模式找出下一個可以接的字。
+   * extra 是顯示層提供的指令（show …）。回傳 { line: 補齊後的整行或 null, options: 候選字 }
+   */
+  function complete(line, extra = []) {
+    const tok = line.trim().split(/\s+/).filter(Boolean);
+    const partial = /\s$/.test(line) || !tok.length ? '' : tok.pop().toLowerCase();
+    const own = S.mode === 'exec'
+      ? ['configure terminal', 'write memory', 'copy running-config startup-config', 'ping <ip>', ...extra]
+      : [...(SUB[S.mode] || []).map((r) => r[0]), ...CONFIG.map((r) => r[0]), 'end', 'exit', 'permit <...>', 'deny <...>', ...extra.map((c) => 'do ' + c)];
+    const words = new Set();
+    for (const pattern of own) {
+      const pt = pattern.split(' ');
+      if (pt.length <= tok.length) continue;
+      const fits = tok.every((t, n) => pt[n][0] === '<' ? pt[n] !== '<...>' : pt[n][0] !== '[' && pt[n].startsWith(t.toLowerCase()));
+      const w = pt[tok.length];
+      if (fits && w[0] !== '<' && w[0] !== '[' && w.startsWith(partial)) words.add(w);
+    }
+    const options = [...words].sort();
+    if (!options.length) return { line: null, options };
+    let common = options[0];
+    for (const w of options) while (!w.startsWith(common)) common = common.slice(0, -1);
+    const done = options.length === 1;
+    return { line: common.length > partial.length || done ? [...tok, common].join(' ') + (done ? ' ' : '') : null, options };
+  }
+
   return {
     exec,
+    complete,
     prompt: () => hostName(dev()) + PROMPT[S.mode],
     help: () => HELP[S.mode] || [],
     get mode() { return S.mode; },
@@ -756,7 +785,7 @@ export function runningConfig(state, dev) {
     const desc = other ? [` description to ${other.kind === 'internet' ? 'ISP' : hostName(other)}`] : [];
     const pc = dev.sw && dev.sw.ports[p.id];
     if (pc && isSw(dev)) {
-      const def = pc.mode === 'access' && pc.vlan === 1 && !pc.shut && !peer && !pc.trust && !(+pc.lag > 0) && !(pc.ps && pc.ps.on) && !pc.bpduguard && !pc.dot1x;
+      const def = pc.mode === 'access' && pc.vlan === 1 && !pc.shut && !peer && !pc.trust && !(+pc.lag > 0) && !(pc.ps && pc.ps.on) && !pc.bpduguard && !pc.rootguard && !pc.dot1x;
       if (def) continue;
       o.push(`interface ${p.label}`, ...desc);
       if (pc.mode === 'routed') {
@@ -779,6 +808,7 @@ export function runningConfig(state, dev) {
       }
       if (pc.trust) o.push(' ip dhcp snooping trust', ...(dev.sw.dai && dev.sw.dai.on ? [' ip arp inspection trust'] : []));
       if (pc.bpduguard) o.push(' spanning-tree bpduguard enable');
+      if (pc.rootguard) o.push(' spanning-tree guard root');
       if (pc.dot1x) o.push(' authentication port-control auto', ' dot1x pae authenticator');
       if (pc.shut) o.push(' shutdown');
       o.push('!');

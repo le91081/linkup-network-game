@@ -315,6 +315,30 @@ console.log('\nCLI 設定指令');
       'int gi0/0/2', 'no ip access-group GI0_0_2_IN in', 'end']);
   });
 
+  // Root Guard：私接的交換器想搶根橋時，埠被擋下、根橋不變
+  {
+    const withGuard = solved('l32', (s) => { Object.assign(s.devices['sw-a'].sw.ports['Gi0/5'], { bpduguard: false, rootguard: true }); });
+    const g = withGuard.s.devices['sw-a'];
+    ok(g.rt.err['Gi0/5'] === 'root' && withGuard.res[0].pass && withGuard.res[1].pass && withGuard.res[2].pass, 'Root Guard 擋下想搶根橋的交換器（根橋不變、不明筆電連不進來）');
+    const viaCli = solved('l32', (s) => { s.devices['sw-a'].sw.ports['Gi0/5'].bpduguard = false; type(s, 'sw-a', ['conf t', 'int gi0/5', 'spanning-tree guard root']); });
+    ok(viaCli.res[1].pass && runningConfig(viaCli.s, viaCli.s.devices['sw-a']).includes(' spanning-tree guard root'), '用指令啟用 Root Guard，running-config 看得到');
+    const onRoot = solved('l23', (s) => { for (const pc of Object.values(s.devices['sw-c'].sw.ports)) pc.rootguard = true; });
+    ok(onRoot.res.every((r) => r.pass) && !Object.keys(onRoot.s.devices['sw-c'].rt.err).length, '根橋自己的下行埠啟用 Root Guard 不影響正常運作（含斷線演練）');
+    const wrong = solved('l23', (s) => { for (const pc of Object.values(s.devices['sw-a'].sw.ports)) pc.rootguard = true; });
+    ok(Object.values(wrong.s.devices['sw-a'].rt.err).includes('root'), '把 Root Guard 開在朝向根橋的埠是錯誤設定：埠會被擋下');
+  }
+  // Tab 補齊
+  {
+    const { s } = solved('l10');
+    const sess = iosSession(() => s.devices.hq, () => s);
+    const shows = ['show ip route', 'show ip interface brief', 'show running-config'];
+    ok(sess.complete('conf', shows).line === 'configure ' && sess.complete('sh ip ro', shows).line === 'sh ip route ', '補齊：只有一個候選時直接補完');
+    const many = sess.complete('show ip ', shows);
+    ok(many.line === null && many.options.join() === 'interface,route', '補齊：有多個候選時列出來');
+    sess.exec('conf t'); sess.exec('int gi0/0/1');
+    ok(sess.complete('ip na').line === 'ip nat ' && sess.complete('ip nat ').options.join() === 'inside,outside' && sess.complete('do sh', shows).line === 'do show ', '補齊：介面模式與 do show');
+  }
+
   // 3. 錯誤處理與模式切換
   {
     const { s } = solved('l10');
