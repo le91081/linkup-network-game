@@ -95,8 +95,9 @@ h1, h2, h3, p { margin: 0; }
 .crumb span { color: var(--muted); font-size: 12px; white-space: nowrap; }
 .crumb b { font-size: 14px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .spacer { flex: 1; }
-#mission { position: fixed; left: var(--gap); top: var(--top); bottom: var(--gap); width: var(--side-l); z-index: 4; display: flex; flex-direction: column; overflow: hidden; }
-#panel { position: fixed; right: var(--gap); top: var(--top); bottom: var(--gap); width: var(--side-r); z-index: 4; display: flex; flex-direction: column; overflow: hidden; }
+/* overflow 用 clip 而不是 hidden：hidden 的容器仍然可以被瀏覽器捲動（例如把取得焦點的元素捲進畫面），整個面板的內容會被推到看不見的地方 */
+#mission { position: fixed; left: var(--gap); top: var(--top); bottom: var(--gap); width: var(--side-l); z-index: 4; display: flex; flex-direction: column; overflow: hidden; overflow: clip; }
+#panel { position: fixed; right: var(--gap); top: var(--top); bottom: var(--gap); width: var(--side-r); z-index: 4; display: flex; flex-direction: column; overflow: hidden; overflow: clip; }
 #console { position: fixed; left: calc(var(--side-l) + var(--gap) * 2); right: calc(var(--side-r) + var(--gap) * 2); bottom: var(--gap); z-index: 4; display: flex; flex-direction: column; max-height: 210px; overflow: hidden; }
 #console.min .c-body { display: none; }
 
@@ -131,8 +132,10 @@ h1, h2, h3, p { margin: 0; }
 .seg button { height: 30px; border: 0; border-radius: 8px; background: transparent; color: var(--muted); font-weight: 600; font-size: 12.5px; }
 .seg button:hover { color: var(--text); }
 .seg button.on { background: linear-gradient(135deg, rgba(95, 227, 207, 0.22), rgba(75, 182, 245, 0.22)); color: #d9fff8; box-shadow: inset 0 0 0 1px rgba(95, 227, 207, 0.4); }
-.switch { display: flex; align-items: center; gap: 9px; cursor: pointer; font-size: 12.5px; }
-.switch input { position: absolute; opacity: 0; pointer-events: none; }
+.switch { position: relative; display: flex; align-items: center; gap: 9px; cursor: pointer; font-size: 12.5px; }
+/* 看不見的核取方塊要疊在開關自己身上。沒有定位的話它會以整個面板為基準、不跟著內容捲動，
+   點開關時瀏覽器為了讓它取得焦點而去捲動面板，設定頁面就整片空白 */
+.switch input { position: absolute; left: 0; top: 0; width: 34px; height: 20px; margin: 0; opacity: 0; pointer-events: none; }
 .switch i { flex: none; width: 34px; height: 20px; border-radius: 20px; background: rgba(150, 170, 225, 0.2); position: relative; transition: background 0.18s; }
 .switch i::after { content: ''; position: absolute; top: 3px; left: 3px; width: 14px; height: 14px; border-radius: 50%; background: #dfe6f7; transition: transform 0.18s; }
 .switch input:checked + i { background: var(--accent); }
