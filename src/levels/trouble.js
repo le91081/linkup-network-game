@@ -1,8 +1,8 @@
 // 第十章：故障排除。網路都已經「設定好了」，只是有人改壞了 — 找出問題並修正。
-import { makeDevice as D, makeState, setLine } from '../engine/model.js';
+import { makeDevice as D, makeState, setLine, removeCable } from '../engine/model.js';
 import { parseIp, fmtIp } from '../engine/ip.js';
 import { transact, macOf } from '../engine/sim.js';
-import { dev, ifc, swp, WEB } from './util.js';
+import { dev, ifc, swp, link, WEB } from './util.js';
 
 export const CHAPTERS4 = [
   { id: 10, title: '故障排除', desc: '網路原本是好的，直到有人動過它。從症狀找出原因：IP 衝突、VLAN 與 Trunk、路由、NAT、ACL、DNS。' },
@@ -211,5 +211,46 @@ export const LEVELS4 = [
       dev(s, 'hq-pc').ifaces[0].dns = '8.8.8.8';
     },
     recap: ['故障排除的方法：確認問題 → 提出假設 → 驗證 → 修正 → 確認整體恢復 → 記錄。', '一個症狀背後可能有好幾個原因。修好一個之後要重新測試，不要假設問題只有一個。'],
+  },
+  {
+    id: 'l39', chapter: 10, title: '明明連得上，為什麼這麼慢', subtitle: '速率、雙工與老舊設備', tags: ['iperf3', '雙工不一致', '半雙工', '效能'],
+    brief: '設計部抱怨開一個檔案要等半天，可是 ping 檔案伺服器明明是通的。網路「會通」和「正常」是兩回事。用 iperf3 量出每台電腦實際跑得到多快，找出是哪一段在拖慢速度。',
+    given: [
+      ['網段', '192.168.1.0/24'], ['檔案伺服器', '192.168.1.10'], ['目標', '每台電腦到伺服器 500 Mbps 以上'],
+      ['量測（終端機）', 'iperf3 -c 192.168.1.10'], ['檢查（CLI）', 'show interfaces status'],
+    ],
+    learn: [
+      { t: '通，不代表正常', d: 'ping 只送幾個小封包，再慢的線都過得去。要知道實際能跑多快，得用 iperf3 這類工具灌流量。' },
+      { t: '雙工不一致', d: '一端寫死全雙工、另一端自動協商時，自動的那端量得出速率卻問不到雙工，只好用半雙工。全雙工的那端想送就送，半雙工的那端一直偵測到碰撞，重傳率極高。' },
+      { t: '要嘛都自動，要嘛都寫死', d: '兩端的設定方式必須一致。現在的設備都建議保持自動協商。點一條線可以看到它協商的結果。' },
+      { t: 'Hub 會拖慢整個網段', d: 'Hub 只有 10 Mbps 半雙工，所有埠共用同一個碰撞網域，設備越多越慢。' },
+    ],
+    setup: () => makeState([
+      D('c2960', 'core', { name: 'SW-Core', pos: [0, -5], init(d) { Object.assign(d.sw.ports['Gi0/9'], { speed: '100', duplex: 'full' }); } }), // 上行埠被寫死
+      D('c2960', 'acc', { name: 'SW-Access', pos: [0, 0.5], init(d) { Object.assign(d.sw.ports['Gi0/3'], { speed: '100', duplex: 'full' }); } }), // 接電腦的埠也被寫死
+      D('tower', 'srv', { name: '檔案伺服器', pos: [-7, -6.5], ip: '192.168.1.10' }),
+      D('hub4', 'hub', { name: '舊 Hub', pos: [-6.5, 3.6] }),
+      D('pc', 'pc-1', { name: '設計 PC', pos: [-9.5, 7.2], ip: '192.168.1.21' }),
+      D('pc', 'pc-2', { name: '會計 PC', pos: [0, 6.2], ip: '192.168.1.22' }),
+      D('pc', 'pc-3', { name: '剪輯 PC', pos: [7.5, 5], ip: '192.168.1.23' }),
+    ], [['srv:eth0', 'core:Gi0/1'], ['core:Gi0/9', 'acc:Gi0/9'], ['acc:Gi0/1', 'hub:1'], ['pc-1:eth0', 'hub:2'], ['pc-2:eth0', 'acc:Gi0/2'], ['pc-3:eth0', 'acc:Gi0/3']]),
+    objectives: [
+      { type: 'ping', from: 'pc-2', to: 'srv', label: '會計 PC ping 得到檔案伺服器（連線本身是通的）' },
+      { type: 'speed', from: 'pc-2', to: 'srv', min: 500, label: '會計 PC 到伺服器 500 Mbps 以上' },
+      { type: 'speed', from: 'pc-3', to: 'srv', min: 500, label: '剪輯 PC 到伺服器 500 Mbps 以上' },
+      { type: 'speed', from: 'pc-1', to: 'srv', min: 500, label: '設計 PC 到伺服器 500 Mbps 以上' },
+    ],
+    hints: [
+      '在會計 PC 的終端機輸入 iperf3 -c 192.168.1.10 量速度，再點兩台交換器之間的線，協商結果寫著「雙工不一致」：SW-Core 的 Gi0/9 被寫死成 100 Mbps 全雙工，對面是自動協商，只好退回半雙工。把 SW-Core Gi0/9 進階設定裡的速率和雙工都改回自動協商（CLI：interface gi0/9 → no speed → no duplex）。',
+      '剪輯 PC 接的 SW-Access Gi0/3 也被寫死成 100 Mbps 全雙工，而電腦的網卡是自動協商，一樣不一致。改回自動。show interfaces status 可以一眼看出哪些埠不是 a-full / a-1000。',
+      '設計 PC 接在一台舊 Hub 上：10 Mbps 半雙工。把 Hub 拿掉 — 點 Hub 兩邊的線把它們拔除，再把設計 PC 直接拖到 SW-Access 上。',
+    ],
+    solve(s) {
+      Object.assign(swp(s, 'core', 'Gi0/9'), { speed: '', duplex: '' });
+      Object.assign(swp(s, 'acc', 'Gi0/3'), { speed: '', duplex: '' });
+      for (const c of s.cables.filter((x) => x.a.dev === 'hub' || x.b.dev === 'hub')) removeCable(s, c.id);
+      link(s, 'pc-1:eth0', 'acc:Gi0/1');
+    },
+    recap: ['效能問題先看實體層：速率、雙工、線材，還有路徑上有沒有舊設備。', 'show interfaces status 裡的 a-full / a-1000 是協商出來的結果；前面沒有 a- 的就是有人寫死的。'],
   },
 ];

@@ -24,18 +24,20 @@ export const SANDBOX = {
     { t: '測試連線', d: '用左側的「連線測試」選來源與目的，或打開電腦的終端機用 ping、tracert。Cisco 設備有 CLI 分頁，可以直接用指令設定。' },
     { t: '自訂目標', d: '把常用的測試存成目標（應該要通，或應該被擋下），之後改設定時按「執行全部目標」就能一次驗證，像關卡一樣。' },
     { t: '匯出與匯入', d: '整個拓撲（設備、接線、設定與目標）可以匯出成一個 JSON 檔，之後再匯入，或傳給別人。' },
+    { t: '時間', d: '這裡的設備都是原廠預設值。網管交換器的埠連線後要等 30 秒（STP 的 listening 與 learning）才會轉送資料，除非打開 PortFast；OSPF 鄰居要 40 秒才會建立。場景上方的時鐘可以加速或快轉。' },
   ],
   objectives: [], hints: [], recap: [],
   setup: () => { const s = makeState([]); s.v6 = true; return s; },
 };
 
-const TESTS = [['ping', 'Ping (ICMP)'], ['tcp:443', 'HTTPS (TCP 443)'], ['tcp:80', 'HTTP (TCP 80)'], ['tcp:22', 'SSH (TCP 22)']];
+const TESTS = [['ping', 'Ping (ICMP)'], ['tcp:443', 'HTTPS (TCP 443)'], ['tcp:80', 'HTTP (TCP 80)'], ['tcp:22', 'SSH (TCP 22)'], ['speed', '傳輸速率 (iperf3)']];
 const splitTest = (v) => { const [type, port] = String(v).split(':'); return { type, port: port ? +port : undefined }; };
 
 /** 自由模式的自訂目標 → 和關卡一樣的目標物件 */
 export function sandboxObjectives(state) {
   return (state.goals || []).filter((g) => state.devices[g.from] && state.devices[g.to]).map((g) => {
     const a = state.devices[g.from].name, b = state.devices[g.to].name;
+    if (g.type === 'speed') return { type: 'speed', from: g.from, to: g.to, min: g.min || 100, label: `${a} 到 ${b} 至少 ${g.min || 100} Mbps` };
     const what = g.type === 'ping' ? ` ping 到 ${b}` : `連到 ${b} 的 TCP ${g.port}`;
     return { type: g.type, from: g.from, to: g.to, port: g.port, expect: g.expect === false ? false : undefined, label: g.expect === false ? `${a} 不能${what}（應該被擋下）` : `${a} 可以${what}` };
   });
@@ -78,7 +80,8 @@ export function renderSandbox(app) {
   const goals = sandboxObjectives(app.state);
   const addGoal = (expect) => {
     if (!sbx.from || !sbx.to || sbx.from === sbx.to) return toast('先在上面選好來源與目的', 'bad');
-    (app.state.goals ||= []).push({ ...splitTest(sbx.type), from: sbx.from, to: sbx.to, expect });
+    if (sbx.type === 'speed' && !expect) return toast('傳輸速率的目標只有「至少 100 Mbps」，沒有「應該不通」', 'bad');
+    (app.state.goals ||= []).push({ ...splitTest(sbx.type), from: sbx.from, to: sbx.to, expect, ...(sbx.type === 'speed' ? { min: 100 } : {}) });
     app.results = [];
     app.changed();
     renderSandbox(app);

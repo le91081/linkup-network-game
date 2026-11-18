@@ -1450,6 +1450,7 @@ function deliver(dev, inIf, pkt) {
     if (!addrMatch(String(dev.mgmt.allow || '').replace(/[,\s]+/g, ','), pkt.src)) return no(`來源 ${fmtIp(pkt.src)} 不在 ${dev.name} 允許管理的位址範圍內`);
     return ok;
   }
+  if (pkt.proto === 'tcp' && pkt.dport === 5201 && dev.kind === 'host') return ok; // 每台主機都當作有跑 iperf3 -s，可以拿來測速
   if ((dev.services || []).some((s) => s.proto === pkt.proto && s.port === pkt.dport)) return ok;
   return no(`${dev.name} 沒有在 ${PROTO}/${pkt.dport} 提供服務（連線被拒絕）`);
 }
@@ -1899,9 +1900,16 @@ export function runObjective(state, o) {
     dst = i.rt.ip;
   }
   const srcIp = o.srcIp ? parseIp(o.srcIp) : from.kind === 'internet' ? parseIp(from.inet.client) : undefined;
-  const proto = o.type === 'ping' ? 'icmp' : o.type;
-  const r = transact(state, o.from, { proto, dst, dport: o.port ?? 443, srcIp });
+  const proto = o.type === 'ping' ? 'icmp' : o.type === 'speed' ? 'tcp' : o.type;
+  const r = transact(state, o.from, { proto, dst, dport: o.type === 'speed' ? 5201 : o.port ?? 443, srcIp });
   log.push(...r.log); hops.push(...r.hops);
+  if (r.ok && o.type === 'speed') {
+    // 傳輸速率測試（iperf3）：連得上之後，看路徑上最慢的那一段
+    const t = throughput(state, r.hops), min = o.min || 0, pass = t.mbps >= min;
+    log.push({ dev: pass ? o.from : t.dev || o.from, kind: pass ? 'ok' : 'drop', text: `iperf3：${t.mbps} Mbps${t.retr ? `，重傳 ${t.retr} 次` : ''}。最慢的一段是 ${t.where}` });
+    if (!pass) return { pass: false, ok: true, reason: `只跑得到 ${t.mbps} Mbps（目標 ${min} Mbps 以上）。最慢的一段：${t.where}`, failDev: t.dev || o.from, log, hops, speed: t };
+    return { pass: true, ok: true, reason: '', failDev: null, log, hops, speed: t };
+  }
   if (r.ok && o.via) {
     const seen = new Set();
     for (const h of r.hops) if (!h.reply && !h.wave) { seen.add(h.from); seen.add(h.to); }
@@ -1912,6 +1920,42 @@ export function runObjective(state, o) {
     }
   }
   return finish(r.ok, r.reason, r.failDev);
+}
+
+// ───────────────────────── 頻寬 ─────────────────────────
+
+/**
+ * 沿著一條已經走通的路徑，估算 TCP 實際跑得到多快。瓶頸是路徑上最慢的那一段：
+ * - 全雙工的線大約跑得到標稱速率的九成多（扣掉標頭）。
+ * - 半雙工（Hub）同一時間只能有一端在送，還會碰撞，實際只有四成左右。
+ * - 雙工不一致：全雙工的那端不會等對方，半雙工的那端不斷碰撞、重傳，幾乎不能用。
+ * - Wi-Fi 的實際吞吐量大約是連線速率的一半。
+ */
+export function throughput(state, hops) {
+  let best = Infinity, where = '', dev = null, loss = 0, retr = 0;
+  const seen = new Set();
+  for (const h of hops) {
+    if (h.wave || h.reply || h.proto === 'arp' || h.proto === 'dhcp') continue;
+    let mbps, note;
+    if (h.wifi) {
+      const a = [state.devices[h.from], state.devices[h.to]].flatMap((d) => d.ifaces).map((i) => i.rt.assoc).find((x) => x && (x.ap === h.from || x.ap === h.to));
+      const rate = a ? a.rate : 54;
+      mbps = rate * 0.5;
+      note = `Wi-Fi 連線速率 ${rate} Mbps${a && a.noisy ? '（頻道互相干擾）' : ''}`;
+    } else {
+      if (!h.cable || seen.has(h.cable)) continue;
+      seen.add(h.cable);
+      const li = linkInfo(state, h.from, h.fromPort);
+      if (!li || li.down) continue;
+      if (li.mismatch) { mbps = Math.min(li.speed * 0.01, 2); note = `${li.speed} Mbps，但兩端的雙工不一致 (duplex mismatch)`; loss = Math.max(loss, 35); retr = Math.max(retr, 1800); }
+      else if (li.half) { mbps = li.speed * 0.4; note = `${li.speed} Mbps 半雙工，會發生碰撞`; loss = Math.max(loss, 3); retr = Math.max(retr, 60); }
+      else { mbps = li.speed * 0.94; note = `${li.speed >= 1000 ? li.speed / 1000 + ' Gbps' : li.speed + ' Mbps'} 全雙工`; }
+    }
+    if (mbps < best) { best = mbps; dev = h.from; where = `${state.devices[h.from].name} ↔ ${state.devices[h.to].name}（${note}）`; }
+  }
+  if (best === Infinity) return { mbps: 0, where: '', dev: null, loss: 0, retr: 0 };
+  if (hops.some((h) => h.proto === 'esp')) best *= 0.9; // 加密與多一層標頭的負擔
+  return { mbps: best >= 10 ? Math.round(best) : Math.round(best * 10) / 10, where, dev, loss, retr };
 }
 
 export function evaluate(state, objectives) {

@@ -159,6 +159,24 @@ expectFail('10-3 總公司 PC 的 DNS 指向路由器', solved('l38', (s) => { s
   else console.log('  ✔ 10-3 只放行 ICMP 的 ACL → ping 通、HTTPS 被擋：' + r.res[1].reason);
 }
 
+expectFail('10-4 上行埠仍然寫死成 100 / full', solved('l39', (s) => { Object.assign(s.devices.core.sw.ports['Gi0/9'], { speed: '100', duplex: 'full' }); }), 1, '雙工不一致');
+expectFail('10-4 剪輯 PC 的埠仍然寫死', solved('l39', (s) => { Object.assign(s.devices.acc.sw.ports['Gi0/3'], { speed: '100', duplex: 'full' }); }), 2, '雙工不一致');
+{
+  const lv = LEVELS.find((l) => l.id === 'l39');
+  const s = lv.setup();
+  Object.assign(s.devices.core.sw.ports['Gi0/9'], { speed: '', duplex: '' });
+  Object.assign(s.devices.acc.sw.ports['Gi0/3'], { speed: '', duplex: '' });
+  recompute(s);
+  const res = evaluate(s, lv.objectives);
+  if (res[3].pass || !/半雙工/.test(res[3].reason) || !res[1].pass || !res[2].pass) fail('10-4 Hub 還在：設計 PC 應該只有幾 Mbps');
+  else console.log('  ✔ 10-4 Hub 還在 → ' + res[3].reason);
+  const fresh = lv.setup();
+  recompute(fresh);
+  const before = evaluate(fresh, lv.objectives);
+  if (!before[0].pass || before.slice(1).some((r) => r.pass)) fail('10-4 一開始應該 ping 得到、但三台電腦都很慢');
+  else console.log(`  ✔ 10-4 一開始 ping 是通的，但只有 ${before[1].speed.mbps} / ${before[2].speed.mbps} / ${before[3].speed.mbps} Mbps`);
+}
+
 // ── 接近現實的行為：ARP、Hub 泛洪、DHCP 四步驟、保留位址、IP 衝突、連線紀錄 ──
 console.log('\n真實行為');
 {

@@ -1,7 +1,7 @@
 // 主機上的終端機：ping / ipconfig / tracert / nslookup / curl
 import { h } from './dom.js';
 import { fmtIp, fmtMask, parseIp } from '../engine/ip.js';
-import { transact, resolveName, dhcpTrace, arpRows, clearArp, dhcpRelease, dhcpRenew, fmtDur } from '../engine/sim.js';
+import { transact, resolveName, dhcpTrace, arpRows, clearArp, dhcpRelease, dhcpRenew, fmtDur, throughput } from '../engine/sim.js';
 import { transact6 } from '../engine/sim6.js';
 import { parseIp6, fmtIp6 } from '../engine/ip6.js';
 
@@ -21,6 +21,7 @@ const HELP = [
   '  tracert <IP 或網域>     顯示封包經過的每一台路由器',
   '  nslookup <網域>         向 DNS 查詢網域的 IP',
   '  curl <IP 或網域>[:埠]   測試 TCP 連線（預設 443）',
+  '  iperf3 -c <IP>          量測到另一台主機的實際傳輸速率（跑 10 秒）',
   '  cls                     清除畫面',
 ];
 
@@ -151,6 +152,28 @@ export function buildTerminal(ctx, body) {
           app.showTrace(`${dev.name}> ${line}`, [...r.log, ...res.log], [...r.hops, ...res.hops], res);
           if (res.ok) print(`已連線到 ${fmtIp(r.ip)}:${port} — HTTP/1.1 200 OK`, 'ok');
           else { print(`curl: (7) 無法連線到 ${fmtIp(r.ip)} 埠 ${port}`, 'bad'); print('  ↳ ' + res.reason, 'hint'); }
+        }
+      }
+    } else if (c === 'iperf3' || c === 'iperf') {
+      const t = args.filter((x) => !x.startsWith('-'))[0];
+      const ip = parseIp(t || '');
+      if (ip == null) print('用法：iperf3 -c <伺服器 IP>', 'warn');
+      else {
+        const res = transact(st(), dev.id, { proto: 'tcp', dst: ip, dport: 5201 });
+        app.showTrace(`${dev.name}> ${line}`, res.log, res.hops, res);
+        if (!res.ok) { print(`iperf3: error - unable to connect to server: ${res.phase === 'reply' ? 'Connection timed out' : 'No route to host'}`, 'bad'); print('  ↳ ' + res.reason, 'hint'); }
+        else {
+          const m = throughput(st(), res.hops);
+          const amt = (mbps) => { const mb = (mbps * 10) / 8; return mb >= 1000 ? (mb / 1000).toFixed(2) + ' GBytes' : mb >= 1 ? mb.toFixed(1) + ' MBytes' : (mb * 1000).toFixed(0) + ' KBytes'; };
+          const rate = (mbps) => (mbps >= 1 ? `${mbps} Mbits/sec` : `${Math.round(mbps * 1000)} Kbits/sec`);
+          print(`Connecting to host ${fmtIp(ip)}, port 5201`);
+          print(`[  5] local ${fmtIp(res.srcIp)} port ${30000 + Math.floor(st().clock) % 20000} connected to ${fmtIp(ip)} port 5201`, 'pre');
+          print('[ ID] Interval           Transfer     Bitrate         Retr', 'pre');
+          print(`[  5]   0.00-10.00  sec  ${amt(m.mbps).padStart(11)}  ${rate(m.mbps).padEnd(15)} ${String(m.retr).padStart(4)}   sender`, m.retr ? 'bad' : 'ok');
+          print(`[  5]   0.00-10.00  sec  ${amt(m.mbps).padStart(11)}  ${rate(m.mbps).padEnd(15)}        receiver`, 'pre');
+          print('');
+          print(`  ↳ 最慢的一段：${m.where}`, m.retr ? 'hint' : 'dim');
+          app.tick(10); // 測試本身跑了 10 秒
         }
       }
     } else if (c) print(`'${cmd}' 不是內部或外部命令。輸入 help 查看可用指令。`, 'warn');

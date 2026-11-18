@@ -85,6 +85,7 @@ export const LEVELS = [
       { t: 'DHCP', d: '設備開機時大喊「誰可以給我一個 IP？」，DHCP 伺服器就會從位址池借一個給它，連遮罩、閘道、DNS 一起附上。整個過程是四步：Discover、Offer、Request、Ack（DORA）。' },
       { t: '固定 IP 要避開位址池', d: '伺服器、NAS、印表機通常用固定 IP。這個 IP 不能落在 DHCP 範圍裡，否則可能被發給別人造成衝突。' },
       { t: 'APIPA', d: '如果電腦拿到 169.254.x.x，代表它找不到 DHCP 伺服器，只好自己編一個。' },
+      { t: '租約', d: 'IP 是「借」來的，有期限。電腦過了一半的時間會自動續約；伺服器暫時連不到也沒關係，到期之前都能繼續用。' },
     ],
     setup: () => makeState([
       D('homerouter', 'rt', { name: '路由器', pos: [0, -2.5] }),

@@ -23,7 +23,7 @@ export const LEVEL_TOPIC = {
   l09: 'security', l16: 'security', l17: 'security', l18: 'security', l19: 'security',
   l20: 'vpn', l21: 'vpn',
   l29: 'services', l30: 'basics', l31: 'security', l32: 'security', l33: 'ops', l34: 'ipv6', l35: 'ipv6',
-  l36: 'services', l37: 'switching', l38: 'routing',
+  l36: 'services', l37: 'switching', l38: 'routing', l39: 'basics',
 };
 
 export const QUESTIONS = {
