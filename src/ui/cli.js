@@ -5,7 +5,7 @@ import { fmtIp6 } from '../engine/ip6.js';
 import { transact, routeRows, macsBehind, isBridgePort, arpRows, sessionLog, hitsOf } from '../engine/sim.js';
 import { route6Rows } from '../engine/sim6.js';
 import { CATALOG, MEDIA, peerOf, portOf, linkInfo } from '../engine/model.js';
-import { iosSession, runningConfig, hostName as host, aclName, aclLine } from '../engine/ios.js';
+import { iosSession, runningConfig, startupConfig, hostName as host, aclName, aclLine } from '../engine/ios.js';
 
 const pad = (s, n) => String(s).padEnd(n);
 const isSw = (d) => !!d.sw && d.sw.mode === 'vlan';
@@ -13,6 +13,10 @@ const dotMac = (m) => m.replace(/:/g, '').replace(/(.{4})(?=.)/g, '$1.');
 
 const SHOW = {
   'show running-config': (st, d) => runningConfig(st, d),
+  'show startup-config': (st, d) => {
+    const c = startupConfig(st, d);
+    return c ? c.filter((l) => l !== 'Building configuration...') : ['startup-config is not present'];
+  },
   'show version': (st, d) => [`${CATALOG[d.model].title}`, `${host(d)} uptime is 3 days, 4 hours`, '（LinkUp 模擬的 IOS 風格介面）'],
   'show ip interface brief': (st, d) => {
     const o = [pad('Interface', 22) + pad('IP-Address', 17) + pad('Method', 8) + pad('Status', 22) + 'Protocol'];
@@ -144,6 +148,10 @@ const SHOW = {
     }
     return o.length > 1 ? o : ['沒有任何租約'];
   },
+  'show ip dhcp conflict': (st, d) => {
+    const hit = Object.entries(st.rt.dhcpConflict || {}).filter(([k]) => k.startsWith(d.id + '/')).flatMap(([, v]) => v);
+    return hit.length ? [pad('IP address', 18) + pad('Detection method', 19) + 'Detection time', ...hit.map((ip) => pad(fmtIp(ip), 18) + pad('Ping', 19) + 'now')] : ['沒有偵測到位址衝突'];
+  },
   'show access-lists': (st, d) => {
     const o = [];
     for (const i of d.ifaces) for (const [key, dir] of [['aclIn', 'in'], ['aclOut', 'out']]) {
@@ -259,17 +267,17 @@ export function buildCli(ctx, body) {
       if (r.pass && !showOrPing(r.doLine != null ? r.doLine : text)) print(`% Invalid input detected：不認識的指令「${text}」，輸入 ? 查看可用指令`, 'warn');
       if (r.changed) {
         ctx.commit(false);
-        renamed = (app.state.devices[dev.id] || dev).name !== before;
+        renamed = r.reloaded || (app.state.devices[dev.id] || dev).name !== before;
       }
     }
-    if (renamed) app.renderPanel(); // 設備改名了：面板標題要跟著更新
+    if (renamed) app.renderPanel(); // 設備改名或重新開機了：整個面板要跟著更新
     else draw();
   };
   input.addEventListener('keydown', (e) => {
     if (e.key === 'Enter') {
       const line = input.value.trim();
       input.value = '';
-      if (!line) return;
+      if (!line && !sess.pending) return; // reload 的 [confirm] 可以直接按 Enter
       hist.push(line); hi = hist.length;
       run(line);
     } else if (e.key === 'Tab') {

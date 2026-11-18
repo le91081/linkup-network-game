@@ -182,7 +182,7 @@ function openFrame(l, state, x, y) {
     : f.proto === 'esp'
       ? layer(3, 'ESP（IPsec）', '加密的內容', '原本的 IP 標頭、埠號與資料都包在裡面，中途的設備只看得到兩端 VPN 閘道的位址')
       : layer(4, f.proto.toUpperCase(), `埠 ${port(f.sport)}  →  埠 ${port(f.dport)}`,
-        f.proto === 'tcp' ? (f.reply ? '旗標 SYN + ACK：三向交握的第二步' : '旗標 SYN：三向交握的第一步，請求建立連線') : 'UDP 不建立連線，直接送出');
+        f.proto === 'tcp' ? (f.ack ? '旗標 ACK：三向交握的第三步，連線建立完成' : f.reply ? '旗標 SYN + ACK：三向交握的第二步' : '旗標 SYN：三向交握的第一步，請求建立連線') : 'UDP 不建立連線，直接送出');
   popover = h('div', { class: 'popover frame', style: { left: Math.max(12, Math.min(x - 60, innerWidth - 404)) + 'px' } },
     h('div', { class: 'fr-head' }, h('b', { text: '封包檢視' }), h('span', { text: `${state.devices[l.dev]?.name || ''} 送出的這一段` })),
     layer(2, f.wifi ? '乙太網路 / 802.11 無線' : '乙太網路', `${f.smac}  →  ${f.dmac}`,
@@ -325,6 +325,18 @@ export function confirmReset(app) {
     h('p', { class: 'muted', text: '所有接線與設定都會回到關卡一開始的狀態。' }),
     h('div', { class: 'd-actions' }, button('取消', { kind: 'ghost', onclick: closeModal }),
       button('重置', { ic: 'reset', kind: 'primary', onclick: () => { closeModal(); app.openLevel(app.level, { fresh: true }); toast(app.level.sandbox ? '已清空桌面' : '已重置關卡'); } })),
+  ]);
+}
+
+/** IOS 設備有尚未存檔的設定時，關機前先問清楚 */
+export function confirmPowerOff(name, onSave, onDiscard) {
+  modal([
+    h('h2', { text: `${name} 有尚未儲存的設定` }),
+    h('p', { class: 'muted', text: '這台設備的 running-config 和 startup-config 不一樣。真實的設備斷電後，只有存進 startup-config 的設定會留下來 — 沒有下過 write memory 的變更會全部消失。' }),
+    h('div', { class: 'd-actions' },
+      button('取消', { kind: 'ghost', onclick: closeModal }),
+      button('直接關機（放棄變更）', { onclick: () => { closeModal(); onDiscard(); } }),
+      button('先存檔再關機', { ic: 'save', kind: 'primary', onclick: () => { closeModal(); onSave(); } })),
   ]);
 }
 

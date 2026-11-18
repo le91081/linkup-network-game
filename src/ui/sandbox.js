@@ -2,6 +2,7 @@
 import { h, icon, button, toast } from './dom.js';
 import { CATALOG, makeDevice, makeState, setLine, uniqueId, cloneState } from '../engine/model.js';
 import { recompute, runObjective } from '../engine/sim.js';
+import { isIos, saveStartup } from '../engine/ios.js';
 
 const VENDOR = /^(Cisco|TP-Link|Ubiquiti|Fortinet|NETGEAR|ASUS|Dell|Lenovo|Apple|HP|Synology) /;
 const HOST_NAME = { pc: 'PC', laptop: '筆電', phone: '手機', printer: '印表機', wprinter: '無線印表機', nas: 'NAS', tower: '伺服器', rack1u: '機架伺服器' };
@@ -166,6 +167,7 @@ export function installSandbox(app, hooks) {
     const services = SERVER_MODELS.includes(model) ? [{ proto: 'tcp', port: 443, name: 'HTTPS 網站' }, { proto: 'tcp', port: 80, name: 'HTTP 網站' }, { proto: 'tcp', port: 22, name: 'SSH' }] : [];
     const d = makeDevice(model, id, { name, pos, dhcp: m.kind === 'host', services });
     if (m.kind === 'internet') setLine(d, 'line1', { type: 'dhcp', gw: '203.0.113.1', assign: '203.0.113.' + (20 + n) });
+    if (isIos(d)) saveStartup(d); // 新設備的 startup-config 是空白的原廠設定
     st.devices[id] = d;
     after(id);
     app.scene.fit(Object.keys(st.devices).length > 1); // 讓新設備一定在畫面裡
@@ -218,6 +220,7 @@ export function installSandbox(app, hooks) {
     const st = cloneState(data.state);
     st.leases ||= {}; st.seq ||= 1; st.v6 = true;
     try { recompute(st); } catch { toast('無法匯入：檔案裡的設定資料不完整', 'bad', 5000); return false; }
+    for (const d of Object.values(st.devices)) if (isIos(d) && typeof d.startup !== 'string') saveStartup(d);
     app.state = st;
     app.results = [];
     app.cliSess = {};

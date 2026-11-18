@@ -3,8 +3,38 @@
 // 所以把一台設備的 running-config 整份貼到另一台同型號的設備上，會得到相同的設定。
 import { parseIp, fmtIp, parseMask, fmtMask, maskOf, netOf, bcastOf } from './ip.js';
 import { parseCidr6, parseIp6 } from './ip6.js';
-import { newIface } from './model.js';
-import { macsBehind } from './sim.js';
+import { newIface, cloneState, CATALOG } from './model.js';
+import { macsBehind, recompute } from './sim.js';
+
+// ───────────────────────── running-config 與 startup-config ─────────────────────────
+// IOS 設備改的是記憶體裡的 running-config；要下 write memory 才會存進 startup-config。
+// 沒有存檔就重新開機（reload 或斷電），設定會回到上一次存檔的樣子。
+
+/** 這台設備是不是跑 IOS（有 running / startup 兩份設定） */
+export const isIos = (dev) => !dev.locked && CATALOG[dev.model].vendor === 'Cisco' && ['router', 'mswitch', 'l3switch'].includes(dev.kind);
+const KEEP = new Set(['id', 'model', 'kind', 'pos', 'ports', 'rt', 'startup', 'locked', 'note']);
+const snapshot = (dev) => JSON.stringify(Object.fromEntries(Object.entries(dev).filter(([k]) => !KEEP.has(k))), (k, v) => (k === 'rt' ? undefined : v));
+/** write memory：把目前的設定存成 startup-config */
+export function saveStartup(dev) { dev.startup = snapshot(dev); }
+/** 重新開機：running-config 回到 startup-config */
+export function restoreStartup(dev) {
+  if (dev.startup == null) return;
+  for (const k of Object.keys(dev)) if (!KEEP.has(k)) delete dev[k];
+  Object.assign(dev, JSON.parse(dev.startup));
+}
+/** startup-config 的內容（和 show running-config 同樣的格式） */
+export function startupConfig(state, dev) {
+  if (dev.startup == null) return null;
+  const s2 = cloneState(state);
+  restoreStartup(s2.devices[dev.id]);
+  recompute(s2);
+  return runningConfig(s2, s2.devices[dev.id]);
+}
+/** running-config 有沒有還沒存檔的變更 */
+export function iosDirty(state, dev) {
+  const saved = startupConfig(state, dev);
+  return saved != null && saved.join('\n') !== runningConfig(state, dev).join('\n');
+}
 
 export const hostName = (dev) => dev.name.replace(/[^\w-]+/g, '-').replace(/^-+|-+$/g, '') || 'Device';
 export const aclName = (i, dir) => (i.aclNames && i.aclNames[dir]) || `${i.label.replace(/[^\w.]+/g, '_')}_${dir}`.toUpperCase();
@@ -203,7 +233,8 @@ function parseAclRule(tok) {
 }
 
 const HELP = {
-  exec: ['configure terminal    進入設定模式', 'show ...              查看狀態（輸入 show ? 列出全部）', 'ping <IP>             測試連線', 'write memory          儲存設定'],
+  exec: ['configure terminal    進入設定模式', 'show ...              查看狀態（輸入 show ? 列出全部）', 'ping <IP>             測試連線',
+    'write memory          把 running-config 存成 startup-config（沒存檔的設定重新開機後會消失）', 'reload                重新開機，回到 startup-config'],
   config: ['hostname <名稱>', 'interface <介面> | interface range <介面> - <n> | interface vlan <ID>', 'vlan <ID>', 'ip route <網段> <遮罩> <下一站> [距離]',
     'router ospf 1', 'ip dhcp pool <名稱> / ip dhcp excluded-address <起> <迄>', 'ip nat inside source list 1 interface <介面> overload',
     'ip nat inside source static <內部 IP> <公用 IP>', 'ip access-list extended <名稱>', 'spanning-tree vlan <清單> priority <值>',
@@ -845,17 +876,48 @@ export function iosSession(getDev, getState) {
     return { hit: false };
   };
 
+  const doReload = (out) => {
+    restoreStartup(dev());
+    S.mode = 'exec'; S.cur = null; S.pending = null;
+    out.push('', '*** 設備重新開機中 ***', '', `${hostName(dev())} 開機完成，設定已從 startup-config 載入。`);
+    return { out, changed: true, reloaded: true };
+  };
+
   function exec(line) {
     const text = line.trim();
     const tok = text.split(/\s+/).filter(Boolean);
     const out = [];
     const done = (changed) => ({ out, changed: !!changed });
+    // reload 的兩個確認問題
+    if (S.pending === 'save') {
+      if (/^y/i.test(text)) { saveStartup(dev()); out.push('Building configuration...', '[OK]'); } else if (!/^n/i.test(text)) { out.push("% Please answer 'yes' or 'no'.", 'System configuration has been modified. Save? [yes/no]:'); return done(false); }
+      S.pending = 'confirm';
+      out.push('Proceed with reload? [confirm]');
+      return done(/^y/i.test(text));
+    }
+    if (S.pending === 'confirm') {
+      if (text === '' || /^y/i.test(text)) return doReload(out);
+      S.pending = null;
+      out.push('Reload cancelled.');
+      return done(false);
+    }
     if (!tok.length || tok[0].startsWith('!')) return done(false);
     const t0 = tok[0].toLowerCase();
     if (S.mode === 'exec') {
       if (match(tok, 'configure terminal') || match(tok, 'configure')) { S.mode = 'config'; out.push('Enter configuration commands, one per line.  End with CNTL/Z.'); return done(false); }
       if (match(tok, 'enable') || match(tok, 'disable') || match(tok, 'end') || match(tok, 'terminal <...>')) return done(false);
-      if (match(tok, 'write [...]') || match(tok, 'copy running-config startup-config')) { out.push('Building configuration...', '[OK]'); return done(false); }
+      if (match(tok, 'write') || match(tok, 'write memory') || match(tok, 'copy running-config startup-config')) {
+        saveStartup(dev());
+        out.push('Building configuration...', '[OK]');
+        return done(true);
+      }
+      if (match(tok, 'reload')) {
+        if (dev().startup == null) saveStartup(dev());
+        const dirty = iosDirty(getState(), dev());
+        S.pending = dirty ? 'save' : 'confirm';
+        out.push(dirty ? 'System configuration has been modified. Save? [yes/no]:' : 'Proceed with reload? [confirm]');
+        return done(false);
+      }
       return { out, changed: false, pass: true };
     }
     if (text === 'Building configuration...' || /^current configuration/i.test(text)) return done(false);
@@ -890,7 +952,7 @@ export function iosSession(getDev, getState) {
     const tok = line.trim().split(/\s+/).filter(Boolean);
     const partial = /\s$/.test(line) || !tok.length ? '' : tok.pop().toLowerCase();
     const own = S.mode === 'exec'
-      ? ['configure terminal', 'write memory', 'copy running-config startup-config', 'ping <ip>', ...extra]
+      ? ['configure terminal', 'write memory', 'copy running-config startup-config', 'reload', 'ping <ip>', ...extra]
       : [...(SUB[S.mode] || []).map((r) => r[0]), ...CONFIG.map((r) => r[0]), 'end', 'exit', 'permit <...>', 'deny <...>', ...extra.map((c) => 'do ' + c)];
     const words = new Set();
     for (const pattern of own) {
@@ -911,7 +973,8 @@ export function iosSession(getDev, getState) {
   return {
     exec,
     complete,
-    prompt: () => hostName(dev()) + PROMPT[S.mode],
+    prompt: () => (S.pending ? '' : hostName(dev()) + PROMPT[S.mode]),
+    get pending() { return S.pending; },
     help: () => HELP[S.mode] || [],
     get mode() { return S.mode; },
   };

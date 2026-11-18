@@ -8,6 +8,7 @@ import * as hud from './ui/hud.js';
 import { renderDevicePanel } from './ui/panel.js';
 import { toast, sleep } from './ui/dom.js';
 import { SANDBOX, installSandbox, sandboxObjectives } from './ui/sandbox.js';
+import { isIos, iosDirty, saveStartup, restoreStartup } from './engine/ios.js';
 
 // 網址加上 ?profile=名稱 就會用另一份獨立的進度（多人共用一台電腦，或測試時不想動到自己的存檔）
 const PROFILE = (new URLSearchParams(location.search).get('profile') || '').replace(/[^\w-]/g, '').slice(0, 24);
@@ -52,6 +53,8 @@ const app = {
       } catch { st = null; }
     }
     if (!st) { st = lv.setup(); recompute(st); }
+    // 關卡一開始的設定就是 IOS 設備已經存檔的 startup-config
+    for (const d of Object.values(st.devices)) if (isIos(d) && d.startup == null) saveStartup(d);
     if (fresh) { delete app.store.saves[lv.id]; delete app.store.hints[lv.id]; }
     Object.assign(app, {
       level: lv, levelIdx: idx, state: st, results: [], running: false, selected: null,
@@ -126,15 +129,22 @@ const app = {
   },
 
   /** 故障模擬：把設備關機或重新開機 */
-  togglePower(id) {
+  togglePower(id, force) {
     const st = app.state, d = st.devices[id];
+    const off = !(st.down || {})[id];
+    // IOS 設備斷電後只剩 startup-config：有沒存檔的變更就先問
+    if (off && !force && isIos(d) && iosDirty(st, d)) {
+      return hud.confirmPowerOff(d.name, () => { saveStartup(d); app.togglePower(id, true); }, () => app.togglePower(id, true));
+    }
     const down = { ...(st.down || {}) };
-    if (down[id]) delete down[id]; else down[id] = true;
+    if (off) down[id] = true; else delete down[id];
     st.down = down;
+    let lost = false;
+    if (off && isIos(d)) { lost = iosDirty(st, d); restoreStartup(d); app.cliSess = {}; }
     app.changed();
     app.renderPanel();
-    toast(down[id] ? `${d.name} 已關機 — 可以測試其他路徑有沒有接手` : `${d.name} 已開機`, down[id] ? 'bad' : 'ok');
-    app.scene.pulse(id, down[id] ? RED : GREEN, true);
+    toast(off ? `${d.name} 已關機${lost ? '，沒有存檔的設定已經消失' : ' — 可以測試其他路徑有沒有接手'}` : `${d.name} 已開機${isIos(d) ? '，設定從 startup-config 載入' : ''}`, off ? 'bad' : 'ok', lost ? 5000 : 3200);
+    app.scene.pulse(id, off ? RED : GREEN, true);
   },
 
   renderPanel() {

@@ -393,6 +393,33 @@ console.log('\nCLI 設定指令');
       '含 VPN 與 NAT 例外的 running-config 貼到空白路由器後，通道照樣建立');
   }
 
+  // running-config 與 startup-config
+  {
+    const { saveStartup, restoreStartup, iosDirty, startupConfig } = await import('../src/engine/ios.js');
+    const lv = LEVELS.find((l) => l.id === 'l10');
+    const s = lv.setup();
+    for (const d of Object.values(s.devices)) if (hasCli(d)) saveStartup(d);
+    recompute(s);
+    ok(!iosDirty(s, s.devices.hq), '剛開機時 running-config 和 startup-config 相同');
+    const sess = iosSession(() => s.devices.hq, () => s);
+    for (const l of ['conf t', 'int gi0/0/2', 'ip address 172.16.0.1 255.255.255.252', 'exit', 'ip route 10.2.0.0 255.255.255.0 172.16.0.2', 'end']) sess.exec(l);
+    type(s, 'br', ['conf t', 'int g0/0/0', 'ip add 172.16.0.2 255.255.255.252', 'ip route 0.0.0.0 0.0.0.0 172.16.0.1', 'end', 'write memory']);
+    recompute(s);
+    ok(iosDirty(s, s.devices.hq) && !iosDirty(s, s.devices.br) && evaluate(s, lv.objectives).every((r) => r.pass), '改了設定但沒存檔：網路是通的，但 running-config 和 startup-config 不同');
+    ok(!startupConfig(s, s.devices.hq).some((l) => l.includes('172.16.0.1')) && startupConfig(s, s.devices.br).some((l) => l.includes('172.16.0.2')), 'show startup-config 顯示的是上一次存檔的內容');
+    const r1 = sess.exec('reload'), r2 = sess.exec('no'), r3 = sess.exec('');
+    recompute(s);
+    ok(/Save\?/.test(r1.out.join()) && /confirm/.test(r2.out.join()) && r3.reloaded && !s.devices.hq.routes.length && evaluate(s, lv.objectives).some((r) => !r.pass),
+      'reload 時不存檔：HQ 的設定回到開機時的樣子，分公司連不回來');
+    for (const l of ['conf t', 'int gi0/0/2', 'ip address 172.16.0.1 255.255.255.252', 'exit', 'ip route 10.2.0.0 255.255.255.0 172.16.0.2', 'end', 'copy running-config startup-config']) sess.exec(l);
+    sess.exec('reload'); sess.exec('');
+    recompute(s);
+    ok(!iosDirty(s, s.devices.hq) && evaluate(s, lv.objectives).every((r) => r.pass), '存檔之後再 reload，設定還在');
+    restoreStartup(s.devices.br);
+    recompute(s);
+    ok(evaluate(s, lv.objectives).every((r) => r.pass), '已經存檔的設備斷電再開機，設定不會消失');
+  }
+
   // 3. 錯誤處理與模式切換
   {
     const { s } = solved('l10');
@@ -418,6 +445,36 @@ console.log('\nCLI 設定指令');
     const res = evaluate(s, LEVELS.find((l) => l.id === 'l10').objectives);
     ok(res.every((x) => !x.pass) && res.some((x) => /關機/.test(x.reason)), '設備關機後連線中斷，錯誤訊息指出是哪一台關機');
   }
+}
+
+// ── DHCP 發放前的衝突偵測 ──
+{
+  const lv = LEVELS.find((l) => l.id === 'l36');
+  const s = lv.setup();
+  s.leases = {}; // 沒有舊租約：印表機一直都在線上
+  recompute(s);
+  const ip = (id) => s.devices[id].ifaces[0].rt.ip;
+  const seen = (s.rt.dhcpConflict || {})['rt/Gi0/0/1'] || [];
+  if (ip('pc-1') === parseIp('192.168.1.10') || s.devices['pc-1'].ifaces[0].rt.conflict || !seen.includes(parseIp('192.168.1.10'))) fail('DHCP 伺服器應該跳過已經有人在用的 192.168.1.10');
+  else console.log('\n  ✔ DHCP 發放前先確認位址沒人在用：跳過印表機的 192.168.1.10，並記錄成衝突');
+  const s2 = lv.setup();
+  recompute(s2);
+  if (s2.devices['pc-1'].ifaces[0].rt.ip !== parseIp('192.168.1.10') || !s2.devices['pc-1'].ifaces[0].rt.conflict) fail('設備離線期間發出去的租約應該保留，回來之後才會衝突');
+  else console.log('  ✔ 設備離線期間已經發出去的租約不會重新檢查：印表機回來之後就和 PC-1 衝突');
+}
+
+// ── TCP 三向交握 ──
+{
+  const { sessionLog } = await import('../src/engine/sim.js');
+  const { s } = solved('l09');
+  recompute(s);
+  const before = sessionLog(s.devices.fw).length;
+  const r = transact(s, 'pc-1', { proto: 'tcp', dst: parseIp('93.184.216.34'), dport: 443 });
+  const flags = r.log.filter((l) => l.frame && l.frame.proto === 'tcp').map((l) => (l.frame.ack ? 'ACK' : l.frame.reply ? 'SYN-ACK' : 'SYN'));
+  const seq = flags.filter((f, n) => f !== flags[n - 1]).join(' → ');
+  const added = sessionLog(s.devices.fw).length - before;
+  if (!r.ok || seq !== 'SYN → SYN-ACK → ACK' || added !== 2 || r.l3.length !== 1) fail(`TCP 三向交握：ok=${r.ok} 順序=${seq} 新增紀錄=${added} l3=${r.l3.length}`);
+  else console.log('\n  ✔ TCP 連線走完 SYN → SYN-ACK → ACK；防火牆對同一條連線只記一筆放行與一筆 NAT');
 }
 
 // ── FortiGate 的 CLI ──

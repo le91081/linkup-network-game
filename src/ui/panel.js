@@ -12,6 +12,7 @@ import * as X from './panel-extra.js';
 import * as M from './panel-more.js';
 import { buildCli } from './cli.js';
 import { buildFortiCli } from './forticli.js';
+import { isIos, iosDirty, saveStartup } from '../engine/ios.js';
 
 function dhcpBlock(ctx, i) {
   const d = i.dhcp;
@@ -330,6 +331,8 @@ function statusTab(ctx, body) {
         if (!key.startsWith(dev.id + '/')) continue;
         for (const [c, ip] of Object.entries(tbl)) rows.push(h('div', { class: 'line' }, h('b', { text: state.devices[c.split('/')[0]].name }), h('span', { class: 'mono muted', text: fmtIp(ip) })));
       }
+      const hit = Object.entries(state.rt.dhcpConflict || {}).filter(([k]) => k.startsWith(dev.id + '/')).flatMap(([, v]) => v);
+      if (hit.length) rows.push(note('warn', `發放前先 ping 過，發現 ${hit.map(fmtIp).join('、')} 已經有設備在用，所以跳過沒有發出去。固定 IP 最好移到位址池之外。`));
       return rows.length ? rows : note('muted', '目前沒有發出任何租約。');
     })));
     body.append(M.arpCard(ctx));
@@ -518,6 +521,14 @@ export function renderDevicePanel(app, root) {
       h('div', { class: 'p-title' },
         app.level.sandbox ? inp(ctx, () => dev.name, (v) => { if (v) dev.name = v; }, { mono: false, ph: '設備名稱' }) : h('h2', { text: dev.name }),
         h('p', { text: m.title }), h('p', { class: 'muted', text: m.tagline })),
+      isIos(dev) && ctx.live(() => {
+        const dirty = iosDirty(app.state, dev);
+        return h('button', {
+          class: 'mini save' + (dirty ? ' dirty' : ''), type: 'button', disabled: !dirty,
+          title: dirty ? '有尚未儲存的設定：點一下執行 write memory。沒有存檔就關機或 reload，這些設定會消失。' : '設定已儲存到 startup-config',
+          onclick: () => { saveStartup(dev); toast(`${dev.name}：已把 running-config 存成 startup-config`, 'ok'); ctx.commit(false); },
+        }, icon('save', 15));
+      }),
       !dev.locked && h('button', {
         class: 'mini power' + (isDown ? ' off' : ''), type: 'button', title: isDown ? '開機' : '關機 — 模擬這台設備故障，看看網路還通不通',
         onclick: () => app.togglePower(dev.id),

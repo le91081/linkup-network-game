@@ -510,7 +510,11 @@ export function visibleSsids(state, dev) {
 
 // ───────────────────────── 位址取得 / 路由表 ─────────────────────────
 
-function leaseFrom(state, old, key, start, end, exclude, clientKey) {
+/**
+ * busy：這個網段上已經有人手動在用的位址。伺服器發出「新的」位址之前會先 ping 確認沒有人回應，
+ * 有人在用就跳過並記成衝突。已經發出去的租約不會重新檢查 — 所以設備離線期間被發走的位址，回來之後還是會衝突。
+ */
+function leaseFrom(state, old, key, start, end, exclude, clientKey, busy = []) {
   if (start == null || end == null || end < start) return null;
   const tbl = (state.leases[key] ||= {});
   const used = new Set(Object.values(tbl));
@@ -519,8 +523,13 @@ function leaseFrom(state, old, key, start, end, exclude, clientKey) {
   if (ip != null && (ip < start || ip > end || used.has(ip))) ip = null;
   if (ip == null) {
     const reserved = new Set(Object.entries(old[key] || {}).filter(([k]) => k !== clientKey).map(([, v]) => v));
-    for (let c = start; c <= end && c - start < 4096; c++) if (!used.has(c) && !reserved.has(c)) { ip = c; break; }
-    if (ip == null) for (let c = start; c <= end && c - start < 4096; c++) if (!used.has(c)) { ip = c; break; }
+    const taken = new Set(busy);
+    for (let c = start; c <= end && c - start < 4096; c++) if (!used.has(c) && !taken.has(c) && !reserved.has(c)) { ip = c; break; }
+    if (ip == null) for (let c = start; c <= end && c - start < 4096; c++) if (!used.has(c) && !taken.has(c)) { ip = c; break; }
+    if (busy.length && state.rt) {
+      const seen = ((state.rt.dhcpConflict ||= {})[key] ||= []);
+      for (const c of busy) if (c >= start && c <= end && !used.has(c) && (ip == null || c < ip) && !seen.includes(c)) seen.push(c);
+    }
   }
   if (ip == null) return null;
   tbl[clientKey] = ip;
@@ -568,7 +577,11 @@ function acquire(state, old, d, i) {
     const mine = rsv.find((r) => r.mac === i.rt.mac);
     let ip;
     if (mine) { ip = mine.ip; (state.leases[sd.id + '/' + s.id] ||= {})[d.id + '/' + i.id] = ip; }
-    else ip = inNet ? leaseFrom(state, old, sd.id + '/' + s.id, start, end, [s.rt.ip, ...rsv.map((r) => r.ip)], d.id + '/' + i.id) : null;
+    else {
+      // 同一個網段上手動設定了 IP 的設備：伺服器 ping 得到它們，不會把這些位址發出去
+      const busy = eps.filter((x) => x.iface !== s && x.iface.rt.ip != null && x.iface.rt.src !== 'dhcp' && x.iface.rt.src !== 'apipa').map((x) => x.iface.rt.ip);
+      ip = inNet ? leaseFrom(state, old, sd.id + '/' + s.id, start, end, [s.rt.ip, ...rsv.map((r) => r.ip)], d.id + '/' + i.id, busy) : null;
+    }
     if (ip == null) { i.rt.note = `${sd.name} 的 DHCP 位址池設定有誤或已用完`; continue; }
     let dns = dnsList(s.dhcp.dns);
     if (!dns.length && sd.dnsProxy) dns = [s.rt.ip];
@@ -1029,7 +1042,7 @@ function aclCheck(list, pkt) {
 function pktDesc(p) {
   const what =
     p.proto === 'icmp' ? (p.reply ? 'ICMP Echo Reply' : 'ICMP Echo Request')
-      : p.proto === 'tcp' ? (p.reply ? `TCP SYN-ACK（來自埠 ${p.sport}）` : `TCP SYN → 埠 ${p.dport}`)
+      : p.proto === 'tcp' ? (p.ack ? `TCP ACK → 埠 ${p.dport}` : p.reply ? `TCP SYN-ACK（來自埠 ${p.sport}）` : `TCP SYN → 埠 ${p.dport}`)
         : p.proto === 'esp' ? 'ESP 加密封包'
           : (p.reply ? `UDP 回應（來自埠 ${p.sport}）` : `UDP → 埠 ${p.dport}`);
   return `${what}　${fmtIp(p.src)} → ${fmtIp(p.dst)}`;
@@ -1197,7 +1210,12 @@ function forward(state, ctx, startId, pkt) {
       if (deny) return drop(`${dev.name} 的 ${inIf.label}（進入方向）：${deny}`);
       const ct = ctx.ct[dev.id];
       const e = ct && ct.find((x) => x.proto === pkt.proto && x.nDst === pkt.src && x.nSrc === pkt.dst && x.nDport === pkt.sport && x.nSport === pkt.dport);
-      if (e && pkt.reply) {
+      // 同一條連線後續的封包（三向交握的 ACK）：有連線紀錄的設備直接比對紀錄，套用同樣的位址轉換，不再重新比對政策
+      const flow = !pkt.reply && pkt.ack && ct && ct.find((x) => x.proto === pkt.proto && x.src === pkt.src && x.sport === pkt.sport && x.dst === pkt.dst && x.dport === pkt.dport);
+      if (flow) {
+        established = true;
+        pkt.src = flow.nSrc; pkt.sport = flow.nSport; pkt.dst = flow.nDst; pkt.dport = flow.nDport;
+      } else if (e && pkt.reply) {
         established = true;
         if (e.src !== pkt.dst || e.dst !== pkt.src) {
           log.push({ dev: dev.id, kind: 'nat', text: `NAT 還原：${fmtIp(pkt.src)} → ${fmtIp(pkt.dst)}　改回　${fmtIp(e.dst)} → ${fmtIp(e.src)}` });
@@ -1222,7 +1240,7 @@ function forward(state, ctx, startId, pkt) {
       }
       if (!dev.routing) return drop(`${dev.name} 收到不是給自己的封包（目的 ${fmtIp(pkt.dst)}），它不是路由器所以直接丟棄`);
       if (--pkt.ttl <= 0) return drop('TTL 歸零，封包被丟棄（可能有路由迴圈）');
-      if (!pkt.reply && pkt.proto !== 'esp') ctx.l3.push({ dev: dev.id, ip: inIf.rt.ip });
+      if (!pkt.reply && !pkt.ack && pkt.proto !== 'esp') ctx.l3.push({ dev: dev.id, ip: inIf.rt.ip });
     } else if (isLocal(dev, pkt.dst)) {
       return { ok: true, dev: dev.id };
     }
@@ -1323,7 +1341,7 @@ function forward(state, ctx, startId, pkt) {
       text: (route.via != null ? `查路由 → 下一站 ${fmtIp(nh)}：` : '') + names.join(' → ') + (tags.length ? `　[802.1Q VLAN ${tags.join(',')}]` : '')
         + (tgt.path.some((h) => h.wifi) ? '　[Wi-Fi]' : ''),
       // 這一段第二層旅程上的訊框內容，給「封包檢視」用
-      frame: { smac: outIf.rt.mac, dmac: tgt.iface.rt.mac, tags, src: pkt.src, dst: pkt.dst, ttl: pkt.ttl, proto: pkt.proto, sport: pkt.sport, dport: pkt.dport, reply: pkt.reply, wifi: tgt.path.some((h) => h.wifi) },
+      frame: { smac: outIf.rt.mac, dmac: tgt.iface.rt.mac, tags, src: pkt.src, dst: pkt.dst, ttl: pkt.ttl, proto: pkt.proto, sport: pkt.sport, dport: pkt.dport, reply: pkt.reply, ack: !!pkt.ack, wifi: tgt.path.some((h) => h.wifi) },
     });
     let leaked = false;
     tgt.path.forEach((h, n) => {
@@ -1473,8 +1491,18 @@ function transactInner(state, fromId, spec) {
     ctx.log.push({ dev: b.dev, kind: 'drop', text: reason });
     return done({ ok: false, reason, failDev: b.dev, phase: 'reply', responder: a.dev });
   }
+  const seenSrc = pkt.src;
+  if (spec.proto === 'tcp') {
+    // TCP 要三個封包才算建立連線：SYN → SYN-ACK → ACK
+    const ack = { proto: 'tcp', src: srcIp, dst: spec.dst, sport: 30000 + id, dport: spec.dport, ttl: 64, reply: false, ack: true };
+    ctx.log.push({ dev: fromId, kind: 'tx', text: `收到 SYN-ACK，送出 ${pktDesc(ack)}（三向交握的第三步）` });
+    const c = forward(state, ctx, fromId, ack);
+    if (!c.ok) return done({ ok: false, reason: '三向交握的最後一步 (ACK) 沒有送達：' + c.reason, failDev: c.dev, phase: 'ack', responder: a.dev });
+    ctx.log.push({ dev: c.dev, kind: 'ok', text: 'TCP 連線建立完成（SYN → SYN-ACK → ACK），可以開始傳送資料' });
+    return done({ ok: true, responder: a.dev, srcIp, seenSrc });
+  }
   ctx.log.push({ dev: fromId, kind: 'ok', text: '收到回應，連線成功' });
-  return done({ ok: true, responder: a.dev, srcIp, seenSrc: pkt.src });
+  return done({ ok: true, responder: a.dev, srcIp, seenSrc });
 }
 
 function devDns(dev) {
