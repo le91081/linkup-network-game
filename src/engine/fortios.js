@@ -1,0 +1,844 @@
+// FortiOS 風格的 CLI：config → edit → set → next → end。
+// 每個設定區段都定義「怎麼從設備的設定讀出 FortiOS 的欄位」和「怎麼把欄位寫回去」，
+// 所以 show 印出來的內容可以整份貼到另一台 FortiGate 上，得到相同的設定。不依賴瀏覽器，可用 Node 測試。
+import { parseIp, fmtIp, parseMask, fmtMask, netOf } from './ip.js';
+import { SERVICE_NAMES, accessOf, sessionLog, routeRows } from './sim.js';
+
+const ACCESS = ['ping', 'https', 'ssh', 'http', 'telnet'];
+const PROPOSALS = ['aes128-sha1', 'aes128-sha256', 'aes256-sha1', 'aes256-sha256'];
+const DH = ['2', '5', '14', '19'];
+const P1_DEFAULT = ['aes128-sha256', 'aes256-sha256', 'aes128-sha1', 'aes256-sha1']; // FortiOS 新建通道時的預設提案
+const DH_DEFAULT = ['14', '5'];
+
+const dottedBits = (s) => (/^\d+\.\d+\.\d+\.\d+$/.test(s || '') ? parseMask(s) : null);
+const list = (s) => String(s || '').split(/[,\s]+/).filter(Boolean);
+const uniq = (a) => [...new Set(a)];
+const clone = (x) => JSON.parse(JSON.stringify(x));
+const sameSet = (a, b) => a.length === b.length && a.every((x) => b.includes(x));
+/** "10.1.0.5/24" → "10.1.0.0/24"；單一位址不帶長度 */
+function normCidr(s) {
+  const m = String(s).trim().match(/^([\d.]+)(?:\/(\d+))?$/);
+  const ip = m && parseIp(m[1]);
+  if (ip == null) return null;
+  const bits = m[2] == null ? 32 : +m[2];
+  return bits > 32 ? null : bits === 32 ? fmtIp(ip) : `${fmtIp(netOf(ip, bits))}/${bits}`;
+}
+const cidrTok = (c) => { const [a, b] = normCidr(c).split('/'); return [a, fmtMask(b == null ? 32 : +b)]; };
+function tokCidr(t) {
+  if (!t) return null;
+  if (t.length === 1) return normCidr(t[0]);
+  const ip = parseIp(t[0] || ''), bits = dottedBits(t[1]);
+  return ip == null || bits == null ? null : bits === 32 ? fmtIp(ip) : `${fmtIp(netOf(ip, bits))}/${bits}`;
+}
+const qv = (s) => '"' + String(s).replace(/(["\\])/g, '\\$1') + '"';
+function tokenize(line) {
+  const out = [], re = /"((?:[^"\\]|\\.)*)"|(\S+)/g;
+  let m;
+  while ((m = re.exec(line))) out.push(m[1] != null ? m[1].replace(/\\(.)/g, '$1') : m[2]);
+  return out;
+}
+const hostOf = (d) => d.name.replace(/\s+/g, '-');
+const ERR = (msg) => ({ err: msg });
+const notFound = (what) => ERR(`entry not found in datasource\n（${what}）`);
+
+// ───────────────────────── 名稱與設定物件之間的對應 ─────────────────────────
+
+const tunnels = (d) => d.vpns || [];
+const vipName = (f) => f.name || `vip-${f.proto || 'tcp'}-${f.port}`;
+const natName = (n) => n.name || `vip-${n.pub}`;
+const poolName = (vs) => vs.pool || 'SSLVPN_TUNNEL_ADDR1';
+const sslIntf = 'ssl.root';
+
+function intfName(d, id) {
+  if (id === 'vpn:remote') return sslIntf;
+  return String(id).startsWith('vpn:') ? String(id).slice(4) : id;
+}
+function intfId(d, name) {
+  if (name === 'any') return 'any';
+  if (d.ifaces.some((i) => i.id === name)) return name;
+  if (name === sslIntf && d.vpnServer) return 'vpn:remote';
+  if (tunnels(d).some((t) => t.name === name)) return 'vpn:' + name;
+  return null;
+}
+/** 位址常值 → 物件名稱（沒有對應的物件就用位址本身當名稱） */
+function addrName(d, lit) {
+  if (!lit || lit === 'any' || lit === 'all') return 'all';
+  const n = normCidr(lit) || lit;
+  for (const [name, o] of Object.entries(d.addrObjs || {})) if (o.cidr === n) return name;
+  return n;
+}
+function rangeList(o) {
+  const a = parseIp(o.start || ''), b = parseIp(o.end || '');
+  if (a == null || b == null || b < a || b - a > 255) return null;
+  return Array.from({ length: b - a + 1 }, (_, n) => fmtIp(a + n));
+}
+/** 物件名稱（位址、位址群組、VIP）→ 位址常值的清單；找不到回傳 null */
+function addrResolve(d, name, seen = new Set()) {
+  if (name === 'all' || name === 'any') return ['any'];
+  const o = (d.addrObjs || {})[name];
+  if (o) return o.cidr ? [o.cidr] : rangeList(o);
+  const g = (d.addrGrps || {})[name];
+  if (g && !seen.has(name)) {
+    seen.add(name);
+    const parts = g.map((m) => addrResolve(d, m, seen));
+    return parts.some((p) => !p) ? null : parts.flat();
+  }
+  const vip = (d.portForwards || []).find((f) => vipName(f) === name) || null;
+  if (vip) return [vip.toIp];
+  const sn = (d.staticNat || []).find((n) => natName(n) === name);
+  if (sn) return [sn.priv];
+  const n = normCidr(name);
+  return n ? [n] : null;
+}
+const specNames = (d, spec, isDst) => {
+  const items = list(spec);
+  if (!items.length || items.some((x) => x === 'any' || x === 'all')) return ['all'];
+  return items.map((x) => {
+    const vip = isDst && ((d.portForwards || []).find((f) => f.toIp === x) || null);
+    const sn = isDst && !vip && (d.staticNat || []).find((n) => n.priv === x);
+    return vip ? vipName(vip) : sn ? natName(sn) : addrName(d, x);
+  });
+};
+function resolveSpec(d, toks) {
+  const out = [];
+  for (const t of toks) {
+    const r = addrResolve(d, t);
+    if (!r) return null;
+    out.push(...r);
+  }
+  return out.includes('any') ? 'any' : uniq(out).join(', ');
+}
+function ensureIds(d) {
+  let max = 0;
+  for (const p of d.policies) if (+p.id > max) max = +p.id;
+  for (const p of d.policies) if (!(+p.id > 0)) p.id = ++max;
+}
+/** 通道的第二階段：一筆對應一組「本地網段 ↔ 遠端網段」 */
+function p2list(t) {
+  const lo = list(t.local).map(normCidr), re = list(t.remote).map(normCidr);
+  if (t.p2 && sameSet(uniq(t.p2.map((e) => e.src)), lo) && sameSet(uniq(t.p2.map((e) => e.dst)), re)) return t.p2;
+  if (!lo.length || !re.length) return []; // 還沒有第二階段
+  return lo.flatMap((src) => re.map((dst) => ({ src, dst }))).map((e, n) => ({ name: n ? `${t.name}-${n + 1}` : t.name, ...e }));
+}
+const setP2 = (t, entries) => { t.p2 = entries; t.local = uniq(entries.map((e) => e.src)).join(', '); t.remote = uniq(entries.map((e) => e.dst)).join(', '); };
+const wanOf = (d, t) => {
+  const T = ((d.rt && d.rt.tunnels) || []).find((x) => x.cfg === t);
+  const i = T && T.localIp != null && d.ifaces.find((x) => x.rt && x.rt.ip === T.localIp);
+  return t.wan || (i && i.id) || (d.ifaces.find((x) => /^wan/.test(x.id)) || d.ifaces[0]).id;
+};
+function parseProposals(toks) {
+  if (!toks || !toks.length) return null;
+  return toks.every((x) => PROPOSALS.includes(x.toLowerCase())) ? toks.map((x) => x.toLowerCase()) : null;
+}
+
+// ───────────────────────── 設定區段 ─────────────────────────
+// read(d, st) → [{ key, f: { 欄位: [字串…] }, sub: { 子表: [{ key, f }] } }]
+// write(d, key, f, sub, st, isNew) → 失敗時回傳 { err }；fields 的值：'q' 輸出時加引號，'b' 不加
+
+const SEC = {
+  'system global': {
+    single: true, fields: { hostname: 'q' },
+    read: (d) => [{ key: '', f: { hostname: [d.name] } }],
+    write(d, key, f) { if (f.hostname && f.hostname.length) d.name = f.hostname.join(' '); },
+  },
+  'system interface': {
+    noCreate: true, fields: { type: 'b', mode: 'b', ip: 'b', allowaccess: 'b', username: 'q', password: 'b' },
+    read: (d) => d.ifaces.map((i) => ({
+      key: i.id,
+      f: {
+        ...(i.bind.t === 'bridge' ? { type: ['hard-switch'] } : {}),
+        mode: [i.mode],
+        ...(i.mode === 'static' && i.ip && parseMask(i.mask || '') != null ? { ip: [i.ip, fmtMask(parseMask(i.mask))] } : {}),
+        ...(accessOf(d, i).length ? { allowaccess: accessOf(d, i) } : {}),
+        ...(i.mode === 'pppoe' ? { username: [i.user || ''], password: [i.pass || ''] } : {}),
+      },
+    })),
+    write(d, key, f) {
+      const i = d.ifaces.find((x) => x.id === key);
+      if (!i) return notFound(`沒有 ${key} 這個介面；可用的介面：${d.ifaces.map((x) => x.id).join('、')}`);
+      const mode = f.mode ? f.mode[0] : i.mode;
+      if (!['static', 'dhcp', 'pppoe'].includes(mode)) return ERR('mode 必須是 static、dhcp 或 pppoe');
+      if (f.ip && (parseIp(f.ip[0] || '') == null || dottedBits(f.ip[1]) == null)) return ERR('用法：set ip <IP> <遮罩>，例如 set ip 192.168.1.1 255.255.255.0');
+      const acc = (f.allowaccess || []).map((x) => x.toLowerCase());
+      const bad = acc.find((x) => ![...ACCESS, 'snmp', 'fgfm', 'radius-acct', 'fabric'].includes(x));
+      if (bad) return ERR(`allowaccess 不認識「${bad}」；可用的值：${ACCESS.join(' ')}`);
+      i.mode = mode;
+      if (mode === 'static') { i.ip = f.ip ? f.ip[0] : ''; i.mask = f.ip ? f.ip[1] : ''; }
+      if (mode === 'pppoe') { i.user = (f.username || [''])[0]; i.pass = (f.password || [''])[0]; }
+      i.access = ACCESS.filter((x) => acc.includes(x));
+      i.ping = i.access.includes('ping');
+      return undefined;
+    },
+    remove: () => ERR('實體介面不能刪除'),
+  },
+  'system admin': {
+    only: (d) => !!d.mgmt, fields: { accprofile: 'q', password: 'b', ...Object.fromEntries(Array.from({ length: 10 }, (_, n) => [`trusthost${n + 1}`, 'b'])) },
+    read: (d) => [{
+      key: d.mgmt.user || 'admin',
+      f: { accprofile: ['super_admin'], ...Object.fromEntries(list(d.mgmt.allow).filter(normCidr).map((c, n) => [`trusthost${n + 1}`, cidrTok(c)])), password: [d.mgmt.pass || ''] },
+    }],
+    write(d, key, f) {
+      const hosts = [];
+      for (let n = 1; n <= 10; n++) {
+        const t = f['trusthost' + n];
+        if (!t) continue;
+        const c = tokCidr(t);
+        if (!c) return ERR(`trusthost${n} 的格式：<IP> <遮罩>`);
+        if (c !== '0.0.0.0/0') hosts.push(c);
+      }
+      d.mgmt.user = key;
+      if (f.password) d.mgmt.pass = f.password.join(' ');
+      d.mgmt.allow = hosts.join(', ');
+      return undefined;
+    },
+    remove: () => ERR('唯一的管理員帳號不能刪除'),
+  },
+  'system ntp': {
+    single: true, only: (d) => !!d.mgmt, fields: { ntpsync: 'b', type: 'b', syncinterval: 'b' },
+    subs: { ntpserver: { numeric: true, fields: { server: 'q' } } },
+    read: (d) => [d.mgmt.ntp ? { key: '', f: { ntpsync: ['enable'], type: ['custom'] }, sub: { ntpserver: [{ key: '1', f: { server: [d.mgmt.ntp] } }] } } : { key: '', f: {} }],
+    write(d, key, f, sub) {
+      const srv = (((sub.ntpserver || [])[0] || {}).f || {}).server;
+      if (srv && parseIp(srv[0] || '') == null) return ERR('ntpserver 的 server 請填 IP 位址');
+      d.mgmt.ntp = srv && (f.ntpsync || ['enable'])[0] !== 'disable' ? srv[0] : '';
+      return undefined;
+    },
+  },
+  'log syslogd setting': {
+    single: true, only: (d) => !!d.mgmt, fields: { status: 'b', server: 'q', port: 'b' },
+    read: (d) => [{ key: '', f: d.mgmt.syslog ? { status: ['enable'], server: [d.mgmt.syslog] } : {} }],
+    write(d, key, f) {
+      const on = (f.status || [])[0] === 'enable';
+      if (on && parseIp((f.server || [''])[0]) == null) return ERR('啟用 syslog 之前要先 set server <Syslog 伺服器 IP>');
+      d.mgmt.syslog = on ? f.server[0] : '';
+      return undefined;
+    },
+  },
+  'system snmp community': {
+    numeric: true, only: (d) => !!d.mgmt, fields: { name: 'q', status: 'b' },
+    read: (d) => ((d.mgmt.snmp || 'v2c') === 'v2c' ? [{ key: '1', f: { name: [d.mgmt.community || 'public'] } }] : []),
+    write(d, key, f) {
+      if (!f.name || !f.name[0]) return ERR('community 需要名稱：set name "<字串>"');
+      Object.assign(d.mgmt, { snmp: 'v2c', community: f.name[0] });
+      return undefined;
+    },
+    remove(d) { d.mgmt.snmp = 'off'; },
+  },
+  'system snmp user': {
+    only: (d) => !!d.mgmt, fields: { 'security-level': 'b', 'auth-proto': 'b', 'auth-pwd': 'b', 'priv-proto': 'b', 'priv-pwd': 'b' },
+    read: (d) => (d.mgmt.snmp === 'v3' ? [{ key: 'monitor', f: { 'security-level': ['auth-priv'] } }] : []),
+    write(d) { d.mgmt.snmp = 'v3'; },
+    remove(d) { d.mgmt.snmp = 'off'; },
+  },
+  'system dhcp server': {
+    numeric: true, fields: { 'default-gateway': 'b', netmask: 'b', interface: 'q', 'dns-service': 'b', 'dns-server1': 'b', 'dns-server2': 'b', 'dns-server3': 'b', 'lease-time': 'b' },
+    subs: {
+      'ip-range': { numeric: true, fields: { 'start-ip': 'b', 'end-ip': 'b' } },
+      'reserved-address': { numeric: true, fields: { ip: 'b', mac: 'b', description: 'q' } },
+    },
+    servers: (d) => d.ifaces.filter((i) => i.dhcp && i.dhcp.on),
+    read(d) {
+      return this.servers(d).map((i, n) => ({
+        key: String(n + 1),
+        f: {
+          ...(i.dhcp.gw || i.ip ? { 'default-gateway': [i.dhcp.gw || i.ip] } : {}),
+          ...(parseMask(i.mask || '') != null ? { netmask: [fmtMask(parseMask(i.mask))] } : {}),
+          interface: [i.id],
+          ...Object.fromEntries(list(i.dhcp.dns).slice(0, 3).map((x, k) => [`dns-server${k + 1}`, [x]])),
+        },
+        sub: {
+          'ip-range': i.dhcp.start && i.dhcp.end ? [{ key: '1', f: { 'start-ip': [i.dhcp.start], 'end-ip': [i.dhcp.end] } }] : [],
+          'reserved-address': (i.dhcp.reserved || []).filter((r) => r.ip && r.mac).map((r, k) => ({ key: String(k + 1), f: { ip: [r.ip], mac: [r.mac] } })),
+        },
+      }));
+    },
+    write(d, key, f, sub, st, isNew) {
+      const i = d.ifaces.find((x) => x.id === (f.interface || [])[0]);
+      if (!i) return notFound('DHCP 伺服器要先指定介面：set interface "internal"');
+      const r = ((sub['ip-range'] || [])[0] || {}).f || {};
+      const a = (r['start-ip'] || [''])[0], b = (r['end-ip'] || [''])[0];
+      if (parseIp(a) == null || parseIp(b) == null) return ERR('還沒有位址範圍：config ip-range → edit 1 → set start-ip … / set end-ip … → next → end');
+      const gw = (f['default-gateway'] || [''])[0];
+      if (gw && parseIp(gw) == null) return ERR('default-gateway 請填 IP 位址');
+      const dns = ['dns-server1', 'dns-server2', 'dns-server3'].map((k) => (f[k] || [''])[0]).filter(Boolean);
+      if (dns.some((x) => parseIp(x) == null)) return ERR('dns-server 請填 IP 位址');
+      const prev = !isNew && this.servers(d)[+key - 1];
+      if (prev && prev !== i) prev.dhcp.on = false;
+      const rsv = (sub['reserved-address'] || []).map((e) => ({ ip: (e.f.ip || [''])[0], mac: (e.f.mac || [''])[0].toLowerCase() })).filter((x) => x.ip && x.mac);
+      Object.assign(i.dhcp, { on: true, start: a, end: b, gw: gw && gw !== i.ip ? gw : '', dns: dns.join(', '), reserved: rsv });
+      return undefined;
+    },
+    remove(d, key) { const i = this.servers(d)[+key - 1]; if (!i) return notFound('沒有這個編號的 DHCP 伺服器'); i.dhcp.on = false; return undefined; },
+  },
+  'firewall address': {
+    fields: { type: 'b', subnet: 'b', 'start-ip': 'b', 'end-ip': 'b', comment: 'q' },
+    read(d) {
+      const out = Object.entries(d.addrObjs || {}).map(([key, o]) => ({ key, f: o.cidr ? { subnet: cidrTok(o.cidr) } : { type: ['iprange'], 'start-ip': [o.start], 'end-ip': [o.end] } }));
+      const have = new Set(out.map((e) => e.key));
+      const vs = d.vpnServer;
+      if (vs && vs.start && vs.end && !have.has(poolName(vs))) { out.push({ key: poolName(vs), f: { type: ['iprange'], 'start-ip': [vs.start], 'end-ip': [vs.end] } }); have.add(poolName(vs)); }
+      // 政策裡直接寫位址的地方，在 FortiOS 裡都必須是一個位址物件
+      const used = [...(d.policies || []).flatMap((p) => [...list(p.src), ...list(p.dst)]), ...(vs ? list(vs.subnets) : [])];
+      for (const lit of used) {
+        const n = normCidr(lit);
+        if (!n || have.has(addrName(d, n))) continue;
+        if ((d.portForwards || []).some((f) => f.toIp === n) || (d.staticNat || []).some((x) => x.priv === n)) continue; // 會以 VIP 的名稱出現
+        have.add(n);
+        out.push({ key: n, f: { subnet: cidrTok(n) } });
+      }
+      return out;
+    },
+    write(d, key, f) {
+      if (key === 'all' || key === 'any') return ERR('"all" 是內建的位址物件，不能修改');
+      const objs = (d.addrObjs ||= {}), old = objs[key];
+      if ((f.type || ['ipmask'])[0] === 'iprange') {
+        const a = (f['start-ip'] || [''])[0], b = (f['end-ip'] || [''])[0];
+        if (parseIp(a) == null || parseIp(b) == null || parseIp(b) < parseIp(a)) return ERR('iprange 需要 set start-ip 與 set end-ip');
+        objs[key] = { start: a, end: b };
+        const vs = d.vpnServer;
+        if (vs && poolName(vs) === key) Object.assign(vs, { start: a, end: b });
+        return undefined;
+      }
+      const c = tokCidr(f.subnet);
+      if (!c) return ERR('用法：set subnet <網段> <遮罩>，例如 set subnet 10.1.10.0 255.255.255.0');
+      objs[key] = { cidr: c };
+      // 物件的內容改了，引用它的政策跟著變
+      if (old && old.cidr && old.cidr !== c && !Object.values(objs).some((o) => o.cidr === old.cidr)) {
+        const swap = (s) => list(s).map((x) => (normCidr(x) === old.cidr ? c : x)).join(', ');
+        for (const p of d.policies || []) { if (p.src !== 'any') p.src = swap(p.src); if (p.dst !== 'any') p.dst = swap(p.dst); }
+      }
+      return undefined;
+    },
+    remove(d, key) {
+      const o = (d.addrObjs || {})[key];
+      if (!o) return notFound(`沒有名為 ${key} 的位址物件（政策裡直接填的位址不是物件，改政策就好）`);
+      const n = (d.policies || []).filter((p) => o.cidr && [...list(p.src), ...list(p.dst)].some((x) => normCidr(x) === o.cidr)).length;
+      if (n) return ERR(`The entry is used by other ${n} entries\n（還有 ${n} 條政策在使用這個位址物件）`);
+      delete d.addrObjs[key];
+      return undefined;
+    },
+  },
+  'firewall addrgrp': {
+    fields: { member: 'q', comment: 'q' },
+    read: (d) => Object.entries(d.addrGrps || {}).map(([key, m]) => ({ key, f: { member: m } })),
+    write(d, key, f) {
+      const m = f.member || [];
+      if (!m.length) return ERR('群組至少要有一個成員：set member "物件1" "物件2"');
+      const bad = m.find((x) => x === key || !addrResolve(d, x));
+      if (bad) return notFound(`找不到位址物件 ${bad}`);
+      (d.addrGrps ||= {})[key] = m;
+      return undefined;
+    },
+    remove(d, key) { if (!(d.addrGrps || {})[key]) return notFound(`沒有名為 ${key} 的位址群組`); delete d.addrGrps[key]; return undefined; },
+  },
+  'firewall vip': {
+    fields: { extip: 'b', mappedip: 'q', extintf: 'q', portforward: 'b', protocol: 'b', extport: 'b', mappedport: 'b', comment: 'q' },
+    read: (d) => [
+      ...(d.portForwards || []).filter((f) => f.port && f.toIp).map((f) => ({
+        key: vipName(f),
+        f: { extip: [f.extIp || '0.0.0.0'], mappedip: [f.toIp], extintf: ['any'], portforward: ['enable'], protocol: [f.proto || 'tcp'], extport: [String(f.port)], mappedport: [String(f.toPort || f.port)] },
+      })),
+      ...(d.staticNat || []).filter((n) => n.pub && n.priv).map((n) => ({ key: natName(n), f: { extip: [n.pub], mappedip: [n.priv], extintf: ['any'] } })),
+    ],
+    write(d, key, f) {
+      const ext = (f.extip || ['0.0.0.0'])[0].split('-')[0], map = (f.mappedip || [''])[0].split('-')[0];
+      if (parseIp(ext) == null) return ERR('extip 請填對外的 IP 位址');
+      if (parseIp(map) == null) return ERR('還沒有 set mappedip "<內部伺服器 IP>"');
+      const pf = (d.portForwards ||= []), drop = () => {
+        d.portForwards = pf.filter((x) => vipName(x) !== key);
+        if (d.staticNat) d.staticNat = d.staticNat.filter((x) => natName(x) !== key);
+      };
+      if ((f.portforward || ['disable'])[0] === 'enable') {
+        const proto = (f.protocol || ['tcp'])[0].toLowerCase(), ep = (f.extport || [''])[0], mp = (f.mappedport || [ep])[0];
+        if (!['tcp', 'udp'].includes(proto)) return ERR('protocol 必須是 tcp 或 udp');
+        if (!/^\d+$/.test(ep) || !/^\d+$/.test(mp)) return ERR('連接埠轉發需要 set extport <對外埠> 與 set mappedport <內部埠>');
+        const cur = pf.find((x) => vipName(x) === key);
+        const val = { name: key, proto, port: ep, toIp: map, toPort: mp === ep ? '' : mp, extIp: ext === '0.0.0.0' ? '' : ext };
+        if (cur && !(d.staticNat || []).some((x) => natName(x) === key)) Object.assign(cur, val);
+        else { drop(); d.portForwards.push(val); }
+        return undefined;
+      }
+      if (ext === '0.0.0.0') return ERR('一對一的 VIP（沒有 portforward）必須指定對外的公用 IP：set extip <IP>');
+      drop();
+      (d.staticNat ||= []).push({ name: key, pub: ext, priv: map });
+      return undefined;
+    },
+    remove(d, key) {
+      const n = (d.portForwards || []).length + (d.staticNat || []).length;
+      d.portForwards = (d.portForwards || []).filter((x) => vipName(x) !== key);
+      if (d.staticNat) d.staticNat = d.staticNat.filter((x) => natName(x) !== key);
+      return (d.portForwards || []).length + (d.staticNat || []).length < n ? undefined : notFound(`沒有名為 ${key} 的 VIP`);
+    },
+  },
+  'user local': {
+    only: (d) => !!d.vpnServer, fields: { type: 'b', passwd: 'b', status: 'b' },
+    read: (d) => d.vpnServer.users.filter((u) => u.user).map((u) => ({ key: u.user, f: { type: ['password'], passwd: [u.pass || ''] } })),
+    write(d, key, f) {
+      const pass = (f.passwd || []).join(' ');
+      if (!pass) return ERR('還沒有密碼：set passwd <密碼>');
+      const u = d.vpnServer.users.find((x) => x.user === key);
+      if (u) u.pass = pass; else d.vpnServer.users.push({ user: key, pass });
+      return undefined;
+    },
+    remove(d, key) { const n = d.vpnServer.users.length; d.vpnServer.users = d.vpnServer.users.filter((u) => u.user !== key); return d.vpnServer.users.length < n ? undefined : notFound(`沒有 ${key} 這個使用者`); },
+  },
+  'user group': {
+    only: (d) => !!d.vpnServer, fields: { member: 'q' },
+    read: (d) => (d.vpnServer.users.some((u) => u.user) ? [{ key: d.vpnServer.group || 'vpn-users', f: { member: d.vpnServer.users.filter((u) => u.user).map((u) => u.user) } }] : []),
+    write(d, key, f) {
+      const bad = (f.member || []).find((m) => !d.vpnServer.users.some((u) => u.user === m));
+      if (bad) return notFound(`沒有 ${bad} 這個使用者，先用 config user local 建立`);
+      d.vpnServer.group = key;
+      return undefined;
+    },
+    remove: () => undefined,
+  },
+  'vpn ipsec phase1-interface': {
+    only: (d) => !!d.vpns,
+    fields: { type: 'b', interface: 'q', 'ike-version': 'b', peertype: 'b', 'net-device': 'b', proposal: 'b', dhgrp: 'b', 'remote-gw': 'b', psksecret: 'b', comments: 'q', keylife: 'b', dpd: 'b', nattraversal: 'b' },
+    read: (d) => tunnels(d).map((t) => ({
+      key: t.name,
+      f: {
+        interface: [wanOf(d, t)], peertype: ['any'], 'net-device': ['disable'],
+        proposal: t.props && t.props.length ? t.props : [`${t.enc || 'aes128'}-${t.hash || 'sha1'}`],
+        dhgrp: t.dhs && t.dhs.length ? t.dhs : [String(t.dh || '2')],
+        ...(t.peer ? { 'remote-gw': [t.peer] } : {}), ...(t.psk ? { psksecret: [t.psk] } : {}),
+      },
+    })),
+    write(d, key, f, sub, st, isNew) {
+      if ((f.type || ['static'])[0] !== 'static') return ERR('這個模擬的 IPsec 只支援站對站（type static）。使用者撥入請用 SSL-VPN：config vpn ssl settings');
+      if ((f['ike-version'] || ['1'])[0] !== '1') return ERR('這個模擬只有 IKEv1');
+      if (!f.interface || !d.ifaces.some((i) => i.id === f.interface[0])) return notFound('要指定通道從哪個介面出去：set interface "wan1"');
+      const props = f.proposal ? parseProposals(f.proposal) : isNew ? P1_DEFAULT : null;
+      if (!props) return ERR(`proposal 可用的值：${PROPOSALS.join(' ')}（可以列好幾組）`);
+      const dhs = f.dhgrp || (isNew ? DH_DEFAULT : null);
+      if (!dhs || !dhs.every((g) => DH.includes(g))) return ERR(`dhgrp 可用的值：${DH.join(' ')}（可以列好幾個）`);
+      const gw = (f['remote-gw'] || [''])[0];
+      if (parseIp(gw) == null) return ERR('還沒有對端的位址：set remote-gw <對端的公用 IP>');
+      let t = tunnels(d).find((x) => x.name === key);
+      if (!t) { t = { name: key, peer: '', psk: '', local: '', remote: '', manualRoute: true, routes: [] }; d.vpns.push(t); }
+      const [enc, hash] = props[0].split('-');
+      Object.assign(t, { wan: f.interface[0], peer: gw, psk: (f.psksecret || []).join(' '), enc, hash, dh: dhs[0], props: props.length > 1 ? props : undefined, dhs: dhs.length > 1 ? dhs : undefined });
+      return undefined;
+    },
+    remove(d, key) {
+      if (!tunnels(d).some((t) => t.name === key)) return notFound(`沒有名為 ${key} 的通道`);
+      const n = (d.policies || []).filter((p) => p.srcIf === 'vpn:' + key || p.dstIf === 'vpn:' + key).length;
+      if (n) return ERR(`The entry is used by other ${n} entries\n（還有 ${n} 條政策在使用這個通道介面，先刪掉政策）`);
+      d.vpns = d.vpns.filter((t) => t.name !== key);
+      return undefined;
+    },
+  },
+  'vpn ipsec phase2-interface': {
+    only: (d) => !!d.vpns,
+    fields: { phase1name: 'q', proposal: 'b', pfs: 'b', dhgrp: 'b', 'src-subnet': 'b', 'dst-subnet': 'b', 'auto-negotiate': 'b', keylifeseconds: 'b', comments: 'q' },
+    read: (d) => tunnels(d).flatMap((t) => p2list(t).map((e) => ({
+      key: e.name,
+      f: {
+        phase1name: [t.name],
+        proposal: t.props2 && t.props2.length ? t.props2 : [`${t.enc2 || t.enc || 'aes128'}-${t.hash2 || t.hash || 'sha1'}`],
+        ...(t.pfs || (t.pfsList && t.pfsList.length) ? { dhgrp: t.pfsList && t.pfsList.length ? t.pfsList : [String(t.pfs)] } : { pfs: ['disable'] }),
+        ...(e.src ? { 'src-subnet': cidrTok(e.src) } : {}), ...(e.dst ? { 'dst-subnet': cidrTok(e.dst) } : {}),
+      },
+    }))),
+    write(d, key, f, sub, st, isNew) {
+      const t = tunnels(d).find((x) => x.name === (f.phase1name || [])[0]);
+      if (!t) return notFound('第二階段要掛在一個第一階段底下：set phase1name "<phase1 的名稱>"');
+      const props = f.proposal ? parseProposals(f.proposal) : isNew ? P1_DEFAULT : null;
+      if (!props) return ERR(`proposal 可用的值：${PROPOSALS.join(' ')}（可以列好幾組）`);
+      const pfsOn = (f.pfs || ['enable'])[0] !== 'disable';
+      const groups = pfsOn ? f.dhgrp || DH_DEFAULT : [];
+      if (!groups.every((g) => DH.includes(g))) return ERR(`dhgrp 可用的值：${DH.join(' ')}`);
+      // 沒有指定網段就是 0.0.0.0/0：所有流量都符合，實際要送哪些由靜態路由決定
+      const src = f['src-subnet'] ? tokCidr(f['src-subnet']) : '0.0.0.0/0', dst = f['dst-subnet'] ? tokCidr(f['dst-subnet']) : '0.0.0.0/0';
+      if (!src || !dst) return ERR('用法：set src-subnet <本地網段> <遮罩>、set dst-subnet <遠端網段> <遮罩>');
+      const [enc2, hash2] = props[0].split('-');
+      Object.assign(t, { enc2, hash2, props2: props.length > 1 ? props : undefined, pfs: groups[0] || '', pfsList: groups.length > 1 ? groups : undefined });
+      const cur = p2list(t).filter((e) => e.src && e.dst && e.name !== key);
+      setP2(t, [...cur, { name: key, src, dst }]);
+      return undefined;
+    },
+    remove(d, key) {
+      const t = tunnels(d).find((x) => p2list(x).some((e) => e.name === key && e.src));
+      if (!t) return notFound(`沒有名為 ${key} 的第二階段`);
+      setP2(t, p2list(t).filter((e) => e.name !== key));
+      return undefined;
+    },
+  },
+  'vpn ssl settings': {
+    single: true, only: (d) => !!d.vpnServer, fields: { status: 'b', 'source-interface': 'q', port: 'b', 'tunnel-ip-pools': 'q', servercert: 'q' },
+    read(d) {
+      const vs = d.vpnServer;
+      return [{ key: '', f: vs.on ? { status: ['enable'], 'source-interface': [vs.wan || 'wan1'], port: [String(+vs.port || 10443)], ...(vs.start && vs.end ? { 'tunnel-ip-pools': [poolName(vs)] } : {}) } : {} }];
+    },
+    write(d, key, f) {
+      const vs = d.vpnServer;
+      if (f.port && !/^\d+$/.test(f.port[0])) return ERR('port 必須是數字');
+      if (f['source-interface'] && !d.ifaces.some((i) => i.id === f['source-interface'][0])) return notFound('source-interface 請填對外的介面，例如 "wan1"');
+      const pool = (f['tunnel-ip-pools'] || [])[0];
+      if (pool) {
+        const o = (d.addrObjs || {})[pool];
+        if (o && o.start) Object.assign(vs, { start: o.start, end: o.end, pool });
+        else if (!(vs.start && poolName(vs) === pool)) return notFound(`找不到位址範圍物件 ${pool}：先用 config firewall address 建一個 type iprange 的物件`);
+      }
+      vs.on = (f.status || [])[0] === 'enable';
+      if (f.port) vs.port = +f.port[0] === 10443 ? '' : f.port[0];
+      if (f['source-interface']) vs.wan = f['source-interface'][0];
+      return undefined;
+    },
+  },
+  'vpn ssl web portal': {
+    only: (d) => !!d.vpnServer, fields: { 'tunnel-mode': 'b', 'ip-pools': 'q', 'split-tunneling': 'b', 'split-tunneling-routing-address': 'q', 'web-mode': 'b' },
+    read(d) {
+      const vs = d.vpnServer, nets = list(vs.subnets).filter(normCidr);
+      if (!vs.on || !nets.length) return [];
+      return [{ key: vs.portal || 'full-access', f: { 'tunnel-mode': ['enable'], ...(vs.start && vs.end ? { 'ip-pools': [poolName(vs)] } : {}), 'split-tunneling': ['enable'], 'split-tunneling-routing-address': nets.map((n) => addrName(d, n)) } }];
+    },
+    write(d, key, f) {
+      const vs = d.vpnServer;
+      const nets = resolveSpec(d, f['split-tunneling-routing-address'] || []);
+      if (nets == null) return notFound('split-tunneling-routing-address 裡有不存在的位址物件');
+      if (!nets || nets === 'any') return ERR('請用 set split-tunneling-routing-address 指定 VPN 用戶可以存取的內部網段（位址物件）');
+      Object.assign(vs, { subnets: nets, portal: key });
+      return undefined;
+    },
+    remove(d) { d.vpnServer.subnets = ''; },
+  },
+  'firewall policy': {
+    numeric: true, fields: { name: 'q', srcintf: 'q', dstintf: 'q', srcaddr: 'q', dstaddr: 'q', action: 'b', schedule: 'q', service: 'q', nat: 'b', status: 'b', logtraffic: 'b', comments: 'q', groups: 'q' },
+    read(d) {
+      ensureIds(d);
+      return d.policies.map((p) => ({
+        key: String(p.id),
+        f: {
+          ...(p.name ? { name: [p.name] } : {}),
+          srcintf: [intfName(d, p.srcIf)], dstintf: [intfName(d, p.dstIf)],
+          srcaddr: specNames(d, p.src, false), dstaddr: specNames(d, p.dst, true),
+          action: [p.action === 'accept' ? 'accept' : 'deny'], schedule: ['always'], service: list(p.service || 'ALL'),
+          ...(p.action === 'accept' && p.nat ? { nat: ['enable'] } : {}), ...(p.off ? { status: ['disable'] } : {}),
+        },
+      }));
+    },
+    write(d, key, f) {
+      ensureIds(d);
+      for (const k of ['srcintf', 'dstintf', 'srcaddr', 'dstaddr', 'service']) if (!f[k] || !f[k].length) return ERR(`政策還缺少必填欄位 ${k}（必填：srcintf、dstintf、srcaddr、dstaddr、service、action）`);
+      const srcIf = intfId(d, f.srcintf[0]), dstIf = intfId(d, f.dstintf[0]);
+      if (!srcIf || !dstIf) return notFound(`沒有 ${!srcIf ? f.srcintf[0] : f.dstintf[0]} 這個介面；可用的介面：any、${d.ifaces.map((i) => i.id).join('、')}${tunnels(d).length ? '、' + tunnels(d).map((t) => t.name).join('、') : ''}${d.vpnServer ? '、' + sslIntf : ''}`);
+      const src = resolveSpec(d, f.srcaddr), dst = resolveSpec(d, f.dstaddr);
+      if (src == null || dst == null) return notFound(`找不到位址物件 ${(src == null ? f.srcaddr : f.dstaddr).find((x) => !addrResolve(d, x))}：先用 config firewall address 建立，或使用 "all"`);
+      const svc = f.service.map((s) => s.toUpperCase());
+      const bad = svc.find((s) => !SERVICE_NAMES.includes(s));
+      if (bad) return notFound(`沒有 ${bad} 這個服務；可用的服務：${SERVICE_NAMES.join('、')}`);
+      const action = (f.action || ['deny'])[0].toLowerCase();
+      if (!['accept', 'deny'].includes(action)) return ERR('action 必須是 accept 或 deny');
+      const val = { name: (f.name || [''])[0], srcIf, dstIf, src, dst, service: svc.includes('ALL') ? 'ALL' : svc.join(', '), action, nat: action === 'accept' && (f.nat || [])[0] === 'enable', off: (f.status || [])[0] === 'disable' };
+      const cur = d.policies.find((p) => String(p.id) === key);
+      if (cur) Object.assign(cur, val); else d.policies.push({ id: +key, ...val });
+      return undefined;
+    },
+    remove(d, key) { ensureIds(d); const n = d.policies.length; d.policies = d.policies.filter((p) => String(p.id) !== key); return d.policies.length < n ? undefined : notFound(`沒有編號 ${key} 的政策`); },
+    move(d, a, where, b) {
+      ensureIds(d);
+      const x = d.policies.find((p) => String(p.id) === a);
+      if (!x || !d.policies.some((p) => String(p.id) === b) || a === b) return notFound('move <政策編號> before|after <政策編號>');
+      d.policies = d.policies.filter((p) => p !== x);
+      d.policies.splice(d.policies.findIndex((p) => String(p.id) === b) + (where === 'after' ? 1 : 0), 0, x);
+      return undefined;
+    },
+  },
+  'router static': {
+    numeric: true, fields: { dst: 'b', gateway: 'b', device: 'q', distance: 'b', comment: 'q' },
+    refs(d) {
+      const out = [];
+      for (const i of d.ifaces) if (i.mode === 'static' && i.gateway) out.push({ t: 'gw', i, f: { gateway: [i.gateway], device: [i.id] } });
+      for (const r of d.routes || []) {
+        const dst = parseIp(r.dst || ''), bits = parseMask(r.mask || ''), via = parseIp(r.via || '');
+        if (dst == null || bits == null || via == null) continue;
+        const own = d.ifaces.find((i) => { const ip = parseIp(i.ip || ''), b = parseMask(i.mask || ''); return i.mode === 'static' && ip != null && b != null && netOf(ip, b) === netOf(via, b); });
+        out.push({ t: 'route', r, f: { ...(bits === 0 ? {} : { dst: [fmtIp(netOf(dst, bits)), fmtMask(bits)] }), gateway: [r.via], ...(+r.ad > 0 && +r.ad !== 10 ? { distance: [String(+r.ad)] } : {}), ...(own ? { device: [own.id] } : {}) } });
+      }
+      for (const t of tunnels(d)) {
+        for (const n of (t.manualRoute ? t.routes || [] : list(t.remote)).map(normCidr).filter(Boolean)) out.push({ t: 'tun', tun: t, net: n, f: { ...(n === '0.0.0.0/0' ? {} : { dst: cidrTok(n) }), device: [t.name] } });
+      }
+      return out;
+    },
+    read(d) { return this.refs(d).map((x, n) => ({ key: String(n + 1), f: x.f })); },
+    write(d, key, f, sub, st, isNew) {
+      const ref = isNew ? null : this.refs(d)[+key - 1];
+      const dst = f.dst ? tokCidr(f.dst) : '0.0.0.0/0';
+      if (!dst) return ERR('用法：set dst <目的網段> <遮罩>（不寫就是預設路由 0.0.0.0/0）');
+      const devName = (f.device || [''])[0];
+      const tun = tunnels(d).find((t) => t.name === devName);
+      if (tun) {
+        if (!tun.manualRoute) return list(tun.remote).map(normCidr).includes(dst) ? undefined : ERR(`通道 ${tun.name} 是在圖形介面建立的，通往對端的路由會跟著「遠端網段」自動建立，不用另外加`);
+        if (ref && ref.t === 'tun') ref.tun.routes = (ref.tun.routes || []).filter((x) => normCidr(x) !== ref.net);
+        tun.routes = uniq([...(tun.routes || []), dst]);
+        return undefined;
+      }
+      if (devName && !d.ifaces.some((i) => i.id === devName)) return notFound(`沒有 ${devName} 這個介面或通道`);
+      const gw = (f.gateway || [''])[0];
+      if (parseIp(gw) == null) return ERR('還沒有下一站：set gateway <IP>（走 VPN 通道的路由則是 set device "<通道名稱>"）');
+      const ad = (f.distance || [''])[0];
+      if (ad && !(+ad >= 1 && +ad <= 255)) return ERR('distance 必須是 1 – 255');
+      const [net, len] = dst.split('/');
+      const val = { dst: net, mask: fmtMask(len == null ? 32 : +len), via: gw, ad: ad || '' };
+      if (ref && ref.t === 'gw' && dst === '0.0.0.0/0') ref.i.gateway = gw;
+      else if (ref && ref.t === 'route') Object.assign(ref.r, val);
+      else { if (ref && ref.t === 'gw') ref.i.gateway = ''; (d.routes ||= []).push(val); }
+      return undefined;
+    },
+    remove(d, key) {
+      const ref = this.refs(d)[+key - 1];
+      if (!ref) return notFound(`沒有編號 ${key} 的靜態路由`);
+      if (ref.t === 'gw') ref.i.gateway = '';
+      else if (ref.t === 'route') d.routes = d.routes.filter((r) => r !== ref.r);
+      else if (ref.tun.manualRoute) ref.tun.routes = (ref.tun.routes || []).filter((x) => normCidr(x) !== ref.net);
+      else return ERR('這筆路由是跟著圖形介面的 VPN 通道自動建立的，要移除請改通道的遠端網段');
+      return undefined;
+    },
+  },
+};
+const ORDER = Object.keys(SEC);
+
+// ───────────────────────── 輸出 ─────────────────────────
+
+function fmtVal(kind, v) { return v.map((x) => (kind === 'q' || /[\s"]/.test(x) || x === '' ? qv(x) : x)).join(' '); }
+function block(name, sec, entries, indent = '') {
+  const o = [`${indent}config ${name}`], ind = indent + '    ';
+  for (const e of entries) {
+    const fi = sec.single ? ind : ind + '    ';
+    if (!sec.single) o.push(`${ind}edit ${sec.numeric ? e.key : qv(e.key)}`);
+    for (const [k, v] of Object.entries(e.f)) if (v && v.length) o.push(`${fi}set ${k} ${fmtVal(sec.fields[k], v)}`);
+    for (const [sn, rows] of Object.entries(e.sub || {})) if (rows.length) o.push(...block(sn, sec.subs[sn], rows, fi));
+    if (!sec.single) o.push(`${ind}next`);
+  }
+  o.push(`${indent}end`);
+  return o;
+}
+const hasContent = (entries) => entries.some((e) => Object.values(e.f).some((v) => v && v.length) || Object.values(e.sub || {}).some((r) => r.length));
+
+/** 整台設備的設定（show full-configuration） */
+export function fortiConfig(state, dev) {
+  const o = [];
+  for (const name of ORDER) {
+    const sec = SEC[name];
+    if (sec.only && !sec.only(dev)) continue;
+    const entries = sec.read(dev, state);
+    if (hasContent(entries)) o.push(...block(name, sec, entries));
+  }
+  return o;
+}
+
+function getInfo(state, d, what) {
+  if (what === 'system status') return [`Version: FortiGate-${d.model === 'fg100f' ? '100F' : '60F'} v7.4（LinkUp 模擬）`, `Hostname: ${hostOf(d)}`, 'Operation Mode: NAT', 'Current virtual domain: root'];
+  if (what === 'system interface') {
+    return d.ifaces.map((i) => `== [ ${i.id} ]\nname: ${i.id}   mode: ${i.mode}   ip: ${i.rt && i.rt.ip != null ? `${fmtIp(i.rt.ip)} ${fmtMask(i.rt.bits)}` : '0.0.0.0 0.0.0.0'}   status: ${i.rt && i.rt.link ? 'up' : 'down'}   allowaccess: ${accessOf(d, i).join(' ') || '(none)'}`).join('\n').split('\n');
+  }
+  if (what === 'router info routing-table all') {
+    const rows = routeRows(d);
+    if (!rows.length) return ['路由表是空的'];
+    return ['Codes: C - connected, S - static, O - OSPF, * - candidate default', '', ...rows.map((r) => {
+      const dst = r.dst.replace('（預設）', '');
+      const code = (r.type === 'D' ? 'S' : r.type) + (dst.startsWith('0.0.0.0/0') ? '*' : ' ');
+      return r.via === '直連' ? `${code}      ${dst} is directly connected, ${r.iface}` : `${code}      ${dst} [${r.ad}/${r.metric}] via ${r.via}, ${r.iface}${r.bad ? '   (inactive)' : ''}`;
+    })];
+  }
+  if (what === 'vpn ipsec tunnel summary') {
+    const ts = tunnels(d);
+    return ts.length ? ts.map((t) => `'${t.name}' ${t.peer || '0.0.0.0'}:0  selectors(total,up): ${p2list(t).length}/${t.rt && t.rt.up ? p2list(t).length : 0}  rx(pkt,err): 0/0  tx(pkt,err): 0/0`) : ['沒有任何 IPsec 通道'];
+  }
+  return null;
+}
+function diagnose(state, d, what) {
+  if (what === 'vpn tunnel list') {
+    const ts = tunnels(d);
+    if (!ts.length) return ['list all ipsec tunnel in vd 0', '沒有任何 IPsec 通道'];
+    return ['list all ipsec tunnel in vd 0', ...ts.flatMap((t) => ['------------------------------------------------------',
+      `name=${t.name} ver=1 ${wanOf(d, t)} -> ${t.peer || '0.0.0.0'}`, `status=${t.rt && t.rt.up ? 'up' : 'down'}${t.rt && !t.rt.up && t.rt.why ? `  (${t.rt.why})` : ''}`,
+      ...p2list(t).filter((e) => e.src).map((e) => `proxyid=${e.name} src=${e.src} dst=${e.dst}`)])];
+  }
+  if (what === 'sys session list') {
+    const log = sessionLog(d);
+    if (!log.length) return ['目前沒有任何連線紀錄（先讓流量經過這台設備）'];
+    return log.map((e) => (e.act === 'snat' ? `nat  proto=${e.proto} ${fmtIp(e.src)}:${e.sport} -> ${fmtIp(e.dst)}:${e.dport}  snat=${fmtIp(e.nsrc)}`
+      : e.act === 'dnat' ? `vip  proto=${e.proto} ${fmtIp(e.src)}:${e.sport} -> ${fmtIp(e.dst)}:${e.dport}  dnat=${fmtIp(e.ndst)}:${e.ndport}`
+        : `${e.act === 'allow' ? 'pass' : 'deny'} proto=${e.proto} ${fmtIp(e.src)}:${e.sport} -> ${fmtIp(e.dst)}:${e.dport}  ${e.inIf}->${e.outIf}  policy=${e.rule || 0}`));
+  }
+  return null;
+}
+
+// ───────────────────────── 工作階段 ─────────────────────────
+
+/** exec(line) → { out: [文字], changed, ping: 要 ping 的位址（交給顯示層播放） } */
+export function fortiSession(getDev, getState) {
+  const stack = [];
+  const dev = () => getDev(), st = () => getState();
+  const top = () => stack[stack.length - 1];
+  const spec = (t) => (t.nested ? t.spec : t.sec);
+  const parseErr = (w) => [`command parse error before '${w}'`, 'Command fail. Return code -61'];
+  const label = (name) => name.split(' ').pop();
+
+  function commit(t) {
+    if (t.nested) {
+      const n = t.list.findIndex((e) => e.key === t.key);
+      if (n >= 0) t.list[n] = { key: t.key, f: t.f }; else t.list.push({ key: t.key, f: t.f });
+      return null;
+    }
+    const r = t.sec.write(dev(), t.key, t.f, t.sub || {}, st(), !!t.isNew);
+    return r && r.err ? r.err : null;
+  }
+
+  function exec(line) {
+    const out = [];
+    let changed = false;
+    const res = (extra) => ({ out, changed, ...extra });
+    const tok = tokenize(line.trim());
+    if (!tok.length || tok[0].startsWith('#')) return res();
+    const cmd = tok[0].toLowerCase(), t = top(), d = dev();
+    const fail = (msg) => { out.push(...[].concat(msg).join('\n').split('\n')); return res(); };
+
+    if (cmd === 'config') {
+      const name = tok.slice(1).join(' ').toLowerCase();
+      if (!t) {
+        const sec = SEC[name];
+        if (!sec || (sec.only && !sec.only(d))) return fail([...parseErr(tok[1] || ''), '（輸入 ? 可以看到有哪些設定區段）']);
+        if (sec.single) stack.push({ t: 'edit', single: true, sec, label: label(name), name, key: '', ...clone({ f: {}, sub: {}, ...sec.read(d, st())[0] }) });
+        else stack.push({ t: 'cfg', sec, label: label(name), name });
+        return res();
+      }
+      if (t.t === 'edit' && !t.nested && t.sec.subs && t.sec.subs[name]) {
+        stack.push({ t: 'cfg', nested: true, spec: t.sec.subs[name], label: name, name, list: ((t.sub ||= {})[name] ||= []) });
+        return res();
+      }
+      return fail(parseErr(tok[1] || ''));
+    }
+    if (cmd === 'edit') {
+      if (!t || t.t !== 'cfg') return fail(parseErr('edit'));
+      let key = tok[1];
+      if (key == null) return fail(['incomplete command', 'Command fail. Return code -160']);
+      const sp = spec(t);
+      if (sp.numeric && !/^\d+$/.test(key)) return fail(['value parse error before \'' + key + '\'', '（這個表的項目用數字編號，例如 edit 1；edit 0 會自動用下一個可用的編號）']);
+      const entries = t.nested ? t.list : t.sec.read(d, st());
+      if (sp.numeric && key === '0') key = String(entries.reduce((m, e) => Math.max(m, +e.key), 0) + 1);
+      const cur = entries.find((e) => String(e.key) === key);
+      if (!cur && sp.noCreate) return fail(notFound(`沒有 ${key}；可用的項目：${entries.map((e) => e.key).join('、')}`).err);
+      if (!cur) out.push(`new entry '${key}' added`);
+      stack.push({ t: 'edit', nested: !!t.nested, sec: t.sec, spec: t.spec, list: t.list, key, isNew: !cur, ...clone({ f: {}, sub: {}, ...(cur || {}) }), key2: key });
+      return res();
+    }
+    if (cmd === 'set' || cmd === 'unset') {
+      if (!t || t.t !== 'edit') return fail(parseErr(cmd));
+      const field = (tok[1] || '').toLowerCase();
+      if (!(field in spec(t).fields)) return fail([...parseErr(tok[1] || ''), `（這裡可以設定的欄位：${Object.keys(spec(t).fields).join('、')}）`]);
+      if (cmd === 'unset') { delete t.f[field]; return res(); }
+      if (tok.length < 3) return fail(['incomplete command', 'Command fail. Return code -160']);
+      t.f[field] = tok.slice(2);
+      return res();
+    }
+    if (cmd === 'next' || cmd === 'end') {
+      if (!t) return res();
+      if (t.t === 'edit') {
+        if (cmd === 'next' && t.single) return fail(parseErr('next'));
+        const e = commit(t);
+        if (e) return fail([e, 'object check operator error, -651, discard the setting', 'Command fail. Return code -651']);
+        changed = !t.nested;
+        stack.pop();
+        if (cmd === 'end' && !t.single) stack.pop();
+        return res();
+      }
+      if (cmd === 'next') return fail(parseErr('next'));
+      stack.pop();
+      return res();
+    }
+    if (cmd === 'abort') {
+      if (!t) return res();
+      stack.pop();
+      if (t.t === 'edit' && !t.single) stack.pop();
+      return res();
+    }
+    if (cmd === 'delete') {
+      if (!t || t.t !== 'cfg') return fail(parseErr('delete'));
+      const key = tok[1];
+      if (key == null) return fail(['incomplete command', 'Command fail. Return code -160']);
+      if (t.nested) { const n = t.list.findIndex((e) => e.key === key); if (n < 0) return fail(notFound(`沒有 ${key}`).err); t.list.splice(n, 1); return res(); }
+      if (!t.sec.remove) return fail('這個區段的項目不能刪除');
+      const r = t.sec.remove(d, key, st());
+      if (r && r.err) return fail([r.err, 'Command fail. Return code -23']);
+      changed = true;
+      return res();
+    }
+    if (cmd === 'move') {
+      if (!t || t.t !== 'cfg' || !t.sec.move) return fail(parseErr('move'));
+      const where = (tok[2] || '').toLowerCase();
+      if (!['before', 'after'].includes(where)) return fail('用法：move <政策編號> before|after <政策編號>');
+      const r = t.sec.move(d, tok[1], where, tok[3]);
+      if (r && r.err) return fail(r.err);
+      changed = true;
+      return res();
+    }
+    if (cmd === 'show') {
+      if (t && t.t === 'edit') {
+        const sp = spec(t);
+        out.push(...block(t.name || t.label || '', { ...sp, single: !!t.single }, [{ key: t.key, f: t.f, sub: t.sub }]));
+        if (!t.single) { out[0] = `config ${stack[stack.length - 2].name}`; }
+        return res();
+      }
+      if (t) { out.push(...block(t.name, spec(t), t.nested ? t.list : t.sec.read(d, st()))); return res(); }
+      const name = tok.slice(1).join(' ').toLowerCase();
+      if (!name || name === 'full-configuration') { out.push(...fortiConfig(st(), d)); return res(); }
+      const sec = SEC[name];
+      if (!sec || (sec.only && !sec.only(d))) return fail(parseErr(tok[1]));
+      out.push(...block(name, sec, sec.read(d, st())));
+      return res();
+    }
+    if (cmd === 'get') {
+      if (t && t.t === 'edit') { for (const [k, v] of Object.entries(t.f)) out.push(`${k.padEnd(20)}: ${v.join(' ')}`); return res(); }
+      const r = getInfo(st(), d, tok.slice(1).join(' ').toLowerCase());
+      if (!r) return fail([...parseErr(tok[1] || ''), '（可用：get system status、get system interface、get router info routing-table all、get vpn ipsec tunnel summary）']);
+      out.push(...r);
+      return res();
+    }
+    if (cmd === 'diagnose' || cmd === 'diag') {
+      const r = diagnose(st(), d, tok.slice(1).join(' ').toLowerCase());
+      if (!r) return fail([...parseErr(tok[1] || ''), '（可用：diagnose vpn tunnel list、diagnose sys session list）']);
+      out.push(...r);
+      return res();
+    }
+    if (cmd === 'execute' || cmd === 'exec') {
+      if ((tok[1] || '').toLowerCase() === 'ping' && parseIp(tok[2] || '') != null) return res({ ping: tok[2] });
+      return fail('用法：execute ping <IP>');
+    }
+    if (cmd === 'exit' || cmd === 'quit') return res();
+    return fail([`Unknown action 0`, ...parseErr(tok[0])]);
+  }
+
+  /** 目前可以輸入的指令（給「?」與 Tab 補齊用） */
+  function words(line) {
+    const tok = tokenize(line), partial = /\s$/.test(line) || !tok.length ? '' : tok.pop().toLowerCase();
+    const t = top(), d = dev();
+    let cand;
+    const first = (tok[0] || '').toLowerCase();
+    if (!tok.length) cand = !t ? ['config', 'show', 'get', 'diagnose', 'execute'] : t.t === 'cfg' ? ['edit', 'delete', 'show', 'end', ...(t.sec && t.sec.move ? ['move'] : [])] : ['set', 'unset', 'show', 'get', 'end', 'abort', ...(t.single ? [] : ['next']), ...(!t.nested && t.sec.subs ? ['config'] : [])];
+    else if (first === 'config' || (first === 'show' && !t)) {
+      const names = t ? Object.keys((t.sec && t.sec.subs) || {}) : ORDER.filter((n) => !SEC[n].only || SEC[n].only(d));
+      const pre = tok.slice(1).join(' ').toLowerCase();
+      cand = uniq(names.filter((n) => n.startsWith(pre ? pre + ' ' : '')).map((n) => n.slice(pre ? pre.length + 1 : 0).split(' ')[0]).filter(Boolean));
+    } else if ((first === 'set' || first === 'unset') && t && t.t === 'edit' && tok.length === 1) cand = Object.keys(spec(t).fields);
+    else if ((first === 'edit' || first === 'delete') && t && t.t === 'cfg' && tok.length === 1) cand = (t.nested ? t.list : t.sec.read(d, st())).map((e) => String(e.key));
+    else cand = [];
+    const options = cand.filter((w) => w.toLowerCase().startsWith(partial)).sort();
+    if (!options.length) return { line: null, options };
+    let common = options[0];
+    for (const w of options) while (!w.toLowerCase().startsWith(common.toLowerCase())) common = common.slice(0, -1);
+    const done = options.length === 1;
+    const word = /\s/.test(common) ? qv(common) : common;
+    return { line: common.length > partial.length || done ? [...tok.map((x) => (/\s/.test(x) ? qv(x) : x)), word].join(' ') + (done ? ' ' : '') : null, options };
+  }
+
+  return {
+    exec,
+    complete: words,
+    prompt: () => { const t = top(); return `${hostOf(dev())}${!t ? '' : ` (${t.t === 'edit' && !t.single ? t.key : t.label})`} # `; },
+    get depth() { return stack.length; },
+  };
+}

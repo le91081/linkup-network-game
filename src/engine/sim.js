@@ -725,8 +725,21 @@ function routesAll(state) {
 // IPsec 分兩個階段協商：第一階段 (IKE) 建立管理通道，第二階段 (IPsec SA) 才是真正加密資料的通道
 export const P1 = (t) => `${(t.enc || 'aes128').toUpperCase()} / ${(t.hash || 'sha1').toUpperCase()} / DH ${t.dh || '2'}`;
 export const P2 = (t) => `${(t.enc2 || t.enc || 'aes128').toUpperCase()} / ${(t.hash2 || t.hash || 'sha1').toUpperCase()}${t.pfs ? ' / PFS ' + t.pfs : ''}`;
-/** 一台設備願意接受的第一階段提案：IOS 的 crypto isakmp policy 是整台共用、可以有好幾組；其他設備是每個通道一組 */
-const p1set = (d, t) => (d.isakmp && d.isakmp.length ? d.isakmp.map(P1) : [P1(t)]);
+/**
+ * 一台設備願意接受的提案。IOS 的 crypto isakmp policy 是整台共用、可以有好幾組；
+ * FortiGate 每個通道可以列出好幾組提案與 DH 群組（用 CLI 設定時存在 props / dhs）。兩端只要有一組相同就能談成。
+ */
+const p1set = (d, t) => {
+  if (d.isakmp && d.isakmp.length) return d.isakmp.map(P1);
+  const props = t.props && t.props.length ? t.props.map((x) => x.split('-')) : [[t.enc || 'aes128', t.hash || 'sha1']];
+  const dhs = t.dhs && t.dhs.length ? t.dhs : [t.dh || '2'];
+  return props.flatMap(([e, h]) => dhs.map((g) => `${e.toUpperCase()} / ${h.toUpperCase()} / DH ${g}`));
+};
+const p2set = (t) => {
+  const props = t.props2 && t.props2.length ? t.props2.map((x) => x.split('-')) : [[t.enc2 || t.enc || 'aes128', t.hash2 || t.hash || 'sha1']];
+  const pfs = t.pfsList && t.pfsList.length ? t.pfsList : [t.pfs || ''];
+  return props.flatMap(([e, h]) => pfs.map((g) => `${e.toUpperCase()} / ${h.toUpperCase()}${g ? ' / PFS ' + g : ''}`));
+};
 const sameSel = (a, b) => a.length === b.length && a.every((x) => b.some((y) => y.net === x.net && y.bits === x.bits));
 const tunIface = (id, label) => ({ id, label, bind: { t: 'tun' }, rt: { ip: null, vips: [], link: true }, nat: false });
 
@@ -763,7 +776,7 @@ function prepTunnels(state) {
     else if (P.cfg.off) T.why = `${pd.name} 那一端的通道已停用`;
     else if (P.cfg.psk !== T.cfg.psk) T.why = '兩端的預先共用金鑰 (PSK) 不一致 — IKE 驗證失敗';
     else if (!p1set(state.devices[T.dev], T.cfg).some((x) => p1set(pd, P.cfg).includes(x))) T.why = `第一階段的加密提案不一致（本端 ${p1set(state.devices[T.dev], T.cfg).join('、')}，對端 ${p1set(pd, P.cfg).join('、')}）— IKE 協商失敗`;
-    else if (P2(P.cfg) !== P2(T.cfg)) T.why = `第二階段 (IPsec) 的加密提案不一致（本端 ${P2(T.cfg)}，對端 ${P2(P.cfg)}）— IKE 通過了，但資料通道建不起來`;
+    else if (!p2set(T.cfg).some((x) => p2set(P.cfg).includes(x))) T.why = `第二階段 (IPsec) 的加密提案不一致（本端 ${p2set(T.cfg).join('、')}，對端 ${p2set(P.cfg).join('、')}）— IKE 通過了，但資料通道建不起來`;
     else if (!sameSel(T.local, P.remote) || !sameSel(T.remote, P.local)) T.why = '兩端的本地 / 遠端網段沒有互相對應';
     else {
       const r = transact(state, T.dev, { proto: 'udp', dst: T.peerIp, dport: 500, quiet: true });
@@ -783,10 +796,11 @@ function prepTunnels(state) {
     const server = parseIp(c.server || '');
     if (server == null) { d.rt.vpn.why = '請填入 VPN 伺服器的位址'; continue; }
     const sd = findOwner(state, server);
-    const res = transact(state, d.id, { proto: 'udp', dst: server, dport: 4500, quiet: true });
+    if (sd && !(sd.vpnServer && sd.vpnServer.on)) { d.rt.vpn.why = `${sd.name} 沒有開啟遠端存取 VPN`; continue; }
+    // 遠端存取用的是 SSL-VPN：用戶端對伺服器的 TCP 連接埠（預設 10443）建立 TLS 連線
+    const res = transact(state, d.id, { proto: 'tcp', dst: server, dport: +c.port || 10443, quiet: true });
     if (!res.ok) { d.rt.vpn.why = '連不到 VPN 伺服器：' + res.reason; continue; }
     const vs = sd.vpnServer;
-    if (!vs || !vs.on) { d.rt.vpn.why = `${sd.name} 沒有開啟遠端存取 VPN`; continue; }
     if (!c.user || !(vs.users || []).some((u) => u.user === c.user && u.pass === c.pass)) { d.rt.vpn.why = 'VPN 帳號或密碼錯誤'; continue; }
     const subnets = cidrList(vs.subnets);
     if (!subnets.length) { d.rt.vpn.why = `${sd.name} 沒有設定 VPN 用戶可以存取的內部網段`; continue; }
@@ -805,6 +819,8 @@ function findTunnel(dev, pkt) {
   let hit = null;
   for (const t of dev.rt.tunnels) {
     if (!selMatch(t.local, pkt.src) || !selMatch(t.remote, pkt.dst)) continue;
+    // 用 CLI 建立的 FortiGate 通道是 route-based：除了第二階段的網段要符合，還要有一筆靜態路由把目的地指向通道
+    if (t.cfg && t.cfg.manualRoute && !selMatch(cidrList((t.cfg.routes || []).join(',')), pkt.dst)) continue;
     if (t.up) return t;
     hit ||= t;
   }
@@ -974,6 +990,22 @@ const SERVICES = {
 export const SERVICE_NAMES = Object.keys(SERVICES);
 const MGMT = { 22: ['ssh', 'SSH'], 23: ['telnet', 'Telnet'], 80: ['http', 'HTTP'], 443: ['https', 'HTTPS'] };
 
+/** 政策的服務欄位可以列出好幾個服務 */
+const svcMatch = (spec, pkt) => {
+  const list = String(spec || 'ALL').split(/[,\s]+/).filter((s) => SERVICES[s.toUpperCase()]);
+  return !list.length || list.some((s) => SERVICES[s.toUpperCase()](pkt));
+};
+
+/**
+ * 防火牆每個介面各自決定開放哪些管理協定（FortiGate 的 allowaccess）。
+ * 還沒有個別設定過的介面沿用舊的規則：WAN 只看 ping 的開關，其他介面依管理頁的全域開關。
+ */
+export function accessOf(dev, i) {
+  if (Array.isArray(i.access)) return i.access;
+  const mgmt = /^wan/.test(i.id) ? [] : ['https', 'ssh', 'http', 'telnet'].filter((k) => dev.mgmt && dev.mgmt[k]);
+  return [...(i.ping !== false ? ['ping'] : []), ...mgmt];
+}
+
 function addrMatch(spec, ip) {
   const s = String(spec || '').trim().toLowerCase();
   if (s === '' || s === 'any' || s === 'all') return true;
@@ -1092,7 +1124,7 @@ function filter(dev, inIf, outIf, pkt, dnat) {
       if (p.srcIf !== 'any' && p.srcIf !== inIf.id) continue;
       if (p.dstIf !== 'any' && p.dstIf !== outIf.id) continue;
       if (!addrMatch(p.src, pkt.src) || !addrMatch(p.dst, pkt.dst)) continue;
-      if (!(SERVICES[p.service] || SERVICES.ALL)(pkt)) continue;
+      if (!svcMatch(p.service, pkt)) continue;
       hit(p);
       if (p.action === 'accept') return { ok: true, nat: !!p.nat, rule: n + 1 };
       return { ok: false, rule: n + 1, reason: `${dev.name} 的政策 #${n + 1}「${p.name || '未命名'}」拒絕了這個連線` };
@@ -1120,19 +1152,25 @@ function deliver(dev, inIf, pkt) {
   const owner = dev.ifaces.find((i) => i.rt.ip === pkt.dst);
   const fromWan = inIf && /^wan/.test(inIf.id) && (dev.kind === 'firewall' || dev.kind === 'homerouter');
   if (pkt.proto === 'icmp') {
-    if (owner && owner.ping === false && inIf === owner) return no(`${dev.name} 的 ${owner.label} 介面不回應來自外部的 ping（安全性預設值）`);
+    if (dev.kind === 'firewall' && owner && inIf === owner && !accessOf(dev, owner).includes('ping')) return no(`${dev.name} 的 ${owner.label} 介面沒有開放 ping（allowaccess 裡沒有 ping）`);
+    if (dev.kind !== 'firewall' && owner && owner.ping === false && inIf === owner) return no(`${dev.name} 的 ${owner.label} 介面不回應來自外部的 ping（安全性預設值）`);
     return ok;
   }
   if (pkt.proto === 'udp') {
     if (pkt.dport === 53 && dev.dnsProxy && !fromWan) return ok;
     if (pkt.dport === 67 && dev.dhcpScopes) return ok;
     if ((pkt.dport === 1812 || pkt.dport === 1813) && dev.radiusServer) return ok;
-    if ((pkt.dport === 500 || pkt.dport === 4500) && ((dev.vpns && dev.vpns.length) || (dev.vpnServer && dev.vpnServer.on))) return ok;
+    if ((pkt.dport === 500 || pkt.dport === 4500) && dev.vpns && dev.vpns.length) return ok;
   }
+  if (pkt.proto === 'tcp' && dev.vpnServer && dev.vpnServer.on && pkt.dport === (+dev.vpnServer.port || 10443)) return ok; // SSL-VPN
   if (pkt.proto === 'tcp' && dev.mgmt && MGMT[pkt.dport]) {
     const [k, name] = MGMT[pkt.dport];
-    if (!dev.mgmt[k]) return no(`${dev.name} 沒有開啟 ${name} 管理服務（連線被拒絕）`);
-    if (fromWan) return no(`${dev.name} 的管理介面不對 WAN 開放`);
+    if (dev.kind === 'firewall' && inIf) {
+      if (!accessOf(dev, inIf).includes(k)) return no(`${dev.name} 的 ${inIf.label} 介面沒有開放 ${name} 管理（allowaccess 裡沒有 ${k}）`);
+    } else {
+      if (!dev.mgmt[k]) return no(`${dev.name} 沒有開啟 ${name} 管理服務（連線被拒絕）`);
+      if (fromWan) return no(`${dev.name} 的管理介面不對 WAN 開放`);
+    }
     if (!addrMatch(String(dev.mgmt.allow || '').replace(/[,\s]+/g, ','), pkt.src)) return no(`來源 ${fmtIp(pkt.src)} 不在 ${dev.name} 允許管理的位址範圍內`);
     return ok;
   }

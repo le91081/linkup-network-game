@@ -6,7 +6,7 @@ import {
 } from './form.js';
 import { fmtIp } from '../engine/ip.js';
 import { CATALOG, peerOf, portOf, newSsid, cableAt, linkInfo } from '../engine/model.js';
-import { visibleSsids, WIFI_SEC, macsBehind, isBridgePort, hitsOf, P1 } from '../engine/sim.js';
+import { visibleSsids, WIFI_SEC, macsBehind, isBridgePort, hitsOf, P1, accessOf } from '../engine/sim.js';
 import * as M from './panel-more.js';
 
 const nameOf = (ctx, id) => ctx.state.devices[id]?.name || id;
@@ -58,6 +58,23 @@ export const portWarn = (ctx, p, pc) => ctx.live(() => {
   if (li && li.half) out.push('對面是 Hub：這個埠降為 10 Mbps 半雙工，多台設備同時傳送會發生碰撞。');
   return out.map((t) => note('warn', t));
 });
+
+/** FortiGate 每個介面各自決定開放哪些管理協定 (allowaccess) */
+export function accessRow(ctx, i) {
+  const { dev } = ctx;
+  const cur = accessOf(dev, i);
+  const all = [['ping', 'PING'], ['https', 'HTTPS'], ['ssh', 'SSH'], ['http', 'HTTP'], ['telnet', 'TELNET']];
+  const flip = (k) => {
+    i.access = all.map((x) => x[0]).filter((x) => (x === k ? !cur.includes(k) : cur.includes(x)));
+    i.ping = i.access.includes('ping');
+    ctx.commit(true);
+  };
+  return h('div', { class: 'sub' },
+    h('span', { class: 'f-label', text: '管理存取 (allowaccess)：從這個介面可以用哪些方式連到防火牆本身' }),
+    h('div', { class: 'chips' }, all.map(([k, t]) => h('button', { type: 'button', class: 'chip btnchip acc' + (cur.includes(k) ? ' on' : ''), text: t, onclick: () => flip(k) }))),
+    (cur.includes('http') || cur.includes('telnet')) && note('warn', 'HTTP 與 Telnet 是明文協定，帳號密碼會被看光，不應該開放。'),
+    /^wan/.test(i.id) && cur.some((k) => k !== 'ping') && note('warn', '對外的介面開放了管理協定，任何人都能從網際網路嘗試登入。'));
+}
 
 export function wifiPicker(ctx, i) {
   const nets = visibleSsids(ctx.state, ctx.dev);
@@ -327,17 +344,20 @@ export function mgmtTab(ctx, body) {
       ifaceNote(ctx, i)),
     h('p', { class: 'tip', text: 'L2 交換器本身不做路由，這個 IP 只是讓你能遠端登入它、讓它能送出 Syslog。' }));
   }
+  const fw = dev.kind === 'firewall';
   body.append(h('div', { class: 'card' }, cardHead('管理存取'),
-    h('div', { class: 'toggles' },
-      toggle(ctx, ...bind(m, 'ssh'), 'SSH（TCP 22，全程加密）'),
-      toggle(ctx, ...bind(m, 'https'), 'HTTPS 管理頁面（TCP 443）'),
-      toggle(ctx, ...bind(m, 'telnet'), 'Telnet（TCP 23，帳號密碼明文傳送）'),
-      toggle(ctx, ...bind(m, 'http'), 'HTTP 管理頁面（TCP 80，明文傳送）')),
+    fw
+      ? note('muted', '防火牆的管理協定是在「介面」分頁的每個介面上個別開放的 (allowaccess)。這裡設定的是允許登入的來源位址 (trusted hosts)。')
+      : h('div', { class: 'toggles' },
+        toggle(ctx, ...bind(m, 'ssh'), 'SSH（TCP 22，全程加密）'),
+        toggle(ctx, ...bind(m, 'https'), 'HTTPS 管理頁面（TCP 443）'),
+        toggle(ctx, ...bind(m, 'telnet'), 'Telnet（TCP 23，帳號密碼明文傳送）'),
+        toggle(ctx, ...bind(m, 'http'), 'HTTP 管理頁面（TCP 80，明文傳送）')),
     field('允許管理的來源', inp(ctx, ...bind(m, 'allow'), { ph: '留空＝任何位址都能連，例如 10.0.99.0/24', check: isCidrList })),
     ctx.live(() => {
       const w = [];
-      if (m.telnet) w.push('Telnet 是明文協定，應該關閉。');
-      if (m.http) w.push('HTTP 管理頁面是明文傳送，應該關閉，只留 HTTPS。');
+      if (!fw && m.telnet) w.push('Telnet 是明文協定，應該關閉。');
+      if (!fw && m.http) w.push('HTTP 管理頁面是明文傳送，應該關閉，只留 HTTPS。');
       if (!String(m.allow || '').trim()) w.push('沒有限制來源，任何網段都能嘗試登入。');
       return w.length ? w.map((x) => note('warn', x)) : note('ok', '管理介面已加固：只開放加密協定，並限制了來源網段。');
     })));
@@ -423,13 +443,15 @@ export function vpnTab(ctx, body) {
   })));
   const vs = dev.vpnServer;
   if (!vs) return;
-  const card = h('div', { class: 'card' }, cardHead('遠端存取 VPN'),
+  const card = h('div', { class: 'card' }, cardHead('遠端存取 VPN（SSL-VPN）'),
     h('div', { class: 'toggles' }, toggle(ctx, ...bind(vs, 'on'), '允許使用者從外部撥入', { rerender: true })));
   if (vs.on) {
     card.append(grid2(
       field('位址池起始', inp(ctx, ...bind(vs, 'start'), { ph: '例如 10.99.0.10', check: isIp })),
       field('位址池結束', inp(ctx, ...bind(vs, 'end'), { ph: '例如 10.99.0.50', check: isIp }))),
-    field('VPN 用戶可以存取的內部網段', inp(ctx, ...bind(vs, 'subnets'), { ph: '例如 10.1.0.0/24', check: isCidrList })),
+    grid2(
+      field('VPN 用戶可以存取的內部網段', inp(ctx, ...bind(vs, 'subnets'), { ph: '例如 10.1.0.0/24', check: isCidrList })),
+      field('連接埠', inp(ctx, ...bind(vs, 'port'), { ph: '10443', check: isPortNo }))),
     h('div', { class: 'thead c-user' }, h('span', { text: '帳號' }), h('span', { text: '密碼' }), h('span')));
     vs.users.forEach((u, n) => card.append(h('div', { class: 'trow c-user' },
       inp(ctx, ...bind(u, 'user'), { ph: '帳號', mono: false }), inp(ctx, ...bind(u, 'pass'), { ph: '密碼' }),
@@ -449,7 +471,9 @@ export function vpnClientTab(ctx, body) {
   const c = dev.vpnClient;
   body.append(h('div', { class: 'card' },
     cardHead('VPN 用戶端', ctx.live(() => badge(dev.rt.vpn && dev.rt.vpn.up ? 'on' : 'off', dev.rt.vpn && dev.rt.vpn.up ? '已連線' : '未連線'))),
-    field('VPN 伺服器位址', inp(ctx, ...bind(c, 'server'), { ph: '公司防火牆的公用 IP', check: isIp })),
+    grid2(
+      field('VPN 伺服器位址', inp(ctx, ...bind(c, 'server'), { ph: '公司防火牆的公用 IP', check: isIp })),
+      field('連接埠', inp(ctx, ...bind(c, 'port'), { ph: '10443', check: isPortNo }))),
     grid2(
       field('帳號', inp(ctx, ...bind(c, 'user'), { ph: '帳號', mono: false })),
       field('密碼', inp(ctx, ...bind(c, 'pass'), { ph: '密碼' }))),
@@ -457,7 +481,7 @@ export function vpnClientTab(ctx, body) {
     ctx.live(() => {
       const v = dev.rt.vpn;
       if (!v) return null;
-      if (v.up) return h('div', { class: 'kv ok' }, kv('虛擬 IP', fmtIp(v.vip)), kv('VPN 伺服器', nameOf(ctx, v.server)), kv('通道', '加密 (ESP)'));
+      if (v.up) return h('div', { class: 'kv ok' }, kv('虛擬 IP', fmtIp(v.vip)), kv('VPN 伺服器', nameOf(ctx, v.server)), kv('通道', 'SSL-VPN (TLS 加密)'));
       return note(c.on ? 'warn' : 'muted', v.why);
     })),
   h('p', { class: 'tip', text: '連上之後，往公司內部網段的流量會走加密通道，其他上網流量仍然直接從這裡出去（分割通道）。' }));

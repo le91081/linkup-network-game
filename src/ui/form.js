@@ -15,6 +15,8 @@ export const isPortNo = (v) => /^\d+$/.test(v) && +v >= 1 && +v <= 65535;
 export const isAddr = (v) => v.toLowerCase() === 'any' || parseCidr(v) != null;
 export const isCidrList = (v) => v.split(/[,\s]+/).filter(Boolean).every((x) => parseCidr(x) != null);
 export const isMacList = (v) => v.split(/[,\s]+/).filter(Boolean).every((x) => /^([0-9a-f]{2}:){5}[0-9a-f]{2}$/i.test(x));
+/** 防火牆政策的位址：any，或一個以上的位址 / 網段（用逗號分隔） */
+export const isAddrList = (v) => v.trim().toLowerCase() === 'any' || (v.trim() !== '' && v.split(/[,\s]+/).filter(Boolean).every((x) => parseCidr(x) != null));
 export const isNum = (lo, hi) => (v) => /^\d+$/.test(v) && +v >= lo && +v <= hi;
 
 export const bind = (obj, key, parse) => [() => obj[key], (v) => { obj[key] = parse ? parse(v) : v; }];

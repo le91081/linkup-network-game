@@ -420,6 +420,107 @@ console.log('\nCLI 設定指令');
   }
 }
 
+// ── FortiGate 的 CLI ──
+console.log('\nFortiGate CLI');
+{
+  const { fortiSession, fortiConfig } = await import('../src/engine/fortios.js');
+  const { makeDevice } = await import('../src/engine/model.js');
+  const ok = (cond, title) => (cond ? console.log('  ✔ ' + title) : fail(title));
+  const typeF = (s, id, lines) => {
+    const sess = fortiSession(() => s.devices[id], () => s);
+    const errs = [];
+    for (const l of lines) { const r = sess.exec(l); if (r.out.some((o) => /parse error|Command fail|not found in datasource|operator error|incomplete|Unknown action/.test(o))) errs.push(`${l.trim()} → ${r.out.join(' / ')}`); }
+    if (sess.depth) errs.push('設定沒有用 end 結束');
+    return errs;
+  };
+  // 1. 每一關解答裡的 FortiGate：show 出來的整份設定貼到一台空白的 FortiGate，要得到同樣的設定，關卡也要照樣通過
+  let n = 0, bad = 0;
+  for (const lv of LEVELS) {
+    const { s } = solved(lv.id);
+    for (const d of Object.values(s.devices).filter((x) => x.kind === 'firewall' && !x.locked)) {
+      const want = fortiConfig(s, d);
+      const s2 = cloneState(s);
+      s2.devices[d.id] = makeDevice(d.model, d.id, { name: d.name, pos: d.pos });
+      recompute(s2);
+      // 原廠預設的介面已經開放了一些管理存取；先清掉，才算一台「空白」的設備
+      const clear = ['config system interface', ...s2.devices[d.id].ifaces.flatMap((i) => [`edit "${i.id}"`, 'unset allowaccess', 'next']), 'end'];
+      const errs = typeF(s2, d.id, [...clear, ...want]);
+      recompute(s2);
+      const got = fortiConfig(s2, s2.devices[d.id]);
+      const broken = evaluate(s2, lv.objectives).filter((r) => !r.pass);
+      n++;
+      if (errs.length || want.join('\n') !== got.join('\n') || broken.length) {
+        bad++;
+        fail(`${lv.id} ${d.name}：貼回設定之後${broken.length ? '關卡不再通過 — ' + broken[0].reason : '內容不一致'}`);
+        for (const e of errs.slice(0, 4)) console.log('      錯誤 ' + e);
+        for (const x of want.filter((l) => !got.includes(l)).slice(0, 5)) console.log('      少了 ' + x);
+        for (const x of got.filter((l) => !want.includes(l)).slice(0, 5)) console.log('      多了 ' + x);
+      }
+    }
+  }
+  if (!bad) console.log(`  ✔ ${n} 台 FortiGate 的設定貼回空白設備後完全一致，關卡照樣通過`);
+
+  // 2. 只用指令完成防火牆關卡
+  {
+    const lv = LEVELS.find((l) => l.id === 'l09');
+    const s = lv.setup();
+    recompute(s);
+    const errs = typeF(s, 'fw', [
+      'config firewall vip', 'edit "web-https"', 'set extintf "wan1"', 'set portforward enable', 'set mappedip "172.16.1.10"', 'set extport 443', 'set mappedport 443', 'next', 'end',
+      'config firewall policy', 'delete 1',
+      'edit 1', 'set name "LAN 上網"', 'set srcintf "internal"', 'set dstintf "wan1"', 'set srcaddr "all"', 'set dstaddr "all"', 'set action accept', 'set schedule "always"', 'set service "ALL"', 'set nat enable', 'next',
+      'edit 2', 'set name "LAN 到 DMZ"', 'set srcintf "internal"', 'set dstintf "dmz"', 'set srcaddr "all"', 'set dstaddr "all"', 'set action accept', 'set schedule "always"', 'set service "HTTPS"', 'next',
+      'edit 3', 'set name "DMZ 連外"', 'set srcintf "dmz"', 'set dstintf "wan1"', 'set srcaddr "all"', 'set dstaddr "all"', 'set action accept', 'set schedule "always"', 'set service "ALL"', 'set nat enable', 'next',
+      'edit 4', 'set name "對外網站"', 'set srcintf "wan1"', 'set dstintf "dmz"', 'set srcaddr "all"', 'set dstaddr "web-https"', 'set action accept', 'set schedule "always"', 'set service "HTTPS"', 'next',
+      'end']);
+    recompute(s);
+    const res = evaluate(s, lv.objectives);
+    ok(!errs.length && res.every((r) => r.pass), `只用 FortiOS 指令完成 3-1（VIP 與四條政策）${errs[0] ? '：' + errs[0] : res.find((r) => !r.pass) ? '：' + res.find((r) => !r.pass).reason : ''}`);
+    const sess = fortiSession(() => s.devices.fw, () => s);
+    for (const l of ['config firewall policy', 'move 4 before 1', 'end']) sess.exec(l);
+    ok(s.devices.fw.policies[0].name === '對外網站', 'move 可以調整政策的比對順序');
+    const r1 = sess.exec('config firewall policy'), r2 = sess.exec('edit 9'), r3 = sess.exec('set srcintf "nope"'), r4 = sess.exec('next');
+    ok(!r1.changed && r2.out[0].includes('new entry') && !r3.out.length && /必填|缺少/.test(r4.out.join()) && s.devices.fw.policies.length === 4, '缺少必填欄位的政策在 next 時被拒絕，不會寫入');
+    sess.exec('abort');
+  }
+  // 3. 站對站 VPN：分公司的 FortiGate 整台用指令設定
+  {
+    const lv = LEVELS.find((l) => l.id === 'l20');
+    const build = ({ route = true, pfs = false } = {}) => {
+      const s = lv.setup();
+      recompute(s);
+      const errs = typeF(s, 'br', [
+        'config vpn ipsec phase1-interface', 'edit "HQ"', 'set interface "wan1"', 'set proposal aes256-sha256', 'set dhgrp 14', 'set remote-gw 203.0.113.18', 'set psksecret Tw!S2S#2026', 'next', 'end',
+        'config vpn ipsec phase2-interface', 'edit "HQ"', 'set phase1name "HQ"', 'set proposal aes256-sha256', ...(pfs ? [] : ['set pfs disable']), 'set src-subnet 10.2.0.0 255.255.255.0', 'set dst-subnet 10.1.0.0 255.255.255.0', 'next', 'end',
+        ...(route ? ['config router static', 'edit 0', 'set dst 10.1.0.0 255.255.255.0', 'set device "HQ"', 'next', 'end'] : []),
+        'config firewall policy',
+        'edit 0', 'set name "to-hq"', 'set srcintf "internal"', 'set dstintf "HQ"', 'set srcaddr "all"', 'set dstaddr "all"', 'set action accept', 'set schedule "always"', 'set service "ALL"', 'next',
+        'edit 0', 'set name "from-hq"', 'set srcintf "HQ"', 'set dstintf "internal"', 'set srcaddr "all"', 'set dstaddr "all"', 'set action accept', 'set schedule "always"', 'set service "ALL"', 'next',
+        'end']);
+      recompute(s);
+      return { s, errs, res: evaluate(s, lv.objectives) };
+    };
+    const good = build();
+    ok(!good.errs.length && good.res.every((r) => r.pass), `只用 FortiOS 指令完成 7-1 站對站 VPN${good.errs[0] ? '：' + good.errs[0] : good.res.find((r) => !r.pass) ? '：' + good.res.find((r) => !r.pass).reason : ''}`);
+    const noRoute = build({ route: false });
+    ok(noRoute.s.devices.br.vpns[0].rt.up && !noRoute.res[0].pass && noRoute.res[2].pass, '用指令建立的通道沒有加靜態路由：通道是 Up，但流量不會走進通道');
+    const pfs = build({ pfs: true });
+    ok(!pfs.s.devices.br.vpns[0].rt.up && /第二階段/.test(pfs.s.devices.br.vpns[0].rt.why), '第二階段預設開啟 PFS，對端沒開就談不成');
+    const sess = fortiSession(() => good.s.devices.br, () => good.s);
+    ok(sess.exec('diagnose vpn tunnel list').out.join('\n').includes('status=up') && sess.exec('get router info routing-table all').out.length > 2, 'diagnose 與 get 可以查看通道與路由表');
+  }
+  // 4. 介面各自的管理存取
+  {
+    const { s } = solved('l09');
+    const sess = fortiSession(() => s.devices.fw, () => s);
+    const ip = s.devices.fw.ifaces.find((i) => i.id === 'internal').rt.ip;
+    for (const l of ['config system interface', 'edit "internal"', 'set allowaccess ping https', 'next', 'end']) sess.exec(l);
+    recompute(s);
+    const ssh = transact(s, 'pc-1', { proto: 'tcp', dst: ip, dport: 22 }), web = transact(s, 'pc-1', { proto: 'tcp', dst: ip, dport: 443 });
+    ok(!ssh.ok && /allowaccess/.test(ssh.reason) && web.ok, 'allowaccess 只開 ping 與 https：SSH 連不上、HTTPS 可以');
+  }
+}
+
 // ── 題庫與證照對照表的資料檢查 ──
 {
   const { QUESTIONS, TOPICS, LEVEL_TOPIC } = await import('../src/data/quiz.js');

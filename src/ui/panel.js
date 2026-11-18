@@ -11,6 +11,7 @@ import { buildTerminal } from './terminal.js';
 import * as X from './panel-extra.js';
 import * as M from './panel-more.js';
 import { buildCli } from './cli.js';
+import { buildFortiCli } from './forticli.js';
 
 function dhcpBlock(ctx, i) {
   const d = i.dhcp;
@@ -76,6 +77,7 @@ function ifaceCard(ctx, i, o = {}) {
       o.ospf && i.ospf && field('OSPF Cost', inp(ctx, ...bind(i, 'ospfCost'), { ph: '預設 1，越小越優先', check: isNum(1, 65535) })),
       o.helper && field('DHCP Relay', inp(ctx, ...bind(i, 'helper'), { ph: '遠端 DHCP 伺服器 IP（選填）', check: isIp }))));
   }
+  if (o.access) parts.push(X.accessRow(ctx, i));
   parts.push(ifaceNote(ctx, i));
   if (o.v6 && ctx.state.v6) parts.push(M.routerV6(ctx, i));
   if (o.dhcp) parts.push(dhcpBlock(ctx, i));
@@ -386,7 +388,7 @@ function fwIfaces(ctx, body) {
     const isBr = i.bind.t === 'bridge';
     const wan = /^wan/.test(i.id);
     body.append(ifaceCard(ctx, i, {
-      title: isBr ? 'internal（埠 1 – 5）' : i.label, port: isBr ? null : i.bind.port, gateway: wan, ping: true, dhcp: !wan,
+      title: isBr ? 'internal（埠 1 – 5）' : i.label, port: isBr ? null : i.bind.port, gateway: wan, access: true, dhcp: !wan,
     }));
   }
 }
@@ -410,11 +412,13 @@ function fwPolicies(ctx, body) {
       grid2(
         field('來源介面', sel(ctx, ...bind(p, 'srcIf'), withCur(p.srcIf))),
         field('目的介面', sel(ctx, ...bind(p, 'dstIf'), withCur(p.dstIf))),
-        field('來源位址', inp(ctx, ...bind(p, 'src'), { ph: 'any 或 10.1.10.0/24', check: isAddr })),
-        field('目的位址', inp(ctx, ...bind(p, 'dst'), { ph: 'any 或 172.16.1.10', check: isAddr })),
-        field('服務', sel(ctx, ...bind(p, 'service'), SERVICE_NAMES.map((s) => [s, s]))),
+        field('來源位址', inp(ctx, ...bind(p, 'src'), { ph: 'any 或 10.1.10.0/24', check: isAddrList })),
+        field('目的位址', inp(ctx, ...bind(p, 'dst'), { ph: 'any 或 172.16.1.10', check: isAddrList })),
+        field('服務', sel(ctx, ...bind(p, 'service'), SERVICE_NAMES.includes(p.service) ? SERVICE_NAMES.map((s) => [s, s]) : [[p.service, p.service], ...SERVICE_NAMES.map((s) => [s, s])])),
         field('動作', sel(ctx, ...bind(p, 'action'), [['accept', '允許 ACCEPT'], ['deny', '拒絕 DENY']], { rerender: true }))),
-      p.action === 'accept' && h('div', { class: 'toggles' }, toggle(ctx, ...bind(p, 'nat'), 'NAT（來源位址換成出口介面的 IP）'))));
+      h('div', { class: 'toggles' },
+        p.action === 'accept' && toggle(ctx, ...bind(p, 'nat'), 'NAT（來源位址換成出口介面的 IP）'),
+        p.off && toggle(ctx, () => !p.off, (v) => { p.off = !v; }, '啟用這條政策（目前是停用狀態）', { rerender: true }))));
   });
   body.append(
     h('div', { class: 'addrow' }, button('新增政策', {
@@ -467,7 +471,7 @@ function baseTabs(dev) {
     case 'l3switch': return [T.swports, T.vlan, T.l3, T.route, T.sec, T.mgmt, T.status];
     case 'router': return [T.ifs, T.route, T.nat, T.acl, T.vpn, T.mgmt, T.status];
     case 'homerouter': return [['wan', '網際網路 (WAN)', hrWan], ['lan', '區域網路 (LAN)', hrLan], ['wifi', '無線網路', X.ssidTab], ['nat', '連接埠轉發', forwardsTab], T.status];
-    case 'firewall': return [['if', '介面', fwIfaces], ['pol', '政策', fwPolicies], ['nat', '虛擬 IP', forwardsTab], T.vpn, T.route, T.mgmt, ['log', '紀錄', M.logTab], T.status];
+    case 'firewall': return [['if', '介面', fwIfaces], ['pol', '政策', fwPolicies], ['nat', '虛擬 IP', forwardsTab], T.vpn, T.route, T.mgmt, ['log', '紀錄', M.logTab], T.status, ['fcli', 'CLI', buildFortiCli]];
     default: return [['info', '線路資訊', inetInfo]];
   }
 }
@@ -505,7 +509,7 @@ export function renderDevicePanel(app, root) {
   const body = h('div', { class: 'p-body' });
   const isDown = !!(app.state.down || {})[dev.id];
   if (isDown) body.append(note('warn', '這台設備目前是關機狀態（故障模擬），所有連接埠都沒有燈號。按右上角的電源鈕可以開機。'));
-  const tabBar = tabs.length > 1 && h('div', { class: 'tabs' + (tabs.length > 7 ? ' many' : '') }, tabs.map(([id, label]) =>
+  const tabBar = tabs.length > 1 && h('div', { class: 'tabs' + (tabs.length > 8 ? ' many many9' : tabs.length > 7 ? ' many' : '') }, tabs.map(([id, label]) =>
     h('button', { type: 'button', class: 'tab' + (id === cur ? ' on' : ''), onclick: () => { app.panelTab[dev.id] = id; app.renderPanel(); } }, label)));
   root.dataset.view = viewKey;
   root.replaceChildren(...[

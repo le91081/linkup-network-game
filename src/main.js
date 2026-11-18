@@ -9,7 +9,9 @@ import { renderDevicePanel } from './ui/panel.js';
 import { toast, sleep } from './ui/dom.js';
 import { SANDBOX, installSandbox, sandboxObjectives } from './ui/sandbox.js';
 
-const STORE_KEY = 'linkup.v1';
+// 網址加上 ?profile=名稱 就會用另一份獨立的進度（多人共用一台電腦，或測試時不想動到自己的存檔）
+const PROFILE = (new URLSearchParams(location.search).get('profile') || '').replace(/[^\w-]/g, '').slice(0, 24);
+const STORE_KEY = 'linkup.v1' + (PROFILE ? '.' + PROFILE : '');
 const GREEN = 0x4ade80, RED = 0xff5d6c;
 const $ = (id) => document.getElementById(id);
 
