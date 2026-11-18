@@ -94,7 +94,7 @@ const app = {
       if (marked) hud.renderMission(app);
     }
     if (!app.tickSave) {
-      app.tickSave = setTimeout(() => { app.tickSave = null; app.store.saves[app.level.id] = cloneState(app.state); app.saveStore(); }, 5000);
+      app.tickSave = setTimeout(() => { app.tickSave = null; app.store.saves[app.level.id] = saveOf(app.state); app.saveStore(); }, 5000);
     }
   },
   skip(n) { app.tick(n); toast(`時間前進了 ${fmtDur(n)}`); },
@@ -133,7 +133,7 @@ const app = {
     if (app.level.sandbox && document.activeElement?.closest?.('#mission') == null) hud.renderMission(app);
     clearTimeout(app.saveTimer);
     app.saveTimer = setTimeout(() => {
-      app.store.saves[app.level.id] = cloneState(app.state);
+      app.store.saves[app.level.id] = saveOf(app.state);
       app.saveStore();
     }, 400);
   },
@@ -337,6 +337,20 @@ function feedback(o, r) {
     const d = r.failDev || src;
     if (d) { sc.bubble(d, r.reason, 'fail'); sc.pulse(d, RED, true); }
   }
+}
+
+/**
+ * 存檔用的狀態。觀察用的表（MAC 位址表、連線表）不寫進存檔，紀錄只留最近的幾筆：
+ * 這些東西每一關都會累積，全部存起來很快就會塞滿瀏覽器的儲存空間。
+ */
+function saveOf(st) {
+  const s = cloneState(st), d = s.dyn;
+  if (d) {
+    delete d.mac; delete d.ct; delete d.outbox;
+    for (const k of Object.keys(d.log || {})) d.log[k] = d.log[k].slice(-15);
+    for (const k of Object.keys(d.syslog || {})) d.syslog[k] = d.syslog[k].slice(-40);
+  }
+  return s;
 }
 
 function updateInsets() {

@@ -2,7 +2,9 @@
 import { h } from './dom.js';
 import { fmtIp, parseIp } from '../engine/ip.js';
 import { fmtIp6 } from '../engine/ip6.js';
-import { transact, routeRows, macsBehind, isBridgePort, arpRows, clearArp, sessionLog, hitsOf, fmtDur, portfastOn } from '../engine/sim.js';
+import { transact, routeRows, isBridgePort, arpRows, clearArp, hitsOf, fmtDur, portfastOn, macRows, clearMac, macAgeOf, sessionRows, clearSessions, saInfo } from '../engine/sim.js';
+import { iosClock, deviceTime, ntpInfo, logRows, clearLog, syslogStats, uptimeOf, routerId, longIf, SEVERITY, NTP_POLL } from '../engine/ops.js';
+import { fmtMask } from '../engine/ip.js';
 import { route6Rows } from '../engine/sim6.js';
 import { CATALOG, MEDIA, peerOf, portOf, linkInfo, phyConfig } from '../engine/model.js';
 import { iosSession, runningConfig, startupConfig, hostName as host, aclName, aclLine } from '../engine/ios.js';
@@ -10,6 +12,13 @@ import { iosSession, runningConfig, startupConfig, hostName as host, aclName, ac
 const pad = (s, n) => String(s).padEnd(n);
 const isSw = (d) => !!d.sw && d.sw.mode === 'vlan';
 const dotMac = (m) => m.replace(/:/g, '').replace(/(.{4})(?=.)/g, '$1.');
+const hms = (s) => { s = Math.max(0, Math.floor(s)); return [Math.floor(s / 3600), Math.floor((s % 3600) / 60), s % 60].map((n) => String(n).padStart(2, '0')).join(':'); };
+const upText = (s) => {
+  const d = Math.floor(s / 86400), h = Math.floor((s % 86400) / 3600), m = Math.floor((s % 3600) / 60);
+  return [d && `${d} day${d > 1 ? 's' : ''}`, (d || h) && `${h} hour${h === 1 ? '' : 's'}`, `${m} minute${m === 1 ? '' : 's'}`].filter(Boolean).join(', ');
+};
+/** 站對站通道（有設定的那種），連同它從哪個介面出去 */
+const cryptoTunnels = (d) => (d.rt.tunnels || []).filter((t) => t.cfg).map((t) => ({ t, iface: d.ifaces.find((i) => i.rt && i.rt.ip != null && i.rt.ip === t.localIp) }));
 
 const SHOW = {
   'show running-config': (st, d) => runningConfig(st, d),
@@ -17,7 +26,7 @@ const SHOW = {
     const c = startupConfig(st, d);
     return c ? c.filter((l) => l !== 'Building configuration...') : ['startup-config is not present'];
   },
-  'show version': (st, d) => [`${CATALOG[d.model].title}`, `${host(d)} uptime is 3 days, 4 hours`, '（LinkUp 模擬的 IOS 風格介面）'],
+  'show version': (st, d) => [`${CATALOG[d.model].title}`, `${host(d)} uptime is ${upText(uptimeOf(st, d))}`, '（LinkUp 模擬的 IOS 風格介面）'],
   'show ip interface brief': (st, d) => {
     const o = [pad('Interface', 22) + pad('IP-Address', 17) + pad('Method', 8) + pad('Status', 22) + 'Protocol'];
     for (const i of d.ifaces) {
@@ -79,14 +88,14 @@ const SHOW = {
   },
   'show mac address-table': (st, d) => {
     if (!isSw(d)) return ['% 這個指令只適用於交換器'];
-    const o = [pad('Vlan', 6) + pad('Mac Address', 18) + pad('Type', 10) + 'Ports', '----  ' + '-'.repeat(14) + '    --------  -----'];
-    for (const p of d.ports) {
-      if (!isBridgePort(d, p.id) || !st.rt.links[d.id + ':' + p.id]) continue;
-      const pc = d.sw.ports[p.id];
-      for (const m of macsBehind(st, d, p.id)) o.push(pad(pc.mode === 'trunk' ? pc.native : pc.vlan, 6) + pad(m.mac.replace(/:/g, '').replace(/(.{4})(?=.)/g, '$1.'), 18) + pad('DYNAMIC', 10) + p.label);
-    }
-    return o.length > 2 ? o : ['MAC 位址表是空的'];
+    const rows = macRows(st, d);
+    const o = ['          Mac Address Table', '-------------------------------------------', '', pad('Vlan', 8) + pad('Mac Address', 18) + pad('Type', 12) + 'Ports', pad('----', 8) + pad('-----------', 18) + pad('--------', 12) + '-----'];
+    for (const r of rows) o.push(pad(String(r.vlan).padStart(4), 8) + pad(dotMac(r.mac), 18) + pad(r.type, 12) + r.label);
+    o.push(`Total Mac Addresses for this criterion: ${rows.length}`);
+    if (!rows.length) o.push(`（表是空的。交換器要收到訊框才會學到來源 MAC：讓電腦 ping 一下，項目就會出現；${macAgeOf(d)} 秒沒有再看到就會過期）`);
+    return o;
   },
+  'show mac address-table aging-time': (st, d) => (isSw(d) ? [`Global Aging Time:  ${macAgeOf(d)}`] : ['% 這個指令只適用於交換器']),
   'show spanning-tree': (st, d) => {
     const s = d.rt.stp;
     if (!isSw(d) || !s) return ['% 這個指令只適用於交換器'];
@@ -131,6 +140,41 @@ const SHOW = {
         return pad(p.label, 14) + pad(Math.max(1, n), 15) + pad(n, 13) + (c.mode === 'shutdown' ? 'Shutdown' : 'Restrict') + (d.rt.err[p.id] ? '   (err-disabled)' : '');
       })];
   },
+  'show crypto isakmp sa': (st, d) => {
+    const o = ['IPv4 Crypto ISAKMP SA', pad('dst', 16) + pad('src', 16) + pad('state', 15) + pad('conn-id', 8) + 'status'];
+    cryptoTunnels(d).forEach(({ t }, n) => {
+      const sa = saInfo(st, d.id, t.name);
+      if (sa) o.push(pad(fmtIp(t.peerIp), 16) + pad(fmtIp(t.localIp), 16) + pad('QM_IDLE', 15) + pad(1001 + n, 8) + 'ACTIVE' + (t.stale ? '   （對端已經沒有回應，這筆 SA 還沒過期）' : ''));
+      else if (t.nego) o.push(pad(fmtIp(t.peerIp), 16) + pad(fmtIp(t.localIp), 16) + pad('MM_KEY_EXCH', 15) + pad(0, 8) + 'ACTIVE');
+    });
+    if (o.length === 2) o.push('', '（沒有任何 IKE SA' + (cryptoTunnels(d).length ? '：' + cryptoTunnels(d).map(({ t }) => `${t.name} — ${t.why || '尚未建立'}`).join('；') : '') + '）');
+    return o;
+  },
+  'show crypto ipsec sa': (st, d) => {
+    const list = cryptoTunnels(d);
+    if (!list.length) return ['No SAs found'];
+    const o = [];
+    for (const { t, iface } of list) {
+      const sa = saInfo(st, d.id, t.name);
+      const id = (c) => `(${fmtIp(c.net)}/${fmtMask(c.bits)}/0/0)`;
+      o.push(`interface: ${iface ? longIf(iface.label) : '(none)'}`, `    Crypto map tag: ${t.cfg.cmap || 'CMAP'}, local addr ${t.localIp != null ? fmtIp(t.localIp) : '0.0.0.0'}`, '');
+      t.local.forEach((l, k) => {
+        const r = t.remote[k] || t.remote[0];
+        o.push(`   local  ident (addr/mask/prot/port): ${id(l)}`, `   remote ident (addr/mask/prot/port): ${r ? id(r) : '(0.0.0.0/0.0.0.0/0/0)'}`,
+          `   current_peer ${t.peerIp != null ? fmtIp(t.peerIp) : '0.0.0.0'} port 500`,
+          `    #pkts encaps: ${sa ? sa.tx : 0}, #pkts encrypt: ${sa ? sa.tx : 0}, #pkts digest: ${sa ? sa.tx : 0}`,
+          `    #pkts decaps: ${sa ? sa.rx : 0}, #pkts decrypt: ${sa ? sa.rx : 0}, #pkts verify: ${sa ? sa.rx : 0}`);
+        if (sa) {
+          o.push(`     local crypto endpt.: ${fmtIp(t.localIp)}, remote crypto endpt.: ${fmtIp(t.peerIp)}`,
+            '     inbound esp sas:', `        sa timing: remaining key lifetime (k/sec): (4608000/${sa.left2})`, '        Status: ACTIVE(ACTIVE)',
+            '     outbound esp sas:', `        sa timing: remaining key lifetime (k/sec): (4608000/${sa.left2})`, '        Status: ACTIVE(ACTIVE)',
+            ...(sa.rekey2 ? [`     （這組金鑰已經重新協商過 ${sa.rekey2} 次，每 ${sa.life2} 秒一次）`] : []));
+        } else o.push('     inbound esp sas:', '', '     outbound esp sas:', '', `     （沒有 SA：${t.why || '通道尚未建立'}）`);
+        o.push('');
+      });
+    }
+    return o;
+  },
   'show cdp neighbors': (st, d) => {
     const o = [pad('Device ID', 20) + pad('Local Intrfce', 16) + pad('Platform', 26) + 'Port ID'];
     for (const p of d.ports) {
@@ -145,8 +189,9 @@ const SHOW = {
     const n = d.rt.nbrs || [];
     if (!n.length) return ['沒有 OSPF 鄰居'];
     const two = (v) => String(Math.max(0, Math.ceil(v))).padStart(2, '0');
+    const rid = (x) => { const r = routerId(st.devices[x.dev]); return fmtIp(r ?? x.ip); };
     return [pad('Neighbor ID', 18) + pad('State', 14) + pad('Dead Time', 11) + pad('Address', 17) + 'Interface',
-      ...n.map((x) => pad(host(st.devices[x.dev]).slice(0, 16), 18) + pad(x.state === 'forming' ? '2WAY/DROTHER' : 'FULL/ -', 14)
+      ...n.map((x) => pad(rid(x), 18) + pad(x.state === 'forming' ? '2WAY/DROTHER' : 'FULL/ -', 14)
         + pad('00:00:' + two(x.state === 'dying' ? x.left : x.state === 'forming' ? 40 - ((40 - x.left) % 10) : x.dead), 11) + pad(fmtIp(x.ip), 17) + (d.ifaces.find((i) => i.id === x.iface) || {}).label)];
   },
   'show ip dhcp binding': (st, d) => {
@@ -162,15 +207,46 @@ const SHOW = {
     const hit = Object.entries(st.rt.dhcpConflict || {}).filter(([k]) => k.startsWith(d.id + '/')).flatMap(([, v]) => v);
     return hit.length ? [pad('IP address', 18) + pad('Detection method', 19) + 'Detection time', ...hit.map((ip) => pad(fmtIp(ip), 18) + pad('Ping', 19) + 'now')] : ['沒有偵測到位址衝突'];
   },
-  'show clock': (st, d) => {
-    // 沒有對時的設備，時鐘是從開機算起的預設時間（前面有 *），各設備的紀錄就對不起來
-    const ntp = d.mgmt && parseIp(d.mgmt.ntp || '');
-    const synced = ntp != null && transact(st, d.id, { proto: 'icmp', dst: ntp, quiet: true }).ok;
-    const t = new Date(Date.UTC(synced ? 2026 : 1993, synced ? 10 : 2, synced ? 18 : 1, synced ? 8 : 0, 0, 0) + Math.floor(st.clock || 0) * 1000);
-    const two = (n) => String(n).padStart(2, '0');
-    const day = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'][t.getUTCDay()], mon = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'][t.getUTCMonth()];
-    return [`${synced ? '' : '*'}${two(t.getUTCHours())}:${two(t.getUTCMinutes())}:${two(t.getUTCSeconds())}.000 UTC ${day} ${mon} ${t.getUTCDate()} ${t.getUTCFullYear()}`,
-      synced ? `Time source is NTP (${fmtIp(ntp)})` : ntp != null ? `No time source（連不到 NTP 伺服器 ${fmtIp(ntp)}）` : 'No time source（沒有設定 NTP：ntp server <IP>）'];
+  'show clock': (st, d) => [iosClock(st, d)],
+  'show clock detail': (st, d) => {
+    // 每台設備有自己的時鐘。前面的 * 代表不可信（沒有對過時），. 代表曾經對過時但現在失去同步
+    const t = deviceTime(st, d);
+    const src = { ntp: t.sync ? 'Time source is NTP' : 'Time source is NTP（目前失去同步，時鐘照原本的速度自己走）', manual: 'Time source is user configuration', rtc: 'Time source is hardware calendar', boot: 'No time source' }[t.src];
+    const hint = t.src === 'boot' ? '（這台設備沒有硬體時鐘，時間是從開機那一刻的出廠預設值算起的。設定 ntp server 對時，或用 clock set 手動設定）'
+      : t.src === 'rtc' ? '（時間來自設備自己的硬體時鐘，沒有對過時，可能快或慢幾分鐘）' : null;
+    return [iosClock(st, d), src, hint].filter(Boolean);
+  },
+  'show ntp status': (st, d) => {
+    const n = ntpInfo(st, d);
+    if (n.synced) {
+      return [`Clock is synchronized, stratum ${n.stratum}, reference is ${fmtIp(n.server)}`, `system poll interval is ${NTP_POLL}, last update was ${n.when} sec ago.`,
+        n.lost && `（最近的輪詢沒有收到 ${fmtIp(n.server)} 的回應：${n.why}。連續八次都沒有回應就會失去同步）`].filter(Boolean);
+    }
+    if (n.master) return [`Clock is synchronized, stratum ${n.master}, reference is 127.127.1.1`, '（ntp master：這台設備把自己的時鐘當成時間來源，替別人報時。它自己的時間如果是錯的，下游全部跟著錯）'];
+    const why = n.server == null ? '沒有設定 NTP 伺服器（ntp server <IP>）'
+      : n.wait > 0 ? `已經收到 ${fmtIp(n.server)} 的回應，還要連續幾次輪詢才會採信，大約再 ${fmtDur(n.wait)}`
+          : !n.reachable ? `連不到 ${fmtIp(n.server)}：${n.why || '還沒有收到回應'}（每 ${NTP_POLL} 秒重試一次，下一次在 ${n.next} 秒後）` : '';
+    return ['Clock is unsynchronized, stratum 16, no reference clock', why && `（${why}）`].filter(Boolean);
+  },
+  'show ntp associations': (st, d) => {
+    const n = ntpInfo(st, d);
+    const o = ['  address         ref clock       st   when   poll reach  delay  offset   disp'];
+    const row = (flag, addr, ref, stv, reach) => `${flag}${pad(addr, 16)}${pad(ref, 16)}${String(stv).padStart(2)} ${String(n.when).padStart(6)} ${String(NTP_POLL).padStart(6)} ${reach.toString(8).padStart(5)}  1.000   0.500  0.100`;
+    if (n.master) o.push(row('*~', '127.127.1.1', '.LOCL.', n.master - 1, 255));
+    if (n.server != null) o.push(row(n.synced ? '*~' : ' ~', fmtIp(n.server), n.reachable ? (n.serverStratum <= 1 ? '.GPS.' : 'time.google.com') : '.INIT.', n.reachable ? n.serverStratum : 16, n.reach));
+    if (o.length === 1) return ['（沒有設定任何 NTP 伺服器）'];
+    o.push(' * sys.peer, # selected, + candidate, - outlyer, x falseticker, ~ configured');
+    return o;
+  },
+  'show logging': (st, d) => {
+    const rows = logRows(st, d), s = syslogStats(st, d), m = d.mgmt || {};
+    const trap = m.logTrap == null || m.logTrap === '' ? 6 : +m.logTrap;
+    const o = ['Syslog logging: enabled', `    Console logging: level debugging, ${rows.length} messages logged`, `    Buffer logging:  level debugging, ${rows.length} messages logged`,
+      `    Trap logging: level ${SEVERITY[trap]}, ${s.sent + s.lost} message lines logged`];
+    if (m.syslog) o.push(`        Logging to ${m.syslog}  (udp port 514), ${s.sent} message lines logged, ${s.lost} message lines dropped${s.lost ? `（${s.why}）` : ''}`);
+    o.push('', 'Log Buffer (8192 bytes):', '', ...rows.map((r) => r.line));
+    if (!rows.length) o.push('（緩衝區是空的：介面上線或斷線、鄰居關係改變、有人改設定時才會留下紀錄。重新開機之後這裡的內容會消失）');
+    return o;
   },
   'show access-lists': (st, d) => {
     const o = [];
@@ -187,16 +263,13 @@ const SHOW = {
     for (const r of arpRows(st, d)) o.push(pad('Internet', 10) + pad(fmtIp(r.ip), 18) + pad(Math.floor(r.age / 60), 11) + pad(dotMac(r.mac), 17) + 'ARPA');
     return o;
   },
-  'show ip nat translations': (st, d) => {
-    const rows = sessionLog(d).filter((e) => e.act === 'snat' || e.act === 'dnat');
-    if (!rows.length) return ['目前沒有任何 NAT 轉換（先讓流量經過這台設備，例如從內部的電腦 ping 外面）'];
-    const o = [pad('Pro', 6) + pad('Inside global', 23) + pad('Inside local', 23) + 'Outside global'];
-    for (const e of rows) {
-      const out = e.proto === 'icmp' ? e.sport : e.dport; // ICMP 沒有埠號，IOS 會顯示識別碼
-      if (e.act === 'snat') o.push(pad(e.proto, 6) + pad(`${fmtIp(e.nsrc)}:${e.sport}`, 23) + pad(`${fmtIp(e.src)}:${e.sport}`, 23) + `${fmtIp(e.dst)}:${out}`);
-      else o.push(pad(e.proto, 6) + pad(`${fmtIp(e.dst)}:${e.dport}`, 23) + pad(`${fmtIp(e.ndst)}:${e.ndport}`, 23) + `${fmtIp(e.src)}:${e.sport}`);
-    }
-    return o;
+  'show ip nat translations': (st, d) => natTable(st, d, false),
+  'show ip nat translations verbose': (st, d) => natTable(st, d, true),
+  'show ip nat statistics': (st, d) => {
+    const dyn = sessionRows(st, d).filter((e) => e.nSrc !== e.src || e.nDst !== e.dst).length;
+    const stat = (d.staticNat || []).filter((n) => n.pub && n.priv).length + (d.portForwards || []).filter((f) => f.port && f.toIp && !f.off).length;
+    const outIf = d.ifaces.filter((i) => i.nat).map((i) => i.label), inIf = d.ifaces.filter((i) => !i.nat && i.rt && i.rt.ip != null).map((i) => i.label);
+    return [`Total active translations: ${dyn + stat} (${stat} static, ${dyn} dynamic; ${dyn} extended)`, 'Outside interfaces:', '  ' + (outIf.join(', ') || '(none)'), 'Inside interfaces:', '  ' + (inIf.join(', ') || '(none)')];
   },
   'show interfaces status': (st, d) => {
     const o = [pad('Port', 14) + pad('Status', 14) + pad('Vlan', 8) + pad('Duplex', 9) + pad('Speed', 9) + 'Type'];
@@ -221,6 +294,28 @@ const SHOW = {
         + (i.rt.vrrp && i.rt.vrrp.wait > 0 ? `   (Master down，${Math.ceil(i.rt.vrrp.wait)} 秒後接手)` : ''))];
   },
 };
+/** NAT 轉換表：動態的項目閒置太久會被移除，靜態的一直都在 */
+function natTable(st, d, verbose) {
+  const W = 22;
+  const o = [pad('Pro', 5) + pad('Inside global', W) + pad('Inside local', W) + pad('Outside local', W) + 'Outside global'];
+  for (const e of sessionRows(st, d)) {
+    const snat = e.nSrc !== e.src, dnat = e.nDst !== e.dst;
+    if (!snat && !dnat) continue;
+    const far = (ip, port) => `${fmtIp(ip)}:${e.proto === 'icmp' ? e.sport : port}`; // ICMP 沒有埠號，IOS 顯示的是識別碼
+    if (snat) o.push(pad(e.proto, 5) + pad(`${fmtIp(e.nSrc)}:${e.nSport}`, W) + pad(`${fmtIp(e.src)}:${e.sport}`, W) + pad(far(e.dst, e.dport), W) + far(e.dst, e.dport));
+    else o.push(pad(e.proto, 5) + pad(`${fmtIp(e.dst)}:${e.dport}`, W) + pad(`${fmtIp(e.nDst)}:${e.nDport}`, W) + pad(`${fmtIp(e.src)}:${e.sport}`, W) + `${fmtIp(e.src)}:${e.sport}`);
+    if (verbose) o.push(`    create ${hms(e.age)}, use ${hms(st.clock - e.t)}, timeout: ${e.ttl}, left ${hms(e.left)}`);
+  }
+  const pub = d.ifaces.find((i) => i.nat && i.rt && i.rt.ip != null);
+  for (const f of d.portForwards || []) {
+    if (f.off || !f.port || !f.toIp || !pub) continue;
+    o.push(pad(f.proto || 'tcp', 5) + pad(`${f.extIp || fmtIp(pub.rt.ip)}:${f.port}`, W) + pad(`${f.toIp}:${f.toPort || f.port}`, W) + pad('---', W) + '---');
+  }
+  for (const n of d.staticNat || []) if (n.pub && n.priv) o.push(pad('---', 5) + pad(n.pub, W) + pad(n.priv, W) + pad('---', W) + '---');
+  if (o.length === 1) return ['目前沒有任何 NAT 轉換（先讓流量經過這台設備，例如從內部的電腦 ping 外面。動態的轉換閒置一段時間就會從表裡移除：ICMP 60 秒、UDP 5 分鐘、TCP 連線關閉後 60 秒）'];
+  return o;
+}
+
 const stpState = (d, pid) => (d.rt.wait && d.rt.wait[pid] > 15 ? 'LSN' : d.rt.wait && d.rt.wait[pid] > 0 ? 'LRN' : 'FWD');
 const CMDS = Object.keys(SHOW);
 const match = (tokens, cmd) => {
@@ -266,7 +361,16 @@ export function buildCli(ctx, body) {
       return true;
     }
     if (tok[tok.length - 1] === '?' && 'show'.startsWith(tok[0])) { CMDS.forEach((c) => print('  ' + c, 'dim')); return true; }
-    if (tok[0] === 'clear' && (tok[1] || '').startsWith('arp')) { clearArp(st, d); app.refreshLive(); return true; }
+    if (tok[0] === 'clear' && tok.length > 1) {
+      const rest = tok.slice(1).join(' ');
+      if (rest.startsWith('arp')) clearArp(st, d);
+      else if (/^mac/.test(rest)) clearMac(st, d);
+      else if (/^ip nat tr/.test(rest)) clearSessions(st, d);
+      else if (/^log/.test(rest)) clearLog(st, d);
+      else return false;
+      app.refreshLive();
+      return true;
+    }
     const cmd = CMDS.find((c) => match(tok, c));
     if (!cmd) return false;
     SHOW[cmd](st, d).forEach((l) => print(l, 'pre')); // 表格不折行，太寬時左右捲動

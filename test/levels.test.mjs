@@ -365,7 +365,7 @@ console.log('\nCLI 設定指令');
     const many = sess.complete('show ip ', shows);
     ok(many.line === null && many.options.join() === 'interface,route', '補齊：有多個候選時列出來');
     sess.exec('conf t'); sess.exec('int gi0/0/1');
-    ok(sess.complete('ip na').line === 'ip nat ' && sess.complete('ip nat ').options.join() === 'inside,outside' && sess.complete('do sh', shows).line === 'do show ', '補齊：介面模式與 do show');
+    ok(sess.complete('ip na').line === 'ip nat ' && sess.complete('ip nat ').options.join() === 'inside,outside,translation' && sess.complete('do sh', shows).line === 'do show ', '補齊：介面模式與 do show');
   }
 
   // 站對站 VPN：分公司換成 Cisco 路由器，整台用指令設定，和總公司的 FortiGate 互通
@@ -666,6 +666,287 @@ console.log('\nCLI 設定指令');
   const added = sessionLog(s.devices.fw).length - before;
   if (!r.ok || seq !== 'SYN → SYN-ACK → ACK' || added !== 2 || r.l3.length !== 1) fail(`TCP 三向交握：ok=${r.ok} 順序=${seq} 新增紀錄=${added} l3=${r.l3.length}`);
   else console.log('\n  ✔ TCP 連線走完 SYN → SYN-ACK → ACK；防火牆對同一條連線只記一筆放行與一筆 NAT');
+}
+
+// ── 模擬時鐘（二）：MAC 位址表、連線表、IPsec、設備時鐘與 NTP、紀錄與 Syslog ──
+console.log('\n需要時間的狀態：MAC 位址表、連線表、IPsec、NTP、Syslog');
+{
+  const sim = await import('../src/engine/sim.js');
+  const ops = await import('../src/engine/ops.js');
+  const { iosSession, runningConfig } = await import('../src/engine/ios.js');
+  const { fortiSession, fortiConfig } = await import('../src/engine/fortios.js');
+  const { removeCable } = await import('../src/engine/model.js');
+  const { macRows, sessionRows, saInfo } = sim;
+  const ok = (cond, title) => (cond ? console.log('  ✔ ' + title) : fail(title));
+  const ipOf = (s, id) => s.devices[id].ifaces.find((x) => x.rt && x.rt.ip != null).rt.ip;
+  const ios = (s, id, lines) => { const sess = iosSession(() => s.devices[id], () => s); const out = []; for (const l of lines) out.push(...sess.exec(l).out); recomputeNow(s); return out; };
+  const forti = (s, id, lines) => { const sess = fortiSession(() => s.devices[id], () => s); const out = []; for (const l of lines) out.push(...sess.exec(l).out); recomputeNow(s); return out; };
+  const ping = (s, from, to) => transact(s, from, { proto: 'icmp', dst: typeof to === 'number' ? to : ipOf(s, to) });
+  const flooded = (r) => r.log.some((l) => /unknown unicast/.test(l.text));
+  // 乾淨的起點：套用解法並等網路穩定，但還沒有任何測試流量經過
+  const fresh = (id) => { const lv = LEVELS.find((l) => l.id === id); const s = lv.setup(); lv.solve(s); recompute(s); return { s, lv }; };
+  const unplug = (s, dev) => { for (const c of s.cables.filter((x) => x.a.dev === dev || x.b.dev === dev)) removeCable(s, c.id); recomputeNow(s); };
+
+  // ── MAC 位址表 ──
+  {
+    const { s } = fresh('l06');
+    const sw = s.devices.sw;
+    const empty = macRows(s, sw).length === 0;
+    ping(s, 'pc-s1', 'pc-s2');
+    const rows = macRows(s, sw);
+    ok(empty && rows.length === 2 && rows.every((r) => r.type === 'DYNAMIC' && r.vlan === 10 && r.age === 0 && r.left === 300),
+      'MAC 位址表一開始是空的，有流量經過才學到來源 MAC（VLAN、連接埠都正確）');
+    advance(s, 299);
+    const still = macRows(s, sw).length;
+    advance(s, 2);
+    ok(still === 2 && macRows(s, sw).length === 0, 'MAC 項目 300 秒沒有再看到就過期');
+    ping(s, 'pc-s1', 'pc-s2');
+    ios(s, 'sw', ['conf t', 'mac address-table aging-time 60', 'end']);
+    advance(s, 61);
+    ok(macRows(s, sw).length === 0 && runningConfig(s, sw).includes('mac address-table aging-time 60'), 'mac address-table aging-time 可以調整過期時間，並出現在 running-config');
+    ios(s, 'sw', ['conf t', 'no mac address-table aging-time', 'end']);
+    ping(s, 'pc-s1', 'pc-s2');
+    const before = macRows(s, sw).length;
+    unplug(s, 'pc-s2');
+    ok(before === 2 && macRows(s, sw).length === 1, '連接埠斷線時，從那個埠學到的 MAC 馬上清掉');
+  }
+  {
+    // 路由器的 ARP 快取可以留四小時，交換器的 MAC 表只有五分鐘：交換器忘了之後，路由器送來的封包只能泛洪
+    const { s } = solved('l08');
+    const first = ping(s, 'rt', 'pc-s');
+    advance(s, 400);
+    const second = ping(s, 'rt', 'pc-s'), third = ping(s, 'rt', 'pc-s');
+    ok(first.ok && !flooded(first) && second.ok && flooded(second) && !flooded(third),
+      '交換器忘了目的 MAC（路由器的 ARP 還記得）：訊框被泛洪到整個 VLAN，對方一回覆又學回來');
+  }
+  {
+    const { s } = solved('l23');
+    ping(s, 'pc-a', 'pc-b');
+    const learned = ['sw-a', 'sw-b', 'sw-c'].map((id) => macRows(s, s.devices[id]).length);
+    const c = s.cables.find((x) => [x.a.dev, x.b.dev].sort().join() === 'sw-a,sw-c');
+    s.cut = { [c.id]: true };
+    recomputeNow(s);
+    ok(learned.every((n) => n > 0) && ['sw-a', 'sw-b', 'sw-c'].every((id) => macRows(s, s.devices[id]).length === 0),
+      '生成樹的拓撲改變 (Topology Change)：所有交換器把學到的 MAC 清掉重學');
+  }
+
+  // ── 連線表與 NAT 轉換的逾時 ──
+  {
+    const { s } = fresh('l05');
+    const rt = s.devices.rt;
+    ping(s, 'pc-1', parseIp('8.8.8.8'));
+    const icmp = sessionRows(s, rt);
+    transact(s, 'pc-1', { proto: 'tcp', dst: parseIp('93.184.216.34'), dport: 443 });
+    const tcp = sessionRows(s, rt).find((e) => e.proto === 'tcp');
+    ok(icmp.length === 1 && icmp[0].left === 60 && icmp[0].nSrc !== icmp[0].src && tcp && tcp.st === 'fin' && tcp.left === 60,
+      '經過 NAT 的連線記在轉換表裡：ICMP 閒置 60 秒；TCP 連線關閉後也只留 60 秒');
+    advance(s, 59);
+    const kept = sessionRows(s, rt).length;
+    advance(s, 2);
+    ok(kept === 2 && sessionRows(s, rt).length === 0, '閒置時間一到，轉換表的項目就被移除');
+  }
+  {
+    const { s } = fresh('l10');
+    ios(s, 'hq', ['conf t', 'ip nat translation icmp-timeout 10', 'end']);
+    ping(s, 'hq-pc', parseIp('8.8.8.8'));
+    const n0 = sessionRows(s, s.devices.hq).length;
+    advance(s, 11);
+    ok(n0 === 1 && sessionRows(s, s.devices.hq).length === 0 && runningConfig(s, s.devices.hq).includes('ip nat translation icmp-timeout 10'),
+      'ip nat translation icmp-timeout 可以調整逾時，並出現在 running-config');
+  }
+  {
+    const { s } = fresh('l09');
+    const fw = s.devices.fw;
+    transact(s, 'pc-1', { proto: 'udp', dst: parseIp('8.8.8.8'), dport: 53 });
+    const udp = sessionRows(s, fw)[0];
+    const list = forti(s, 'fw', ['diagnose sys session list']);
+    ok(udp && udp.proto === 'udp' && udp.ttl === 180 && list.some((l) => /expire=180 timeout=180/.test(l)) && list.some((l) => /^total session 1/.test(l)),
+      'FortiGate 的連線表：UDP 閒置 180 秒，diagnose sys session list 會顯示倒數');
+    forti(s, 'fw', ['config system session-ttl', 'set default 600', 'end']);
+    ok(fw.natTimeout.tcp === 600 && fortiConfig(s, fw).join('\n').includes('set default 600') && sim.sessionTtl(fw, { proto: 'tcp', st: 'est' }) === 600,
+      'config system session-ttl 可以調整 TCP 連線的閒置時間');
+    forti(s, 'fw', ['diagnose sys session clear']);
+    ok(sessionRows(s, fw).length === 0, 'diagnose sys session clear 清空連線表');
+  }
+
+  // ── IPsec：協商時間、金鑰壽命、對端失聯 ──
+  {
+    const lv = LEVELS.find((l) => l.id === 'l20');
+    const s = lv.setup();
+    recompute(s); lv.solve(s); recomputeNow(s);
+    const t = s.devices.hq.vpns[0];
+    const nego = !t.rt.up && t.rt.nego > 0 && pendingOf(s).some((p) => p.kind === 'vpn');
+    advance(s, 2);
+    ok(nego && t.rt.up && s.devices.br.vpns[0].rt.up, 'VPN 通道設定好之後要先協商 (IKE)，兩秒後才 Up');
+    const res = evaluate(s, lv.objectives);
+    const sa0 = saInfo(s, 'hq', t.name);
+    ok(res.every((r) => r.pass) && sa0.tx > 0 && sa0.rx > 0 && sa0.life1 === 86400 && sa0.life2 === 43200, 'SA 記錄了加密 / 解密的封包數；FortiGate 的金鑰壽命預設是一天與十二小時');
+    advance(s, 43210);
+    const sa1 = saInfo(s, 'hq', t.name);
+    ok(t.rt.up && sa1.rekey2 === 1 && sa1.left2 === 43190 && sa1.rekey1 === 0, '第二階段的金鑰到期會自動重新協商，通道不會中斷');
+    forti(s, 'hq', ['config vpn ipsec phase2-interface', `edit "${t.name}"`, 'set keylifeseconds 7200', 'next', 'end']);
+    advance(s, 3);
+    ok(saInfo(s, 'hq', t.name).life2 === 7200 && saInfo(s, 'br', s.devices.br.vpns[0].name).life2 === 7200 && fortiConfig(s, s.devices.hq).join('\n').includes('set keylifeseconds 7200'),
+      '兩端的金鑰壽命不同時用比較短的那一個（改設定會重新協商）');
+    // 對端突然關機：這一端的 SA 還在，要等 DPD 才會發現
+    s.down = { br: true };
+    recomputeNow(s);
+    const stale = t.rt.up && t.rt.stale - s.clock === 60;
+    const r = transact(s, 'hq-pc', { proto: 'icmp', dst: ipOf(s, 'br-pc') });
+    advance(s, 61);
+    ok(stale && !r.ok && /SA 還沒過期/.test(r.reason) && !t.rt.up, '對端關機：通道還顯示 Up、封包照樣加密送出（被丟掉），60 秒後 DPD 才判定失聯');
+    delete s.down;
+    recomputeNow(s);
+    const renego = !t.rt.up && t.rt.nego > 0;
+    recompute(s);
+    ok(renego && t.rt.up && evaluate(s, lv.objectives).every((x) => x.pass), '對端回來之後重新協商，通道恢復');
+    const log = ops.logRows(s, s.devices.hq).map((x) => x.line);
+    ok(log.some((l) => /action="tunnel-down"/.test(l)) && log.some((l) => /action="tunnel-up"/.test(l)) && /^date=2026-01-0\d time=\d\d:\d\d:\d\d devname="HQ-FW"/.test(log[0]),
+      'FortiGate 的事件紀錄記下通道中斷與恢復');
+    // 關掉 DPD：只能等金鑰到期
+    forti(s, 'hq', ['config vpn ipsec phase1-interface', `edit "${t.name}"`, 'set dpd disable', 'next', 'end']);
+    recompute(s);
+    s.down = { br: true };
+    recompute(s); // settle 最多只等 300 秒
+    ok(t.rt.up && t.rt.stale - s.clock > 300 && fortiConfig(s, s.devices.hq).join('\n').includes('set dpd disable'), '關掉 DPD 之後，對端失聯要等到金鑰到期才會發現');
+  }
+  {
+    // IOS 預設沒有 keepalive
+    const { makeDevice, addCable } = await import('../src/engine/model.js');
+    const link = (st, x, y) => { const [ad, ap] = x.split(':'), [bd, bp] = y.split(':'); const e = addCable(st, ad, ap, bd, bp); if (e) throw new Error(e); };
+    const lv = LEVELS.find((l) => l.id === 'l20');
+    const s = lv.setup();
+    for (const c of s.cables.filter((x) => x.a.dev === 'br' || x.b.dev === 'br')) removeCable(s, c.id);
+    s.devices.br = makeDevice('isr4321', 'br', { name: 'Branch-RT', pos: [7, -4.5] });
+    link(s, 'inet:line2', 'br:Gi0/0/0'); link(s, 'br:Gi0/0/1', 'br-sw:1');
+    recompute(s);
+    ios(s, 'br', ['conf t', 'int gi0/0/0', 'ip address 198.51.100.34 255.255.255.252', 'ip nat outside', 'no shut', 'int gi0/0/1', 'ip address 10.2.0.1 255.255.255.0', 'ip nat inside',
+      'ip route 0.0.0.0 0.0.0.0 198.51.100.33', 'ip access-list extended NAT', 'deny ip 10.2.0.0 0.0.0.255 10.1.0.0 0.0.0.255', 'permit ip 10.2.0.0 0.0.0.255 any',
+      'ip nat inside source list NAT interface Gi0/0/0 overload', 'crypto isakmp policy 10', 'encryption aes 256', 'hash sha256', 'authentication pre-share', 'group 14', 'lifetime 3600',
+      'crypto isakmp key Tw!S2S#2026 address 203.0.113.18', 'crypto ipsec transform-set TS esp-aes 256 esp-sha256-hmac', 'mode tunnel',
+      'ip access-list extended VPN-HQ', 'permit ip 10.2.0.0 0.0.0.255 10.1.0.0 0.0.0.255',
+      'crypto map CMAP 10 ipsec-isakmp', 'set peer 203.0.113.18', 'set transform-set TS', 'match address VPN-HQ', 'int gi0/0/0', 'crypto map CMAP', 'end']);
+    recompute(s);
+    const t = s.devices.br.vpns[0], sa = saInfo(s, 'br', t.name);
+    const cfg = runningConfig(s, s.devices.br).join('\n');
+    ok(t.rt.up && sa.life1 === 3600 && sa.life2 === 3600 && cfg.includes(' lifetime 3600'), 'IOS：isakmp policy 的 lifetime 生效（兩端取較短的），IPsec SA 預設一小時');
+    s.down = { hq: true };
+    recompute(s);
+    ok(t.rt.up && t.rt.stale - s.clock > 300, 'IOS 預設沒有 keepalive：對端失聯之後通道還是 Up，要等 SA 到期');
+    delete s.down;
+    recompute(s);
+    ios(s, 'br', ['conf t', 'crypto isakmp keepalive 10 3', 'end']);
+    recompute(s);
+    s.down = { hq: true };
+    recomputeNow(s);
+    const wait = t.rt.stale - s.clock;
+    advance(s, 26);
+    ok(wait === 25 && !t.rt.up && runningConfig(s, s.devices.br).includes('crypto isakmp keepalive 10 3'), 'crypto isakmp keepalive 10 3：25 秒內就發現對端失聯');
+    const log = ops.logRows(s, s.devices.br).map((x) => x.line);
+    ok(log.some((l) => /%CRYPTO-5-SESSION_STATUS: Crypto tunnel is DOWN/.test(l)) && log.some((l) => /%SYS-5-CONFIG_I/.test(l)), 'IOS 的紀錄：通道中斷 (%CRYPTO-5-SESSION_STATUS)、有人改過設定 (%SYS-5-CONFIG_I)');
+  }
+
+  // ── 設備自己的時鐘與 NTP ──
+  {
+    const lv = LEVELS.find((l) => l.id === 'l19');
+    const s = lv.setup();
+    recompute(s);
+    const sw = s.devices.sw, rt = s.devices.rt, nms = s.devices.nms;
+    ok(/^\*\d\d:\d\d:\d\d\.\d{3} UTC \w{3} Mar \d+ 1993$/.test(ops.iosClock(s, sw)) && /^\*.* 2026$/.test(ops.iosClock(s, rt)),
+      '沒有對時：2960 沒有硬體時鐘，時間從 1993 年算起；ISR 用硬體時鐘，年份是對的但不可信（都有 *）');
+    lv.solve(s);
+    recompute(s);
+    const n0 = ops.ntpInfo(s, sw);
+    advance(s, 255);
+    const before = ops.ntpInfo(s, sw).synced;
+    advance(s, 2);
+    const n1 = ops.ntpInfo(s, sw);
+    ok(n0.reachable && !n0.synced && n0.wait === 256 && !before && n1.synced && n1.stratum === 3 && /^\d\d:\d\d:\d\d\.\d{3} UTC Mon Jan 5 2026$/.test(ops.iosClock(s, sw)),
+      'NTP：連得到伺服器之後還要輪詢幾次（256 秒）才採信；同步之後時間正確、前面沒有 *');
+    ok(evaluate(s, lv.objectives).every((r) => r.pass), '6-4 的目標在新的時鐘模型下照樣通過');
+    // 紀錄與 Syslog
+    unplug(s, 'usr');
+    const log = ops.logRows(s, sw).map((x) => x.line), got = ops.syslogRows(s, nms);
+    ok(log.some((l) => /^Jan  5 \d\d:\d\d:\d\d\.\d{3}: %LINK-3-UPDOWN: Interface GigabitEthernet0\/2, changed state to down$/.test(l))
+      && log.some((l) => /%LINEPROTO-5-UPDOWN: Line protocol on Interface GigabitEthernet0\/2, changed state to down/.test(l)),
+    '介面斷線：設備記下 %LINK-3-UPDOWN 與 %LINEPROTO-5-UPDOWN，時間戳記是對時後的時間');
+    ok(got.some((m) => m.ip === '10.0.99.2' && /^<187>\d+: Jan  5 .*%LINK-3-UPDOWN/.test(m.line)) && got.some((m) => /^<189>/.test(m.line) && /LINEPROTO/.test(m.line)),
+      'Syslog 伺服器收到訊息：來源 IP 正確，優先值 = 設施 local7 × 8 + 嚴重程度');
+    ios(s, 'sw', ['conf t', 'logging trap warnings', 'end']);
+    const n = ops.syslogRows(s, nms).length;
+    ios(s, 'sw', ['conf t', 'interface gi0/1', 'shutdown', 'end']);
+    const after = ops.syslogRows(s, nms).slice(n).map((m) => m.line);
+    ok(runningConfig(s, sw).includes('logging trap warnings') && !after.some((l) => /CONFIG_I|LINEPROTO|LINK-5/.test(l)) && ops.logRows(s, sw).some((x) => /%LINK-5-CHANGED: Interface GigabitEthernet0\/1, changed state to administratively down/.test(x.line)),
+      'logging trap warnings：比 warnings 輕微的訊息只留在設備上，不會送到伺服器');
+    ios(s, 'sw', ['conf t', 'no logging trap', 'interface gi0/1', 'no shutdown', 'end']);
+    // 伺服器連不到：UDP 不會重送
+    const lost0 = ops.syslogStats(s, rt).lost, had = ops.syslogRows(s, nms).length;
+    s.down = { nms: true };
+    recomputeNow(s);
+    ios(s, 'rt', ['conf t', 'interface gi0/0/0', 'shutdown', 'end']);
+    ok(ops.syslogStats(s, rt).lost > lost0 && ops.syslogRows(s, nms).length === had && ops.logRows(s, rt).some((x) => /LINK-5-CHANGED/.test(x.line)), 'Syslog 伺服器連不到：訊息直接掉了（UDP 不重送），設備自己的緩衝區還留著');
+    // NTP 伺服器失聯八次輪詢之後失去同步，時鐘照原本的速度繼續走
+    advance(s, 64 * 9);
+    const lostInfo = ops.ntpInfo(s, sw);
+    ok(!lostInfo.synced && /^\.\d\d:\d\d:\d\d\.\d{3} UTC Mon Jan 5 2026$/.test(ops.iosClock(s, sw)), 'NTP 伺服器失聯：連續八次輪詢沒有回應就失去同步，時間前面變成 .（不會跳回 1993 年）');
+    delete s.down;
+    // reload：記憶體裡的紀錄消失，時鐘從頭開始
+    ios(s, 'sw', ['write memory', 'reload', '']);
+    const buf = ops.logRows(s, sw).map((x) => x.line);
+    ok(/1993$/.test(ops.iosClock(s, sw)) && /^\*Mar  1 00:00:00\.000: %SYS-5-RESTART: System restarted --$/.test(buf[0]) && buf.some((l) => /%LINK-3-UPDOWN: Interface GigabitEthernet0\/9, changed state to up/.test(l))
+      && macRows(s, sw).length <= 1 && ops.uptimeOf(s, sw) === 0, // 重開機後自己馬上去問 NTP 伺服器，所以會學到伺服器那一筆
+    'reload 之後：紀錄緩衝區清空、時鐘回到 1993 年、介面重新上線，MAC 位址表也重新學');
+  }
+  {
+    // ntp master：上游自己的時間是錯的，下游就跟著錯
+    const { s } = solved('l19');
+    ios(s, 'rt', ['conf t', 'clock timezone TST 8', 'ntp master 5', 'no ntp server', 'end', 'clock set 08:00:00 1 January 2030']);
+    ios(s, 'sw', ['conf t', 'ntp server 10.0.99.1', 'end']);
+    advance(s, 64 * 5);
+    const n = ops.ntpInfo(s, s.devices.sw);
+    ok(n.synced && n.stratum === 6 && /^08:0\d:\d\d\.\d{3} TST \w{3} Jan 1 2030$/.test(ops.iosClock(s, s.devices.rt)) && /^00:0\d:\d\d\.\d{3} UTC \w{3} Jan 1 2030$/.test(ops.iosClock(s, s.devices.sw))
+      && ['clock timezone TST 8', 'ntp master 5'].every((l) => runningConfig(s, s.devices.rt).includes(l)),
+    'ntp master + clock set：交換器向路由器對時（stratum 6），連路由器設錯的年份也一起學過去；clock timezone 只影響顯示');
+  }
+  {
+    // FortiGate 第一次收到回應就校時；公用的 NTP 伺服器在網際網路上
+    const { s } = solved('l09');
+    forti(s, 'fw', ['config system ntp', 'set ntpsync enable', 'set type custom', 'config ntpserver', 'edit 1', `set server "${ops.INET_NTP}"`, 'next', 'end', 'end']);
+    const n = ops.ntpInfo(s, s.devices.fw);
+    const out = forti(s, 'fw', ['diagnose sys ntp status']);
+    ok(n.synced && n.stratum === 2 && out.some((l) => /^synchronized: yes/.test(l)), 'FortiGate 向網際網路上的 NTP 伺服器對時：第一次收到回應就同步 (stratum 2)');
+  }
+  // ── 其他事件的紀錄 ──
+  {
+    const { s } = solved('l25');
+    const routers = Object.values(s.devices).filter((d) => d.ifaces.some((i) => i.vrrp && i.vrrp.on));
+    const master = routers.find((d) => d.ifaces.some((i) => i.rt.vrrp && i.rt.vrrp.state === 'master')), backup = routers.find((d) => d !== master);
+    s.down = { [master.id]: true };
+    recompute(s);
+    ok(ops.logRows(s, backup).some((x) => /%VRRP-6-STATECHANGE: .* Grp 1 state Backup -> Master/.test(x.line)), 'VRRP 換手會留下 %VRRP-6-STATECHANGE');
+  }
+  {
+    const { s } = solved('l27');
+    const r = Object.values(s.devices).find((d) => (d.rt.nbrs || []).length);
+    const nb = r.rt.nbrs[0];
+    s.down = { [nb.dev]: true };
+    recompute(s);
+    const down = ops.logRows(s, r).some((x) => /%OSPF-5-ADJCHG: Process 1, Nbr \d+\.\d+\.\d+\.\d+ on \S+ from FULL to DOWN, Neighbor Down: (Dead timer expired|Interface down or detached)/.test(x.line));
+    delete s.down;
+    recompute(s);
+    ok(down && ops.logRows(s, r).some((x) => /from LOADING to FULL, Loading Done/.test(x.line)), 'OSPF 鄰居中斷與重新建立會留下 %OSPF-5-ADJCHG');
+  }
+  {
+    const { s } = solved('l17');
+    const sw = Object.values(s.devices).find((d) => d.kind === 'mswitch');
+    const pid = Object.keys(sw.sw.ports).find((p) => sw.sw.ports[p].ps && sw.sw.ports[p].ps.on && s.rt.links[sw.id + ':' + p]);
+    sw.sw.ports[pid].ps.mode = 'shutdown';
+    sw.sw.ports[pid].ps.macs = '02:00:00:00:00:01';
+    recompute(s);
+    const lines = ops.logRows(s, sw).map((x) => x.line);
+    ok(sw.rt.err[pid] && lines.some((l) => /%PM-4-ERR_DISABLE: psecure-violation error detected on/.test(l)) && lines.some((l) => /%PORT_SECURITY-2-PSECURE_VIOLATION: Security violation occurred, caused by MAC address [0-9a-f.]{14} on port GigabitEthernet/.test(l)),
+      'Port Security 違規：%PM-4-ERR_DISABLE 與 %PORT_SECURITY-2-PSECURE_VIOLATION（附上違規的 MAC）');
+  }
 }
 
 // ── FortiGate 的 CLI ──

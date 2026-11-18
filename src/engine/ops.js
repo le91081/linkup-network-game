@@ -56,7 +56,7 @@ export function deviceTime(state, d, depth = 0) {
   if (n && n.synced && depth < 6) {
     // 對時對的是「上游那一台的時間」：上游自己的時鐘是錯的，下游就跟著錯
     const ref = state.devices[n.ref];
-    return out(ref && ref.mgmt ? deviceTime(state, ref, depth + 1).ms : wall, 'ntp', true, n.lostAt == null);
+    return out(ref && ref.mgmt ? deviceTime(state, ref, depth + 1).ms : wall, 'ntp', true, true);
   }
   if (c.set) return out(c.set.wall + (now - c.set.at) * 1000, c.set.free ? 'ntp' : 'manual', true, false);
   if (NO_RTC.has(d.model)) return out(FACTORY + (now - (c.boot ?? now - UPTIME0)) * 1000, 'boot', false, false);
@@ -155,10 +155,12 @@ function ntpRound(state, boot, round) {
         if (n.okSince == null) n.okSince = boot ? -1e9 : now;
         n.reach = ((n.reach << 1) | 1) & 255;
         n.lostAt = null;
+        n.lastOk = now;
       } else {
         n.why = r.reason; n.okSince = null;
         n.reach = (n.reach << 1) & 255;
-        if (n.synced && n.lostAt == null) n.lostAt = now;
+        // 第一次沒收到回應的那一次輪詢，是上一次成功之後的下一輪（時間一次跳很多的時候也要算對）
+        if (n.synced && n.lostAt == null) n.lostAt = Math.min(now, (n.lastOk ?? now) + NTP_POLL);
       }
       if (boot && r.ok) n.reach = 255;
     }
@@ -321,10 +323,24 @@ function diffDevice(state, d, a, b) {
       `logid="0100020099" type="event" subtype="system" level="information" vd="root" logdesc="Interface status changed" action="interface-stat-change" status="${up ? 'UP' : 'DOWN'}" msg="Link monitor: Interface ${fgIf(pid)} was turned ${up ? 'up' : 'down'}"`);
     if (ios) ev(5, 'LINEPROTO-5-UPDOWN', `Line protocol on Interface ${L}, changed state to ${up ? 'up' : 'down'}`);
   };
+  // 埠已經被關掉了，所以從接線去找這個埠後面有哪些 MAC：對面是電腦就是它自己，是交換器或基地台就是接在它後面的設備
+  const macsOn = (pid) => {
+    const c = state.cables.find((x) => (x.a.dev === d.id && x.a.port === pid) || (x.b.dev === d.id && x.b.port === pid));
+    const o = c && (c.a.dev === d.id ? c.b : c.a), x = o && state.devices[o.dev];
+    if (!x) return [];
+    const i = x.ifaces.find((y) => (y.bind.t === 'port' || y.bind.t === 'sub') && y.bind.port === o.port);
+    if (i && i.rt && i.rt.mac) return [i.rt.mac];
+    const out = [];
+    for (const y of x.ifaces) if ((y.bind.t === 'svi' || y.bind.t === 'bridge') && y.rt && y.rt.ip != null) out.push(y.rt.mac);
+    for (const cl of state.rt.clients[x.id] || []) out.push(cl.iface.rt.mac);
+    if (x.sw) for (const p of Object.keys(x.sw.ports)) if (p !== o.port) for (const m of macsBehind(state, x, p)) out.push(m.mac);
+    return out;
+  };
+  const peerMac = (pid) => macsOn(pid)[0];
   const badMac = (pid) => {
     const pc = d.sw.ports[pid], ok = String((pc.ps && pc.ps.macs) || '').toLowerCase();
-    const m = macsBehind(state, d, pid).find((x) => !ok.includes(x.mac));
-    return m ? dotMac(m.mac) : 'unknown';
+    const all = macsOn(pid), m = all.find((x) => !ok.includes(x)) || all[0];
+    return m ? dotMac(m) : 'unknown';
   };
   for (const [pid, now] of Object.entries(b.port)) {
     const was = a.port[pid];
@@ -381,8 +397,8 @@ function diffDevice(state, d, a, b) {
   // 802.1X
   for (const [pid, st] of Object.entries(b.auth)) {
     if (a.auth[pid] === st) continue;
-    const m = macsBehind(state, d, pid)[0];
-    ev(5, st === 'ok' ? 'DOT1X-5-SUCCESS' : 'DOT1X-5-FAIL', `Authentication ${st === 'ok' ? 'successful' : 'failed'} for client (${m ? dotMac(m.mac) : 'Unknown MAC'}) on Interface ${label(pid)}`);
+    const m = peerMac(pid);
+    ev(5, st === 'ok' ? 'DOT1X-5-SUCCESS' : 'DOT1X-5-FAIL', `Authentication ${st === 'ok' ? 'successful' : 'failed'} for client (${m ? dotMac(m) : 'Unknown MAC'}) on Interface ${label(pid)}`);
   }
 }
 

@@ -344,7 +344,7 @@ function statusTab(ctx, body) {
     })));
     body.append(M.arpCard(ctx));
   }
-  if (dev.kind === 'router' || dev.kind === 'homerouter') body.append(M.sessionCard(ctx));
+  if (dev.kind === 'router' || dev.kind === 'homerouter') body.append(M.sessionTableCard(ctx), M.sessionCard(ctx, '連線紀錄（最新的在上面）'));
   body.append(X.neighborsCard(ctx));
 }
 
@@ -474,7 +474,8 @@ function baseTabs(dev) {
   if (dev.locked && dev.kind !== 'internet') return [['info', '設備資訊', X.lockedInfo]];
   switch (dev.kind) {
     case 'host': return [T.net, dev.vpnClient && ['vpn', 'VPN', X.vpnClientTab], dev.dhcpScopes && ['dhcp', 'DHCP 服務', X.dhcpScopesTab],
-      dev.radiusServer && ['radius', 'RADIUS', M.radiusServerTab], T.term].filter(Boolean);
+      dev.radiusServer && ['radius', 'RADIUS', M.radiusServerTab],
+      (dev.services || []).some((s) => s.proto === 'udp' && s.port === 514) && ['syslog', 'Syslog', M.syslogTab], T.term].filter(Boolean);
     case 'hub': case 'switch': return [T.ports];
     case 'ap': return [['ssid', '無線網路', X.ssidTab], ['radio', '無線電', X.radioTab], T.ports];
     case 'mswitch': return [T.swports, T.vlan, T.sec, T.mgmt, T.status];

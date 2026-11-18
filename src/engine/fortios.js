@@ -2,7 +2,8 @@
 // 每個設定區段都定義「怎麼從設備的設定讀出 FortiOS 的欄位」和「怎麼把欄位寫回去」，
 // 所以 show 印出來的內容可以整份貼到另一台 FortiGate 上，得到相同的設定。不依賴瀏覽器，可用 Node 測試。
 import { parseIp, fmtIp, parseMask, fmtMask, netOf } from './ip.js';
-import { SERVICE_NAMES, accessOf, sessionLog, routeRows } from './sim.js';
+import { SERVICE_NAMES, accessOf, sessionLog, routeRows, sessionRows, clearSessions, saInfo } from './sim.js';
+import { ntpInfo, plainStamp, logRows, clearLog, syslogStats } from './ops.js';
 
 const ACCESS = ['ping', 'https', 'ssh', 'http', 'telnet'];
 const PROPOSALS = ['aes128-sha1', 'aes128-sha256', 'aes256-sha1', 'aes256-sha256'];
@@ -214,6 +215,18 @@ const SEC = {
       return undefined;
     },
   },
+  // 連線可以閒置多久（TCP）。UDP 與 ICMP 另有較短的固定逾時
+  'system session-ttl': {
+    single: true, only: (d) => !!d.policies, fields: { default: 'b' },
+    read: (d) => [{ key: '', f: d.natTimeout && +d.natTimeout.tcp > 0 ? { default: [String(d.natTimeout.tcp)] } : {} }],
+    write(d, key, f) {
+      const v = (f.default || [])[0];
+      if (v != null && (!/^\d+$/.test(v) || +v < 300 || +v > 2764800)) return ERR('default 必須是 300 – 2764800 秒（預設 3600）');
+      if (v == null || +v === 3600) { if (d.natTimeout) delete d.natTimeout.tcp; } else (d.natTimeout ||= {}).tcp = +v;
+      if (d.natTimeout && !Object.keys(d.natTimeout).length) delete d.natTimeout;
+      return undefined;
+    },
+  },
   'system snmp community': {
     numeric: true, only: (d) => !!d.mgmt, fields: { name: 'q', status: 'b' },
     read: (d) => ((d.mgmt.snmp || 'v2c') === 'v2c' ? [{ key: '1', f: { name: [d.mgmt.community || 'public'] } }] : []),
@@ -398,7 +411,7 @@ const SEC = {
   },
   'vpn ipsec phase1-interface': {
     only: (d) => !!d.vpns,
-    fields: { type: 'b', interface: 'q', 'ike-version': 'b', peertype: 'b', 'net-device': 'b', proposal: 'b', dhgrp: 'b', 'remote-gw': 'b', psksecret: 'b', comments: 'q', keylife: 'b', dpd: 'b', nattraversal: 'b' },
+    fields: { type: 'b', interface: 'q', 'ike-version': 'b', peertype: 'b', 'net-device': 'b', proposal: 'b', dhgrp: 'b', 'remote-gw': 'b', psksecret: 'b', comments: 'q', keylife: 'b', dpd: 'b', 'dpd-retrycount': 'b', 'dpd-retryinterval': 'b', nattraversal: 'b' },
     read: (d) => tunnels(d).map((t) => ({
       key: t.name,
       f: {
@@ -406,6 +419,9 @@ const SEC = {
         proposal: t.props && t.props.length ? t.props : [`${t.enc || 'aes128'}-${t.hash || 'sha1'}`],
         dhgrp: t.dhs && t.dhs.length ? t.dhs : [String(t.dh || '2')],
         ...(t.peer ? { 'remote-gw': [t.peer] } : {}), ...(t.psk ? { psksecret: [t.psk] } : {}),
+        // 只有改過的才會出現在設定裡：金鑰壽命預設 86400 秒，DPD 預設 on-demand、每 20 秒一次、重試 3 次
+        ...(+t.life1 > 0 ? { keylife: [String(t.life1)] } : {}), ...(t.dpd ? { dpd: [t.dpd] } : {}),
+        ...(+t.dpdRetry > 0 ? { 'dpd-retrycount': [String(t.dpdRetry)] } : {}), ...(+t.dpdInterval > 0 ? { 'dpd-retryinterval': [String(t.dpdInterval)] } : {}),
       },
     })),
     write(d, key, f, sub, st, isNew) {
@@ -418,10 +434,21 @@ const SEC = {
       if (!dhs || !dhs.every((g) => DH.includes(g))) return ERR(`dhgrp 可用的值：${DH.join(' ')}（可以列好幾個）`);
       const gw = (f['remote-gw'] || [''])[0];
       if (parseIp(gw) == null) return ERR('還沒有對端的位址：set remote-gw <對端的公用 IP>');
+      const num = (k, lo, hi) => { const v = (f[k] || [])[0]; return v == null ? null : /^\d+$/.test(v) && +v >= lo && +v <= hi ? +v : NaN; };
+      const life = num('keylife', 120, 172800), dr = num('dpd-retrycount', 1, 10), di = num('dpd-retryinterval', 1, 3600);
+      if (Number.isNaN(life)) return ERR('keylife 必須是 120 – 172800 秒（預設 86400）');
+      if (Number.isNaN(dr)) return ERR('dpd-retrycount 必須是 1 – 10（預設 3）');
+      if (Number.isNaN(di)) return ERR('dpd-retryinterval 必須是 1 – 3600 秒（預設 20）');
+      const dpd = (f.dpd || ['on-demand'])[0];
+      if (!['disable', 'on-idle', 'on-demand'].includes(dpd)) return ERR('dpd 可用的值：disable、on-idle、on-demand');
       let t = tunnels(d).find((x) => x.name === key);
       if (!t) { t = { name: key, peer: '', psk: '', local: '', remote: '', manualRoute: true, routes: [] }; d.vpns.push(t); }
       const [enc, hash] = props[0].split('-');
       Object.assign(t, { wan: f.interface[0], peer: gw, psk: (f.psksecret || []).join(' '), enc, hash, dh: dhs[0], props: props.length > 1 ? props : undefined, dhs: dhs.length > 1 ? dhs : undefined });
+      Object.assign(t, {
+        life1: life && life !== 86400 ? life : undefined, dpd: dpd === 'on-demand' ? undefined : dpd,
+        dpdRetry: dr && dr !== 3 ? dr : undefined, dpdInterval: di && di !== 20 ? di : undefined,
+      });
       return undefined;
     },
     remove(d, key) {
@@ -442,6 +469,7 @@ const SEC = {
         proposal: t.props2 && t.props2.length ? t.props2 : [`${t.enc2 || t.enc || 'aes128'}-${t.hash2 || t.hash || 'sha1'}`],
         ...(t.pfs || (t.pfsList && t.pfsList.length) ? { dhgrp: t.pfsList && t.pfsList.length ? t.pfsList : [String(t.pfs)] } : { pfs: ['disable'] }),
         ...(e.src ? { 'src-subnet': cidrTok(e.src) } : {}), ...(e.dst ? { 'dst-subnet': cidrTok(e.dst) } : {}),
+        ...(+t.life2 > 0 ? { keylifeseconds: [String(t.life2)] } : {}),
       },
     }))),
     write(d, key, f, sub, st, isNew) {
@@ -455,8 +483,10 @@ const SEC = {
       // 沒有指定網段就是 0.0.0.0/0：所有流量都符合，實際要送哪些由靜態路由決定
       const src = f['src-subnet'] ? tokCidr(f['src-subnet']) : '0.0.0.0/0', dst = f['dst-subnet'] ? tokCidr(f['dst-subnet']) : '0.0.0.0/0';
       if (!src || !dst) return ERR('用法：set src-subnet <本地網段> <遮罩>、set dst-subnet <遠端網段> <遮罩>');
+      const kl = (f.keylifeseconds || [])[0];
+      if (kl != null && (!/^\d+$/.test(kl) || +kl < 120 || +kl > 172800)) return ERR('keylifeseconds 必須是 120 – 172800 秒（預設 43200）');
       const [enc2, hash2] = props[0].split('-');
-      Object.assign(t, { enc2, hash2, props2: props.length > 1 ? props : undefined, pfs: groups[0] || '', pfsList: groups.length > 1 ? groups : undefined });
+      Object.assign(t, { enc2, hash2, props2: props.length > 1 ? props : undefined, pfs: groups[0] || '', pfsList: groups.length > 1 ? groups : undefined, life2: kl != null && +kl !== 43200 ? +kl : undefined });
       const cur = p2list(t).filter((e) => e.src && e.dst && e.name !== key);
       setP2(t, [...cur, { name: key, src, dst }]);
       return undefined;
@@ -633,7 +663,11 @@ export function fortiConfig(state, dev) {
 }
 
 function getInfo(state, d, what) {
-  if (what === 'system status') return [`Version: FortiGate-${d.model === 'fg100f' ? '100F' : '60F'} v7.4（LinkUp 模擬）`, `Hostname: ${hostOf(d)}`, 'Operation Mode: NAT', 'Current virtual domain: root'];
+  if (what === 'system status') {
+    const s = plainStamp(state, d);
+    return [`Version: FortiGate-${d.model === 'fg100f' ? '100F' : '60F'} v7.4（LinkUp 模擬）`, `Hostname: ${hostOf(d)}`, 'Operation Mode: NAT', 'Current virtual domain: root',
+      `System time: ${s.day} ${s.mon} ${String(s.dd).padStart(2)} ${s.time} ${s.yyyy}`];
+  }
   if (what === 'system interface') {
     return d.ifaces.map((i) => `== [ ${i.id} ]\nname: ${i.id}   mode: ${i.mode}   ip: ${i.rt && i.rt.ip != null ? `${fmtIp(i.rt.ip)} ${fmtMask(i.rt.bits)}` : '0.0.0.0 0.0.0.0'}   status: ${i.rt && i.rt.link ? 'up' : 'down'}   allowaccess: ${accessOf(d, i).join(' ') || '(none)'}`).join('\n').split('\n');
   }
@@ -648,7 +682,10 @@ function getInfo(state, d, what) {
   }
   if (what === 'vpn ipsec tunnel summary') {
     const ts = tunnels(d);
-    return ts.length ? ts.map((t) => `'${t.name}' ${t.peer || '0.0.0.0'}:0  selectors(total,up): ${p2list(t).length}/${t.rt && t.rt.up ? p2list(t).length : 0}  rx(pkt,err): 0/0  tx(pkt,err): 0/0`) : ['沒有任何 IPsec 通道'];
+    return ts.length ? ts.map((t) => {
+      const sa = saInfo(state, d.id, t.name);
+      return `'${t.name}' ${t.peer || '0.0.0.0'}:0  selectors(total,up): ${p2list(t).length}/${t.rt && t.rt.up ? p2list(t).length : 0}  rx(pkt,err): ${sa ? sa.rx : 0}/0  tx(pkt,err): ${sa ? sa.tx : 0}/0`;
+    }) : ['沒有任何 IPsec 通道'];
   }
   return null;
 }
@@ -656,19 +693,62 @@ function diagnose(state, d, what) {
   if (what === 'vpn tunnel list') {
     const ts = tunnels(d);
     if (!ts.length) return ['list all ipsec tunnel in vd 0', '沒有任何 IPsec 通道'];
-    return ['list all ipsec tunnel in vd 0', ...ts.flatMap((t) => ['------------------------------------------------------',
-      `name=${t.name} ver=1 ${wanOf(d, t)} -> ${t.peer || '0.0.0.0'}`, `status=${t.rt && t.rt.up ? 'up' : 'down'}${t.rt && !t.rt.up && t.rt.why ? `  (${t.rt.why})` : ''}`,
-      ...p2list(t).filter((e) => e.src).map((e) => `proxyid=${e.name} src=${e.src} dst=${e.dst}`)])];
+    return ['list all ipsec tunnel in vd 0', ...ts.flatMap((t) => {
+      const sa = saInfo(state, d.id, t.name), dpd = t.dpd || 'on-demand';
+      return ['------------------------------------------------------',
+        `name=${t.name} ver=1 ${wanOf(d, t)} -> ${t.peer || '0.0.0.0'}`,
+        `status=${t.rt && t.rt.up ? 'up' : 'down'}${t.rt && !t.rt.up && t.rt.why ? `  (${t.rt.why})` : ''}${t.rt && t.rt.stale ? `  (對端已經沒有回應，DPD 探測中，再 ${Math.ceil(t.rt.stale - state.clock)} 秒判定失聯)` : ''}`,
+        `stat: rxp=${sa ? sa.rx : 0} txp=${sa ? sa.tx : 0}`,
+        `dpd: mode=${dpd} on=${dpd === 'disable' ? 0 : 1} idle=${(+t.dpdInterval || 20) * 1000}ms retry=${+t.dpdRetry || 3}`,
+        ...p2list(t).filter((e) => e.src).flatMap((e) => [`proxyid=${e.name} src=${e.src} dst=${e.dst}`,
+          ...(sa ? [`  SA:  expire=${sa.left2}  life: timeout=${sa.left2}/${sa.life2}  rekey=${sa.rekey2}`] : [])])];
+    })];
+  }
+  if (what === 'vpn ike gateway list') {
+    const ts = tunnels(d);
+    if (!ts.length) return ['沒有任何 IPsec 通道'];
+    return ts.flatMap((t) => {
+      const sa = saInfo(state, d.id, t.name);
+      return ['', 'vd: root/0', `name: ${t.name}`, 'version: 1', `interface: ${wanOf(d, t)}`, `addr: ${wanOf(d, t)}:500 -> ${t.peer || '0.0.0.0'}:500`,
+        ...(sa ? [`created: ${sa.age}s ago`, 'IKE SA: created 1/1  established 1/1', 'IPsec SA: created 1/1  established 1/1', '  status: established',
+          `  proposal: ${t.enc || 'aes128'}-${t.hash || 'sha1'}`, `  lifetime/rekey: ${sa.life1}/${sa.left1}`]
+          : [`  status: ${t.rt && t.rt.nego ? 'connecting' : 'not established'}${t.rt && t.rt.why ? `（${t.rt.why}）` : ''}`])];
+    });
   }
   if (what === 'sys session list') {
-    const log = sessionLog(d);
-    if (!log.length) return ['目前沒有任何連線紀錄（先讓流量經過這台設備）'];
-    return log.map((e) => (e.act === 'snat' ? `nat  proto=${e.proto} ${fmtIp(e.src)}:${e.sport} -> ${fmtIp(e.dst)}:${e.dport}  snat=${fmtIp(e.nsrc)}`
-      : e.act === 'dnat' ? `vip  proto=${e.proto} ${fmtIp(e.src)}:${e.sport} -> ${fmtIp(e.dst)}:${e.dport}  dnat=${fmtIp(e.ndst)}:${e.ndport}`
-        : `${e.act === 'allow' ? 'pass' : 'deny'} proto=${e.proto} ${fmtIp(e.src)}:${e.sport} -> ${fmtIp(e.dst)}:${e.dport}  ${e.inIf}->${e.outIf}  policy=${e.rule || 0}`));
+    // 目前還留在表裡的連線。expire 是還能閒置幾秒，時間到就會被移除
+    const rows = sessionRows(state, d);
+    if (!rows.length) return ['total session 0', '（連線表是空的：先讓流量經過這台設備。閒置太久的連線會自動移除）'];
+    const o = [];
+    for (const e of rows) {
+      const pn = { icmp: 1, tcp: 6, udp: 17 }[e.proto] || 0;
+      const ps = e.proto === 'tcp' ? (e.st === 'est' ? '01' : e.st === 'fin' ? '05' : '02') : '00';
+      const snat = e.nSrc !== e.src, dnat = e.nDst !== e.dst;
+      o.push(`session info: proto=${pn} proto_state=${ps} duration=${e.age} expire=${e.left} timeout=${e.ttl}`,
+        `orgin->sink: org pre->post, reply pre->post dev=${e.inIf}->${e.outIf}/${e.outIf}->${e.inIf}`,
+        `hook=${snat ? 'post' : 'pre'} dir=org act=${snat ? 'snat' : dnat ? 'dnat' : 'noop'} ${fmtIp(e.src)}:${e.sport}->${fmtIp(e.dst)}:${e.dport}(${snat ? `${fmtIp(e.nSrc)}:${e.nSport}` : dnat ? `${fmtIp(e.nDst)}:${e.nDport}` : '0.0.0.0:0'})`,
+        `hook=${snat ? 'pre' : 'post'} dir=reply act=${snat ? 'dnat' : dnat ? 'snat' : 'noop'} ${fmtIp(e.nDst)}:${e.nDport}->${fmtIp(e.nSrc)}:${e.nSport}(${snat || dnat ? `${fmtIp(snat ? e.src : e.dst)}:${snat ? e.sport : e.dport}` : '0.0.0.0:0'})`,
+        `policy_id=${e.rule || 0}`, '');
+    }
+    o.push(`total session ${rows.length}`);
+    return o;
+  }
+  if (what === 'sys session clear') { clearSessions(state, d); return ['（連線表已清空）']; }
+  if (what === 'sys ntp status') {
+    const n = ntpInfo(state, d);
+    if (n.server == null) return ['synchronized: no, ntpsync: disabled, server-mode: disabled', '（還沒有設定 NTP 伺服器：config system ntp）'];
+    return [`synchronized: ${n.synced ? 'yes' : 'no'}, ntpsync: enabled, server-mode: disabled`, '',
+      `ipv4 server(${fmtIp(n.server)}) ${fmtIp(n.server)} -- ${n.reachable ? 'reachable' : 'unreachable'}(0x${n.reach.toString(16)}) S:${n.reachable ? n.serverStratum : 16} T:${n.when}${n.synced ? ' selected' : ''}`,
+      ...(n.reachable ? [`\tserver-version=4, stratum=${n.serverStratum}`] : [`\t（${n.why || '還沒有收到回應'}）`])];
+  }
+  if (what === 'log history' || what === 'log display') {
+    const rows = logRows(state, d), st = syslogStats(state, d);
+    return [`${rows.length} logs found.`, ...rows.map((r, k) => `${k + 1}: ${r.line}`),
+      ...(d.mgmt && d.mgmt.syslog ? [`（已送到 Syslog 伺服器 ${d.mgmt.syslog}：${st.sent} 筆${st.lost ? `，${st.lost} 筆沒有送達：${st.why}` : ''}）`] : [])];
   }
   return null;
 }
+void sessionLog;
 
 // ───────────────────────── 工作階段 ─────────────────────────
 
@@ -803,13 +883,22 @@ export function fortiSession(getDev, getState) {
     }
     if (cmd === 'diagnose' || cmd === 'diag') {
       const r = diagnose(st(), d, tok.slice(1).join(' ').toLowerCase());
-      if (!r) return fail([...parseErr(tok[1] || ''), '（可用：diagnose vpn tunnel list、diagnose sys session list）']);
+      if (!r) return fail([...parseErr(tok[1] || ''), '（可用：diagnose vpn tunnel list、diagnose vpn ike gateway list、diagnose sys session list、diagnose sys session clear、diagnose sys ntp status）']);
       out.push(...r);
       return res();
     }
     if (cmd === 'execute' || cmd === 'exec') {
       if ((tok[1] || '').toLowerCase() === 'ping' && parseIp(tok[2] || '') != null) return res({ ping: tok[2] });
-      return fail('用法：execute ping <IP>');
+      const sub = tok.slice(1).join(' ').toLowerCase();
+      if (sub === 'log display') { out.push(...diagnose(st(), d, 'log display')); return res(); }
+      if (sub === 'log delete-all') { clearLog(st(), d); out.push('（紀錄已清除）'); return res(); }
+      if (sub === 'date' || sub === 'time') {
+        const s = plainStamp(st(), d), n = ntpInfo(st(), d);
+        out.push(sub === 'date' ? `current date is: ${s.date}` : `current time is: ${s.time}`,
+          ...(sub === 'time' ? [n.synced ? `last ntp sync: 已和 ${fmtIp(n.server)} 同步` : 'last ntp sync: 尚未同步（時間來自設備自己的硬體時鐘，可能有偏差）'] : []));
+        return res();
+      }
+      return fail('用法：execute ping <IP>、execute log display、execute date、execute time');
     }
     if (cmd === 'exit' || cmd === 'quit') return res();
     return fail([`Unknown action 0`, ...parseErr(tok[0])]);

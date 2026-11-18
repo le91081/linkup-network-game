@@ -5,6 +5,7 @@ import { parseIp, fmtIp, parseMask, fmtMask, maskOf, netOf, bcastOf } from './ip
 import { parseCidr6, parseIp6 } from './ip6.js';
 import { newIface, cloneState, CATALOG } from './model.js';
 import { macsBehind, recompute, ospfOn } from './sim.js';
+import { logEvent, markReboot, setClock, deviceTime, SEVERITY } from './ops.js';
 
 // ───────────────────────── running-config 與 startup-config ─────────────────────────
 // IOS 設備改的是記憶體裡的 running-config；要下 write memory 才會存進 startup-config。
@@ -97,6 +98,13 @@ const wildBits = (s) => (dotted(s) && parseIp(s) != null ? parseMask(fmtIp(~pars
 const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
 
 /** 比對指令樣式：文字只要打出開頭幾個字母（IOS 的縮寫），<x> 是參數，<...> 吃掉剩下所有字，[...] 則可以是空的 */
+const MONTHS = ['january', 'february', 'march', 'april', 'may', 'june', 'july', 'august', 'september', 'october', 'november', 'december'];
+// ip nat translation 的計時器 → 連線表裡對應的種類。timeout 是通用的（一次設定三種）
+const NAT_TIMER = {
+  timeout: ['tcp', 'udp', 'icmp'], 'tcp-timeout': ['tcp'], 'udp-timeout': ['udp'], 'icmp-timeout': ['icmp'],
+  'dns-timeout': ['dns'], 'syn-timeout': ['syn'], 'finrst-timeout': ['fin'],
+};
+
 function match(tok, pattern) {
   const pt = pattern.split(' ');
   const args = [];
@@ -623,8 +631,61 @@ export function iosSession(getDev, getState) {
     ['no ip http server', () => void (dev().mgmt && (dev().mgmt.http = false))],
     ['ip http secure-server', () => void (dev().mgmt && (dev().mgmt.https = true))],
     ['no ip http secure-server', () => void (dev().mgmt && (dev().mgmt.https = false))],
-    ['ntp server <ip>', ([ip]) => (parseIp(ip) == null ? err('IP 位址的格式不正確') : void (dev().mgmt && (dev().mgmt.ntp = ip)))],
+    ['ntp server <ip> [...]', ([ip]) => (parseIp(ip) == null ? err('IP 位址的格式不正確') : void (dev().mgmt && (dev().mgmt.ntp = ip)))],
     ['no ntp server [...]', () => void (dev().mgmt && (dev().mgmt.ntp = ''))],
+    // 把自己的時鐘當成時間來源，替其他設備報時（沒有上游可以對時的時候用）
+    ['ntp master [...]', ([n]) => {
+      const m = dev().mgmt, s = n ? +n : 8;
+      if (!m) return err('這台設備不支援');
+      if (!Number.isInteger(s) || s < 1 || s > 15) return err('stratum 必須是 1 – 15（數字越小代表離標準時間越近，預設 8）');
+      m.ntpMaster = s;
+      return undefined;
+    }],
+    ['no ntp master [...]', () => { if (dev().mgmt) delete dev().mgmt.ntpMaster; }],
+    ['clock timezone <name> <hours> [...]', ([name, hours]) => {
+      const m = dev().mgmt, off = +hours;
+      if (!m) return err('這台設備不支援');
+      if (!Number.isInteger(off) || off < -12 || off > 14) return err('用法：clock timezone <名稱> <和 UTC 差幾小時>，例如 clock timezone TST 8');
+      m.tz = { name, off };
+      return undefined;
+    }],
+    ['no clock timezone [...]', () => { if (dev().mgmt) delete dev().mgmt.tz; }],
+    // 嚴重程度在這個門檻以內的訊息才送到 Syslog 伺服器（預設 informational）
+    ['logging trap <level>', ([lv]) => {
+      const m = dev().mgmt, n = /^[0-7]$/.test(lv) ? +lv : SEVERITY.findIndex((s) => s.startsWith(lv.toLowerCase()));
+      if (!m) return err('這台設備不支援');
+      if (n < 0) return err('用法：logging trap <0-7 或名稱>：emergencies、alerts、critical、errors、warnings、notifications、informational、debugging');
+      if (n === 6) delete m.logTrap; else m.logTrap = n;
+      return undefined;
+    }],
+    ['no logging trap [...]', () => { if (dev().mgmt) delete dev().mgmt.logTrap; }],
+    ['logging buffered [...]', () => undefined],
+    ['logging console [...]', () => undefined],
+    // MAC 位址表的項目多久沒看到就忘記（預設 300 秒）
+    ['mac address-table aging-time <n>', ([n]) => {
+      const e = needSw();
+      if (e) return e;
+      if (!/^\d+$/.test(n) || +n < 10 || +n > 1000000) return err('用法：mac address-table aging-time <10-1000000>（秒，預設 300）');
+      if (+n === 300) delete dev().sw.macAge; else dev().sw.macAge = +n;
+      return undefined;
+    }],
+    ['no mac address-table aging-time [...]', () => needSw() || void delete dev().sw.macAge],
+    // NAT 轉換表的閒置逾時
+    ['ip nat translation <kind> <n>', ([kind, n]) => {
+      const d = dev(), k = NAT_TIMER[kind.toLowerCase()];
+      if (!d.routing || !d.staticNat) return err('這台設備不支援 NAT');
+      if (!k) return err('用法：ip nat translation timeout | tcp-timeout | udp-timeout | icmp-timeout | dns-timeout | syn-timeout | finrst-timeout <秒>');
+      if (!/^\d+$/.test(n) || +n < 1 || +n > 536870) return err('秒數必須是 1 – 536870');
+      for (const x of k) (d.natTimeout ||= {})[x] = +n;
+      return undefined;
+    }],
+    ['no ip nat translation <kind> [...]', ([kind]) => {
+      const d = dev(), k = NAT_TIMER[kind.toLowerCase()];
+      if (!k) return err('沒有這個計時器');
+      for (const x of k) if (d.natTimeout) delete d.natTimeout[x];
+      if (d.natTimeout && !Object.keys(d.natTimeout).length) delete d.natTimeout;
+      return undefined;
+    }],
     ['logging host <ip>', ([ip]) => (parseIp(ip) == null ? err('IP 位址的格式不正確') : void (dev().mgmt && (dev().mgmt.syslog = ip)))],
     ['logging <ip>', ([ip]) => (parseIp(ip) == null ? err('用法：logging host <Syslog 伺服器 IP>') : void (dev().mgmt && (dev().mgmt.syslog = ip)))],
     ['no logging [...]', () => void (dev().mgmt && (dev().mgmt.syslog = ''))],
@@ -659,6 +720,24 @@ export function iosSession(getDev, getState) {
     }],
     ['no crypto isakmp policy <n>', ([n]) => { const d = dev(); if (d.vpns) d.isakmp = isakmpOf(d).filter((x) => x.n !== +n); }],
     ['crypto isakmp enable', () => undefined],
+    // Dead Peer Detection：沒有設定的話，對端失聯之後要等 SA 到期才會發現
+    ['crypto isakmp keepalive <sec> [...]', ([sec, rest]) => {
+      const d = dev(), r = rest ? rest.split(/\s+/)[0] : '';
+      if (!d.vpns) return err('這台設備不支援 IPsec VPN');
+      if (!/^\d+$/.test(sec) || +sec < 10 || +sec > 3600) return err('用法：crypto isakmp keepalive <10-3600> [重試間隔 2-60]');
+      if (r && /^\d+$/.test(r) && (+r < 2 || +r > 60)) return err('重試間隔必須是 2 – 60 秒');
+      d.ikeKeepalive = { sec: +sec, retry: /^\d+$/.test(r) ? +r : 2 };
+      return undefined;
+    }],
+    ['no crypto isakmp keepalive [...]', () => { delete dev().ikeKeepalive; }],
+    ['crypto ipsec security-association lifetime seconds <n>', ([n]) => {
+      const d = dev();
+      if (!d.vpns) return err('這台設備不支援 IPsec VPN');
+      if (!/^\d+$/.test(n) || +n < 120 || +n > 86400) return err('用法：crypto ipsec security-association lifetime seconds <120-86400>（預設 3600）');
+      if (+n === 3600) delete d.ipsecLife; else d.ipsecLife = +n;
+      return undefined;
+    }],
+    ['no crypto ipsec security-association lifetime [...]', () => { delete dev().ipsecLife; }],
     ['crypto isakmp key <...>', ([rest]) => {
       const d = dev(), t = rest.split(/\s+/);
       const a = t.findIndex((x, n) => n > 0 && x.length >= 3 && 'address'.startsWith(x.toLowerCase()));
@@ -756,7 +835,8 @@ export function iosSession(getDev, getState) {
       }],
       ['default-information originate [...]', () => { dev().ospfDefault = true; }],
       ['no default-information originate', () => { dev().ospfDefault = false; }],
-      ['router-id <id>', () => undefined],
+      ['router-id <id>', ([id]) => { if (parseIp(id) == null) return err('用法：router-id <A.B.C.D>'); dev().ospfRid = id; return undefined; }],
+      ['no router-id [...]', () => { delete dev().ospfRid; }],
       ['passive-interface <...>', () => '（這個模擬沒有 passive-interface，要關閉某個介面的 OSPF 請用 no network）'],
     ],
     dhcp: [
@@ -867,7 +947,12 @@ export function iosSession(getDev, getState) {
       ['hash <h>', ([h]) => { const v = { sha: 'sha1', sha1: 'sha1', sha256: 'sha256' }[h.toLowerCase()]; if (!v) return err('hash 支援 sha（SHA-1）與 sha256'); S.cur.hash = v; return undefined; }],
       ['group <g>', ([g]) => { if (!['2', '5', '14', '19'].includes(g)) return err('DH 群組支援 2、5、14、19'); S.cur.dh = g; return undefined; }],
       ['authentication <a>', ([a]) => ('pre-share'.startsWith(a.toLowerCase()) ? undefined : err('這個模擬只支援 pre-share（預先共用金鑰）'))],
-      ['lifetime <n>', () => undefined],
+      ['lifetime <n>', ([n]) => {
+        if (!/^\d+$/.test(n) || +n < 60 || +n > 86400) return err('用法：lifetime <60-86400>（秒，預設 86400）');
+        if (+n === 86400) delete S.cur.life; else S.cur.life = +n;
+        return undefined;
+      }],
+      ['no lifetime [...]', () => { delete S.cur.life; }],
     ],
     tset: [['mode <m>', () => undefined]],
     cmap: [
@@ -886,6 +971,12 @@ export function iosSession(getDev, getState) {
       }],
       ['set pfs <g>', ([g]) => { const m = g.toLowerCase().match(/^group(2|5|14|19)$/); if (!m) return err('用法：set pfs group14（支援 group2、group5、group14、group19）'); S.cur.pfs = m[1]; return undefined; }],
       ['no set pfs', () => { S.cur.pfs = ''; }],
+      ['set security-association lifetime seconds <n>', ([n]) => {
+        if (!/^\d+$/.test(n) || +n < 120 || +n > 86400) return err('用法：set security-association lifetime seconds <120-86400>');
+        S.cur.life2 = +n;
+        return undefined;
+      }],
+      ['no set security-association lifetime [...]', () => { delete S.cur.life2; }],
       ['set security-association <...>', () => undefined],
       ['match address <name>', ([name]) => { S.cur.acl = name.toUpperCase(); syncVpnAcl(dev(), S.cur.acl); return undefined; }],
       ['description <...>', ([text]) => { S.cur.name = text; }],
@@ -907,6 +998,7 @@ export function iosSession(getDev, getState) {
 
   const doReload = (out) => {
     restoreStartup(dev());
+    markReboot(getState(), dev().id); // 記憶體裡的表（ARP、MAC、紀錄…）全部消失，時鐘也重新開始
     S.mode = 'exec'; S.cur = null; S.pending = null;
     out.push('', '*** 設備重新開機中 ***', '', `${hostName(dev())} 開機完成，設定已從 startup-config 載入。`);
     return { out, changed: true, reloaded: true };
@@ -940,6 +1032,19 @@ export function iosSession(getDev, getState) {
         out.push('Building configuration...', '[OK]');
         return done(true);
       }
+      // clock set 14:30:00 5 January 2026（月份和日期的順序兩種都可以）
+      const cs = match(tok, 'clock set <...>');
+      if (cs) {
+        const m = cs[0].match(/^(\d{1,2}):(\d{2}):(\d{2})\s+(\w+)\s+(\w+)\s+(\d{4})$/);
+        const mon = (s) => MONTHS.findIndex((x) => x.startsWith(s.toLowerCase().slice(0, 3)));
+        const day = m && (/^\d+$/.test(m[4]) ? +m[4] : /^\d+$/.test(m[5]) ? +m[5] : NaN);
+        const mo = m && (/^\d+$/.test(m[4]) ? mon(m[5]) : mon(m[4]));
+        if (!m || !(day >= 1 && day <= 31) || mo < 0 || +m[1] > 23 || +m[2] > 59 || +m[3] > 59) { out.push('% 用法：clock set <時:分:秒> <日> <月份> <年>，例如 clock set 14:30:00 5 January 2026'); return done(false); }
+        const tz = (dev().mgmt && dev().mgmt.tz) || { off: 0 };
+        setClock(getState(), dev(), Date.UTC(+m[6], mo, day, +m[1], +m[2], +m[3]) - tz.off * 3600000);
+        logEvent(getState(), dev(), 6, 'SYS-6-CLOCKUPDATE', `System clock has been updated from ${new Date(deviceTime(getState(), dev()).ms).toISOString().slice(11, 19)} UTC, configured from console by console.`);
+        return done(true);
+      }
       if (match(tok, 'reload')) {
         if (dev().startup == null) saveStartup(dev());
         const dirty = iosDirty(getState(), dev());
@@ -950,8 +1055,19 @@ export function iosSession(getDev, getState) {
       return { out, changed: false, pass: true };
     }
     if (text === 'Building configuration...' || /^current configuration/i.test(text)) return done(false);
-    if (match(tok, 'end') || t0 === '^z') { S.mode = 'exec'; S.cur = null; return done(false); }
-    if (match(tok, 'exit')) { S.mode = S.mode === 'config' ? 'exec' : 'config'; S.cur = null; return done(false); }
+    // 離開設定模式時，IOS 會記下一筆「有人改過設定」
+    const leave = () => {
+      const touched = S.touched;
+      S.touched = false;
+      if (touched) logEvent(getState(), dev(), 5, 'SYS-5-CONFIG_I', 'Configured from console by console');
+      return done(touched);
+    };
+    if (match(tok, 'end') || t0 === '^z') { S.mode = 'exec'; S.cur = null; return leave(); }
+    if (match(tok, 'exit')) {
+      const top = S.mode === 'config';
+      S.mode = top ? 'exec' : 'config'; S.cur = null;
+      return top ? leave() : done(false);
+    }
     if (t0 === 'do') return { out, changed: false, pass: true, doLine: tok.slice(1).join(' ') };
     // 介面模式裡單獨一個 sh 是 shutdown；後面還有字（sh ip int br）才是想看 show
     if (tok.length >= 2 && 'show'.startsWith(t0) && t0.length >= 2) { out.push('% 在設定模式要查看狀態請在前面加 do，例如 do show ip interface brief'); return done(false); }
@@ -970,6 +1086,7 @@ export function iosSession(getDev, getState) {
     if (!res.hit) { out.push(err(`Invalid input detected：不認識的指令「${text}」，輸入 ? 查看這個模式可用的指令`)); return done(false); }
     if (isErr(res.r)) { out.push(res.r); return done(false); }
     for (const x of [].concat(res.r ?? [])) out.push(x);
+    S.touched = true;
     return done(true);
   }
 
@@ -1040,6 +1157,7 @@ export function runningConfig(state, dev) {
     if (stp.on === false) o.push('no spanning-tree vlan 1-4094');
     else if (stp.prio != null && stp.prio !== '' && +stp.prio !== 32768) o.push(`spanning-tree vlan 1-4094 priority ${+stp.prio}`);
     if (stp.portfastDefault) o.push('spanning-tree portfast default');
+    if (+sw.macAge > 0 && +sw.macAge !== 300) o.push(`mac address-table aging-time ${+sw.macAge}`);
     const vl = sw.vlans.map((v) => v.id).sort((a, b) => a - b).join(',');
     if (sw.snoop && sw.snoop.on) o.push('ip dhcp snooping', `ip dhcp snooping vlan ${vl}`);
     if (sw.dai && sw.dai.on) o.push(`ip arp inspection vlan ${vl}`);
@@ -1079,8 +1197,10 @@ export function runningConfig(state, dev) {
     if (i) cmIf.set(i, cmapOf(T.cfg));
   }
   if (vp.length || (dev.isakmp && dev.isakmp.length)) {
-    for (const p of isakmpOf(dev)) o.push(`crypto isakmp policy ${p.n}`, ` encryption ${ENC_IOS[p.enc] || 'aes'}`, ` hash ${HASH_IOS[p.hash] || 'sha'}`, ' authentication pre-share', ` group ${p.dh}`);
+    for (const p of isakmpOf(dev)) o.push(`crypto isakmp policy ${p.n}`, ` encryption ${ENC_IOS[p.enc] || 'aes'}`, ` hash ${HASH_IOS[p.hash] || 'sha'}`, ' authentication pre-share', ` group ${p.dh}`, ...(+p.life > 0 && +p.life !== 86400 ? [` lifetime ${+p.life}`] : []));
     for (const t of vp) if (t.psk && t.peer) o.push(`crypto isakmp key ${t.psk} address ${t.peer}`);
+    if (dev.ikeKeepalive && +dev.ikeKeepalive.sec > 0) o.push(`crypto isakmp keepalive ${dev.ikeKeepalive.sec} ${dev.ikeKeepalive.retry || 2}`);
+    if (+dev.ipsecLife > 0 && +dev.ipsecLife !== 3600) o.push(`crypto ipsec security-association lifetime seconds ${+dev.ipsecLife}`);
     o.push('!');
     const sets = new Map(Object.entries(dev.tsets || {}));
     for (const t of vp) if (!sets.has(tsetOf(t))) sets.set(tsetOf(t), { enc2: t.enc2 || t.enc || 'aes128', hash2: t.hash2 || t.hash || 'sha1' });
@@ -1092,6 +1212,7 @@ export function runningConfig(state, dev) {
       if (t.peer) o.push(` set peer ${t.peer}`);
       o.push(` set transform-set ${tsetOf(t)}`);
       if (t.pfs) o.push(` set pfs group${t.pfs}`);
+      if (+t.life2 > 0) o.push(` set security-association lifetime seconds ${+t.life2}`);
       o.push(` match address ${vpnAclOf(t)}`);
     }
     if (vp.length) o.push('!');
@@ -1178,6 +1299,7 @@ export function runningConfig(state, dev) {
     .sort((a, b) => netOf(a.rt.ip, a.rt.bits) - netOf(b.rt.ip, b.rt.bits));
   if (os.length || stmts.length) {
     o.push('router ospf 1');
+    if (dev.ospfRid) o.push(` router-id ${dev.ospfRid}`);
     for (const n of stmts) o.push(` network ${fmtIp(n.net)} ${wild(n.bits)} area 0`);
     for (const i of os) o.push(` network ${fmtIp(netOf(i.rt.ip, i.rt.bits))} ${wild(i.rt.bits)} area 0`);
     if (dev.ospfDefault) o.push(' default-information originate');
@@ -1196,6 +1318,12 @@ export function runningConfig(state, dev) {
   for (const n of dev.staticNat || []) if (n.pub && n.priv) o.push(`ip nat inside source static ${n.priv} ${n.pub}`);
   for (const f of dev.portForwards || []) {
     if (f.port && f.toIp && out[0]) o.push(`ip nat inside source static ${f.proto || 'tcp'} ${f.toIp} ${f.toPort || f.port} interface ${out[0].label} ${f.port}`);
+  }
+  // 改過的 NAT 逾時才會出現在設定裡
+  const nt = dev.natTimeout || {};
+  for (const [name, keys] of Object.entries(NAT_TIMER)) {
+    if (name === 'timeout') continue;
+    if (+nt[keys[0]] > 0) o.push(`ip nat translation ${name} ${+nt[keys[0]]}`);
   }
   if (out.some((i) => natList(i) === '1') && !(dev.aclDefs || {})['1']) o.push('access-list 1 permit any');
   for (const i of out) {
@@ -1228,7 +1356,10 @@ export function runningConfig(state, dev) {
   if (dev.radius && dev.radius.ip) o.push('!', 'radius server AAA', ` address ipv4 ${dev.radius.ip} auth-port 1812 acct-port 1813`, ` key 7 ${hex(dev.radius.secret || '')}`);
   if (m) {
     o.push('!');
+    if (m.tz && m.tz.name) o.push(`clock timezone ${m.tz.name} ${m.tz.off}`);
+    if (+m.ntpMaster > 0) o.push(`ntp master ${+m.ntpMaster}`);
     if (m.ntp) o.push(`ntp server ${m.ntp}`);
+    if (m.logTrap != null && m.logTrap !== '' && +m.logTrap !== 6) o.push(`logging trap ${SEVERITY[+m.logTrap]}`);
     if (m.syslog) o.push(`logging host ${m.syslog}`);
     const snmp = m.snmp || 'v2c';
     if (snmp === 'v2c') o.push(`snmp-server community ${m.community || 'public'} RO`);

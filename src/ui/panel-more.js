@@ -1,6 +1,7 @@
 // 設定頁面（續）：RADIUS / 802.1X、靜態 NAT、IPv6、本機帳號與 SNMP
 import { h, button } from './dom.js';
-import { sessionLog, clearSessionLog, arpRows } from '../engine/sim.js';
+import { sessionLog, clearSessionLog, arpRows, sessionRows, clearSessions, fmtDur } from '../engine/sim.js';
+import { syslogRows, clearSyslog, SIM_EPOCH } from '../engine/ops.js';
 import { inp, sel, toggle, seg, field, note, kv, del, cardHead, grid2, bind, isIp, isIp6, isCidr6 } from './form.js';
 import { fmtIp } from '../engine/ip.js';
 import { fmtIp6 } from '../engine/ip6.js';
@@ -160,7 +161,7 @@ export function snmpFields(ctx) {
 const svcOf = (e) => (e.proto === 'icmp' ? 'ICMP' : `${e.proto.toUpperCase()} ${e.dport}`);
 const LOG_TAG = { allow: ['ok', '放行'], deny: ['bad', '拒絕'], snat: ['nat', 'NAT'], dnat: ['nat', '轉發'] };
 
-function sessionRows(ctx) {
+function historyRows(ctx) {
   const log = sessionLog(ctx.dev);
   if (!log.length) return [note('muted', '還沒有任何紀錄。執行測試或從終端機 ping 之後，經過這台設備的連線會列在這裡。')];
   return log.map((e) => {
@@ -178,13 +179,59 @@ function sessionRows(ctx) {
 export function sessionCard(ctx, title = '連線紀錄與 NAT 轉換') {
   return h('div', { class: 'card' },
     cardHead(title, button('清除', { small: true, onclick: () => { clearSessionLog(ctx.dev); ctx.app.refreshLive(); } })),
-    ctx.live(() => sessionRows(ctx)));
+    ctx.live(() => historyRows(ctx)));
+}
+
+const ST_NAME = { syn: '交握中', est: '已建立', fin: '關閉中' };
+
+/** 目前還留在表裡的連線：每一筆都在倒數，閒置太久就會被移除 */
+export function sessionTableCard(ctx, title = '連線表（NAT 轉換）') {
+  const { dev, state } = ctx;
+  return h('div', { class: 'card' },
+    cardHead(title, button('清除', { small: true, onclick: () => { clearSessions(state, dev); ctx.app.refreshLive(); } })),
+    ctx.live(() => {
+      const rows = sessionRows(state, dev);
+      if (!rows.length) return note('muted', '目前沒有任何連線。經過這台設備的連線會記在這裡，閒置太久就會被移除：ICMP 大約一分鐘、UDP 幾分鐘、TCP 關閉之後一兩分鐘。');
+      return rows.slice(0, 30).map((e) => {
+        const snat = e.nSrc !== e.src, dnat = e.nDst !== e.dst;
+        const sub = [e.proto === 'tcp' ? ST_NAME[e.st] || '' : '', snat && `來源換成 ${fmtIp(e.nSrc)}`, dnat && `目的換成 ${fmtIp(e.nDst)}:${e.nDport}`,
+          e.rule ? `政策 #${e.rule}` : '', `剩 ${fmtDur(e.left)}`].filter(Boolean).join(' · ');
+        return h('div', { class: 'srow nat' }, h('span', { class: 'tag', text: e.proto.toUpperCase() }),
+          h('b', { class: 'mono', text: `${fmtIp(e.src)}${e.proto === 'icmp' ? '' : ':' + e.sport} → ${fmtIp(e.dst)}${e.proto === 'icmp' ? '' : ':' + e.dport}` }),
+          h('span', { class: 'mono muted', text: sub }));
+      });
+    }));
 }
 
 export function logTab(ctx, body) {
   body.append(
     h('p', { class: 'tip', text: '防火牆會記下每一條經過它的新連線：被哪一條政策放行或拒絕、有沒有做位址轉換。排查問題時先來這裡看：封包有沒有到、是被誰處理的。' }),
+    sessionTableCard(ctx, '目前的連線 (session table)'),
     sessionCard(ctx, '流量紀錄（最新的在上面）'));
+}
+
+// ───────────────────────── Syslog 伺服器 ─────────────────────────
+
+const SEV_NAME = ['緊急', '警報', '嚴重', '錯誤', '警告', '注意', '資訊', '除錯'];
+const two = (n) => String(n).padStart(2, '0');
+
+/** 收集各設備送來的紀錄（UDP 514）。時間是伺服器收到的時間，不是設備自己寫的時間 */
+export function syslogTab(ctx, body) {
+  const { dev, state } = ctx;
+  body.append(h('p', { class: 'tip', text: '各設備把自己的紀錄送到這裡集中保存，設備重開機之後紀錄也還在。左邊的時間是這台伺服器收到的時間；訊息裡的時間是設備自己寫的 — 設備沒有對時的話，兩邊會對不起來。' }));
+  body.append(h('div', { class: 'card' },
+    cardHead('收到的訊息 · UDP 514', button('清除', { small: true, onclick: () => { clearSyslog(state, dev); ctx.app.refreshLive(); } })),
+    ctx.live(() => {
+      const rows = syslogRows(state, dev);
+      if (!rows.length) return note('muted', '還沒有收到任何訊息。設備要把 Syslog 伺服器指向這台主機的 IP，而且兩邊要連得通；之後介面上線、斷線等事件就會出現在這裡。');
+      return h('div', { class: 'logbox tall' }, rows.slice(-80).reverse().map((r) => {
+        const x = new Date(SIM_EPOCH + r.t * 1000 + 8 * 3600000);
+        const from = state.devices[r.dev];
+        return h('div', { class: 'll s' + r.sev },
+          h('span', { class: 'lt', text: `${two(x.getUTCHours())}:${two(x.getUTCMinutes())}:${two(x.getUTCSeconds())}  ${r.ip}${from ? ` (${from.name})` : ''}  ${SEV_NAME[r.sev] || ''}` }),
+          h('span', { text: r.line.replace(/^<\d+>(\d+: )?/, '') }));
+      }));
+    })));
 }
 
 export function arpCard(ctx) {

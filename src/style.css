@@ -562,3 +562,11 @@ h3.sec { font-size: 11.5px; letter-spacing: 0.08em; color: var(--faint); text-tr
 #clock.c1 .ck-time { min-width: 0; }
 #clock.c1 .ck-sp { padding: 0 6px; }
 #clock.c2.pending .ck-skip, #clock.c3 .ck-skip { display: none; }
+
+/* ───────── 事件紀錄 ───────── */
+.logbox { display: flex; flex-direction: column; gap: 3px; max-height: 240px; overflow: auto; padding: 8px 9px; border-radius: 9px; background: rgba(4, 7, 16, 0.55); border: 1px solid var(--line); }
+.logbox.tall { max-height: 460px; }
+.logbox .ll { font: 11px/1.45 var(--mono); color: #c6d0ea; white-space: pre-wrap; word-break: break-all; }
+.logbox .ll .lt { display: block; color: var(--faint); font-size: 10.5px; }
+.logbox .ll.s0, .logbox .ll.s1, .logbox .ll.s2, .logbox .ll.s3 { color: #ffb0b8; }
+.logbox .ll.s4 { color: #ffd995; }

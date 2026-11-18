@@ -2,6 +2,7 @@
 import { h } from './dom.js';
 import { fmtIp, fmtMask, parseIp } from '../engine/ip.js';
 import { transact, resolveName, dhcpTrace, arpRows, clearArp, dhcpRelease, dhcpRenew, fmtDur, throughput } from '../engine/sim.js';
+import { plainStamp } from '../engine/ops.js';
 import { transact6 } from '../engine/sim6.js';
 import { parseIp6, fmtIp6 } from '../engine/ip6.js';
 
@@ -22,6 +23,7 @@ const HELP = [
   '  nslookup <網域>         向 DNS 查詢網域的 IP',
   '  curl <IP 或網域>[:埠]   測試 TCP 連線（預設 443）',
   '  iperf3 -c <IP>          量測到另一台主機的實際傳輸速率（跑 10 秒）',
+  '  date                    顯示目前的日期與時間',
   '  cls                     清除畫面',
 ];
 
@@ -50,6 +52,7 @@ export function buildTerminal(ctx, body) {
     const c = (cmd || '').toLowerCase();
     if (c === 'help' || c === '?') HELP.forEach((x) => print(x, 'dim'));
     else if (c === 'cls' || c === 'clear') logs.length = 0;
+    else if (c === 'date' || c === 'time') { const t = plainStamp(st(), dev); print(`${t.date} ${t.time}（電腦的時間由作業系統自動校正，這裡當作是準的）`); }
     else if (c === 'arp' && /^-d/i.test(args[0] || '')) { clearArp(st(), dev); app.refreshLive(); }
     else if (c === 'arp') {
       const rows = arpRows(st(), dev);

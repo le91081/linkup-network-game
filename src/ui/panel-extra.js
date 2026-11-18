@@ -6,7 +6,8 @@ import {
 } from './form.js';
 import { fmtIp } from '../engine/ip.js';
 import { CATALOG, peerOf, portOf, newSsid, cableAt, linkInfo } from '../engine/model.js';
-import { visibleSsids, WIFI_SEC, macsBehind, isBridgePort, hitsOf, P1, accessOf, portfastOn } from '../engine/sim.js';
+import { visibleSsids, WIFI_SEC, macsBehind, isBridgePort, hitsOf, P1, accessOf, portfastOn, macRows, clearMac, macAgeOf, saInfo, fmtDur } from '../engine/sim.js';
+import { ntpInfo, deviceTime, plainStamp, logRows, clearLog, syslogStats, NTP_POLL } from '../engine/ops.js';
 import * as M from './panel-more.js';
 
 const nameOf = (ctx, id) => ctx.state.devices[id]?.name || id;
@@ -329,15 +330,11 @@ export function secTab(ctx, body) {
 
 export function switchStatus(ctx, body) {
   const { dev, state } = ctx;
-  body.append(h('div', { class: 'card' }, cardHead('MAC 位址表'), ctx.live(() => {
-    const rows = [];
-    for (const p of dev.ports) {
-      if (!isBridgePort(dev, p.id) || !state.rt.links[dev.id + ':' + p.id]) continue;
-      for (const m of macsBehind(state, dev, p.id)) {
-        rows.push(h('div', { class: 'line' }, h('b', { class: 'mono', text: p.label }), h('span', { class: 'mono', text: m.mac }), h('span', { class: 'muted', style: { marginLeft: 'auto' }, text: nameOf(ctx, m.dev) })));
-      }
-    }
-    return rows.length ? rows : note('muted', '還沒有學到任何 MAC 位址。');
+  body.append(h('div', { class: 'card' }, cardHead('MAC 位址表', button('清除', { small: true, onclick: () => { clearMac(state, dev); ctx.app.refreshLive(); } })), ctx.live(() => {
+    const rows = macRows(state, dev);
+    if (!rows.length) return note('muted', `還沒有學到任何 MAC 位址。交換器要收到訊框才會記下來源的 MAC（讓電腦 ping 一下就會出現），${macAgeOf(dev)} 秒沒有再看到就會忘記。`);
+    return rows.map((r) => h('div', { class: 'line' }, h('b', { class: 'mono', text: r.label }), h('span', { class: 'mono', text: r.mac }),
+      h('span', { class: 'muted', style: { marginLeft: 'auto' }, text: r.type === 'STATIC' ? `VLAN ${r.vlan} · 靜態` : `VLAN ${r.vlan} · ${r.age} 秒前 · 剩 ${r.left} 秒` })));
   })));
   body.append(h('div', { class: 'card' }, cardHead('Port-channel'), ctx.live(() => {
     const e = Object.entries(dev.rt.lag);
@@ -402,7 +399,28 @@ export function mgmtTab(ctx, body) {
     grid2(
       field('NTP 伺服器', inp(ctx, ...bind(m, 'ntp'), { ph: '例如 10.0.99.20', check: isIp })),
       field('Syslog 伺服器', inp(ctx, ...bind(m, 'syslog'), { ph: '例如 10.0.99.20', check: isIp }))),
-    h('p', { class: 'tip', text: '設備用 NTP 對時、把事件紀錄送到 Syslog 伺服器集中保存。時間一致，事後才能把各設備的紀錄串起來追查。' })));
+    h('p', { class: 'tip', text: '設備用 NTP 對時、把事件紀錄送到 Syslog 伺服器集中保存。時間一致，事後才能把各設備的紀錄串起來追查。' }),
+    ctx.live(() => {
+      const st = ctx.state, n = ntpInfo(st, dev), t = deviceTime(st, dev), s = plainStamp(st, dev), ip = n.server != null ? fmtIp(n.server) : '';
+      const ntp = n.server == null
+        ? note('muted', t.src === 'boot' ? '沒有設定 NTP。這台設備沒有硬體時鐘，時間是從開機時的出廠預設值（1993 年）算起的，紀錄上的時間會和其他設備對不起來。'
+          : t.src === 'manual' ? '沒有設定 NTP，時間是手動設定的。' : '沒有設定 NTP。時間來自設備自己的硬體時鐘，會有幾分鐘的誤差。')
+        : n.synced && !n.lost ? note('ok', `已經和 ${ip} 對時（stratum ${n.stratum}）。`)
+          : n.lost ? note('warn', `已經 ${fmtDur(n.when)}沒有收到 ${ip} 的回應：${n.why}`)
+            : n.wait > 0 ? note('warn', `已經收到 ${ip} 的回應，但要連續好幾次輪詢都正常才會採信，大約再 ${fmtDur(n.wait)}。`)
+              : note('warn', `連不到 NTP 伺服器 ${ip}：${n.why || '還沒有收到回應'}（每 ${NTP_POLL} 秒重試一次）`);
+      const sy = syslogStats(st, dev);
+      return [h('div', { class: 'kv ' + (t.auth ? 'ok' : '') }, kv('設備自己的時間', `${s.date} ${s.time}${t.auth ? '' : '（不可信）'}`),
+        m.syslog && kv('送到 Syslog 伺服器', `${sy.sent} 筆${sy.lost ? `，${sy.lost} 筆沒有送達` : ''}`)), ntp,
+      m.syslog && sy.lost > 0 && note('warn', `Syslog 用的是 UDP，送不到就直接掉了、不會重送。最近一次失敗的原因：${sy.why}`)];
+    })));
+  body.append(h('div', { class: 'card' },
+    cardHead('事件紀錄', button('清除', { small: true, onclick: () => { clearLog(ctx.state, dev); ctx.app.refreshLive(); } })),
+    ctx.live(() => {
+      const rows = logRows(ctx.state, dev);
+      if (!rows.length) return note('muted', '還沒有任何紀錄。介面上線或斷線、鄰居關係改變、VPN 通道狀態改變時，設備會在這裡留下一筆。紀錄放在記憶體裡，重新開機就沒了，所以才需要送到 Syslog 伺服器。');
+      return h('div', { class: 'logbox' }, rows.slice(-25).map((r) => h('div', { class: 'll s' + r.sev, text: r.line })));
+    })));
 }
 
 // ───────────────────────── 路由器：ACL ─────────────────────────
@@ -463,7 +481,22 @@ export function vpnTab(ctx, body) {
         field('第二階段雜湊', sel(ctx, () => t.hash2 || '', (v) => { t.hash2 = v; }, [['', '和第一階段相同'], ['sha1', 'SHA1'], ['sha256', 'SHA256']])),
         field('PFS（第二階段再做一次 DH）', sel(ctx, () => t.pfs || '', (v) => { t.pfs = v; }, [['', '不使用'], ...DH_GROUPS]))),
       dev.isakmp && dev.isakmp.length > 0 && note('muted', `第一階段的提案由 CLI 的 crypto isakmp policy 管理，整台設備共用：${dev.isakmp.map((p) => `#${p.n} ${P1(p)}`).join('；')}`),
-      ctx.live(() => (t.rt && t.rt.up ? note('ok', '通道已建立 (Up)') : note('warn', '通道未建立：' + ((t.rt && t.rt.why) || '設定中')))),
+      grid2(
+        !(dev.isakmp && dev.isakmp.length) && field('第一階段金鑰壽命（秒）', inp(ctx, () => t.life1 || '', (v) => { t.life1 = +v > 0 ? +v : undefined; }, { ph: '預設 86400', check: isNum(120, 172800) })),
+        field('第二階段金鑰壽命（秒）', inp(ctx, () => t.life2 || '', (v) => { t.life2 = +v > 0 ? +v : undefined; }, { ph: dev.kind === 'firewall' ? '預設 43200' : '預設 3600', check: isNum(120, 172800) })),
+        dev.kind === 'firewall' && field('對端失聯偵測 (DPD)', sel(ctx, () => t.dpd || 'on-demand', (v) => { t.dpd = v === 'on-demand' ? undefined : v; },
+          [['on-demand', '開啟：每 20 秒探測，三次沒回應就拆掉通道'], ['disable', '關閉：要等金鑰到期才會發現']]))),
+      ctx.live(() => {
+        const r = t.rt || {}, sa = saInfo(state, dev.id, t.name || 'VPN');
+        if (r.nego) return note('warn', `正在協商 (IKE)，大約再 ${Math.ceil(r.nego)} 秒建立。`);
+        if (r.up && r.stale) {
+          return note('warn', `這一端的通道看起來還是 Up，但對端已經沒有回應（${r.staleWhy}）。再 ${fmtDur(r.stale - state.clock)} 才會判定失聯${dev.kind === 'firewall' || dev.ikeKeepalive ? '' : '：沒有設定 keepalive，只能等金鑰到期'}，這段時間往對端的封包都會被丟掉。`);
+        }
+        if (!r.up) return note('warn', '通道未建立：' + (r.why || '設定中'));
+        return [note('ok', '通道已建立 (Up)'), sa && h('div', { class: 'kv ok' },
+          kv('第一階段金鑰', `剩 ${fmtDur(sa.left1)}`), kv('第二階段金鑰', `剩 ${fmtDur(sa.left2)}${sa.rekey2 ? `（已更新 ${sa.rekey2} 次）` : ''}`),
+          kv('加密 / 解密的封包', `${sa.tx} / ${sa.rx}`))];
+      }),
       dev.kind === 'firewall' && note('muted', `政策的介面請選「VPN ${t.name || 'VPN'}」，內網 ↔ VPN 兩個方向都要放行。`)));
   });
   body.append(h('div', { class: 'addrow' }, button('新增站對站通道', {
@@ -475,6 +508,12 @@ export function vpnTab(ctx, body) {
       ctx.commit(true);
     },
   })));
+  if (dev.kind === 'router' && dev.vpns.length) {
+    body.append(h('div', { class: 'card' }, cardHead('對端失聯偵測 (IKE keepalive)'),
+      field('多久沒有流量就探測一次（秒）', inp(ctx, () => (dev.ikeKeepalive ? dev.ikeKeepalive.sec : ''), (v) => {
+        if (+v >= 10) dev.ikeKeepalive = { sec: +v, retry: (dev.ikeKeepalive || {}).retry || 2 }; else delete dev.ikeKeepalive;
+      }, { ph: '留空 = 不偵測', check: isNum(10, 3600) }), 'IOS 預設不會主動探測對端。沒有設定的話，對端斷線之後這一端的通道還會維持 Up，直到金鑰到期（最久一小時）才發現。')));
+  }
   const vs = dev.vpnServer;
   if (!vs) return;
   const card = h('div', { class: 'card' }, cardHead('遠端存取 VPN（SSL-VPN）'),
