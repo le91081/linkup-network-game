@@ -384,8 +384,8 @@ export function iosSession(getDev, getState) {
       const mode = ['restrict', 'shutdown', 'protect'].find((x) => x.startsWith(m.toLowerCase()));
       return mode ? onL2((pc) => { (pc.ps ||= { on: false, macs: '', mode: 'shutdown' }).mode = mode === 'protect' ? 'restrict' : mode; }) : err('模式必須是 restrict、shutdown 或 protect');
     }],
-    ['spanning-tree portfast [...]', () => onL2(() => {})],
-    ['no spanning-tree portfast', () => onL2(() => {})],
+    ['spanning-tree portfast [...]', ([opt]) => onL2((pc) => { pc.portfast = !(opt || '').toLowerCase().startsWith('dis'); })],
+    ['no spanning-tree portfast', () => onL2((pc) => { delete pc.portfast; })],
     ['spanning-tree bpduguard <x>', ([x]) => onL2((pc) => { pc.bpduguard = 'enable'.startsWith(x.toLowerCase()); })],
     ['no spanning-tree bpduguard [...]', () => onL2((pc) => { pc.bpduguard = false; })],
     ['spanning-tree guard root', () => onL2((pc) => { pc.rootguard = true; })],
@@ -533,6 +533,8 @@ export function iosSession(getDev, getState) {
     ['ip arp inspection vlan <list>', () => needSw() || void (dev().sw.dai = { ...(dev().sw.dai || {}), on: true })],
     ['no ip arp inspection vlan [...]', () => needSw() || void (dev().sw.dai = { ...(dev().sw.dai || {}), on: false })],
     ['spanning-tree mode <m>', () => needSw() || undefined],
+    ['spanning-tree portfast default', () => needSw() || void ((dev().sw.stp ||= {}).portfastDefault = true)],
+    ['no spanning-tree portfast default', () => needSw() || void ((dev().sw.stp ||= {}).portfastDefault = false)],
     ['spanning-tree vlan <list> priority <n>', ([, n]) => {
       const e = needSw(); if (e) return e;
       if (!/^\d+$/.test(n) || +n > 61440 || +n % 4096) return err('priority 必須是 4096 的倍數（0、4096、8192 … 61440）');
@@ -1028,6 +1030,7 @@ export function runningConfig(state, dev) {
     const stp = sw.stp || {};
     if (stp.on === false) o.push('no spanning-tree vlan 1-4094');
     else if (stp.prio != null && stp.prio !== '' && +stp.prio !== 32768) o.push(`spanning-tree vlan 1-4094 priority ${+stp.prio}`);
+    if (stp.portfastDefault) o.push('spanning-tree portfast default');
     const vl = sw.vlans.map((v) => v.id).sort((a, b) => a - b).join(',');
     if (sw.snoop && sw.snoop.on) o.push('ip dhcp snooping', `ip dhcp snooping vlan ${vl}`);
     if (sw.dai && sw.dai.on) o.push(`ip arp inspection vlan ${vl}`);
@@ -1086,6 +1089,7 @@ export function runningConfig(state, dev) {
   const natOut = (i) => i.nat || (i.natOut && !i.natRule);
   const natRule = (i) => i.nat || (i.natRule && !i.natOut);
   const anyNat = dev.ifaces.some(natOut);
+  const stp0 = (dev.sw && dev.sw.stp) || {};
   const l3lines = (i) => {
     const l = [];
     if (i.mode === 'dhcp') l.push(' ip address dhcp');
@@ -1110,7 +1114,7 @@ export function runningConfig(state, dev) {
     const pc = dev.sw && dev.sw.ports[p.id];
     if (pc && isSw(dev)) {
       const phy = [pc.speed && pc.speed !== 'auto' ? ` speed ${pc.speed}` : null, pc.duplex && pc.duplex !== 'auto' ? ` duplex ${pc.duplex}` : null].filter(Boolean);
-      const def = pc.mode === 'access' && pc.vlan === 1 && !pc.shut && !peer && !pc.trust && !(+pc.lag > 0) && !(pc.ps && pc.ps.on) && !pc.bpduguard && !pc.rootguard && !pc.dot1x && !phy.length;
+      const def = pc.mode === 'access' && pc.vlan === 1 && !pc.shut && !peer && !pc.trust && !(+pc.lag > 0) && !(pc.ps && pc.ps.on) && !pc.bpduguard && !pc.rootguard && !pc.dot1x && !phy.length && pc.portfast == null;
       if (def) continue;
       o.push(`interface ${p.label}`, ...desc, ...phy);
       if (pc.mode === 'routed') {
@@ -1120,10 +1124,12 @@ export function runningConfig(state, dev) {
         o.push(' switchport mode trunk');
         if (pc.native !== 1) o.push(` switchport trunk native vlan ${pc.native}`);
         if (pc.allowed && pc.allowed !== 'all') o.push(` switchport trunk allowed vlan ${pc.allowed}`);
+        if (pc.portfast === true) o.push(' spanning-tree portfast trunk');
       } else {
         o.push(' switchport mode access');
         if (pc.vlan !== 1) o.push(` switchport access vlan ${pc.vlan}`);
-        o.push(' spanning-tree portfast');
+        if (pc.portfast === true) o.push(' spanning-tree portfast');
+        else if (pc.portfast === false && stp0.portfastDefault) o.push(' spanning-tree portfast disable');
       }
       if (+pc.lag > 0) o.push(` channel-group ${+pc.lag} mode ${pc.lagMode || 'active'}`);
       if (pc.ps && pc.ps.on) {

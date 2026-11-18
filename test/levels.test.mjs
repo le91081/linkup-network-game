@@ -1,6 +1,11 @@
 // 自動驗證：每個關卡「初始狀態不會過關」且「套用參考解法後全部目標通過」
 import { LEVELS } from '../src/levels/index.js';
-import { recompute, evaluate, transact } from '../src/engine/sim.js';
+import { recompute as recomputeNow, settle, advance, pendingOf, evaluate, transact } from '../src/engine/sim.js';
+
+// 引擎有模擬時鐘：改完設定之後，STP、OSPF、VRRP 都需要時間收斂。
+// 測試裡的 recompute 一律「等到網路穩定」再往下；要測計時本身的地方才用 recomputeNow / advance。
+const recompute = (s) => settle(s);
+const fmtIpT = (n) => [n >>> 24, (n >>> 16) & 255, (n >>> 8) & 255, n & 255].join('.');
 import { cloneState } from '../src/engine/model.js';
 import { parseIp } from '../src/engine/ip.js';
 
@@ -163,7 +168,7 @@ console.log('\n真實行為');
   const ok = (cond, title) => (cond ? console.log('  ✔ ' + title) : fail(title));
   {
     const { s } = solved('l01');
-    recompute(s); // 清空剛才測試留下的 ARP 快取
+    s.dyn.arp = {}; // 清空剛才測試留下的 ARP 快取
     const ip = parseIp('192.168.1.20');
     const a = transact(s, 'pc-a', { proto: 'icmp', dst: ip });
     const b = transact(s, 'pc-a', { proto: 'icmp', dst: ip });
@@ -171,8 +176,11 @@ console.log('\n真實行為');
     ok(b.ok && !b.hops.some((h) => h.wave) && !b.log.some((l) => l.kind === 'arp'), 'ARP 快取：第二個封包不再廣播');
     ok(arpRows(s, s.devices['pc-a']).some((r) => r.ip === ip) && arpRows(s, s.devices['pc-b']).length === 1, '兩端都記下了對方的 MAC');
     ok(a.log.some((l) => l.frame && l.frame.smac === s.devices['pc-a'].ifaces[0].rt.mac && l.frame.ttl === 64), '追蹤紀錄附上訊框標頭（MAC / IP / TTL）');
-    recompute(s);
-    ok(arpRows(s, s.devices['pc-a']).length === 0, '設定變更後 ARP 快取清空');
+    advance(s, 100);
+    ok(arpRows(s, s.devices['pc-a']).length === 1 && arpRows(s, s.devices['pc-a'])[0].age === 100, 'ARP 項目會保留下來，而且記得自己多久沒被用到');
+    advance(s, 30);
+    const c = transact(s, 'pc-a', { proto: 'icmp', dst: ip });
+    ok(c.ok && c.hops.some((h) => h.wave), '個人電腦的 ARP 項目超過兩分鐘沒用到就過期，下一個封包要重新廣播');
   }
   {
     const s = makeState([makeDevice('hub4', 'hub', { name: 'Hub', pos: [0, 0] }),
@@ -465,6 +473,124 @@ console.log('\nCLI 設定指令');
     const res = evaluate(s, LEVELS.find((l) => l.id === 'l10').objectives);
     ok(res.every((x) => !x.pass) && res.some((x) => /關機/.test(x.reason)), '設備關機後連線中斷，錯誤訊息指出是哪一台關機');
   }
+}
+
+// ── 模擬時鐘：STP 的連接埠狀態與 PortFast ──
+{
+  const { makeState, makeDevice } = await import('../src/engine/model.js');
+  const { link, setIp } = await import('../src/levels/util.js');
+  const { iosSession, runningConfig } = await import('../src/engine/ios.js');
+  const say = (cond, title) => { if (cond) console.log('  ✔ ' + title); else fail(title); };
+  console.log('\n模擬時鐘');
+  const s = makeState([makeDevice('c2960', 'sw', { name: 'SW' }), makeDevice('pc', 'a', { name: 'PC-A', pos: [-4, 3] }), makeDevice('pc', 'b', { name: 'PC-B', pos: [4, 3] })]);
+  link(s, 'a:eth0', 'sw:Gi0/1'); link(s, 'b:eth0', 'sw:Gi0/2');
+  setIp(s, 'a', '192.168.1.10'); setIp(s, 'b', '192.168.1.20');
+  recomputeNow(s);
+  const ping = (from, ip) => transact(s, from, { proto: 'icmp', dst: parseIp(ip) });
+  say(ping('a', '192.168.1.20').ok && !pendingOf(s).length, '一開始就接好的線當作已經運作很久，不需要等待');
+  // 之後才接上去的電腦：交換器的埠要先經過 listening 與 learning
+  s.devices.c = makeDevice('pc', 'c', { name: 'PC-C', pos: [0, 5] });
+  link(s, 'c:eth0', 'sw:Gi0/3'); setIp(s, 'c', '192.168.1.30');
+  recomputeNow(s);
+  const r0 = ping('c', '192.168.1.10');
+  say(!r0.ok && /listening/.test(r0.reason) && /PortFast/.test(r0.reason) && pendingOf(s)[0].at === 30, `新接上的埠前 30 秒不轉送資料：${r0.reason}`);
+  advance(s, 20);
+  const r1 = ping('c', '192.168.1.10');
+  say(!r1.ok && /learning/.test(r1.reason) && /再 10 秒/.test(r1.reason), '20 秒後進入 learning，還要 10 秒');
+  advance(s, 10);
+  say(ping('c', '192.168.1.10').ok && !pendingOf(s).length, '30 秒後開始轉送');
+  // 換 VLAN 會讓 STP 重新走一次；開了 PortFast 就不用等
+  s.devices.sw.sw.vlans.push({ id: 10, name: 'x' });
+  const sess = iosSession(() => s.devices.sw, () => s);
+  for (const l of ['conf t', 'int range gi0/1 - 3', 'switchport access vlan 10', 'end']) sess.exec(l);
+  recomputeNow(s);
+  say(!ping('c', '192.168.1.10').ok && pendingOf(s).length === 3, '把埠換到另一個 VLAN，STP 重新計時');
+  for (const l of ['conf t', 'int range gi0/1 - 3', 'spanning-tree portfast', 'end']) sess.exec(l);
+  recomputeNow(s);
+  say(ping('c', '192.168.1.10').ok && runningConfig(s, s.devices.sw).includes(' spanning-tree portfast'), '啟用 PortFast 之後立刻開始轉送');
+  // 交換器之間用 RSTP 快速協商
+  s.devices.sw2 = makeDevice('c2960', 'sw2', { name: 'SW2', pos: [8, 0] });
+  s.devices.sw2.sw.vlans.push({ id: 10, name: 'x' });
+  s.devices.d = makeDevice('pc', 'd', { name: 'PC-D', pos: [10, 3] });
+  for (const id of ['sw', 'sw2']) Object.assign(s.devices[id].sw.ports['Gi0/9'], { mode: 'trunk' });
+  Object.assign(s.devices.sw2.sw.ports['Gi0/1'], { vlan: 10, portfast: true });
+  link(s, 'sw:Gi0/9', 'sw2:Gi0/9'); link(s, 'd:eth0', 'sw2:Gi0/1'); setIp(s, 'd', '192.168.1.40');
+  recomputeNow(s);
+  const r2 = ping('d', '192.168.1.10');
+  say(!r2.ok && /協商/.test(r2.reason) && pendingOf(s)[0].at - s.clock === 2, '交換器之間的新連線用 RSTP 協商，2 秒後開始轉送');
+  settle(s);
+  say(ping('d', '192.168.1.10').ok, 'settle 會讓時間前進到網路穩定為止');
+}
+
+// ── 模擬時鐘：DHCP 租約 ──
+{
+  const { dhcpRelease, dhcpRenew } = await import('../src/engine/sim.js');
+  const say = (cond, title) => { if (cond) console.log('  ✔ ' + title); else fail(title); };
+  const { s } = solved('l36');
+  const lan = s.devices.rt.ifaces.find((i) => i.id === 'Gi0/0/1');
+  lan.dhcp.lease = 3600; // 一小時
+  s.leases = {}; s.dyn.hold = {}; s.dyn.lease = {};
+  recomputeNow(s);
+  const pc = s.devices['pc-1'].ifaces[0], pc2 = s.devices['pc-2'].ifaces[0];
+  const ip0 = pc.rt.ip;
+  say(pc.rt.src === 'dhcp' && pc.rt.exp === s.clock + 3600, '用戶端拿到位址時記下租約的到期時間');
+  // 伺服器關機：電腦不會馬上斷線
+  s.down = { rt: true };
+  advance(s, 600);
+  say(pc.rt.ip === ip0 && !!pc.rt.held && transact(s, 'pc-1', { proto: 'icmp', dst: parseIp('192.168.1.10') }).ok, 'DHCP 伺服器關機後，電腦沿用還沒到期的租約，區域網路內照樣能通');
+  advance(s, 3001);
+  say(pc.rt.src === 'apipa', '租約到期還是續不到約：電腦失去位址，退回 APIPA');
+  s.down = {};
+  recomputeNow(s);
+  say(pc.rt.src === 'dhcp' && pc.rt.ip === ip0, '伺服器回來之後重新要到位址');
+  // 過了一半的時間會自動續約
+  const exp0 = pc.rt.exp;
+  advance(s, 1700);
+  say(pc.rt.exp === exp0, '租約還沒過一半：到期時間不變');
+  advance(s, 200);
+  say(pc.rt.exp === s.clock + 3600, '過了一半 (T1) 自動續約，到期時間往後延');
+  // 伺服器手上還沒到期的租約不會發給別人
+  pc.mode = 'static';
+  Object.assign(lan.dhcp, { start: fmtIpT(ip0), end: fmtIpT(ip0) });
+  recomputeNow(s);
+  say(pc2.rt.ip !== ip0 && (pc2.rt.src !== 'dhcp' || !!pc2.rt.held), '位址池只剩一個位址，而它還被 PC-1 的租約占著：PC-2 要不到新的位址');
+  advance(s, 3700);
+  say(pc2.rt.src === 'dhcp' && pc2.rt.ip === ip0 && !pc2.rt.held, 'PC-1 的租約到期後，位址才釋出給 PC-2');
+  lan.dhcp.end = fmtIpT(ip0 + 20);
+  dhcpRelease(s, 'pc-2');
+  recomputeNow(s);
+  say(pc2.rt.ip == null && !Object.keys(s.leases['rt/Gi0/0/1'] || {}).includes('pc-2/eth0'), 'ipconfig /release 歸還位址，之後不會自動再去要');
+  dhcpRenew(s, 'pc-2');
+  recomputeNow(s);
+  say(pc2.rt.src === 'dhcp' && pc2.rt.exp === s.clock + 3600, 'ipconfig /renew 重新取得位址');
+
+}
+
+// ── 模擬時鐘：VRRP 換手與 OSPF 的計時 ──
+{
+  const say = (cond, title) => { if (cond) console.log('  ✔ ' + title); else fail(title); };
+  const { s } = solved('l25');
+  const net = () => transact(s, 'pc-1', { proto: 'icmp', dst: parseIp('8.8.8.8') });
+  const vr = (id) => s.devices[id].ifaces[1].rt.vrrp;
+  const nb = (id, to) => s.devices[id].rt.nbrs.find((n) => n.dev === to);
+  say(net().ok && vr('gw-a').state === 'master' && vr('gw-b').state === 'backup', '平常由 GW-A 當 VRRP Master');
+  s.down = { 'gw-a': true };
+  recomputeNow(s);
+  const r0 = net();
+  say(!r0.ok && vr('gw-b').state === 'backup' && vr('gw-b').wait === 3, `Master 剛斷電的前 3 秒沒有人回應虛擬 IP：${r0.reason}`);
+  say(nb('gw-b', 'gw-a') && nb('gw-b', 'gw-a').state === 'dying' && !nb('edge', 'gw-a'), '直接相連的 Edge 立刻知道 GW-A 不見了；隔著交換器的 GW-B 要等 Dead timer');
+  advance(s, 3);
+  say(net().ok && vr('gw-b').state === 'master', '3 秒後 GW-B 接手成為 Master');
+  say(pendingOf(s).some((p) => p.kind === 'ospf' && p.at - s.clock === 37), 'GW-B 的 OSPF Dead timer 還剩 37 秒');
+  advance(s, 37);
+  say(!nb('gw-b', 'gw-a') && !pendingOf(s).length, '40 秒後 GW-B 才把 GW-A 從鄰居清單拿掉');
+  s.down = {};
+  recomputeNow(s);
+  say(vr('gw-a').state === 'master' && nb('gw-a', 'edge').state === 'forming' && Math.round(nb('gw-a', 'edge').left) === 40, 'GW-A 開機：VRRP 立刻搶回 Master，但 OSPF 鄰居關係要重新建立');
+  const r1 = net();
+  say(!r1.ok, `GW-A 搶回 Master 時還沒有學到路由，這段時間封包被丟掉（開機後立刻 preempt 的經典問題）：${r1.reason}`);
+  advance(s, 40);
+  say(net().ok && nb('gw-a', 'edge').state === 'full', '40 秒後鄰居進到 FULL，連線恢復');
 }
 
 // ── 速率與雙工的協商 ──

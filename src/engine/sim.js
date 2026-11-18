@@ -54,6 +54,7 @@ const psAllowed = (pc, mac) => macList(pc.ps.macs).includes(mac);
 
 function portUsable(d, pid) {
   if (d.sw.ports[pid].shut || (d.rt.err && d.rt.err[pid])) return false;
+  if (d.rt.wait && d.rt.wait[pid] > 0) return false; // 還在 STP 的 listening / learning，不轉送資料
   if (d.rt.unauth && d.rt.unauth[pid]) return false; // 802.1X 尚未通過驗證
   const l = d.rt.lag && d.rt.lag[pid];
   return !l || (l.state === 'bundled' && l.carrier);
@@ -64,6 +65,7 @@ const stpBlocked = (d, pid, v) => !!(d.rt.stp && d.rt.stp.blocked.has(pid + '|' 
 function ingressKey(dev, pid, tag, mac, notes) {
   const sw = dev.sw, pc = sw.ports[pid];
   if (dev.rt.unauth && dev.rt.unauth[pid]) { notes.dot1x = `${dev.name} 的 ${pid}：${dev.rt.unauth[pid]}`; return DROP; }
+  if (dev.rt.wait && dev.rt.wait[pid] > 0) { notes.stp ||= { dev: dev.id, pid, left: dev.rt.wait[pid] }; return DROP; }
   if (!portUsable(dev, pid)) return DROP;
   if (sw.mode !== 'vlan') return tag == null ? 'u' : tag;
   if (pc.ps && pc.ps.on && mac && !psAllowed(pc, mac)) { notes.ps = `${dev.name} 的 ${pid}`; return DROP; }
@@ -128,6 +130,7 @@ export function l2Explore(state, devId, iface) {
     }
     for (const pid of Object.keys(d.sw.ports)) {
       if (pid === exceptPort || !isBridgePort(d, pid)) continue;
+      if (d.rt.wait && d.rt.wait[pid] > 0 && links[d.id + ':' + pid]) { out.stp ||= { dev: d.id, pid, left: d.rt.wait[pid] }; continue; }
       const t = egressTag(d, pid, key);
       if (t !== DROP) emit(d, pid, t, path);
     }
@@ -438,6 +441,81 @@ function prepStp(state) {
   }
 }
 
+// ───────────────────────── 模擬時鐘 ─────────────────────────
+// state.clock 是從關卡開始算起的秒數。state.dyn 是「需要時間才會改變」的狀態，跨次計算保留下來：
+// 連接埠什麼時候啟用、OSPF 鄰居什麼時候建立、DHCP 租約什麼時候到期、ARP 快取什麼時候學到。
+// 關卡一開始的狀態當作已經運作很久（全部收斂完成），之後的變動才需要等待。
+
+/** 讓模擬時間前進 secs 秒，再重新計算網路的狀態 */
+export function advance(state, secs) {
+  state.clock = (state.clock || 0) + Math.max(0, secs);
+  return recompute(state);
+}
+/** 還沒走完的收斂計時（STP、OSPF、VRRP），最快完成的排在前面 */
+export const pendingOf = (state) => ((state.rt && state.rt.pending) || []).slice().sort((a, b) => a.at - b.at);
+/** 重新計算，並讓時間前進到網路穩定為止（最多前進 max 秒） */
+export function settle(state, max = 300) {
+  recompute(state);
+  const end = state.clock + max;
+  for (let n = 0; n < 400; n++) {
+    const p = pendingOf(state)[0];
+    if (!p || p.at > end) break;
+    state.clock = Math.max(state.clock, p.at);
+    recompute(state);
+  }
+  return state;
+}
+export const fmtDur = (s) => {
+  s = Math.max(0, Math.ceil(s));
+  if (s < 60) return `${s} 秒`;
+  if (s < 3600) return `${Math.floor(s / 60)} 分${s % 60 ? ` ${s % 60} 秒` : '鐘'}`;
+  if (s < 86400) return `${Math.floor(s / 3600)} 小時${Math.floor((s % 3600) / 60) ? ` ${Math.floor((s % 3600) / 60)} 分` : ''}`;
+  return `${Math.floor(s / 86400)} 天${Math.floor((s % 86400) / 3600) ? ` ${Math.floor((s % 86400) / 3600)} 小時` : ''}`;
+};
+
+// ── STP 的連接埠狀態 ──
+const STP_EDGE_DELAY = 30; // 沒有 PortFast 的埠：listening 15 秒 + learning 15 秒
+const STP_P2P_DELAY = 2; // 交換器之間用 RSTP 的 proposal / agreement 快速協商
+/** PortFast：這個埠接的是終端設備，連線後直接開始轉送 */
+export const portfastOn = (d, pc) => (pc.portfast != null ? !!pc.portfast : !!(d.sw.stp && d.sw.stp.portfastDefault) && pc.mode !== 'trunk');
+
+function prepStpTimers(state) {
+  const rt = state.rt, dyn = state.dyn, now = state.clock, live = new Set();
+  for (const d of Object.values(state.devices)) {
+    if (!isVlanSw(d) || (d.sw.stp && d.sw.stp.on === false) || (state.down || {})[d.id]) continue;
+    for (const [pid, pc] of Object.entries(d.sw.ports)) {
+      const l = rt.links[d.id + ':' + pid];
+      if (!l || pc.mode === 'routed') continue;
+      const key = d.id + ':' + pid;
+      live.add(key);
+      // 連線剛建立，或這個埠換了 VLAN / 模式：STP 要重新走一次
+      const sig = pc.mode === 'trunk' ? `t|${pc.native}|${pc.allowed}` : `a|${pc.vlan}`;
+      let rec = dyn.port[key];
+      if (!rec || rec.sig !== sig) rec = dyn.port[key] = { since: dyn.boot ? -1e9 : now, sig };
+      const x = state.devices[l.dev];
+      const toSwitch = isVlanSw(x) && !(x.sw.stp && x.sw.stp.on === false) && isBridgePort(x, l.port);
+      const delay = toSwitch ? STP_P2P_DELAY : portfastOn(d, pc) ? 0 : STP_EDGE_DELAY;
+      const left = rec.since + delay - now;
+      if (left <= 0) continue;
+      d.rt.wait[pid] = left;
+      rt.wait[l.cable] = Math.max(rt.wait[l.cable] || 0, left);
+      rt.pending.push({ at: rec.since + delay, dev: d.id, kind: 'stp', text: `${d.name} 的 ${pid}：STP ${toSwitch ? '協商中' : left > 15 ? 'listening' : 'learning'}` });
+    }
+  }
+  for (const k of Object.keys(dyn.port)) if (!live.has(k)) delete dyn.port[k];
+}
+
+// ── ARP 快取 ──
+/** ARP 項目多久沒用到就會被清掉：個人電腦大約兩分鐘，防火牆五分鐘，路由器與交換器四小時 */
+const arpTtl = (dev) => (dev.kind === 'host' ? 120 : dev.kind === 'firewall' || dev.kind === 'homerouter' ? 300 : 14400);
+export const VRRP_MAC = '00:00:5e:00:01:01'; // VRRP 的虛擬 MAC：換手之後主機不需要重新學
+const answerMac = (e, ip) => (e.iface.rt.ip !== ip && e.iface.vrrp && e.iface.vrrp.on && parseIp(e.iface.vrrp.vip || '') === ip ? VRRP_MAC : e.iface.rt.mac);
+export const arpRows = (state, dev) => Object.entries((state.dyn && state.dyn.arp[dev.id]) || {})
+  .filter(([, e]) => state.clock - e.t < arpTtl(dev))
+  .map(([ip, e]) => ({ ip: +ip, mac: e.mac, age: Math.floor(state.clock - e.t), left: Math.ceil(arpTtl(dev) - (state.clock - e.t)) }));
+/** arp -d / clear arp-cache */
+export function clearArp(state, dev) { if (state.dyn) delete state.dyn.arp[dev.id]; }
+
 export const WIFI_SEC = { open: '開放（無加密）', wep: 'WEP', wpa2: 'WPA2-Personal', wpa2wpa3: 'WPA2 / WPA3 混合', wpa3: 'WPA3-Personal', wpa2ent: 'WPA2-Enterprise (802.1X)' };
 const SEC_MODES = { open: ['open'], wep: ['wep'], wpa2: ['wpa2'], wpa2wpa3: ['wpa3', 'wpa2'], wpa3: ['wpa3'], wpa2ent: ['wpa2'] };
 export const apRange = (d) => ({ low: 6, mid: 9, high: 12 })[(d.wifi && d.wifi.power) || 'mid'];
@@ -516,10 +594,54 @@ export function visibleSsids(state, dev) {
  * busy：這個網段上已經有人手動在用的位址。伺服器發出「新的」位址之前會先 ping 確認沒有人回應，
  * 有人在用就跳過並記成衝突。已經發出去的租約不會重新檢查 — 所以設備離線期間被發走的位址，回來之後還是會衝突。
  */
+// ── DHCP 租約 ──
+export const DEFAULT_LEASE = 86400; // 一天
+/** 某個位址池的租約長度（秒）。key 是「伺服器 id/介面 id」或「伺服器 id/scope/起始 IP」 */
+function leaseLen(state, key) {
+  const cut = key.indexOf('/'), d = state.devices[key.slice(0, cut)], rest = key.slice(cut + 1);
+  if (!d) return DEFAULT_LEASE;
+  if (rest.startsWith('scope/')) return +((d.dhcpScopes || []).find((x) => x.start === rest.slice(6)) || {}).lease || DEFAULT_LEASE;
+  const i = d.ifaces.find((x) => x.id === rest);
+  return +(i && i.dhcp && i.dhcp.lease) || DEFAULT_LEASE;
+}
+/** 伺服器記下（或續約）一筆租約，回傳到期時間。用戶端在租約過了一半時會自動續約 */
+function touchLease(state, key, clientKey, ip) {
+  const hold = (state.dyn.hold[key] ||= {}), now = state.clock, len = leaseLen(state, key), h = hold[clientKey];
+  if (!h || h.ip !== ip) hold[clientKey] = { ip, t0: now, exp: now + len };
+  else if (now >= h.t0 + len / 2) { h.t0 = now; h.exp = now + len; }
+  return hold[clientKey].exp;
+}
+/** 用戶端記下自己拿到的租約：之後就算連不到伺服器，到期之前都可以繼續用 */
+function rememberLease(state, d, i, key, exp) {
+  state.dyn.lease[d.id + '/' + i.id] = { ip: i.rt.ip, bits: i.rt.bits, gw: i.rt.gw, dns: i.rt.dns, server: i.rt.server, relay: i.rt.relay || null, key, exp };
+  i.rt.exp = exp;
+}
+/** ipconfig /release：歸還位址，之後要 /renew 才會再去要 */
+export function dhcpRelease(state, devId) {
+  const d = state.devices[devId];
+  for (const i of d.ifaces) {
+    if (i.mode !== 'dhcp') continue;
+    const ck = d.id + '/' + i.id, L = state.dyn.lease[ck];
+    if (L && L.key) { if (state.leases[L.key]) delete state.leases[L.key][ck]; if (state.dyn.hold[L.key]) delete state.dyn.hold[L.key][ck]; }
+    delete state.dyn.lease[ck];
+    i.released = true;
+  }
+}
+/** ipconfig /renew：馬上向伺服器續約（或重新要一個位址） */
+export function dhcpRenew(state, devId) {
+  const d = state.devices[devId];
+  for (const i of d.ifaces) {
+    if (i.mode !== 'dhcp') continue;
+    delete i.released;
+    const L = state.dyn.lease[d.id + '/' + i.id], h = L && L.key && (state.dyn.hold[L.key] || {})[d.id + '/' + i.id];
+    if (h) h.t0 = -1e9; // 讓伺服器把這次請求當成續約
+  }
+}
+
 function leaseFrom(state, old, key, start, end, exclude, clientKey, busy = []) {
   if (start == null || end == null || end < start) return null;
   const tbl = (state.leases[key] ||= {});
-  const used = new Set(Object.values(tbl));
+  const used = new Set(Object.entries(tbl).filter(([k]) => k !== clientKey).map(([, v]) => v)); // 別人還沒到期的租約不能動
   for (const x of [].concat(exclude ?? [])) used.add(x);
   let ip = old[key] ? old[key][clientKey] : null;
   if (ip != null && (ip < start || ip > end || used.has(ip))) ip = null;
@@ -533,7 +655,7 @@ function leaseFrom(state, old, key, start, end, exclude, clientKey, busy = []) {
       for (const c of busy) if (c >= start && c <= end && !used.has(c) && (ip == null || c < ip) && !seen.includes(c)) seen.push(c);
     }
   }
-  if (ip == null) return null;
+  if (ip == null) { delete tbl[clientKey]; return null; }
   tbl[clientKey] = ip;
   return ip;
 }
@@ -570,7 +692,14 @@ function acquire(state, old, d, i) {
     if (!isServer) continue;
     const blk = snoopBlock(state, e.path);
     if (blk) { snooped = { by: blk, server: sd }; continue; }
-    if (s.line) return set(parseIp(s.line.assign), s.rt.bits, s.rt.ip, dnsList(s.line.dns), 'dhcp', sd.id);
+    if (s.line) {
+      // ISP 配發的位址：租約一天，過了一半會自動續約
+      const prev = state.dyn.lease[d.id + '/' + i.id], t0 = prev && prev.isp && state.clock < prev.t0 + DEFAULT_LEASE / 2 ? prev.t0 : state.clock;
+      set(parseIp(s.line.assign), s.rt.bits, s.rt.ip, dnsList(s.line.dns), 'dhcp', sd.id);
+      rememberLease(state, d, i, null, t0 + DEFAULT_LEASE);
+      Object.assign(state.dyn.lease[d.id + '/' + i.id], { isp: true, t0 });
+      return true;
+    }
     const start = parseIp(s.dhcp.start), end = parseIp(s.dhcp.end);
     const inNet = start != null && end != null && sameNet(start, s.rt.ip, s.rt.bits) && sameNet(end, s.rt.ip, s.rt.bits);
     // 保留位址：指定的 MAC 永遠拿到同一個 IP
@@ -587,7 +716,9 @@ function acquire(state, old, d, i) {
     if (ip == null) { i.rt.note = `${sd.name} 的 DHCP 位址池設定有誤或已用完`; continue; }
     let dns = dnsList(s.dhcp.dns);
     if (!dns.length && sd.dnsProxy) dns = [s.rt.ip];
-    return set(ip, s.rt.bits, parseIp(s.dhcp.gw) ?? s.rt.ip, dns, 'dhcp', sd.id);
+    set(ip, s.rt.bits, parseIp(s.dhcp.gw) ?? s.rt.ip, dns, 'dhcp', sd.id);
+    rememberLease(state, d, i, sd.id + '/' + s.id, touchLease(state, sd.id + '/' + s.id, d.id + '/' + i.id, ip));
+    return true;
   }
   if (!i.rt.note) {
     i.rt.note = !i.rt.link ? (i.bind.t === 'wlan' ? i.rt.note || 'Wi-Fi 尚未連線' : '網路線沒有接上，或對端連接埠沒有啟用')
@@ -595,7 +726,8 @@ function acquire(state, old, d, i) {
       : snooped ? `${snooped.server.name} 的 DHCP 回應被 ${snooped.by.name} 的 DHCP Snooping 擋下（進來的埠不是信任埠）`
         : eps.some((x) => x.iface.line && x.iface.line.type === 'pppoe') ? 'DHCP 沒有回應：這條 ISP 線路要用 PPPoE 撥接'
           : eps.some((x) => x.iface.line && x.iface.line.type === 'static') ? 'DHCP 沒有回應：這條 ISP 線路是固定 IP，需要手動設定'
-            : 'DHCP 沒有回應：這個網段上找不到 DHCP 伺服器';
+            : eps.stp ? `DHCP 還沒有回應：${state.devices[eps.stp.dev].name} 的 ${eps.stp.pid} 還在 STP 的 listening / learning 狀態，再 ${Math.ceil(eps.stp.left)} 秒才會開始轉送`
+              : 'DHCP 沒有回應：這個網段上找不到 DHCP 伺服器';
   }
   return false;
 }
@@ -623,6 +755,7 @@ function relayPass(state, old) {
         const ip = leaseFrom(state, old, sd.id + '/scope/' + sc.start, parseIp(sc.start), parseIp(sc.end), null, d.id + '/' + i.id);
         if (ip == null) { i.rt.note = `${sd.name} 的位址範圍已經用完`; continue; }
         Object.assign(i.rt, { ip, bits: r.rt.bits, gw: parseIp(sc.gw) ?? r.rt.ip, dns: dnsList(sc.dns), src: 'dhcp', server: sd.id, relay: rd.id, note: '' });
+        rememberLease(state, d, i, sd.id + '/scope/' + sc.start, touchLease(state, sd.id + '/scope/' + sc.start, d.id + '/' + i.id, ip));
         changed = true;
         break;
       }
@@ -631,7 +764,10 @@ function relayPass(state, old) {
   return changed;
 }
 
+const VRRP_DOWN = 3; // Master_Down_Interval：大約三個通告間隔沒聽到 Master，Backup 才會接手
+
 function prepVrrp(state) {
+  const dyn = state.dyn, now = state.clock;
   const c = [];
   for (const d of Object.values(state.devices)) {
     for (const i of d.ifaces) {
@@ -639,14 +775,32 @@ function prepVrrp(state) {
       const vip = parseIp(i.vrrp.vip || '');
       if (i.rt.ip == null || !i.rt.link) { i.rt.vrrp = { state: 'init', why: '介面沒有 IP 或沒有連線' }; continue; }
       if (vip == null || !sameNet(vip, i.rt.ip, i.rt.bits)) { i.rt.vrrp = { state: 'init', why: '虛擬 IP 必須和介面位於同一個子網路' }; continue; }
-      c.push({ d, i, vip, k: [+i.vrrp.prio || 100, i.rt.ip] });
+      c.push({ d, i, vip, key: d.id + '/' + i.id, k: [+i.vrrp.prio || 100, i.rt.ip] });
     }
   }
+  const prev = Object.fromEntries(c.map((x) => [x.key, dyn.vrrp[x.key] && dyn.vrrp[x.key].state]));
+  const live = new Set(c.map((x) => x.key));
+  for (const k of Object.keys(dyn.vrrp)) if (!live.has(k)) delete dyn.vrrp[k];
   for (const x of c) {
     const peers = l2Explore(state, x.d.id, x.i).map((e) => c.find((y) => y.i === e.iface && y.vip === x.vip)).filter(Boolean);
     const top = peers.find((p) => cmp(p.k, x.k) > 0);
-    x.i.rt.vrrp = { state: top ? 'backup' : 'master', peers: peers.length };
-    if (!top) x.i.rt.vips.push(x.vip);
+    let rec = dyn.vrrp[x.key];
+    if (!rec) rec = dyn.vrrp[x.key] = dyn.boot ? { state: top ? 'backup' : 'master', lost: null } : { state: 'backup', lost: null };
+    let st, wait = 0;
+    if (top) st = 'backup';
+    else if (rec.state === 'master') st = 'master';
+    else if (peers.some((p) => prev[p.key] === 'master')) st = 'master'; // 原本的 Master 還活著，只是優先權比我低：直接搶回來 (preempt)
+    else {
+      // 聽不到 Master 的通告了：要等 Master_Down_Interval 才接手，這段時間沒有人回應虛擬 IP
+      if (rec.lost == null) rec.lost = now;
+      wait = rec.lost + VRRP_DOWN - now;
+      st = wait > 0 ? 'backup' : 'master';
+      if (wait > 0) state.rt.pending.push({ at: rec.lost + VRRP_DOWN, dev: x.d.id, kind: 'vrrp', text: `${x.d.name}：聽不到 VRRP Master，等待接手` });
+    }
+    if (st === 'master' || top) rec.lost = null;
+    rec.state = st;
+    x.i.rt.vrrp = { state: st, peers: peers.length, wait: wait > 0 ? wait : 0 };
+    if (st === 'master') x.i.rt.vips.push(x.vip);
   }
 }
 
@@ -704,23 +858,69 @@ export function setOspf(d, i, on) {
   i.ospf = false;
 }
 
+const OSPF_WAIT = 40; // 乙太網路上要先等 DR / BDR 選舉（Wait timer 和 Dead interval 一樣長），鄰居才會進到 FULL
+const OSPF_DEAD = 40; // 四個 Hello 間隔沒聽到對方，才判定鄰居失聯
+
 function computeOspf(state) {
-  const nodes = Object.values(state.devices).filter((d) => d.ifaces.some((i) => ospfOn(d, i) && i.rt.ip != null && i.rt.link));
-  const adj = {}, nets = {};
+  const dyn = state.dyn, now = state.clock, devs = state.devices;
+  const running = (d, i) => !!i && ospfOn(d, i) && i.rt.ip != null && i.rt.link;
+  const nodes = Object.values(devs).filter((d) => d.ifaces.some((i) => running(d, i)));
+  const isNode = new Set(nodes.map((d) => d.id));
+  const adj = {}, nets = {}, seen = new Set();
   for (const d of nodes) {
-    adj[d.id] = []; nets[d.id] = [];
+    adj[d.id] = []; nets[d.id] = []; d.rt.nbrs = [];
     for (const i of d.ifaces) {
-      if (!ospfOn(d, i) || i.rt.ip == null || !i.rt.link) continue;
+      if (!running(d, i)) continue;
       nets[d.id].push({ net: netOf(i.rt.ip, i.rt.bits), bits: i.rt.bits });
+      const cost = Math.max(1, +i.ospfCost || 1);
       for (const e of l2Explore(state, d.id, i)) {
         const j = e.iface;
-        if (!ospfOn(state.devices[e.dev], j) || j.rt.ip == null || j.rt.bits !== i.rt.bits || !sameNet(j.rt.ip, i.rt.ip, i.rt.bits)) continue;
-        adj[d.id].push({ to: e.dev, iface: i, via: j.rt.ip, cost: Math.max(1, +i.ospfCost || 1) });
+        if (!ospfOn(devs[e.dev], j) || j.rt.ip == null || j.rt.bits !== i.rt.bits || !sameNet(j.rt.ip, i.rt.ip, i.rt.bits)) continue;
+        const me = d.id + '/' + i.id, other = e.dev + '/' + j.id, key = me < other ? me + '~' + other : other + '~' + me;
+        let rec = dyn.adj[key];
+        if (!rec) rec = dyn.adj[key] = { since: dyn.boot ? -1e9 : now };
+        if (rec.gone) { rec.since = now; delete rec.gone; } // 中斷過又聽到對方：鄰居關係要從頭建立
+        rec.last = now;
+        rec[me] = { ip: i.rt.ip, cost }; // 記下這一端的資訊，對方失聯之後還用得到
+        seen.add(key);
+        const left = rec.since + OSPF_WAIT - now;
+        if (left > 0) {
+          d.rt.nbrs.push({ dev: e.dev, iface: i.id, ip: j.rt.ip, cost, state: 'forming', left });
+          state.rt.pending.push({ at: rec.since + OSPF_WAIT, dev: d.id, kind: 'ospf', text: `${d.name} ↔ ${devs[e.dev].name}：OSPF 鄰居關係建立中` });
+          continue;
+        }
+        adj[d.id].push({ to: e.dev, iface: i, via: j.rt.ip, cost });
+        d.rt.nbrs.push({ dev: e.dev, iface: i.id, ip: j.rt.ip, cost, state: 'full', dead: OSPF_DEAD - ((now - Math.max(rec.since, 0)) % 10) });
       }
     }
     if (d.ospfDefault && d.rt.routes.some((r) => r.bits === 0 && !r.bad && r.type !== 'O')) nets[d.id].push({ net: 0, bits: 0 });
-    d.rt.nbrs = adj[d.id].map((a) => ({ dev: a.to, iface: a.iface.id, ip: a.via, cost: a.cost }));
+    dyn.lsa[d.id] = nets[d.id];
   }
+  // 這一次沒聽到的鄰居：介面還亮著的那一端，要等 Dead timer 到期才會把它從資料庫拿掉。
+  // 在那之前路由還指向已經不在的鄰居，封包會被送進黑洞。
+  const ghosts = new Set();
+  for (const [key, rec] of Object.entries(dyn.adj)) {
+    if (seen.has(key)) continue;
+    if (now - rec.last >= OSPF_DEAD || rec.since + OSPF_WAIT > rec.last) { delete dyn.adj[key]; continue; }
+    rec.gone = true;
+    const sides = key.split('~').map((s) => ({ s, dev: s.slice(0, s.indexOf('/')), iface: s.slice(s.indexOf('/') + 1) }));
+    for (const [a, b] of [[sides[0], sides[1]], [sides[1], sides[0]]]) {
+      const d = devs[a.dev], other = devs[b.dev];
+      if (!d || !other || !rec[b.s]) continue;
+      const i = d.ifaces.find((x) => x.id === a.iface);
+      const believes = isNode.has(d.id) && running(d, i);
+      if (!believes && isNode.has(d.id)) continue; // 自己的介面也斷了：立刻知道鄰居不見了
+      if (!isNode.has(d.id)) ghosts.add(d.id); // 已經失聯的那一台：它發過的 LSA 還留在別人的資料庫裡
+      (adj[d.id] ||= []).push({ to: b.dev, iface: i, via: rec[b.s].ip, cost: rec[a.s] ? rec[a.s].cost : 1, stale: true });
+      if (!believes) continue;
+      const left = rec.last + OSPF_DEAD - now;
+      d.rt.nbrs.push({ dev: b.dev, iface: a.iface, ip: rec[b.s].ip, cost: rec[a.s] ? rec[a.s].cost : 1, state: 'dying', left });
+      state.rt.pending.push({ at: rec.last + OSPF_DEAD, dev: d.id, kind: 'ospf', text: `${d.name} 還沒發現 ${other.name} 已經失聯（OSPF Dead timer）` });
+    }
+  }
+  for (const id of ghosts) nets[id] = dyn.lsa[id] || [];
+  for (const id of Object.keys(dyn.lsa)) if (!isNode.has(id) && !ghosts.has(id)) delete dyn.lsa[id];
+  const everyone = [...nodes.map((d) => d.id), ...ghosts];
   for (const d of nodes) {
     const dist = { [d.id]: 0 }, first = {}, done = new Set();
     for (;;) {
@@ -728,22 +928,22 @@ function computeOspf(state) {
       for (const k of Object.keys(dist)) if (!done.has(k) && (u == null || dist[k] < dist[u])) u = k;
       if (u == null) break;
       done.add(u);
-      for (const e of adj[u]) {
+      for (const e of adj[u] || []) {
         const nd = dist[u] + e.cost;
         if (dist[e.to] == null || nd < dist[e.to]) { dist[e.to] = nd; first[e.to] = u === d.id ? e : first[u]; }
       }
     }
-    for (const o of nodes) {
-      if (o === d || dist[o.id] == null) continue;
-      for (const n of nets[o.id]) {
+    for (const oid of everyone) {
+      if (oid === d.id || dist[oid] == null) continue;
+      for (const n of nets[oid]) {
         if (d.rt.routes.some((r) => r.type === 'C' && r.net === n.net && r.bits === n.bits)) continue;
-        const metric = dist[o.id] + 1;
+        const metric = dist[oid] + 1;
         const ex = d.rt.routes.findIndex((r) => r.type === 'O' && r.net === n.net && r.bits === n.bits);
         if (ex >= 0) {
           if (d.rt.routes[ex].metric <= metric) continue;
           d.rt.routes.splice(ex, 1);
         }
-        d.rt.routes.push({ net: n.net, bits: n.bits, via: first[o.id].via, iface: first[o.id].iface, type: 'O', ad: 110, metric });
+        d.rt.routes.push({ net: n.net, bits: n.bits, via: first[oid].via, iface: first[oid].iface, type: 'O', ad: 110, metric });
       }
     }
   }
@@ -921,24 +1121,30 @@ function daiBlock(state, path, srcIf, dstIf) {
 
 /** 設定或接線變動後呼叫：重新計算所有執行期狀態 */
 export function recompute(state) {
+  if (typeof state.clock !== 'number') state.clock = 0;
+  if (!state.dyn) state.dyn = { boot: true }; // 第一次計算：目前的狀態當作已經運作很久
+  for (const k of ['port', 'adj', 'lsa', 'vrrp', 'lease', 'hold', 'arp']) state.dyn[k] ||= {};
   let auth = { dot1x: {}, ent: {} };
+  // 802.1X 可能要算好幾輪。前幾輪只是試算，計時的狀態以最後一輪為準，所以每一輪都從同一份起點開始
+  const dyn0 = JSON.stringify(state.dyn);
   for (let round = 0; round < 3; round++) {
+    if (round) state.dyn = JSON.parse(dyn0);
     computePass(state, auth);
     const next = computeAuth(state);
     if (JSON.stringify(next) === JSON.stringify(auth)) break;
     auth = next; // 802.1X 的結果改變了連接埠的狀態，要重算一次
   }
   if (state.v6) recompute6(state);
-  state.rt.arp = {}; // 設定或接線一變動就清空 ARP 快取：下一個封包會重新廣播詢問
+  delete state.dyn.boot;
   return state;
 }
 
 function computePass(state, auth) {
   const devs = Object.values(state.devices);
   const down = state.down || {};
-  state.rt = { links: {}, off: {}, clients: {}, cable: {}, why: {}, auth, arp: {} };
+  state.rt = { links: {}, off: {}, clients: {}, cable: {}, why: {}, auth, wait: {}, pending: [] };
   for (const d of devs) {
-    d.rt = { routes: [], nbrs: [], tunnels: [], lag: {}, err: {}, stp: null, interf: [], vpn: null, unauth: null };
+    d.rt = { routes: [], nbrs: [], tunnels: [], lag: {}, err: {}, stp: null, interf: [], vpn: null, unauth: null, wait: {} };
     if (isVlanSw(d)) {
       for (const [pid, pc] of Object.entries(d.sw.ports)) {
         const a = auth.dot1x[d.id + ':' + pid];
@@ -952,6 +1158,7 @@ function computePass(state, auth) {
   prepPhysical(state);
   prepLag(state);
   prepStp(state);
+  prepStpTimers(state);
   prepWifi(state);
   for (const d of devs) {
     const dead = down[d.id] || state.rt.off[d.id];
@@ -977,7 +1184,18 @@ function computePass(state, auth) {
   }
   const old = state.leases || {};
   state.leases = {};
-  const dyn = (i) => i.rt.active && i.rt.ip == null && (i.mode === 'dhcp' || i.mode === 'pppoe');
+  // 伺服器手上還沒到期的租約：就算用戶端現在不在線上，那個位址也不會發給別人
+  const now = state.clock;
+  for (const [key, tbl] of Object.entries(old)) {
+    const hold = (state.dyn.hold[key] ||= {});
+    for (const [ck, ip] of Object.entries(tbl)) {
+      if (!state.devices[ck.slice(0, ck.indexOf('/'))]) { delete hold[ck]; continue; } // 設備已經不存在
+      if (!hold[ck] || hold[ck].ip !== ip) hold[ck] = { ip, t0: now, exp: now + leaseLen(state, key) }; // 舊存檔，或關卡預先放進去的租約
+      if (hold[ck].exp > now) (state.leases[key] ||= {})[ck] = ip; else delete hold[ck];
+    }
+    for (const ck of Object.keys(hold)) if (!(ck in tbl)) delete hold[ck];
+  }
+  const dyn = (i) => i.rt.active && i.rt.ip == null && !i.released && (i.mode === 'dhcp' || i.mode === 'pppoe');
   for (let pass = 0; pass < 4; pass++) {
     let changed = false;
     for (const d of devs) for (const i of d.ifaces) if (dyn(i) && acquire(state, old, d, i)) changed = true;
@@ -987,9 +1205,18 @@ function computePass(state, auth) {
   routesAll(state);
   let again = relayPass(state, old);
   for (const d of devs) {
-    if (d.kind !== 'host') continue;
     for (const i of d.ifaces) {
       if (!dyn(i) || i.mode !== 'dhcp' || !i.rt.link) continue;
+      // 這一次沒有要到位址。手上的租約還沒到期的話繼續用（伺服器暫時連不到並不會讓電腦馬上斷線）
+      const ck = d.id + '/' + i.id, L = state.dyn.lease[ck];
+      if (L && L.exp > now && state.devices[L.server]) {
+        Object.assign(i.rt, { ip: L.ip, bits: L.bits, gw: L.gw, dns: L.dns, src: 'dhcp', server: L.server, relay: L.relay, exp: L.exp, held: i.rt.note || 'DHCP 伺服器沒有回應' });
+        if (L.key) (state.leases[L.key] ||= {})[ck] = L.ip;
+        again = true;
+        continue;
+      }
+      delete state.dyn.lease[ck];
+      if (d.kind !== 'host') continue;
       const h = hash(d.id + i.id);
       Object.assign(i.rt, { ip: parseIp(`169.254.${(h % 254) + 1}.${((h >>> 8) % 254) + 1}`), bits: 16, src: 'apipa' });
       again = true;
@@ -1005,6 +1232,15 @@ function computePass(state, auth) {
     }
   }
   prepTunnels(state);
+  // 介面斷線時，從那個介面學到的 ARP 項目會被清掉
+  for (const d of devs) {
+    const cache = state.dyn.arp[d.id];
+    if (!cache) continue;
+    for (const [ip, e] of Object.entries(cache)) {
+      const i = d.ifaces.find((x) => x.id === e.i);
+      if (!i || !i.rt.link || down[d.id]) delete cache[ip];
+    }
+  }
   return state;
 }
 
@@ -1117,6 +1353,10 @@ function arpFail(state, dev, outIf, nh, viaGw, eps) {
   if (eps.dot1x) return `ARP 沒有回應：連接埠還沒有通過 802.1X 驗證（${eps.dot1x}）`;
   if (eps.ps) return `ARP 沒有回應：${dev.name} 的訊框被 ${eps.ps} 的 Port Security 擋下（不是允許的 MAC 位址）`;
   if (!owner) return `ARP 沒有回應：找不到 ${who}，沒有任何設備使用這個 IP`;
+  if (eps.stp) {
+    const s = eps.stp;
+    return `${state.devices[s.dev].name} 的 ${s.pid} 剛連上，還在 STP 的${s.left > 15 ? ' listening ' : s.left > 2 ? ' learning ' : '協商'}狀態，再 ${Math.ceil(s.left)} 秒才會開始轉送資料${s.left > 2 ? '（接電腦或伺服器的埠可以啟用 PortFast，跳過這段等待）' : ''}`;
+  }
   // 路徑上如果有沒燈號的線，把原因一起說出來
   const dead = state.cables.find((c) => state.rt.why[c.id]);
   const extra = dead ? `。另外，${state.devices[dead.a.dev].name} ↔ ${state.devices[dead.b.dev].name} 的連線沒有燈號：${state.rt.why[dead.id]}` : '';
@@ -1339,18 +1579,22 @@ function forward(state, ctx, startId, pkt) {
       dai ||= blk;
     }
     // 真實網路裡，第一次要和某個 IP 通訊前得先用 ARP 廣播問出它的 MAC；問到之後會記在 ARP 快取裡
-    const cache = (state.rt.arp[dev.id] ||= {});
-    const needArp = !cache[nh];
+    const cache = (state.dyn.arp[dev.id] ||= {});
+    const known = cache[nh];
+    // 快取裡有、還沒過期、而且那個 MAC 現在仍然是這個 IP 的主人，才不用重新詢問
+    const needArp = !(known && state.clock - known.t < arpTtl(dev) && cands.some((e) => answerMac(e, nh) === known.mac));
     if (needArp) {
       log.push({ dev: dev.id, kind: 'arp', text: `ARP 廣播：誰是 ${fmtIp(nh)}？同一個廣播網域的每台設備都會收到` });
       const wave = buildWave(eps);
       if (wave.length) hops.push({ wave, proto: 'arp' });
     }
     if (!tgt) return drop(dai || arpFail(state, dev, outIf, nh, route.via != null, eps));
+    const tmac = answerMac(tgt, nh);
+    if (!needArp) known.t = state.clock; // 有流量在走，項目就會一直被確認、不會過期
     if (needArp) {
-      cache[nh] = tgt.iface.rt.mac;
-      if (outIf.rt.ip != null) (state.rt.arp[tgt.dev] ||= {})[outIf.rt.ip] = outIf.rt.mac; // 被問的那一方也順便記下發問者
-      log.push({ dev: tgt.dev, kind: 'arp', text: `ARP 回覆：${fmtIp(nh)} 的 MAC 位址是 ${tgt.iface.rt.mac}（${dev.name} 記入 ARP 快取）` });
+      cache[nh] = { mac: tmac, t: state.clock, i: outIf.id };
+      if (outIf.rt.ip != null) (state.dyn.arp[tgt.dev] ||= {})[outIf.rt.ip] = { mac: outIf.rt.mac, t: state.clock, i: tgt.iface.id }; // 被問的那一方也順便記下發問者
+      log.push({ dev: tgt.dev, kind: 'arp', text: `ARP 回覆：${fmtIp(nh)} 的 MAC 位址是 ${tmac}${tmac === VRRP_MAC ? '（VRRP 的虛擬 MAC）' : ''}（${dev.name} 記入 ARP 快取）` });
       for (const h of [...tgt.path].reverse()) hops.push({ cable: h.cable, wifi: h.wifi, from: h.to, to: h.from, tag: h.tag, reply: true, proto: 'arp' });
     }
     if (cands.length > 1 && !dai) {
@@ -1363,7 +1607,7 @@ function forward(state, ctx, startId, pkt) {
       text: (route.via != null ? `查路由 → 下一站 ${fmtIp(nh)}：` : '') + names.join(' → ') + (tags.length ? `　[802.1Q VLAN ${tags.join(',')}]` : '')
         + (tgt.path.some((h) => h.wifi) ? '　[Wi-Fi]' : ''),
       // 這一段第二層旅程上的訊框內容，給「封包檢視」用
-      frame: { smac: outIf.rt.mac, dmac: tgt.iface.rt.mac, tags, src: pkt.src, dst: pkt.dst, ttl: pkt.ttl, proto: pkt.proto, sport: pkt.sport, dport: pkt.dport, reply: pkt.reply, ack: !!pkt.ack, ssl: !!pkt.ssl, wifi: tgt.path.some((h) => h.wifi) },
+      frame: { smac: outIf.rt.mac, dmac: tmac, tags, src: pkt.src, dst: pkt.dst, ttl: pkt.ttl, proto: pkt.proto, sport: pkt.sport, dport: pkt.dport, reply: pkt.reply, ack: !!pkt.ack, ssl: !!pkt.ssl, wifi: tgt.path.some((h) => h.wifi) },
     });
     let leaked = false;
     tgt.path.forEach((h, n) => {
@@ -1427,7 +1671,7 @@ function hubLeak(state, path, n) {
   return out.length ? out : undefined;
 }
 
-export const arpRows = (state, dev) => Object.entries(state.rt.arp[dev.id] || {}).map(([ip, mac]) => ({ ip: +ip, mac }));
+
 
 /** DHCP 的四個步驟 (DORA)：依目前的租約重建過程，給動畫與終端機的 ipconfig /renew 用 */
 export function dhcpTrace(state, devId) {
@@ -1619,9 +1863,13 @@ export function runObjective(state, o) {
       if (c) s2.cut[c.id] = true;
       what.push(`${state.devices[dv].name} 的 ${pid} 斷線`);
     }
+    // 故障發生後要等網路重新收斂（VRRP 換手、OSPF 的 Dead timer…）才測試
     recompute(s2);
+    const t0 = s2.clock;
+    settle(s2);
+    const took = Math.round(s2.clock - t0);
     const r = runObjective(s2, o.test);
-    r.log.unshift({ dev: (o.down || [])[0] || (o.cut || [[]])[0][0], kind: 'info', text: `故障演練：${what.join('、')}` });
+    r.log.unshift({ dev: (o.down || [])[0] || (o.cut || [[]])[0][0], kind: 'info', text: `故障演練：${what.join('、')}${took ? `；${fmtDur(took)}後網路重新收斂，再進行測試` : ''}` });
     if (!r.pass && r.reason) r.reason = `故障演練（${what.join('、')}）：${r.reason}`;
     return r;
   }

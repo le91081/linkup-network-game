@@ -621,4 +621,15 @@ CHAPTERS.push(...CHAPTERS2, ...CHAPTERS3, ...CHAPTERS4);
 LEVELS.push(...LEVELS2, ...LEVELS3, ...LEVELS4);
 LEVELS.sort((a, b) => a.chapter - b.chapter); // 穩定排序：補充關卡排到所屬章節的最後
 
+// 關卡裡的交換器都由「前任管理員」下過 spanning-tree portfast default：接終端設備的埠一連上就開始轉送。
+// 原廠預設是關閉的（要等 30 秒），在自由模式放一台新的交換器就會遇到。
+for (const lv of LEVELS) {
+  const setup = lv.setup;
+  lv.setup = () => {
+    const s = setup();
+    for (const d of Object.values(s.devices)) if (d.sw && d.sw.stp && d.sw.stp.portfastDefault == null) d.sw.stp.portfastDefault = true;
+    return s;
+  };
+}
+
 export const levelById = (id) => LEVELS.find((l) => l.id === id);
