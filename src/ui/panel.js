@@ -12,6 +12,7 @@ import * as X from './panel-extra.js';
 import * as M from './panel-more.js';
 import * as DG from './panel-diag.js';
 import * as OPS from './panel-ops.js';
+import * as V from './panel-voice.js';
 import { isTftp, isFtp } from '../engine/files.js';
 import { buildCli } from './cli.js';
 import { buildFortiCli } from './forticli.js';
@@ -192,6 +193,7 @@ function swPorts(ctx, body) {
       !routed && open && X.portAdvanced(ctx, p, pc)));
   }
   body.append(DG.spanCard(ctx));
+  for (const c of [V.poeCard(ctx), V.mlsQosCard(ctx)]) if (c) body.append(c);
 }
 
 function swVlans(ctx, body) {
@@ -486,16 +488,17 @@ function tabsFor(dev) {
 function baseTabs(dev) {
   if (dev.locked && dev.kind !== 'internet') return [['info', '設備資訊', X.lockedInfo]];
   switch (dev.kind) {
-    case 'host': return [T.net, dev.vpnClient && ['vpn', 'VPN', X.vpnClientTab], dev.dhcpScopes && ['dhcp', 'DHCP 服務', X.dhcpScopesTab],
+    case 'host': if (CATALOG[dev.model].phone) return [['phone', '電話', V.phoneTab], ['pnet', '網路設定', V.phoneNetTab]];
+      return [T.net, dev.vpnClient && ['vpn', 'VPN', X.vpnClientTab], dev.dhcpScopes && ['dhcp', 'DHCP 服務', X.dhcpScopesTab],
       dev.radiusServer && ['radius', 'RADIUS', M.radiusServerTab],
       (dev.services || []).some((s) => s.proto === 'udp' && s.port === 514) && ['syslog', 'Syslog', M.syslogTab],
-      (isTftp(dev) || isFtp(dev)) && ['files', '檔案', OPS.filesTab], dev.nms && ['nms', '網管', OPS.nmsTab],
+      (isTftp(dev) || isFtp(dev)) && ['files', '檔案', OPS.filesTab], dev.nms && ['nms', '網管', OPS.nmsTab], dev.cucm && ['cucm', 'CUCM', V.cucmTab],
       ['cap', '封包擷取', DG.captureTab], T.term].filter(Boolean);
     case 'hub': case 'switch': return [T.ports];
     case 'ap': return [['ssid', '無線網路', X.ssidTab], ['radio', '無線電', X.radioTab], T.ports];
     case 'mswitch': return [T.swports, T.vlan, T.sec, T.mgmt, T.status];
-    case 'l3switch': return [T.swports, T.vlan, T.l3, T.route, T.sec, T.mgmt, T.status];
-    case 'router': return [T.ifs, T.route, T.nat, T.acl, T.vpn, T.mgmt, T.status];
+    case 'l3switch': return [T.swports, T.vlan, T.l3, T.route, T.sec, ['qos', 'QoS', V.qosTab], T.mgmt, T.status];
+    case 'router': return [T.ifs, T.route, T.nat, T.acl, T.vpn, ['qos', 'QoS', V.qosTab], T.mgmt, T.status];
     case 'homerouter': return [['wan', '網際網路 (WAN)', hrWan], ['lan', '區域網路 (LAN)', hrLan], ['wifi', '無線網路', X.ssidTab], ['nat', '連接埠轉發', forwardsTab], T.status];
     case 'firewall': return [['if', '介面', fwIfaces], ['pol', '政策', fwPolicies], ['nat', '虛擬 IP', forwardsTab], T.vpn, T.route, T.mgmt, ['log', '紀錄', M.logTab], T.status, ['fcli', 'CLI', buildFortiCli]];
     default: return [['info', '線路資訊', inetInfo]];
@@ -547,7 +550,7 @@ export function renderDevicePanel(app, root) {
   root.dataset.view = viewKey;
   root.replaceChildren(...[
     h('div', { class: 'p-head k-' + dev.kind },
-      h('div', { class: 'p-badge', text: KIND_NAME[dev.kind] }),
+      h('div', { class: 'p-badge', text: m.phone ? 'IP 電話' : KIND_NAME[dev.kind] }),
       h('div', { class: 'p-title' },
         app.level.sandbox ? inp(ctx, () => dev.name, (v) => { if (v) dev.name = v; }, { mono: false, ph: '設備名稱' }) : h('h2', { text: dev.name }),
         h('p', { text: m.title }), h('p', { class: 'muted', text: m.tagline })),

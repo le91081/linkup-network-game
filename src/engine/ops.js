@@ -5,9 +5,9 @@
 // state.dyn.syslog[伺服器] = [{ n, t, ip, dev, sev, line }]   Syslog 伺服器收到的訊息
 // state.dyn.ev[設備]    = 上一次看到的狀態，用來比對出「發生了什麼事」
 import { parseIp, fmtIp } from './ip.js';
-import { transact, macsBehind, closeFlow } from './sim.js';
+import { transact, macsBehind, closeFlow, poeTable } from './sim.js';
 import { isIos } from './ios.js';
-import { linkInfo } from './model.js';
+import { linkInfo, CATALOG } from './model.js';
 import { ensureFlash, bootPick, isCiscoOs, IMAGES } from './files.js';
 import { nmsTick, queueTrap, flushTraps } from './snmp.js';
 import { discTick, heardVia } from './disc.js';
@@ -300,7 +300,7 @@ export function markReboot(state, devId) {
 /** 從按下電源（或 reload）到可以開始工作要多久（秒） */
 const BOOT_TIME = {
   hub4: 2, sw5: 5, sw8: 5, homerouter: 60, ap: 60, erx: 60, c2960: 120, c2960p: 120, isr4321: 180, isr4331: 180, c9300: 240, n93180: 240, n9332: 240,
-  fg60f: 70, fg100f: 90, pc: 30, laptop: 20, phone: 20, printer: 30, wprinter: 30, nas: 90, tower: 90, rack1u: 150,
+  fg60f: 70, fg100f: 90, pc: 30, laptop: 20, phone: 20, printer: 30, wprinter: 30, nas: 90, tower: 90, rack1u: 150, ipphone: 90,
 };
 export const bootTime = (d) => BOOT_TIME[d.model] ?? 30;
 
@@ -352,6 +352,18 @@ export function opsBefore(state) {
       else booting[d.id] = c.up - now;
     }
     if (d.kind === 'internet') ensureInetNtp(d);
+  }
+  // 用 PoE 供電的設備（IP 電話、基地台）：交換器開始供電之後才開機。交換器重新開機，它們也跟著斷電重開
+  const tbl = poeTable(state, (id) => !!down[id] || booting[id] > 0);
+  const powered = new Set(Object.values(tbl).filter((e) => e.state === 'on').map((e) => e.pd));
+  for (const d of Object.values(state.devices)) {
+    if (!CATALOG[d.model] || !CATALOG[d.model].needsPoe || down[d.id]) continue;
+    const c = dyn.clk[d.id];
+    if (!powered.has(d.id)) { c.nopower = true; delete c.up; delete booting[d.id]; continue; }
+    if (c.nopower) {
+      delete c.nopower;
+      if (!first) { wipe(state, d); c.up = now + bootTime(d); booting[d.id] = c.up - now; }
+    }
   }
   return booting;
 }

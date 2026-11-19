@@ -1417,6 +1417,117 @@ console.log('\n第二層探索：CDP、LLDP 與 DTP');
   void makeState;
 }
 
+console.log('\n語音與 QoS：PoE、語音 VLAN、註冊、LLQ、整形、信任邊界');
+{
+  const voice = await import('../src/engine/voice.js');
+  const { iosSession, runningConfig } = await import('../src/engine/ios.js');
+  const { removeCable, addCable } = await import('../src/engine/model.js');
+  const ok = (cond, title) => (cond ? console.log('  ✔ ' + title) : fail(title));
+  const start = (id) => { const lv = LEVELS.find((l) => l.id === id); const s = lv.setup(); recompute(s); return { s, lv }; };
+  const ios = (s, id, lines) => { const sess = iosSession(() => s.devices[id], () => s); const out = []; for (const l of lines) out.push(...sess.exec(l).out); recomputeNow(s); return out; };
+  const st = (s, id) => voice.phoneState(s, s.devices[id]);
+  {
+    const { s } = start('l44');
+    const a0 = st(s, 'ph-a'), b0 = st(s, 'ph-b');
+    ok(a0.st === 'off' && /PoE/.test(a0.why) && s.devices['pc-a'].ifaces[0].rt.ip == null && b0.st === 'tftp' && /option 150/.test(b0.why) && !s.devices['ph-b'].rt.voice,
+      `接在沒有 PoE 的埠：電話沒電，後面的電腦也斷線；會議室電話沒學到語音 VLAN，停在下載設定（${b0.why.slice(0, 30)}…）`);
+    const c = s.cables.find((x) => (x.a.dev === 'ph-a' && x.a.port === 'sw') || (x.b.dev === 'ph-a' && x.b.port === 'sw'));
+    removeCable(s, c.id); addCable(s, 'ph-a', 'sw', 'sw', 'Gi0/1');
+    recomputeNow(s);
+    const booting = st(s, 'ph-a').st;
+    advance(s, 91); recomputeNow(s);
+    const a1 = st(s, 'ph-a');
+    ok(booting === 'boot' && a1.st !== 'off' && a1.st !== 'boot' && !s.devices['ph-a'].rt.voice,
+      `改插 PoE 埠：電話先開機 90 秒（${booting}）；交換器的埠沒有 voice vlan，CDP 也不會告訴它語音 VLAN（${a1.st}）`);
+    ios(s, 'sw', ['configure terminal', 'interface range gi0/1 - 2', 'switchport voice vlan 110', 'end']);
+    const va = s.devices['ph-a'].rt.voice, vb = s.devices['ph-b'].rt.voice;
+    ios(s, 'sw', ['configure terminal', 'lldp run', 'end']);
+    const vb2 = s.devices['ph-b'].rt.voice;
+    ok(va && va.via === 'cdp' && va.vlan === 110 && !vb && vb2 && vb2.via === 'lldp', 'Cisco 電話從 CDP 學到語音 VLAN；Yealink 不懂 CDP，要交換器 lldp run 才從 LLDP-MED 學到');
+    const pw = (s.rt.poe || {})['sw:Gi0/1'], pwb = (s.rt.poe || {})['sw:Gi0/2'];
+    ok(pw && pw.state === 'on' && pw.alloc === 6.3 && pwb.alloc === 15.4, 'PoE：Cisco 電話用 CDP 協商只保留 6.3 W；Yealink（Class 3、沒有 CDP）依等級保留 15.4 W');
+    advance(s, 20); recomputeNow(s);
+    const a2 = st(s, 'ph-a');
+    ios(s, 'rt', ['configure terminal', 'ip dhcp pool VOICE', 'option 150 ip 10.10.100.10', 'end']);
+    const a3 = st(s, 'ph-a');
+    advance(s, 10); recomputeNow(s);
+    const a4 = st(s, 'ph-a'), b4 = st(s, 'ph-b');
+    ok(a2.st === 'tftp' && a3.st === 'regging' && a4.st === 'reg' && a4.ext === '2001' && b4.st === 'reg',
+      `語音網段的位址池少了 option 150 → 停在下載設定；補上之後註冊要幾秒，自動註冊配到分機 ${a4.ext} / ${b4.ext}`);
+    const q = voice.callQuality(s, 'ph-a', 'ph-b');
+    ok(q.ok && q.mos >= 4.3, `同一台交換器上的兩支電話：MOS ${q.mos}`);
+    ios(s, 'sw', ['configure terminal', 'interface gi0/1', 'power inline never', 'end']);
+    const off = st(s, 'ph-a').st;
+    ios(s, 'sw', ['configure terminal', 'interface gi0/1', 'power inline auto', 'end']);
+    ok(off === 'off' && runningConfig(s, s.devices.sw).every((l) => l !== ' power inline never'), 'power inline never：那個埠不供電，電話馬上斷電');
+  }
+  {
+    // CUCM 沒開自動註冊、資料庫裡沒有這支電話 → 註冊被拒；手動設定語音 VLAN 與備用 TFTP 也能註冊
+    const { s } = start('l44');
+    s.devices.cucm.cucm.autoReg = false;
+    // 手動指定的語音 VLAN 要交換器那個埠真的帶著它（voice vlan），電話送的帶標籤訊框才進得去
+    ios(s, 'sw', ['configure terminal', 'interface gi0/2', 'switchport voice vlan 110', 'end']);
+    s.devices['ph-b'].phone.vlan = '110';
+    s.devices['ph-b'].phone.tftp = '10.10.100.10';
+    recomputeNow(s);
+    const r = st(s, 'ph-b');
+    s.devices.cucm.cucm.phones.push({ mac: s.devices['ph-b'].ifaces[0].rt.mac, ext: '3001', name: '會議室' });
+    recompute(s); // 被拒絕的電話會再試，這次查得到，註冊要幾秒
+    const r2 = st(s, 'ph-b');
+    ok(s.devices['ph-b'].rt.voice.via === 'manual' && r.st === 'reject' && r2.st === 'reg' && r2.ext === '3001',
+      '電話上手動設定語音 VLAN 與備用 TFTP；CUCM 沒開自動註冊時，資料庫裡沒有的電話會被拒絕，加進資料庫就配到指定的分機');
+  }
+  {
+    // 單向通話：路由器只擋了一個方向的 RTP
+    const { s } = start('l45');
+    const sess = iosSession(() => s.devices.hrt, () => s);
+    for (const l of ['configure terminal', 'ip access-list extended NO-RTP-IN', 'deny udp 10.20.110.0 0.0.0.255 10.10.110.0 0.0.0.255 eq 16384', 'permit ip any any', 'interface gi0/0/0', 'ip access-group NO-RTP-IN in', 'end']) sess.exec(l);
+    recompute(s);
+    const one = voice.callQuality(s, 'ph-br', 'ph-hq');
+    ok(!one.ok && one.oneWay && /總公司電話 聽不到 分公司電話/.test(one.why), `ACL 只擋了一個方向的 RTP：單向通話（${one.why.slice(0, 40)}…）`);
+  }
+  {
+    const { s, lv } = start('l45');
+    const q0 = voice.callQuality(s, 'ph-br', 'ph-hq');
+    ok(q0.ok && q0.mos < 3.6 && q0.ab.why.some((w) => /合約頻寬 20 Mbps/.test(w)) && s.flows.every((f) => f.rt.mbps > 4 && f.rt.mbps < 7),
+      `沒有 QoS：備份把營運商的 20 Mbps 塞滿，超過的被管制丟掉，語音也一起被丟（MOS ${q0.mos}，三個備份各 ${s.flows[0].rt.mbps} Mbps）`);
+    ios(s, 'brt', ['configure terminal', 'policy-map SHAPE', 'class class-default', 'shape average 20000000', 'interface gi0/0/0', 'service-policy output SHAPE', 'end']);
+    const q1 = voice.callQuality(s, 'ph-br', 'ph-hq');
+    ok(q1.mos < 4.0 && q1.ab.loss > 3 && q1.ab.jitter > 5 && q1.ab.why.some((w) => /同一個佇列/.test(w)), `只有整形、沒有 LLQ：語音和備份排在同一個佇列（MOS ${q1.mos}，遺失 ${q1.ab.loss}%，抖動 ${q1.ab.jitter} ms）`);
+    const e1 = ios(s, 'brt', ['configure terminal', 'class-map match-any VOICE', 'match dscp ef', 'policy-map VOICE-PRI', 'class VOICE', 'priority percent 30', 'bandwidth percent 10', 'end']);
+    const e2 = ios(s, 'brt', ['configure terminal', 'interface gi0/0/1.10', 'service-policy input VOICE-PRI', 'end']);
+    ok(e1.some((l) => /Only one of bandwidth or priority/.test(l)) && e2.some((l) => /not supported in the input direction/.test(l)), 'priority 和 bandwidth 不能放在同一個 class；佇列只能用在 output');
+    ios(s, 'brt', ['configure terminal', 'policy-map VOICE-PRI', 'class class-default', 'fair-queue', 'policy-map SHAPE', 'class class-default', 'service-policy VOICE-PRI', 'end']);
+    const q2 = voice.callQuality(s, 'ph-br', 'ph-hq');
+    const res2 = evaluate(s, lv.objectives);
+    ok(q2.mos >= 4.0 && !res2[2].pass && /BR-SW/.test(res2[2].reason), `加上 LLQ 之後通話清楚了（MOS ${q2.mos}，靠的是 class-default 的 fair-queue），但語音在 BR-SW 就被改成 0，路由器認不出它`);
+    ios(s, 'bsw', ['configure terminal', 'interface gi0/1', 'mls qos trust cos', 'end']);
+    const res3 = evaluate(s, lv.objectives);
+    ok(!res3[2].pass && /cs5 \(40\)/.test(res3[2].reason) && /CoS 5 對應到 40/.test(res3[2].reason), '只信任 CoS：預設的對照表把 CoS 5 換成 DSCP 40 (CS5)，不是 EF');
+    ios(s, 'bsw', ['configure terminal', 'interface gi0/1', 'auto qos voip cisco-phone', 'end']);
+    const res4 = evaluate(s, lv.objectives);
+    const q4 = voice.callQuality(s, 'ph-br', 'ph-hq');
+    ok(res4.every((r) => r.pass) && q4.mos >= 4.3, `auto qos voip cisco-phone：語音一路都是 EF，四個目標都通過（MOS ${q4.mos}）`);
+    const rc = runningConfig(s, s.devices.brt);
+    ok(rc.indexOf('policy-map VOICE-PRI') < rc.indexOf('policy-map SHAPE') && rc.includes('  service-policy VOICE-PRI') && rc.includes(' service-policy output SHAPE'),
+      'running-config 先印子政策再印 parent，貼回去才不會找不到');
+    // trust device cisco-phone：對面是電腦就不信任
+    ios(s, 'bsw', ['configure terminal', 'interface gi0/2', 'mls qos trust device cisco-phone', 'mls qos trust dscp', 'end']);
+    const { portTrust } = await import('../src/engine/qos.js');
+    ok(portTrust(s, s.devices.bsw, 'Gi0/2') === 'none' && portTrust(s, s.devices.bsw, 'Gi0/1') === 'cos', 'trust device cisco-phone：CDP 認出對面是 Cisco 電話才信任，接的是電腦就不信任');
+  }
+  {
+    const { s, lv } = start('l46');
+    const r0 = evaluate(s, lv.objectives);
+    const sw = s.devices.sw;
+    ok(!r0[0].pass && sw.rt.dtp['Gi0/5'].oper === 'trunk' && /desirable/.test(sw.rt.dtp['Gi0/5'].why) && r0[1].pass,
+      'VLAN hopping：筆電用 DTP 把 dynamic auto 的埠協商成 Trunk，帶著 VLAN 20 的標籤直接連到資料庫，繞過 R1 的 ACL');
+    ios(s, 'sw', ['configure terminal', 'interface range gi0/1 - 2 , gi0/5', 'switchport mode access', 'end']);
+    const r1 = evaluate(s, lv.objectives);
+    ok(r1[0].pass && sw.rt.dtp['Gi0/5'].oper === 'access' && !r1[2].pass && /nonegotiate/.test(r1[2].reason), '設成 Access 之後筆電只能走 R1，ACL 擋下了 3306；但還要 nonegotiate 才算加固完成');
+  }
+}
+
 // ── FortiGate 的 CLI ──
 console.log('\nFortiGate CLI');
 {

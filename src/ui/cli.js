@@ -4,6 +4,7 @@ import { fmtIp, parseIp } from '../engine/ip.js';
 import { fmtIp6 } from '../engine/ip6.js';
 import { transact, routeRows, isBridgePort, arpRows, clearArp, hitsOf, fmtDur, portfastOn, macRows, clearMac, macAgeOf, sessionRows, clearSessions, saInfo, isTrunk, dtpSpeaker } from '../engine/sim.js';
 import { cdpCfg, lldpCfg, cdpOn, lldpTxOn, lldpRxOn, neighbors, ndCounters, cdpCapText, speaksCdp, speaksLldp } from '../engine/disc.js';
+import { dscpName, COS_DSCP_DEFAULT, portTrust, egressOf, classify, QLIMIT } from '../engine/qos.js';
 import { iosClock, deviceTime, ntpInfo, logRows, clearLog, syslogStats, uptimeOf, routerId, longIf, SEVERITY, NTP_POLL, vtyRows, idleLimit } from '../engine/ops.js';
 import { quietLeft } from '../engine/remote.js';
 import { counters, clearCounters, clearedAt, spanDest, debugOf, setDebug, consoleRows } from '../engine/wire.js';
@@ -441,6 +442,60 @@ const SHOW = {
     return ['Global DTP information', '\tSending DTP Hello packets every 30 seconds', '\tDynamic Trunk timeout is 300 seconds', `\t${n} interfaces using DTP`];
   },
   'show interfaces switchport': (st, d) => (isSw(d) ? d.ports.filter((p) => d.sw.ports[p.id].mode !== 'routed').flatMap((p) => [...switchportLines(st, d, p), '']) : ['% 這個指令只適用於交換器']),
+  'show power inline': (st, d) => {
+    if (!d.ports.some((p) => p.poe)) return ['% 這台交換器沒有 PoE 埠'];
+    const budget = CATALOG[d.model].poeBudget || 0;
+    const rows = d.ports.filter((p) => p.poe).map((p) => ({ p, e: (st.rt.poe || {})[d.id + ':' + p.id] }));
+    const used = rows.reduce((a, r) => a + (r.e && r.e.state === 'on' ? r.e.alloc : 0), 0);
+    const o = [`Available:${budget.toFixed(1)}(w)  Used:${used.toFixed(1)}(w)  Remaining:${(budget - used).toFixed(1)}(w)`, '',
+      'Interface Admin  Oper       Power   Device              Class Max', '                           (Watts)                            ', '--------- ------ ---------- ------- ------------------- ----- ----'];
+    for (const { p, e } of rows) {
+      const pc = d.sw.ports[p.id], x = e && st.devices[e.pd];
+      const oper = !e ? 'off' : e.state === 'on' ? 'on' : e.state === 'denied' ? 'faulty' : 'off';
+      o.push(pad(p.label, 10) + pad(pc.poe === 'never' ? 'off' : 'auto', 7) + pad(oper, 11) + pad(e && e.state === 'on' ? e.alloc.toFixed(1) : '0.0', 8)
+        + pad(x ? CATALOG[x.model].title.replace(/^(Cisco|Ubiquiti) /, '').slice(0, 19) : 'n/a', 20) + pad(e ? String(e.cls) : 'n/a', 6) + '30.0');
+    }
+    const denied = rows.filter((r) => r.e && r.e.state === 'denied');
+    if (denied.length) o.push('', `（${denied.map((r) => r.p.label).join('、')} 被拒絕供電：PoE 預算 ${budget} W 已經用完）`);
+    return o;
+  },
+  'show class-map': (st, d) => {
+    const all = Object.entries(d.classMaps || {});
+    const o = [' Class Map match-any class-default (id 0)', '   Match any ', ''];
+    for (const [name, m] of all) {
+      o.push(` Class Map match-${m.any ? 'any' : 'all'} ${name}`);
+      for (const r of m.rules) o.push('   Match ' + (r.t === 'any' ? 'any' : r.t === 'dscp' ? `  dscp ${r.v.map((x) => `${dscpName(x)} (${x})`).join(' ')}` : r.t === 'cos' ? `cos  ${r.v.join(' ')}` : r.t === 'acl' ? `access-group name ${r.v}` : `protocol ${r.v}`));
+      o.push('');
+    }
+    return o;
+  },
+  'show policy-map': (st, d) => {
+    const all = Object.entries(d.policyMaps || {});
+    if (!all.length) return ['（還沒有任何 policy-map）'];
+    const o = [];
+    for (const [name, pm] of all) {
+      o.push(`  Policy Map ${name}`);
+      for (const c of pm) {
+        o.push(`    Class ${c.cls}`);
+        if (c.priority) o.push(c.priority.kbps ? `      priority ${c.priority.kbps} (kbps)` : `      priority ${c.priority.pct} (%)`);
+        if (c.bandwidth) o.push(c.bandwidth.kbps ? `      bandwidth ${c.bandwidth.kbps} (kbps)` : c.bandwidth.rpct ? `      bandwidth remaining ${c.bandwidth.rpct} (%)` : `      bandwidth ${c.bandwidth.pct} (%)`);
+        if (c.fq) o.push('      fair-queue');
+        if (c.set) o.push(`      set dscp ${dscpName(c.set.dscp)}`);
+        if (c.police) o.push(`      police cir ${c.police.bps} bc 1500`, '        conform-action transmit ', '        exceed-action drop ');
+        if (c.shape) o.push(`      Average Rate Traffic Shaping`, `      cir ${c.shape.bps} (bps)`);
+        if (c.child) o.push(`      service-policy ${c.child}`);
+      }
+    }
+    return o;
+  },
+  'show policy-map interface': (st, d) => d.ifaces.filter((i) => i.qosIn || i.qosOut).flatMap((i) => policyIfLines(st, d, i)),
+  'show mls qos': (st, d) => (d.kind !== 'mswitch' ? ['% 這個指令只適用於 Catalyst 2960 這類交換器'] : [`QoS is ${d.sw.qos && d.sw.qos.on ? 'enabled' : 'disabled'}`, 'QoS ip packet dscp rewrite is enabled',
+    ...(d.sw.qos && d.sw.qos.on ? [] : ['（mls qos 沒有開：交換器不看也不改封包上的標記，原樣轉送）'])]),
+  'show mls qos interface': (st, d) => (d.kind !== 'mswitch' ? ['% 這個指令只適用於 Catalyst 2960 這類交換器'] : d.ports.filter((p) => st.rt.links[d.id + ':' + p.id]).flatMap((p) => [...mlsQosLines(st, d, p), ''])),
+  'show mls qos maps cos-dscp': (st, d) => {
+    const m = (d.sw && d.sw.qos && d.sw.qos.cosDscp) || COS_DSCP_DEFAULT;
+    return ['   Cos-dscp map:', '        cos:   0  1  2  3  4  5  6  7', '     --------------------------------', '       dscp: ' + m.map((x) => String(x).padStart(2)).join(' ')];
+  },
   'show vrrp brief': (st, d) => {
     const v = d.ifaces.filter((i) => i.vrrp && i.vrrp.on);
     if (!v.length) return ['沒有設定 VRRP'];
@@ -522,6 +577,64 @@ function switchportLines(st, d, p) {
     `Trunking VLANs Enabled: ${pc.allowed === 'all' || !pc.allowed ? 'ALL' : pc.allowed}`, 'Pruning VLANs Enabled: 2-1001', 'Capture Mode Disabled', 'Capture VLANs Allowed: ALL', '',
     'Protected: false', 'Unknown unicast blocked: disabled', 'Unknown multicast blocked: disabled', 'Appliance trust: none',
     ...(t.why ? [`（DTP：${t.why}）`] : []), ...(pc.noneg ? ['（nonegotiate：這個埠不送 DTP，對面的 dynamic 埠不會因為它而變成 Trunk）'] : [])];
+}
+
+// ───────────────────────── QoS ─────────────────────────
+const bps = (mbps) => String(Math.round(mbps * 1e6));
+/** show policy-map interface：每個 class 的流量與丟棄，數字來自目前在跑的背景流量與通話 */
+function policyIfLines(st, d, i) {
+  const o = [` ${longIf(i.label)} `, ''];
+  for (const [dir, name] of [['input', i.qosIn], ['output', i.qosOut]]) {
+    if (!name) continue;
+    const pm = (d.policyMaps || {})[name] || [];
+    o.push(`  Service-policy ${dir}: ${name}`, '');
+    // 這個介面送出去的方向：找出對應的那一段線路與它的負載
+    const l = st.rt.links[d.id + ':' + i.bind.port];
+    const h = l && { cable: l.cable, from: d.id, fromPort: i.bind.port, to: l.dev, toPort: l.port, tag: i.bind.t === 'sub' ? i.bind.vlan : null };
+    const eg = dir === 'output' && h ? egressOf(st, h) : null;
+    const q = h ? (st.rt.qload || {})[h.cable + '>' + h.to] : null;
+    const offered = q ? q.offered : 0, fixed = q ? q.fixed / 1000 : 0;
+    void offered;
+    const rate = eg ? eg.rate : 0;
+    const cong = eg && q && q.elastic.length && offered >= rate * 0.98;
+    const drops = (st.dyn && st.dyn.qdrop) || {}, dk = h ? h.cable + '>' + h.to : '';
+    const classLines = (list, ind, base) => {
+      for (const c of list) {
+        // 有 shape 的 parent：整個介面的量；其他 class：分到這個 class 的 TCP 速率加上語音
+        const by = c.shape || (!eg || !eg.queues) ? { n: q ? q.elastic.length : 0, fixed: q ? q.fixed : 0, rate: q ? q.rate : 0 } : (q && q.byCls[c.cls]) || { n: 0, fixed: 0, rate: 0 };
+        const off = by.rate + by.fixed / 1000;
+        const p = c.fq ? 0.002 : Math.min(0.12, 0.02 + 0.015 * by.n);
+        const drop = cong && by.n && !c.priority && !c.shape ? by.rate * p : 0;
+        const total = drops[dk + '|' + (eg && eg.queues ? c.cls : 'fifo')] || 0;
+        o.push(`${ind}Class-map: ${c.cls} (match-${c.cls === 'class-default' ? 'any' : (d.classMaps[c.cls] || {}).any ? 'any' : 'all'})  `,
+          `${ind}  30 second offered rate ${bps(off)} bps, drop rate ${bps(drop)} bps`);
+        if (c.cls === 'class-default') o.push(`${ind}  Match: any `);
+        else for (const r of (d.classMaps[c.cls] || { rules: [] }).rules) o.push(`${ind}  Match: ${r.t === 'dscp' ? ` dscp ${r.v.map((x) => `${dscpName(x)} (${x})`).join(' ')}` : r.t === 'acl' ? `access-group name ${r.v}` : r.t === 'protocol' ? `protocol ${r.v}` : r.t === 'cos' ? `cos ${r.v.join(' ')}` : 'any'}`);
+        if (c.priority) o.push(`${ind}  Priority: ${c.priority.kbps ? c.priority.kbps + ' kbps' : `${c.priority.pct}% (${Math.round((base * c.priority.pct) / 100 * 1000)} kbps)`}, burst bytes 1500, b/w exceed drops: 0`, '');
+        else if (c.bandwidth || c.fq || c.cls === 'class-default') {
+          o.push(`${ind}  Queueing`, `${ind}  queue limit ${c.qlimit || QLIMIT} packets`, `${ind}  (queue depth/total drops/no-buffer drops) ${cong && by.n && !c.fq ? Math.round((c.qlimit || QLIMIT) * 0.7) : cong && by.n ? 2 : 0}/${total}/0`);
+          if (c.bandwidth) o.push(`${ind}  bandwidth ${c.bandwidth.kbps ? c.bandwidth.kbps + ' kbps' : c.bandwidth.rpct ? 'remaining ' + c.bandwidth.rpct + '%' : c.bandwidth.pct + '%'}`);
+          if (c.fq) o.push(`${ind}  Fair-queue: per-flow queue limit 16 packets`);
+          o.push('');
+        }
+        if (c.set) o.push(`${ind}  QoS Set`, `${ind}    dscp ${dscpName(c.set.dscp)}`, '');
+        if (c.shape) o.push(`${ind}  shape (average) cir ${c.shape.bps}, bc ${Math.round(c.shape.bps / 250)}, be ${Math.round(c.shape.bps / 250)}`, `${ind}  target shape rate ${c.shape.bps}`, '');
+        if (c.child && (d.policyMaps || {})[c.child]) { o.push(`${ind}  Service-policy : ${c.child}`, ''); classLines(d.policyMaps[c.child], ind + '    ', c.shape ? c.shape.bps / 1e6 : base); }
+      }
+    };
+    classLines(pm, '    ', dir === 'output' ? rate : offered);
+    if (dir === 'output' && eg && eg.cir) o.push(`    （這條線是營運商的線路，合約頻寬 ${eg.cir} Mbps${eg.shape && eg.shape <= eg.cir ? '：已經整形到合約以內，不會被營運商丟封包' : '：送出去的量超過的話，營運商那一端會直接丟掉'}）`);
+    void fixed;
+  }
+  return o;
+}
+function mlsQosLines(st, d, p) {
+  const pc = d.sw.ports[p.id], tr = portTrust(st, d, p.id);
+  const l = st.rt.links[d.id + ':' + p.id], x = l && st.devices[l.dev];
+  return [longIf(p.label), `trust state: ${!(d.sw.qos && d.sw.qos.on) ? 'not trusted' : tr === 'none' ? 'not trusted' : 'trust ' + tr}`, `trust mode: ${pc.qosTrust ? 'trust ' + pc.qosTrust : 'not trusted'}`,
+    `trust enabled flag: ${tr !== 'none' ? 'ena' : 'dis'}`, 'COS override: dis', 'default COS: 0', 'DSCP Mutation Map: Default DSCP Mutation Map', `Trust device: ${pc.trustDevice || 'none'}`, 'qos mode: port-based',
+    ...(pc.trustDevice && tr === 'none' && d.sw.qos && d.sw.qos.on ? [`（trust device cisco-phone：${x ? x.name : '對面'} 不是 Cisco 的 IP 電話（或 CDP 沒有開），所以不信任）`] : []),
+    ...(d.sw.qos && d.sw.qos.on && !pc.qosTrust ? ['（這個埠沒有 trust：收到的封包 DSCP 一律改成 0）'] : [])];
 }
 
 /** show version：跑的是哪一個版本、從哪一個映像檔開機 */
@@ -710,6 +823,21 @@ function showOrPing(app, devId, line, print) {
     const ports = name ? [portByName(d, name)] : d.ports.filter((p) => st.rt.links[d.id + ':' + p.id] || (d.sw && d.sw.ports[p.id] && d.sw.ports[p.id].shut));
     if (name && !ports[0]) { print(`% 找不到介面「${tok.slice(2).join(' ')}」`, 'warn'); return true; }
     for (const p of ports) ifaceDetail(st, d, p).forEach((l) => print(l, l.startsWith('（') ? 'hint' : 'pre'));
+    return true;
+  }
+  if (tok[0].length >= 2 && 'show'.startsWith(tok[0]) && (tok[1] || '').length >= 3 && 'policy-map'.startsWith(tok[1]) && tok[2] && tok[2].length >= 3 && 'interface'.startsWith(tok[2]) && tok[3]) {
+    const p = portByName(d, tok.slice(3).join('').replace(/\.\d+$/, ''));
+    const sub = tok.slice(3).join('').match(/\.(\d+)$/);
+    const i = p && d.ifaces.find((x) => x.bind.port === p.id && (sub ? x.bind.t === 'sub' && x.bind.vlan === +sub[1] : x.bind.t === 'port'));
+    if (!i) { print(`% 找不到介面「${tok.slice(3).join(' ')}」`, 'warn'); return true; }
+    const lines = policyIfLines(st, d, i);
+    (lines.length ? lines : [`（${i.label} 上沒有套用任何 service-policy）`]).forEach((l) => print(l, l.startsWith('（') ? 'hint' : 'pre'));
+    return true;
+  }
+  if (tok[0].length >= 2 && 'show'.startsWith(tok[0]) && tok[1] === 'mls' && tok[2] && 'qos'.startsWith(tok[2]) && tok[3] && 'interface'.startsWith(tok[3]) && tok[4]) {
+    const p = portByName(d, tok.slice(4).join(''));
+    if (!p || !isSw(d)) { print(`% 找不到介面「${tok.slice(4).join(' ')}」`, 'warn'); return true; }
+    mlsQosLines(st, d, p).forEach((l) => print(l, l.startsWith('（') ? 'hint' : 'pre'));
     return true;
   }
   if (tok[0].length >= 2 && 'show'.startsWith(tok[0]) && (tok[1] || '').length >= 3 && 'monitor'.startsWith(tok[1]) && tok[2] && 'session'.startsWith(tok[2]) && tok[3]) {

@@ -27,7 +27,7 @@ export const cableDist = (state, c) => pairDist(state, c.a.dev, c.b.dev);
 
 /**
  * kind:
- *  host       終端設備（PC / 伺服器 / 手機 / 印表機…）
+ *  host       終端設備（PC / 伺服器 / 手機 / 印表機 / IP 電話…）
  *  hub        集線器（L1，全部埠共用）
  *  switch     非網管型交換器
  *  mswitch    網管型 L2 交換器（VLAN / Trunk / STP / LACP / Port Security）
@@ -50,6 +50,18 @@ export const CATALOG = {
   phone: {
     kind: 'host', shape: 'phone', vendor: 'Apple', title: 'Apple iPhone 15',
     tagline: '智慧型手機 · Wi-Fi 6', ports: [], wlan: true,
+  },
+  ipphone: {
+    kind: 'host', shape: 'ipphone', vendor: 'Cisco', title: 'Cisco IP Phone 8841',
+    tagline: 'IP 電話 · SW 埠接交換器、PC 埠接電腦 · PoE Class 2 (802.3af)',
+    ports: [rj('sw', 'SW'), rj('pc', 'PC')], needsPoe: true, poeIn: 'sw', poe: { cls: 2, watts: 6.3 }, phone: true,
+    services: [{ proto: 'udp', port: 5060, name: 'SIP' }, { proto: 'udp', port: 16384, name: 'RTP 語音' }],
+  },
+  t54w: {
+    kind: 'host', shape: 'ipphone', vendor: 'Yealink', title: 'Yealink SIP-T54W',
+    tagline: 'SIP 電話 · 只會 LLDP-MED（沒有 CDP）· PoE Class 3',
+    ports: [rj('sw', 'Internet'), rj('pc', 'PC')], needsPoe: true, poeIn: 'sw', poe: { cls: 3, watts: 7.4 }, phone: true,
+    services: [{ proto: 'udp', port: 5060, name: 'SIP' }, { proto: 'udp', port: 16384, name: 'RTP 語音' }],
   },
   printer: {
     kind: 'host', shape: 'printer', vendor: 'HP', title: 'HP LaserJet Pro M404dn',
@@ -93,7 +105,7 @@ export const CATALOG = {
   },
   ap: {
     kind: 'ap', shape: 'ap', vendor: 'Ubiquiti', title: 'Ubiquiti UniFi U6 Lite',
-    tagline: 'Wi-Fi 6 無線基地台 · 需要 PoE 供電 (802.3af)', ports: [rj('eth0', 'LAN / PoE')], needsPoe: true,
+    tagline: 'Wi-Fi 6 無線基地台 · 需要 PoE 供電 (802.3af)', ports: [rj('eth0', 'LAN / PoE')], needsPoe: true, poe: { cls: 0, watts: 12 },
   },
   erx: {
     kind: 'router', shape: 'router-s', vendor: 'Ubiquiti', title: 'Ubiquiti EdgeRouter X',
@@ -116,6 +128,7 @@ export const CATALOG = {
     kind: 'mswitch', shape: 'switch-r', vendor: 'Cisco', title: 'Cisco Catalyst 2960-CX-8PC-L',
     tagline: '網管型 PoE+ 交換器 · 8×GE PoE+ + 2×GE 上行 + 2×SFP',
     ports: [...seq(8, (i) => rj('Gi0/' + i, 'Gi0/' + i, { poe: true })), rj('Gi0/9'), rj('Gi0/10'), sfp('Gi0/11'), sfp('Gi0/12')],
+    poeBudget: 124, // PoE+ 的總預算（瓦）：每個埠最多 30 W，但八個埠加起來只有 124 W
   },
   c9300: {
     kind: 'l3switch', shape: 'switch-r', vendor: 'Cisco', title: 'Cisco Catalyst 9300-24T',
@@ -185,6 +198,13 @@ export function makeDevice(model, id, o = {}) {
   };
   switch (m.kind) {
     case 'host':
+      if (m.phone) {
+        // IP 電話裡面是一台三埠的小交換器：SW 埠、PC 埠、電話自己。電話的介面接在這台小交換器上
+        d.sw = { mode: 'phone', ports: { sw: {}, pc: {} } };
+        d.ifaces = [iface('voice', '電話', { t: 'bridge' }, { mode: 'dhcp' })];
+        d.phone = { vlan: '', tftp: '', pcPort: true };
+        break;
+      }
       d.ifaces = d.ports.map((p) => iface(p.id, p.label, { t: 'port', port: p.id }));
       if (m.wlan) d.ifaces.push(iface('wlan0', 'Wi-Fi', { t: 'wlan' }, { mode: 'dhcp', wifi: { ssid: '', pass: '' } }));
       break;
@@ -258,6 +278,8 @@ export function makeDevice(model, id, o = {}) {
   if (o.init) o.init(d);
   return d;
 }
+/** PoE 的等級 → 交換器要先保留多少瓦（Cisco 的作法：CDP 協商出實際用量之前，依等級的上限保留） */
+export const POE_CLASS_W = { 0: 15.4, 1: 4.0, 2: 7.0, 3: 15.4, 4: 30.0 };
 
 /** ISP 線路設定：line = { type:'dhcp'|'static'|'pppoe', gw, mask, assign, user, pass, dns } */
 export function setLine(inet, portId, line) {

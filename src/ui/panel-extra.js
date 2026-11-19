@@ -11,6 +11,7 @@ import { cdpCfg, lldpCfg, cdpOn, lldpTxOn, lldpRxOn, portNd, setPortNd, neighbor
 import { ntpInfo, deviceTime, plainStamp, logRows, clearLog, syslogStats, NTP_POLL } from '../engine/ops.js';
 import * as M from './panel-more.js';
 import * as OPS from './panel-ops.js';
+import * as V from './panel-voice.js';
 
 const nameOf = (ctx, id) => ctx.state.devices[id]?.name || id;
 const DH_GROUPS = [['2', 'DH 2（1024-bit）'], ['5', 'DH 5（1536-bit）'], ['14', 'DH 14（2048-bit）'], ['19', 'DH 19（ECP-256）']];
@@ -277,6 +278,8 @@ export function portAdvanced(ctx, p, pc) {
       return seen.map((m) => h('div', { class: 'line' }, h('b', { text: nameOf(ctx, m.dev) }), h('span', { class: 'mono muted', text: m.mac }),
         badge(okList.includes(m.mac) ? 'on' : 'warn', okList.includes(m.mac) ? '允許' : '擋下')));
     }),
+    p.poe && h('div', { class: 'toggles' }, toggle(ctx, () => pc.poe !== 'never', (v) => { if (v) delete pc.poe; else pc.poe = 'never'; }, 'PoE 供電（power inline auto）')),
+    V.portTrustField(ctx, pc),
     p.media === 'rj45' && phyFields(ctx, pc),
     grid2(
       field('Port-channel 編號', inp(ctx, ...bind(pc, 'lag'), { ph: '不使用請留空', check: isNum(1, 48) })),

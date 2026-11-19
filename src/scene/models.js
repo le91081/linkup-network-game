@@ -213,6 +213,23 @@ const BUILDERS = {
     u.screen.position.set(0, 0.51, 0.038);
     tilt.add(u.screen);
   },
+  ipphone(g, dev, u) {
+    // 桌上型 IP 電話：左邊是話筒，右邊是斜放的螢幕與按鍵；網路孔（SW、PC）在背面
+    Object.assign(u, { w: 1.5, h: 0.75, d: 1.25 });
+    box(g, 1.35, 0.12, 1.0, mat(PALETTE.black, { rough: 0.45 }), 0.05, 0.06, 0, 0.05);
+    const tilt = new THREE.Group();
+    tilt.position.set(0.18, 0.1, -0.05);
+    tilt.rotation.x = -1.05;
+    g.add(tilt);
+    box(tilt, 0.98, 0.95, 0.1, mat(PALETTE.darker, { rough: 0.4, metal: 0.2 }), 0, 0.45, 0, 0.05);
+    u.screen = new THREE.Mesh(new THREE.PlaneGeometry(0.62, 0.36), glow(PALETTE.screenOff, 0.4));
+    u.screen.position.set(0, 0.68, 0.055);
+    tilt.add(u.screen);
+    for (let r = 0; r < 4; r++) for (let c = 0; c < 3; c++) box(tilt, 0.13, 0.08, 0.03, mat(PALETTE.mid, { metal: 0.3 }), -0.17 + c * 0.17, 0.4 - r * 0.1, 0.06, 0.015);
+    box(g, 0.3, 0.14, 0.98, mat(PALETTE.black, { rough: 0.35 }), -0.55, 0.19, 0, 0.07);
+    jacks(g, u, dev, -0.05, 0.32, 0.12, -0.5, 0, -1, { w: 0.15, h: 0.1, t: 0.06 });
+    u.rect = [-0.72, 0.72, -0.52, 0.55];
+  },
   ap(g, dev, u) {
     Object.assign(u, { w: 1.5, h: 2.15, d: 1.5 });
     const cyl = (r, hh, m, y) => {
@@ -327,6 +344,10 @@ export function refreshDevice(g, dev, led, off) {
     let c = PALETTE.screenOff, e = 0.35;
     if (dev.kind === 'ap') {
       if (!off) { c = PALETTE.sky; e = 1.9; }
+    } else if (CATALOG[dev.model].phone) {
+      // IP 電話的螢幕：註冊好是藍色，還在開機、拿位址或註冊失敗是琥珀色
+      const st = !off && dev.rt && dev.rt.phone && dev.rt.phone.st;
+      if (st === 'reg') { c = 0x3f7df0; e = 1.1; } else if (st && st !== 'off') { c = PALETTE.amber; e = 0.9; }
     } else if (i) {
       if (i.rt.src === 'apipa') { c = PALETTE.amber; e = 1.0; }
       else { c = u.screen ? 0x3f7df0 : PALETTE.green; e = u.screen ? 1.1 : 1.8; }

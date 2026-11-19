@@ -5,6 +5,7 @@ import { parseIp, fmtIp, parseMask, fmtMask, maskOf, netOf, bcastOf } from './ip
 import { parseCidr6, parseIp6 } from './ip6.js';
 import { newIface, cloneState, CATALOG, makeDevice, defaultPortMode } from './model.js';
 import { cdpCfg, lldpCfg, portNd, setPortNd, speaksCdp, clearNeighbors, CDP_TIMER, CDP_HOLD, LLDP_TIMER, LLDP_HOLD } from './disc.js';
+import { parseDscp, dscpName, COS_DSCP_DEFAULT } from './qos.js';
 import { transfer, configFile, ensureFlash, flashFree, flashPath, fsName, IMAGES, PLATFORM, PLATFORM_NAME, imageFile, fmtBytes } from './files.js';
 import { macsBehind, recompute, ospfOn } from './sim.js';
 import { logEvent, markReboot, setClock, deviceTime, SEVERITY, bootTime } from './ops.js';
@@ -76,7 +77,7 @@ const TYPES = { gi: 'gigabitethernet', te: 'tengigabitethernet', fa: 'fastethern
 const PROMPT = {
   exec: '#', config: '(config)#', if: '(config-if)#', vlan: '(config-vlan)#', router: '(config-router)#', dhcp: '(dhcp-config)#',
   line: '(config-line)#', acl: '(config-ext-nacl)#', stdacl: '(config-std-nacl)#', radius: '(config-radius-server)#',
-  isakmp: '(config-isakmp)#', tset: '(cfg-crypto-trans)#', cmap: '(config-crypto-map)#',
+  isakmp: '(config-isakmp)#', tset: '(cfg-crypto-trans)#', cmap: '(config-crypto-map)#', qcmap: '(config-cmap)#', pmap: '(config-pmap)#', pmapc: '(config-pmap-c)#',
 };
 const SERVICE_PORT = { www: 80, http: 80, https: 443, domain: 53, dns: 53, ssh: 22, telnet: 23, ftp: 21, smtp: 25, ntp: 123, snmp: 161, tftp: 69 };
 
@@ -239,7 +240,7 @@ function attachPools(dev) {
   for (const p of dev.dhcpPools || []) {
     const i = p.net != null && dev.ifaces.find((x) => { const n = staticNet(x); return n && n.bits === p.bits && n.net === p.net; });
     if (!i) { rest.push(p); continue; }
-    Object.assign(i.dhcp, { on: true, pool: p.name, gw: p.gw || '', dns: p.dns || '', lease: p.lease || '' });
+    Object.assign(i.dhcp, { on: true, pool: p.name, gw: p.gw || '', dns: p.dns || '', lease: p.lease || '', ...(p.tftp ? { tftp: p.tftp } : {}) });
     applyPoolRange(dev, i);
   }
   // 單一主機的位址池：掛到有 DHCP 伺服器、而且包含這個 IP 的介面上
@@ -290,21 +291,24 @@ const HELP = {
   config: ['hostname <名稱>', 'interface <介面> | interface range <介面> - <n> | interface vlan <ID>', 'vlan <ID>', 'ip route <網段> <遮罩> <下一站> [距離]',
     'router ospf 1', 'ip dhcp pool <名稱> / ip dhcp excluded-address <起> <迄>', 'ip nat inside source list 1 interface <介面> overload',
     'ip nat inside source static <內部 IP> <公用 IP>', 'ip access-list extended <名稱>', 'spanning-tree vlan <清單> priority <值>',
-    'ip dhcp snooping / ip arp inspection vlan <清單>', 'line vty 0 4', 'ntp server / logging host / snmp-server community', 'cdp run / no cdp run / lldp run / cdp timer / lldp timer', 'do <show 指令>、end、exit'],
-  if: ['ip address <IP> <遮罩> | ip address dhcp', 'shutdown / no shutdown', 'switchport mode access|trunk|dynamic auto|dynamic desirable', 'switchport nonegotiate', 'switchport voice vlan <ID>', 'no cdp enable / no lldp transmit / no lldp receive', 'switchport access vlan <ID>',
+    'ip dhcp snooping / ip arp inspection vlan <清單>', 'line vty 0 4', 'ntp server / logging host / snmp-server community', 'cdp run / no cdp run / lldp run / cdp timer / lldp timer', 'class-map / policy-map（QoS）', 'mls qos（Catalyst 2960）', 'do <show 指令>、end、exit'],
+  if: ['ip address <IP> <遮罩> | ip address dhcp', 'shutdown / no shutdown', 'switchport mode access|trunk|dynamic auto|dynamic desirable', 'switchport nonegotiate', 'switchport voice vlan <ID>', 'no cdp enable / no lldp transmit / no lldp receive', 'service-policy input | output <政策>', 'mls qos trust dscp | cos | device cisco-phone', 'auto qos voip cisco-phone', 'power inline auto | never', 'switchport access vlan <ID>',
     'switchport trunk native vlan <ID> / allowed vlan <清單>', 'no switchport（L3 交換器改成 Routed 埠）', 'ip nat inside|outside', 'ip helper-address <IP>',
     'ip ospf cost <值>', 'ip access-group <名稱> in|out', 'encapsulation dot1q <VLAN>（子介面）', 'vrrp 1 ip <虛擬 IP> / vrrp 1 priority <值>',
     'channel-group <編號> mode active|passive|on', 'switchport port-security [mac-address <MAC> | violation <模式>]',
     'spanning-tree bpduguard enable / spanning-tree guard root', 'ip dhcp snooping trust', 'ipv6 address <位址/前綴>', 'speed 10|100|1000|auto、duplex auto|full|half'],
   vlan: ['name <名稱>'],
   router: ['network <網段> <萬用遮罩> area 0', 'default-information originate'],
-  dhcp: ['network <網段> <遮罩>', 'default-router <IP>', 'dns-server <IP> [IP]', 'lease <天> [小時] [分鐘]', 'host <IP> <遮罩> 加上 hardware-address <MAC>（保留位址）'],
+  dhcp: ['network <網段> <遮罩>', 'default-router <IP>', 'dns-server <IP> [IP]', 'option 150 ip <TFTP 伺服器>（IP 電話下載設定檔）', 'lease <天> [小時] [分鐘]', 'host <IP> <遮罩> 加上 hardware-address <MAC>（保留位址）'],
   line: ['transport input ssh | telnet | all | none', 'access-class <名稱> in', 'login local'],
   acl: ['permit|deny <ip|tcp|udp|icmp> <來源> <目的> [eq <埠>]', '來源 / 目的的寫法：any、host <IP>、<網段> <萬用遮罩>', 'no <序號>   刪除一條規則'],
   stdacl: ['permit <網段> <萬用遮罩> | permit host <IP>'],
   radius: ['address ipv4 <IP>', 'key <共用密鑰>'],
   isakmp: ['encryption aes | aes 256', 'hash sha | sha256', 'group 2 | 5 | 14 | 19', 'authentication pre-share'],
   tset: ['mode tunnel'],
+  qcmap: ['match dscp ef | af41 | cs3 | <0-63>', 'match access-group name <ACL>', 'match protocol rtp | sip', 'match cos <0-7>', 'match any'],
+  pmap: ['class <class-map 名稱> | class class-default'],
+  pmapc: ['priority percent <n> | priority <kbps>（LLQ：語音用）', 'bandwidth percent <n> | bandwidth remaining percent <n>', 'set dscp <值>', 'police cir <bps>', 'shape average <bps>', 'service-policy <子政策>（parent 做 shape、child 排隊）', 'fair-queue', 'queue-limit <n> packets'],
   cmap: ['set peer <對端 IP>', 'set transform-set <名稱>', 'set pfs group14', 'match address <ACL 名稱>', 'description <通道名稱>'],
 };
 
@@ -424,6 +428,50 @@ export function iosSession(getDev, getState, who = null) {
     ['switchport trunk encapsulation <e>', () => onL2(() => {})],
     ['switchport nonegotiate', () => onL2((pc, t) => (/^dynamic/.test(pc.mode) ? err(`Conflict between 'nonegotiate' and 'dynamic' status on this interface: ${t.name}`) : void (pc.noneg = true)))],
     ['no switchport nonegotiate', () => onL2((pc) => { delete pc.noneg; })],
+    ['power inline <m> [...]', ([m]) => {
+      const mode = ['auto', 'never', 'static'].find((x) => x.startsWith(m.toLowerCase()));
+      if (!mode) return err('用法：power inline auto | never');
+      return onL2((pc, t) => (t.port.poe ? void (mode === 'never' ? (pc.poe = 'never') : delete pc.poe) : err(`${t.name} 不支援 PoE`)));
+    }],
+    ['no power inline [...]', () => onL2((pc) => { delete pc.poe; })],
+    ['mls qos trust device <x>', ([x]) => ('cisco-phone'.startsWith(x.toLowerCase()) ? onL2((pc) => { pc.trustDevice = 'cisco-phone'; }) : err('用法：mls qos trust device cisco-phone'))],
+    ['no mls qos trust device [...]', () => onL2((pc) => { delete pc.trustDevice; })],
+    ['mls qos trust <x>', ([x]) => {
+      const t = ['dscp', 'cos', 'ip-precedence'].find((y) => y.startsWith(x.toLowerCase()));
+      if (!t || t === 'ip-precedence') return err('用法：mls qos trust dscp | cos | device cisco-phone');
+      return onL2((pc) => { pc.qosTrust = t; });
+    }],
+    ['no mls qos trust', () => onL2((pc) => { delete pc.qosTrust; })],
+    ['auto qos voip <x>', ([x], out) => {
+      const kind = ['cisco-phone', 'trust'].find((y) => y.startsWith(x.toLowerCase()));
+      if (!kind) return err('用法：auto qos voip cisco-phone | trust');
+      const sw = dev().sw;
+      if (!sw || !isSw(dev()) || dev().kind !== 'mswitch') return err('這台設備不支援 auto qos');
+      // AutoQoS：打開 mls qos，把 CoS 5 對應到 EF，信任電話（或上行埠）的標記
+      sw.qos = { ...(sw.qos || {}), on: true, cosDscp: [0, 8, 16, 26, 32, 46, 48, 56] };
+      const r = onL2((pc) => { pc.qosTrust = kind === 'trust' ? 'dscp' : 'cos'; if (kind === 'cisco-phone') pc.trustDevice = 'cisco-phone'; else delete pc.trustDevice; pc.autoQos = kind; });
+      if (!r) out.push('（AutoQoS 已經打開 mls qos，並把 CoS 5 對應到 DSCP 46 (EF)）');
+      return r;
+    }],
+    ['no auto qos voip [...]', () => onL2((pc) => { delete pc.autoQos; delete pc.qosTrust; delete pc.trustDevice; })],
+    ['service-policy <dir> <name>', ([dir, name]) => {
+      const dr = ['input', 'output'].find((x) => x.startsWith(dir.toLowerCase()));
+      if (!dr) return err('用法：service-policy input | output <政策名稱>');
+      const d = dev(), pm = (d.policyMaps || {})[name];
+      if (!pm) return err(`policy map ${name} not configured`);
+      const queuing = (p) => p.some((c) => c.priority || c.bandwidth || c.fq || c.qlimit);
+      if (dr === 'input' && (queuing(pm) || pm.some((c) => c.shape))) return err('Configuration failed: queueing and shaping are not supported in the input direction（佇列與整形只能用在 output）');
+      for (const c of pm) {
+        const child = c.child && (d.policyMaps || {})[c.child];
+        if (child && queuing(child) && !c.shape) return err(`A child policy with queueing actions requires shape in the parent class（${c.cls} 要先 shape average，子政策 ${c.child} 的 priority / bandwidth 才有意義）`);
+      }
+      // 保留的頻寬加起來不能超過 100%
+      const flat = pm.some((c) => c.shape) ? (d.policyMaps[pm.find((c) => c.shape).child] || []) : pm;
+      const pct = flat.reduce((a, c) => a + ((c.priority && c.priority.pct) || 0) + ((c.bandwidth && c.bandwidth.pct) || 0), 0);
+      if (pct > 100) return err(`I/f: Total bandwidth requested ${pct}% exceeds 100% of available bandwidth`);
+      return onL3((i) => { i[dr === 'input' ? 'qosIn' : 'qosOut'] = name; });
+    }],
+    ['no service-policy <dir> [...]', ([dir]) => onL3((i) => { delete i[(dir || '').toLowerCase().startsWith('i') ? 'qosIn' : 'qosOut']; })],
     // ── CDP / LLDP（介面）──
     ['cdp enable', () => ndIf('cdp', true)],
     ['no cdp enable', () => ndIf('cdp', false)],
@@ -487,6 +535,34 @@ export function iosSession(getDev, getState, who = null) {
     ['duplex <v>', ([v]) => { const d = ['auto', 'full', 'half'].find((x) => x.startsWith(v.toLowerCase())); return d ? setPhy('duplex', d) : err('duplex 可用的值：auto、full、half'); }],
     ['no duplex', () => setPhy('duplex', 'auto')],
   ];
+  /** class-map 裡加一條 match */
+  function addMatch(r) {
+    const m = dev().classMaps[S.cur];
+    if (!m.rules.some((x) => same(x, r))) m.rules.push(r);
+    return undefined;
+  }
+  function matchDscp(list) {
+    const v = list.split(/\s+/).map(parseDscp);
+    if (!v.length || v.some((x) => x == null)) return err('DSCP 可以寫名稱（ef、af41、cs3、default）或數字 0 – 63');
+    return addMatch({ t: 'dscp', v });
+  }
+  /** policy-map 裡進入某個 class */
+  function pmClass(name) {
+    const d = dev(), pm = d.policyMaps[S.cur.pm];
+    if (name !== 'class-default' && !(d.classMaps || {})[name]) return err(`class-map ${name} 不存在（先建立 class-map）`);
+    let c = pm.find((x) => x.cls === name);
+    if (!c) { c = { cls: name }; if (name === 'class-default') pm.push(c); else { const n = pm.findIndex((x) => x.cls === 'class-default'); if (n < 0) pm.push(c); else pm.splice(n, 0, c); } }
+    S.mode = 'pmapc'; S.cur = { pm: S.cur.pm, cls: name };
+    return undefined;
+  }
+  function pmSet(fn) {
+    const c = dev().policyMaps[S.cur.pm].find((x) => x.cls === S.cur.cls);
+    return c ? fn(c) : err('找不到目前的 class');
+  }
+  function setDscp(v) {
+    const n = parseDscp(v);
+    return n == null ? err('DSCP 可以寫名稱（ef、af41、cs3、default）或數字 0 – 63') : pmSet((c) => { c.set = { dscp: n }; });
+  }
   /** cdp enable / lldp transmit 這類介面指令：只能下在實體介面上 */
   function ndIf(key, on) {
     return each((t) => {
@@ -515,6 +591,35 @@ export function iosSession(getDev, getState, who = null) {
 
   const CONFIG = [
     ['hostname <name>', ([name]) => { dev().name = name; }],
+    ['mls qos', () => { if (dev().kind !== 'mswitch') return err('mls qos 是 Catalyst 2960 這類交換器的指令（路由器用 class-map / policy-map）'); const sw = dev().sw; sw.qos = { ...(sw.qos || {}), on: true }; return '（開了 mls qos 之後，沒有設定 trust 的埠會把收到的 DSCP 與 CoS 全部改成 0）'; }],
+    ['no mls qos', () => { const sw = dev().sw; if (sw && sw.qos) { sw.qos.on = false; if (!sw.qos.cosDscp) delete sw.qos; } }],
+    ['mls qos map cos-dscp <...>', ([list]) => {
+      const v = list.split(/\s+/).map(Number);
+      if (v.length !== 8 || v.some((x) => !(x >= 0 && x <= 63))) return err('用法：mls qos map cos-dscp <8 個 DSCP 值>，例如 0 8 16 24 32 46 48 56');
+      const sw = dev().sw; if (!sw) return err('這個指令只適用於交換器');
+      sw.qos = { ...(sw.qos || { on: false }), cosDscp: v };
+      return undefined;
+    }],
+    ['no mls qos map cos-dscp', () => { const sw = dev().sw; if (sw && sw.qos) delete sw.qos.cosDscp; }],
+    ['class-map <...>', ([rest]) => {
+      const t = rest.split(/\s+/), any = /^match-any$/i.test(t[0]), all = /^match-all$/i.test(t[0]);
+      const name = any || all ? t[1] : t[0];
+      if (!name) return err('用法：class-map [match-any | match-all] <名稱>');
+      if (/^class-default$/i.test(name)) return err('class-default 是內建的，不能重新定義');
+      const d = dev(), m = ((d.classMaps ||= {})[name] ||= { any: false, rules: [] });
+      if (any || all) m.any = any;
+      enter('qcmap', name);
+      return undefined;
+    }],
+    ['no class-map <...>', ([rest]) => { const name = rest.split(/\s+/).pop(); const d = dev(); if (!(d.classMaps || {})[name]) return err(`class-map ${name} not configured`); delete d.classMaps[name]; return undefined; }],
+    ['policy-map <name>', ([name]) => { const d = dev(); (d.policyMaps ||= {})[name] ||= []; enter('pmap', { pm: name }); return undefined; }],
+    ['no policy-map <name>', ([name]) => {
+      const d = dev();
+      if (!(d.policyMaps || {})[name]) return err(`policy-map ${name} not configured`);
+      if (d.ifaces.some((i) => i.qosIn === name || i.qosOut === name)) return err(`Policy map ${name} is being used（先在介面上 no service-policy）`);
+      delete d.policyMaps[name];
+      return undefined;
+    }],
     ['cdp run', () => { delete (dev().cdp ||= {}).run; tidy(dev(), 'cdp'); }],
     ['no cdp run', () => { (dev().cdp ||= {}).run = false; }],
     ['cdp timer <n>', ([n]) => (+n >= 5 && +n <= 254 ? void ((dev().cdp ||= {}).timer = +n === CDP_TIMER ? undefined : +n, tidy(dev(), 'cdp')) : err('CDP timer 的範圍是 5 – 254 秒'))],
@@ -1155,6 +1260,14 @@ export function iosSession(getDev, getState, who = null) {
         return undefined;
       }],
       ['domain-name <...>', () => undefined],
+      ['option 150 ip <...>', ([list]) => {
+        const ips = list.split(/[,\s]+/).filter(Boolean);
+        if (!ips.length || ips.some((x) => parseIp(x) == null)) return err('用法：option 150 ip <TFTP 伺服器 IP>');
+        const p = S.cur; (p.iface ? p.iface.dhcp : p).tftp = ips.join(', ');
+        return undefined;
+      }],
+      ['option 66 ascii <ip>', ([ip]) => { if (parseIp(ip) == null) return err('用法：option 66 ascii <TFTP 伺服器 IP>'); const p = S.cur; (p.iface ? p.iface.dhcp : p).tftp = ip; return undefined; }],
+      ['no option <n> [...]', () => { const p = S.cur; delete (p.iface ? p.iface.dhcp : p).tftp; }],
     ],
     line: [
       ['transport input [...]', ([list]) => {
@@ -1251,6 +1364,52 @@ export function iosSession(getDev, getState, who = null) {
       ['no lifetime [...]', () => { delete S.cur.life; }],
     ],
     tset: [['mode <m>', () => undefined]],
+    qcmap: [
+      ['match any', () => addMatch({ t: 'any' })],
+      ['match ip dscp <...>', ([l]) => matchDscp(l)],
+      ['match dscp <...>', ([l]) => matchDscp(l)],
+      ['match cos <...>', ([l]) => { const v = l.split(/\s+/).map(Number); return v.every((x) => x >= 0 && x <= 7) ? addMatch({ t: 'cos', v }) : err('CoS 的範圍是 0 – 7'); }],
+      ['match access-group name <n>', ([n]) => addMatch({ t: 'acl', v: n.toUpperCase() })],
+      ['match access-group <n>', ([n]) => addMatch({ t: 'acl', v: n.toUpperCase() })],
+      ['match protocol <p> [...]', ([p]) => { const v = ['rtp', 'sip'].find((x) => x === p.toLowerCase()); return v ? addMatch({ t: 'protocol', v }) : err('這個模擬的 NBAR 只認得 rtp（語音）和 sip（訊令）'); }],
+      ['no match <...>', ([rest]) => {
+        const m = dev().classMaps[S.cur], t = rest.toLowerCase().split(/\s+/);
+        const kind = t[0] === 'ip' ? t[1] : t[0];
+        m.rules = m.rules.filter((r) => !(r.t === (kind === 'access-group' ? 'acl' : kind)));
+        return undefined;
+      }],
+      ['description [...]', () => undefined],
+    ],
+    pmap: [
+      ['class <name>', ([name]) => pmClass(name)],
+      ['no class <name>', ([name]) => { const pm = dev().policyMaps[S.cur.pm]; const n = pm.findIndex((c) => c.cls === name); if (n < 0) return err(`class ${name} 不在這個政策裡`); pm.splice(n, 1); return undefined; }],
+      ['description [...]', () => undefined],
+    ],
+    pmapc: [
+      ['class <name>', ([name]) => pmClass(name)],
+      ['priority percent <n>', ([n]) => (+n >= 1 && +n <= 100 ? pmSet((c) => (c.bandwidth ? err('Only one of bandwidth or priority can be configured in a class') : void (c.priority = { pct: +n }))) : err('percent 的範圍是 1 – 100'))],
+      ['priority level <l> [...]', ([, ...rest]) => pmSet((c) => { const m = String(rest).match(/percent (\d+)/); c.priority = m ? { pct: +m[1] } : { pct: 100 }; })],
+      ['priority <kbps> [...]', ([k]) => (+k >= 8 ? pmSet((c) => (c.bandwidth ? err('Only one of bandwidth or priority can be configured in a class') : void (c.priority = { kbps: +k }))) : err('用法：priority <kbps> 或 priority percent <n>'))],
+      ['no priority [...]', () => pmSet((c) => { delete c.priority; })],
+      ['bandwidth remaining percent <n>', ([n]) => pmSet((c) => (c.priority ? err('Only one of bandwidth or priority can be configured in a class') : void (c.bandwidth = { rpct: +n })))],
+      ['bandwidth percent <n>', ([n]) => (+n >= 1 && +n <= 100 ? pmSet((c) => (c.priority ? err('Only one of bandwidth or priority can be configured in a class') : void (c.bandwidth = { pct: +n }))) : err('percent 的範圍是 1 – 100'))],
+      ['bandwidth <kbps>', ([k]) => (+k >= 8 ? pmSet((c) => (c.priority ? err('Only one of bandwidth or priority can be configured in a class') : void (c.bandwidth = { kbps: +k }))) : err('用法：bandwidth <kbps> | percent <n> | remaining percent <n>'))],
+      ['no bandwidth [...]', () => pmSet((c) => { delete c.bandwidth; })],
+      ['set ip dscp <v>', ([v]) => setDscp(v)],
+      ['set dscp <v>', ([v]) => setDscp(v)],
+      ['no set [...]', () => pmSet((c) => { delete c.set; })],
+      ['police cir <bps> [...]', ([b]) => (+b >= 8000 ? pmSet((c) => { c.police = { bps: +b }; }) : err('用法：police cir <bps>，例如 police cir 1000000'))],
+      ['police <bps> [...]', ([b]) => (+b >= 8000 ? pmSet((c) => { c.police = { bps: +b }; }) : err('用法：police <bps>'))],
+      ['no police [...]', () => pmSet((c) => { delete c.police; })],
+      ['shape average <bps> [...]', ([b]) => (+b >= 8000 ? pmSet((c) => { c.shape = { bps: +b }; }) : err('用法：shape average <bps>，例如 shape average 20000000'))],
+      ['no shape [...]', () => pmSet((c) => { delete c.shape; })],
+      ['service-policy <name>', ([n]) => { const d = dev(); if (!(d.policyMaps || {})[n]) return err(`policy map ${n} not configured`); if (n === S.cur.pm) return err('政策不能套用自己'); return pmSet((c) => { c.child = n; }); }],
+      ['no service-policy [...]', () => pmSet((c) => { delete c.child; })],
+      ['fair-queue [...]', () => pmSet((c) => { c.fq = true; })],
+      ['no fair-queue', () => pmSet((c) => { delete c.fq; })],
+      ['queue-limit <n> [...]', ([n]) => (+n >= 1 && +n <= 8192 ? pmSet((c) => { c.qlimit = +n; }) : err('queue-limit 的範圍是 1 – 8192'))],
+      ['no queue-limit [...]', () => pmSet((c) => { delete c.qlimit; })],
+    ],
     cmap: [
       ['set peer <ip>', ([ip]) => {
         if (parseIp(ip) == null) return err('IP 位址的格式不正確');
@@ -1369,6 +1528,7 @@ export function iosSession(getDev, getState, who = null) {
       return done(touched);
     };
     if (match(tok, 'end') || t0 === '^z') { S.mode = 'exec'; S.cur = null; return leave(); }
+    if (match(tok, 'exit') && S.mode === 'pmapc') { S.mode = 'pmap'; S.cur = { pm: S.cur.pm }; return done(false); }
     if (match(tok, 'exit')) {
       const top = S.mode === 'config';
       S.mode = top ? 'exec' : 'config'; S.cur = null;
@@ -1729,8 +1889,40 @@ export function runningConfig(state, dev) {
     if (sw.snoop && sw.snoop.on) o.push('ip dhcp snooping', `ip dhcp snooping vlan ${vl}`);
     if (sw.dai && sw.dai.on) o.push(`ip arp inspection vlan ${vl}`);
     if (Object.values(sw.ports).some((p) => p.dot1x)) o.push('aaa new-model', 'aaa authentication dot1x default group radius', 'dot1x system-auth-control');
+    if (sw.qos && sw.qos.on) o.push('mls qos');
+    if (sw.qos && sw.qos.cosDscp && sw.qos.cosDscp.join() !== COS_DSCP_DEFAULT.join()) o.push(`mls qos map cos-dscp ${sw.qos.cosDscp.join(' ')}`);
     o.push('!');
   }
+  // QoS：class-map 與 policy-map
+  for (const [name, m] of Object.entries(dev.classMaps || {})) {
+    o.push(`class-map match-${m.any ? 'any' : 'all'} ${name}`);
+    for (const r of m.rules) {
+      if (r.t === 'any') o.push(' match any');
+      else if (r.t === 'dscp') o.push(` match dscp ${r.v.map(dscpName).join(' ')}`);
+      else if (r.t === 'cos') o.push(` match cos ${r.v.join(' ')}`);
+      else if (r.t === 'acl') o.push(` match access-group name ${r.v}`);
+      else if (r.t === 'protocol') o.push(` match protocol ${r.v}`);
+    }
+  }
+  // 子政策要先出現（貼回設定時，parent 的 service-policy 才找得到它）
+  const pmOrder = [], pmSeen = new Set(), pmAll = dev.policyMaps || {};
+  const pmVisit = (n) => { if (pmSeen.has(n) || !pmAll[n]) return; pmSeen.add(n); for (const c of pmAll[n]) if (c.child) pmVisit(c.child); pmOrder.push(n); };
+  Object.keys(pmAll).forEach(pmVisit);
+  for (const [name, pm] of pmOrder.map((n) => [n, pmAll[n]])) {
+    o.push(`policy-map ${name}`);
+    for (const c of pm) {
+      o.push(` class ${c.cls}`);
+      if (c.priority) o.push(c.priority.kbps ? `  priority ${c.priority.kbps}` : `  priority percent ${c.priority.pct}`);
+      if (c.bandwidth) o.push(c.bandwidth.kbps ? `  bandwidth ${c.bandwidth.kbps}` : c.bandwidth.rpct ? `  bandwidth remaining percent ${c.bandwidth.rpct}` : `  bandwidth percent ${c.bandwidth.pct}`);
+      if (c.fq) o.push('  fair-queue');
+      if (c.qlimit) o.push(`  queue-limit ${c.qlimit} packets`);
+      if (c.set) o.push(`  set dscp ${dscpName(c.set.dscp)}`);
+      if (c.police) o.push(`  police cir ${c.police.bps}`, '   conform-action transmit ', '   exceed-action drop ');
+      if (c.shape) o.push(`  shape average ${c.shape.bps}`);
+      if (c.child) o.push(`  service-policy ${c.child}`);
+    }
+  }
+  if (Object.keys(dev.classMaps || {}).length || Object.keys(dev.policyMaps || {}).length) o.push('!');
   // DHCP 位址池
   for (const i of dev.ifaces) {
     if (!i.dhcp || !i.dhcp.on || !i.rt || i.rt.ip == null) continue;
@@ -1740,6 +1932,7 @@ export function runningConfig(state, dev) {
     if (b != null && b < bc - 1) o.push(`ip dhcp excluded-address ${fmtIp(b + 1)} ${fmtIp(bc - 1)}`);
     o.push(`ip dhcp pool ${poolName(i)}`, ` network ${fmtIp(net)} ${fmtMask(i.rt.bits)}`, ` default-router ${i.dhcp.gw || fmtIp(i.rt.ip)}`);
     if (i.dhcp.dns) o.push(` dns-server ${i.dhcp.dns.replace(/[,\s]+/g, ' ')}`);
+    if (i.dhcp.tftp) o.push(` option 150 ip ${i.dhcp.tftp.replace(/[,\s]+/g, ' ')}`);
     if (+i.dhcp.lease > 0 && +i.dhcp.lease !== 86400) o.push(` lease ${leaseText(+i.dhcp.lease)}`);
     o.push('!');
     for (const r of i.dhcp.reserved || []) {
@@ -1754,6 +1947,7 @@ export function runningConfig(state, dev) {
     if (p.net != null) o.push(` network ${fmtIp(p.net)} ${fmtMask(p.bits)}`);
     if (p.gw) o.push(` default-router ${p.gw}`);
     if (p.dns) o.push(` dns-server ${p.dns.replace(/[,\s]+/g, ' ')}`);
+    if (p.tftp) o.push(` option 150 ip ${p.tftp.replace(/[,\s]+/g, ' ')}`);
     o.push('!');
   }
   // IPsec VPN：第一階段政策、金鑰、第二階段的 transform-set，最後用 crypto map 把它們和對端、ACL 綁在一起
@@ -1803,6 +1997,8 @@ export function runningConfig(state, dev) {
     if (i.ip6) l.push(` ipv6 address ${i.ip6}`);
     if (i.ip6 && !i.ra) l.push(' ipv6 nd ra suppress all');
     if (i.cmap || cmIf.has(i)) l.push(` crypto map ${i.cmap || cmIf.get(i)}`);
+    if (i.qosIn) l.push(` service-policy input ${i.qosIn}`);
+    if (i.qosOut) l.push(` service-policy output ${i.qosOut}`);
     return l.filter(Boolean);
   };
   for (const p of dev.ports) {
@@ -1813,7 +2009,7 @@ export function runningConfig(state, dev) {
     if (pc && isSw(dev)) {
       const phy = [pc.speed && pc.speed !== 'auto' ? ` speed ${pc.speed}` : null, pc.duplex && pc.duplex !== 'auto' ? ` duplex ${pc.duplex}` : null].filter(Boolean);
       const nd = portNd(dev, p.id), ndl = [nd.cdp === false ? ' no cdp enable' : null, nd.tx === false ? ' no lldp transmit' : null, nd.rx === false ? ' no lldp receive' : null].filter(Boolean);
-      const def = pc.mode === defaultPortMode(dev.model) && pc.vlan === 1 && pc.native === 1 && (!pc.allowed || pc.allowed === 'all') && !pc.voice && !pc.noneg && !ndl.length && !pc.shut && !peer && !pc.trust && !(+pc.lag > 0) && !(pc.ps && pc.ps.on) && !pc.bpduguard && !pc.rootguard && !pc.dot1x && !phy.length && pc.portfast == null;
+      const def = pc.mode === defaultPortMode(dev.model) && pc.vlan === 1 && pc.native === 1 && (!pc.allowed || pc.allowed === 'all') && !pc.voice && !pc.noneg && !pc.qosTrust && !pc.trustDevice && !pc.poe && !ndl.length && !pc.shut && !peer && !pc.trust && !(+pc.lag > 0) && !(pc.ps && pc.ps.on) && !pc.bpduguard && !pc.rootguard && !pc.dot1x && !phy.length && pc.portfast == null;
       if (def) continue;
       o.push(`interface ${p.label}`, ...desc, ...phy);
       if (pc.mode === 'routed') {
@@ -1827,6 +2023,10 @@ export function runningConfig(state, dev) {
         if (pc.mode !== defaultPortMode(dev.model) || (pc.mode === 'access' && !DTP_OK(dev))) o.push(` switchport mode ${pc.mode.replace('-', ' ')}`);
         if (pc.noneg) o.push(' switchport nonegotiate');
         if (pc.voice) o.push(` switchport voice vlan ${pc.voice}`);
+        if (pc.autoQos) o.push(` auto qos voip ${pc.autoQos}`);
+        if (pc.trustDevice) o.push(' mls qos trust device cisco-phone');
+        if (pc.qosTrust) o.push(` mls qos trust ${pc.qosTrust}`);
+        if (pc.poe === 'never') o.push(' power inline never');
         if (pc.mode === 'trunk') { if (pc.portfast === true) o.push(' spanning-tree portfast trunk'); }
         else if (pc.portfast === true) o.push(' spanning-tree portfast');
         else if (pc.portfast === false && stp0.portfastDefault) o.push(' spanning-tree portfast disable');

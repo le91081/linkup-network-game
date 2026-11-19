@@ -31,7 +31,18 @@ export function serverRolesCard(ctx) {
       if (id === 'tftp' || id === 'ftp') dev.files ||= {};
       if (id === 'ftp' && on) dev.ftpUsers ||= [{ user: 'backup', pass: 'Backup#2026' }];
       if (id === 'nms') { if (on) dev.nms ||= { targets: [] }; else delete dev.nms; }
-    }, `${label}（${proto.toUpperCase()} ${port}）`, { rerender: true, title: hint }))));
+    }, `${label}（${proto.toUpperCase()} ${port}）`, { rerender: true, title: hint })),
+    toggle(ctx, () => !!dev.cucm, (on) => {
+      // CUCM 同時提供 TFTP（電話的設定檔）與 SIP（註冊、撥號）
+      if (on) {
+        dev.cucm ||= { autoReg: true, first: 2001, phones: [] };
+        for (const [proto, port, name] of [['udp', 69, 'TFTP'], ['udp', 5060, 'SIP']]) if (!hasRole(dev, proto, port)) (dev.services ||= []).push({ proto, port, name });
+        dev.files ||= {};
+      } else {
+        delete dev.cucm;
+        dev.services = (dev.services || []).filter((x) => !(x.proto === 'udp' && x.port === 5060));
+      }
+    }, 'Cisco Unified CM（IP 電話的通話伺服器：TFTP 69 + SIP 5060）', { rerender: true, title: '電話從這裡下載設定檔並註冊' })));
 }
 
 // ───────────────────────── 檔案 ─────────────────────────

@@ -17,9 +17,9 @@ import { isCiscoOs, PLATFORM } from './files.js';
 const isPhone = (d) => !!(CATALOG[d.model] || {}).phone;
 
 /** 會講 CDP 的設備：Cisco 的路由器、交換器與 IP 電話 */
-export const speaksCdp = (d) => isCiscoOs(d) || isPhone(d);
+export const speaksCdp = (d) => isCiscoOs(d) || (isPhone(d) && CATALOG[d.model].vendor === 'Cisco');
 /** 會講 LLDP 的設備：上面那些，加上基地台 */
-export const speaksLldp = (d) => speaksCdp(d) || d.kind === 'ap';
+export const speaksLldp = (d) => speaksCdp(d) || isPhone(d) || d.kind === 'ap';
 // 原廠預設：IOS 的設備 CDP 開、LLDP 關（要 lldp run）；Nexus 兩個都開；IP 電話兩個都開；UniFi 基地台只有 LLDP
 const lldpDefault = (d) => PLATFORM[d.model] === 'n9k' || isPhone(d) || d.kind === 'ap';
 
@@ -49,7 +49,7 @@ export const lldpRxOn = (d, pid) => lldpCfg(d).run && portNd(d, pid).rx !== fals
 
 const PLATFORM_ID = {
   isr4321: 'ISR4321/K9', isr4331: 'ISR4331/K9', c2960: 'WS-C2960CX-8TC-L', c2960p: 'WS-C2960CX-8PC-L', c9300: 'C9300-24T',
-  n93180: 'N9K-C93180YC-FX', n9332: 'N9K-C9332C', cp8841: 'Cisco IP Phone 8841',
+  n93180: 'N9K-C93180YC-FX', n9332: 'N9K-C9332C', ipphone: 'Cisco IP Phone 8841', t54w: 'Yealink SIP-T54W',
 };
 /** CDP 的能力代碼：R 路由器、S 交換器、I IGMP、H 主機、P 電話、M 兩埠 MAC Relay（電話的電腦埠） */
 function cdpCaps(d) {
@@ -72,7 +72,7 @@ const longName = (s) => String(s).replace(/^Gi(?=\d)/, 'GigabitEthernet').replac
 
 function versionOf(d) {
   const v = (d.fw && d.fw.ver) || '';
-  if (isPhone(d)) return 'sip88xx.14-2-1-0101-27';
+  if (isPhone(d)) return CATALOG[d.model].vendor === 'Cisco' ? 'sip88xx.14-2-1-0101-27' : 'Yealink SIP-T54W 96.86.0.70';
   if (PLATFORM[d.model] === 'n9k') return `Cisco Nexus Operating System (NX-OS) Software, Version ${v || '10.3(4a)'}`;
   if (PLATFORM[d.model] === 'c2960cx') return `Cisco IOS Software, C2960CX Software (C2960c405ex-UNIVERSALK9-M), Version ${v || '15.2(7)E10'}, RELEASE SOFTWARE (fc2)`;
   if (d.kind === 'ap') return 'UniFi U6-Lite 6.6.77';
@@ -89,7 +89,7 @@ function mgmtAddr(d, pid) {
 export function deviceIdOf(d) {
   if (isPhone(d)) {
     const i = d.ifaces[0], mac = (i && i.rt && i.rt.mac) || '';
-    return 'SEP' + mac.replace(/:/g, '').toUpperCase();
+    return CATALOG[d.model].vendor === 'Cisco' ? 'SEP' + mac.replace(/:/g, '').toUpperCase() : 'SIP-T54W-' + mac.replace(/:/g, '').slice(-6);
   }
   const host = d.name.replace(/[^\w-]+/g, '-').replace(/^-+|-+$/g, '') || 'Device';
   return d.mgmt && d.mgmt.domain && isCiscoOs(d) ? `${host}.${d.mgmt.domain}` : host;
@@ -112,7 +112,7 @@ function advert(state, d, pid, proto) {
     duplex: li && li.duplex ? li.duplex : 'full',
     voice: pc && op === 'access' && pc.voice ? pc.voice : null, // CDP 的 Appliance VLAN / LLDP-MED 的 Network Policy
     med: isPhone(d), // LLDP-MED 端點
-    power: isPhone(d) ? 6.3 : null,
+    power: isPhone(d) ? CATALOG[d.model].poe.watts : null,
   };
 }
 

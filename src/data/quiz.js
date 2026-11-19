@@ -25,6 +25,7 @@ export const LEVEL_TOPIC = {
   l29: 'services', l30: 'basics', l31: 'security', l32: 'security', l33: 'ops', l34: 'ipv6', l35: 'ipv6',
   l36: 'services', l37: 'switching', l38: 'routing', l39: 'basics',
   l40: 'ops', l41: 'ops', l42: 'ops', l43: 'ops',
+  l44: 'switching', l45: 'ops', l46: 'security',
 };
 
 export const QUESTIONS = {
@@ -128,6 +129,15 @@ export const QUESTIONS = {
     { q: 'SNMPv3 比 v2c 多了什麼？', a: ['更快的輪詢速度', '帳號、認證與加密（authPriv）', '可以送 Trap', '可以查詢介面的計數器'], c: 1, e: 'v1 / v2c 用 community 字串而且是明文；v3 有使用者、認證（SHA）與加密（AES），查詢的內容別人看不到。', r: 'CCNA 4.4' },
     { q: '網管伺服器兩次輪詢相隔 60 秒，一個 1 Gbps 介面的 ifHCOutOctets 增加了 3,750,000,000。這段時間的送出使用率大約是多少？', a: ['5%', '25%', '50%', '75%'], c: 2, e: '3.75 × 10⁹ 位元組 × 8 ÷ 60 秒 = 500 Mbps，是 1 Gbps 的 50%。', r: 'CCNA 4.4' },
     { q: '兩台都支援 Gigabit 的交換器之間只協商到 100 Mbps 全雙工，燈號也正常。最可能的原因是？', a: ['VLAN 設錯了', '網路線有線對斷了，自動降到 100 Mbps', 'STP 把埠封鎖了', 'IP 位址衝突'], c: 1, e: '1000BASE-T 要四對線都正常，只剩兩對能用時會自動降速 (speed downshift)。燈是亮的，很容易被忽略。', r: 'Network+ 5.2' },
+    { q: 'Cisco 交換器上 show cdp neighbors 看得到路由器，show lldp neighbors 卻什麼都沒有。最可能的原因是？', a: ['兩台設備不相容', 'Catalyst 與 ISR 出廠時 LLDP 是關的，要 lldp run', 'LLDP 只能用在 IP 電話', 'CDP 和 LLDP 不能同時開'], c: 1, e: 'IOS 設備預設開 CDP、關 LLDP。LLDP 是 IEEE 的公開標準，跨廠牌的環境（例如其他廠牌的電話、基地台）要靠它。', r: 'CCNA 2.3' },
+    { q: '對面的交換器下了 no cdp run。這一端 show cdp neighbors 的那一筆會怎樣？', a: ['立刻消失', '等 holdtime（預設 180 秒）過了沒有再收到通告才消失', '永遠不會消失', '要重新開機才會消失'], c: 1, e: 'CDP 沒有「我要關掉了」的通知，鄰居只能等 holdtime 到期。LLDP 則會送一個 TTL = 0 的 shutdown 通告，對方立刻刪除。', r: 'CCNA 2.3' },
+    { q: '兩台 Catalyst 交換器之間，一端 switchport mode dynamic auto、另一端也是 dynamic auto。這條線會變成什麼？', a: ['Trunk', 'Access', 'err-disabled', 'EtherChannel'], c: 1, e: 'auto 只會回應對方的要求，不會主動要求。兩端都是 auto 就沒有人要求，維持 Access。一端是 trunk 或 desirable 才會協商成 Trunk。', r: 'CCNA 2.2' },
+    { q: '要防止攻擊者用 DTP 把使用者的埠協商成 Trunk（VLAN hopping），最好的做法是？', a: ['開啟 Port Security', 'switchport mode access 加上 switchport nonegotiate', '把 STP 關掉', '設定 BPDU Guard'], c: 1, e: '明確設成 Access 就不會變成 Trunk；nonegotiate 讓這個埠連 DTP 都不送。沒用的埠 shutdown、Native VLAN 改成沒人用的 VLAN 也是常見的加固。', r: 'CCNA 5.7' },
+    { q: '接 IP 電話的交換器埠設了 switchport access vlan 10、switchport voice vlan 110。電話後面的電腦會在哪個 VLAN？', a: ['VLAN 110', 'VLAN 10', '兩個都在', 'VLAN 1'], c: 1, e: '電腦的流量不帶標籤，屬於 Access VLAN 10；電話自己的語音帶著 VLAN 110 的標籤。電話是從 CDP 或 LLDP-MED 知道語音 VLAN 的。', r: 'CCNA 2.1' },
+    { q: 'IP 電話拿到了位址，卻一直停在「正在下載設定」。DHCP 最可能少了什麼？', a: ['預設閘道', 'option 150（TFTP 伺服器）', 'DNS 伺服器', '租約時間'], c: 1, e: '電話開機後要從 TFTP 伺服器下載自己的設定檔，才知道要向哪一台 CUCM 註冊。TFTP 伺服器的位址由 DHCP 的 option 150（或 option 66）提供。', r: 'CCNA 4.3' },
+    { q: '在 QoS 裡，LLQ (Low Latency Queuing) 是指什麼？', a: ['把所有流量放進同一個佇列', '一個嚴格優先 (priority) 的佇列，語音不用排在其他流量後面', '把封包壓縮得比較小', '限制每個使用者的頻寬'], c: 1, e: 'policy-map 裡對語音的 class 下 priority，就是 LLQ：只要有語音封包就先送。其他 class 用 bandwidth 或 fair-queue 分剩下的頻寬。', r: 'CCNA 4.7' },
+    { q: '實體 1 Gbps、營運商合約 20 Mbps 的 Metro Ethernet。只在出口設 LLQ、沒有 shape，語音品質會怎樣？', a: ['完全解決', '沒有改善：自己的出口不會塞車，超過合約的部分在營運商那端被丟，語音也一起被丟', '變得更差', '只影響下載'], c: 1, e: '佇列只在「塞車的地方」才有作用。要先 shape average 到 20 Mbps，讓壅塞發生在自己的路由器上，再用 child policy 做 LLQ（階層式 QoS）。', r: 'CCNA 4.7' },
+    { q: 'Catalyst 2960 開了 mls qos，接電話的埠只設 mls qos trust cos。電話送出 CoS 5 的語音，到了路由器 DSCP 是多少？', a: ['46 (EF)', '40 (CS5)', '0', '34 (AF41)'], c: 1, e: '預設的 CoS→DSCP 對照表把 CoS 5 對應到 40。路由器的 class-map 如果 match dscp ef 就認不出來。auto qos voip cisco-phone 會把對照表改成 CoS 5 → 46。', r: 'CCNA 4.7' },
     { q: '控制器式網路中，「南向介面 (southbound API)」連接的是什麼？', a: ['控制器與應用程式', '控制器與網路設備', '兩台控制器之間', '使用者與網頁介面'], c: 1, e: '南向介面讓控制器下達指令給設備（例如 NETCONF、OpenFlow）；北向介面則提供給上層的應用程式與自動化工具呼叫。', r: 'CCNA 6.3' },
   ],
 };

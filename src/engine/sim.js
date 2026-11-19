@@ -2,8 +2,11 @@
 // L1 供電 / 連線狀態、L2 橋接 / VLAN / STP / LACP / Port Security / DHCP Snooping / Wi-Fi、
 // L3 路由 / OSPF / VRRP、DHCP（含 Relay）、PPPoE、NAT、ACL、防火牆政策、IPsec 與遠端存取 VPN、DNS
 import { parseIp, fmtIp, parseMask, netOf, sameNet, isPrivate, parseCidr, parseVlanList, hostAddrProblem } from './ip.js';
-import { cloneState, primaryIface, CATALOG, CABLES, cableKind, cableDist, linkInfo, DTP_MODELS } from './model.js';
-import { cdpOn, lldpTxOn, lldpRxOn } from './disc.js';
+import { cloneState, primaryIface, CATALOG, CABLES, cableKind, cableDist, linkInfo, DTP_MODELS, POE_CLASS_W } from './model.js';
+import { cdpOn, lldpTxOn, lldpRxOn, speaksCdp } from './disc.js';
+import { egressOf, markAlong, classify, setCdpCheck } from './qos.js';
+import { callsTick, phoneTick, phoneState, PHONE_TEXT, callQuality, mosText } from './voice.js';
+setCdpCheck((d, pid, x, xp) => cdpOn(d, pid) && cdpOn(x, xp));
 import { recompute6, transact6, globalIp6 } from './sim6.js';
 import { parseIp6 } from './ip6.js';
 import { opsBefore, opsAfter, logEvent, debugLog, longIf, UPTIME0 } from './ops.js';
@@ -299,23 +302,46 @@ export function clearMac(state, d) { if (state.dyn && state.dyn.mac) delete stat
 
 // ───────────────────── 供電、連線、LACP、STP、Wi-Fi ─────────────────────
 
+/**
+ * PoE：受電設備 (PD) 從交換器 (PSE) 的 PoE 埠拿電。交換器有總預算，依埠的順序分配，不夠的埠會被拒絕供電。
+ * 每個 PD 依等級保留上限（Class 2 是 7 W、Class 0 / 3 是 15.4 W）；Cisco 電話和 Cisco 交換器之間開著 CDP 時，
+ * 會用 CDP 協商出實際需要的瓦數，保留得比較少。power inline never 的埠不供電。
+ * 回傳 { '交換器:埠': { pd, state: 'on' | 'denied' | 'never' | 'off', watts, alloc, cls, cdp } }
+ */
+export function poeTable(state, isDead) {
+  const out = {}, cut = state.cut || {};
+  const shutPort = (D, pid) => !!(D.sw && D.sw.ports[pid] && D.sw.ports[pid].shut);
+  for (const d of Object.values(state.devices)) {
+    if (!d.ports.some((p) => p.poe)) continue;
+    const budget = CATALOG[d.model].poeBudget ?? Infinity;
+    let sum = 0;
+    for (const p of d.ports) {
+      if (!p.poe) continue;
+      const c = state.cables.find((x) => (x.a.dev === d.id && x.a.port === p.id) || (x.b.dev === d.id && x.b.port === p.id));
+      if (!c || cut[c.id]) continue;
+      const o = c.a.dev === d.id && c.a.port === p.id ? c.b : c.a, x = state.devices[o.dev], xm = CATALOG[x.model];
+      if (!xm.needsPoe || (xm.poeIn && xm.poeIn !== o.port)) continue;
+      const key = d.id + ':' + p.id, cls = xm.poe ? xm.poe.cls : 0, watts = xm.poe ? xm.poe.watts : 12;
+      const pc = d.sw && d.sw.ports[p.id];
+      if (pc && pc.poe === 'never') { out[key] = { pd: x.id, state: 'never', watts: 0, alloc: 0, cls }; continue; }
+      if (isDead(d.id) || shutPort(d, p.id)) { out[key] = { pd: x.id, state: 'off', watts: 0, alloc: 0, cls }; continue; }
+      const cdp = speaksCdp(x) && cdpOn(d, p.id) && cdpOn(x, o.port);
+      const alloc = cdp ? watts : POE_CLASS_W[cls];
+      if (sum + alloc > budget + 1e-9) { out[key] = { pd: x.id, state: 'denied', watts: 0, alloc, cls, cdp }; continue; }
+      sum += alloc;
+      out[key] = { pd: x.id, state: 'on', watts, alloc, cls, cdp };
+    }
+  }
+  return out;
+}
+
 function prepPhysical(state) {
   const rt = state.rt, down = state.down || {}, cut = state.cut || {};
   // 交換器的連接埠，或路由器的實體介面被 shutdown
   const shut = (D, pid) => !!(D.sw && D.sw.ports[pid] && D.sw.ports[pid].shut) || D.ifaces.some((i) => i.shut && i.bind.t === 'port' && i.bind.port === pid);
-  for (const d of Object.values(state.devices)) {
-    if (!CATALOG[d.model] || !CATALOG[d.model].needsPoe) continue;
-    let ok = false;
-    for (const c of state.cables) {
-      if (cut[c.id]) continue;
-      const me = c.a.dev === d.id ? c.a : c.b.dev === d.id ? c.b : null;
-      if (!me) continue;
-      const o = me === c.a ? c.b : c.a, od = state.devices[o.dev];
-      const op = od.ports.find((p) => p.id === o.port);
-      if (op && op.poe && !down[od.id] && !shut(od, o.port)) ok = true;
-    }
-    if (!ok) rt.off[d.id] = true;
-  }
+  rt.poe = poeTable(state, (id) => !!down[id]);
+  const powered = new Set(Object.values(rt.poe).filter((e) => e.state === 'on').map((e) => e.pd));
+  for (const d of Object.values(state.devices)) if (CATALOG[d.model] && CATALOG[d.model].needsPoe && !powered.has(d.id)) rt.off[d.id] = true;
   for (const c of state.cables) {
     const A = state.devices[c.a.dev], B = state.devices[c.b.dev];
     if (cut[c.id] || down[A.id] || down[B.id] || rt.off[A.id] || rt.off[B.id] || shut(A, c.a.port) || shut(B, c.b.port)) {
@@ -774,7 +800,7 @@ function touchLease(state, key, clientKey, ip) {
 }
 /** 用戶端記下自己拿到的租約：之後就算連不到伺服器，到期之前都可以繼續用 */
 function rememberLease(state, d, i, key, exp) {
-  state.dyn.lease[d.id + '/' + i.id] = { ip: i.rt.ip, bits: i.rt.bits, gw: i.rt.gw, dns: i.rt.dns, server: i.rt.server, relay: i.rt.relay || null, key, exp };
+  state.dyn.lease[d.id + '/' + i.id] = { ip: i.rt.ip, bits: i.rt.bits, gw: i.rt.gw, dns: i.rt.dns, tftp: i.rt.tftp || [], server: i.rt.server, relay: i.rt.relay || null, key, exp };
   i.rt.exp = exp;
 }
 /** ipconfig /release：歸還位址，之後要 /renew 才會再去要 */
@@ -878,6 +904,7 @@ function acquire(state, old, d, i) {
     let dns = dnsList(s.dhcp.dns);
     if (!dns.length && sd.dnsProxy) dns = [s.rt.ip];
     set(ip, s.rt.bits, parseIp(s.dhcp.gw) ?? s.rt.ip, dns, 'dhcp', sd.id);
+    i.rt.tftp = dnsList(s.dhcp.tftp); // option 150：IP 電話去哪裡下載設定檔
     const lk = sd.id + '/' + s.id, ck = d.id + '/' + i.id;
     rememberLease(state, d, i, lk, touchLease(state, lk, ck, ip));
     // 這一刻真的有 DHCP 封包在走（新的租約或續約）：沿路的交換器學到用戶端與伺服器的 MAC
@@ -922,7 +949,7 @@ function relayPass(state, old) {
         if (!sc) { i.rt.note = `${sd.name} 沒有適用於 ${fmtIp(netOf(r.rt.ip, r.rt.bits))}/${r.rt.bits} 的位址範圍 (Scope)`; continue; }
         const ip = leaseFrom(state, old, sd.id + '/scope/' + sc.start, parseIp(sc.start), parseIp(sc.end), null, d.id + '/' + i.id);
         if (ip == null) { i.rt.note = `${sd.name} 的位址範圍已經用完`; continue; }
-        Object.assign(i.rt, { ip, bits: r.rt.bits, gw: parseIp(sc.gw) ?? r.rt.ip, dns: dnsList(sc.dns), src: 'dhcp', server: sd.id, relay: rd.id, note: '' });
+        Object.assign(i.rt, { ip, bits: r.rt.bits, gw: parseIp(sc.gw) ?? r.rt.ip, dns: dnsList(sc.dns), tftp: dnsList(sc.tftp), src: 'dhcp', server: sd.id, relay: rd.id, note: '' });
         rememberLease(state, d, i, sd.id + '/scope/' + sc.start, touchLease(state, sd.id + '/scope/' + sc.start, d.id + '/' + i.id, ip));
         changed = true;
         break;
@@ -1387,6 +1414,7 @@ export function recompute(state) {
     for (const id of ids) if (isFinite(booting[id])) state.rt.pending.push({ at: state.clock + booting[id], dev: id, kind: 'boot', text: `${state.devices[id].name}：開機中` });
     state.rt.rommon = Object.fromEntries(ids.filter((id) => !isFinite(booting[id])).map((id) => [id, state.dyn.clk[id].rommon.why]));
     Object.assign(state.dyn, side);
+    phoneTick(state); // IP 電話的註冊（通話要用到）
     // 背景流量先算進計數器，網管伺服器這一輪的輪詢才看得到
     background(state, { isBridge: isBridgePort, ospfOn, uptime0: UPTIME0 });
     flowsTick(state);
@@ -1471,13 +1499,13 @@ function computePass(state, auth) {
       // 這一次沒有要到位址。手上的租約還沒到期的話繼續用（伺服器暫時連不到並不會讓電腦馬上斷線）
       const ck = d.id + '/' + i.id, L = state.dyn.lease[ck];
       if (L && L.exp > now && state.devices[L.server]) {
-        Object.assign(i.rt, { ip: L.ip, bits: L.bits, gw: L.gw, dns: L.dns, src: 'dhcp', server: L.server, relay: L.relay, exp: L.exp, held: i.rt.note || 'DHCP 伺服器沒有回應' });
+        Object.assign(i.rt, { ip: L.ip, bits: L.bits, gw: L.gw, dns: L.dns, tftp: L.tftp || [], src: 'dhcp', server: L.server, relay: L.relay, exp: L.exp, held: i.rt.note || 'DHCP 伺服器沒有回應' });
         if (L.key) (state.leases[L.key] ||= {})[ck] = L.ip;
         again = true;
         continue;
       }
       delete state.dyn.lease[ck];
-      if (d.kind !== 'host') continue;
+      if (d.kind !== 'host' || CATALOG[d.model].phone) continue;
       const h = hash(d.id + i.id);
       Object.assign(i.rt, { ip: parseIp(`169.254.${(h % 254) + 1}.${((h >>> 8) % 254) + 1}`), bits: 16, src: 'apipa' });
       again = true;
@@ -2311,6 +2339,20 @@ export function runObjective(state, o) {
     const r = o.test(state);
     return { pass: r === true, ok: r === true, reason: r === true ? '' : r, log: [], hops: [] };
   }
+  if (o.type === 'phone') {
+    // IP 電話已經向 CUCM 註冊（可以指定分機號碼）
+    const d = state.devices[o.dev], st = phoneState(state, d);
+    const ok = st.st === 'reg' && (!o.ext || st.ext === String(o.ext));
+    const reason = ok ? '' : st.st === 'reg' ? `${d.name} 註冊成分機 ${st.ext}，不是 ${o.ext}` : `${d.name}：${st.why || PHONE_TEXT[st.st]}`;
+    return { pass: ok, ok, reason, failDev: o.dev, log: [], hops: [] };
+  }
+  if (o.type === 'call') {
+    // 兩支電話之間通話，品質 (MOS) 要達到門檻
+    const q = callQuality(state, o.from, o.to), min = o.mos || 4.0;
+    const ok = q.ok && q.mos >= min;
+    const reason = ok ? '' : !q.ok ? q.why : `通話品質 MOS ${q.mos}（${mosText(q.mos)}），要 ${min} 以上：${q.why || '延遲、抖動或遺失太多'}`;
+    return { pass: ok, ok, reason, call: q, failDev: o.from, log: [], hops: [] };
+  }
   if (o.type === 'ping6') {
     const expect = o.expect ?? true;
     const dst = o.ip6 ? parseIp6(o.ip6) : globalIp6(state.devices[o.to]);
@@ -2416,9 +2458,19 @@ export function runObjective(state, o) {
 function linkCap(state, h) {
   const li = linkInfo(state, h.from, h.fromPort);
   if (!li || li.down) return null;
-  if (li.mismatch) return { mbps: Math.min(li.speed * 0.01, 2), note: `${li.speed} Mbps，但兩端的雙工不一致 (duplex mismatch)`, loss: 35, retr: 1800 };
-  if (li.half) return { mbps: li.speed * 0.4, note: `${li.speed} Mbps 半雙工，會發生碰撞`, loss: 3, retr: 60 };
-  return { mbps: li.speed * 0.94, note: `${li.speed >= 1000 ? li.speed / 1000 + ' Gbps' : li.speed + ' Mbps'} 全雙工`, loss: 0, retr: 0 };
+  let c;
+  if (li.mismatch) c = { mbps: Math.min(li.speed * 0.01, 2), note: `${li.speed} Mbps，但兩端的雙工不一致 (duplex mismatch)`, loss: 35, retr: 1800 };
+  else if (li.half) c = { mbps: li.speed * 0.4, note: `${li.speed} Mbps 半雙工，會發生碰撞`, loss: 3, retr: 60 };
+  else c = { mbps: li.speed * 0.94, note: `${li.speed >= 1000 ? li.speed / 1000 + ' Gbps' : li.speed + ' Mbps'} 全雙工`, loss: 0, retr: 0 };
+  // 整形 (shape)：自己把送出去的速率壓在設定值以下
+  const eg = egressOf(state, h);
+  if (eg && eg.shape != null && eg.shape * 0.95 < c.mbps) c = { ...c, mbps: eg.shape * 0.95, note: `${c.note}，整形 (shape) 到 ${eg.shape} Mbps` };
+  // 營運商的合約頻寬：超過的被管制 (police) 丟掉，TCP 一直被丟封包、一直重送，用不滿合約的頻寬
+  if (eg && eg.cir) {
+    const shaped = eg.shape != null && eg.shape <= eg.cir;
+    if (!shaped && eg.cir * 0.85 < c.mbps) c = { ...c, mbps: eg.cir * 0.85, note: `實體 ${c.note}，但營運商的合約頻寬只有 ${eg.cir} Mbps，超過的被管制丟掉`, loss: Math.max(c.loss, 3), retr: Math.max(c.retr, 120) };
+  }
+  return c;
 }
 const dirKey = (h) => h.cable + '>' + h.to;
 
@@ -2432,9 +2484,12 @@ function flowsTick(state) {
   const dyn = state.dyn, now = state.clock;
   const dt = dyn.flowT == null ? 0 : Math.max(0, now - dyn.flowT);
   dyn.flowT = now;
-  const load = {}, count = {};
-  state.rt.load = load; state.rt.loadN = count;
-  const flows = (state.flows || []).filter((f) => f.on !== false && state.devices[f.from]).sort((a, b) => (+a.mbps || 0) - (+b.mbps || 0));
+  const load = {}, count = {}, qload = {};
+  state.rt.load = load; state.rt.loadN = count; state.rt.qload = qload;
+  const Q = (dk, h) => { const q = (qload[dk] ||= { offered: 0, fixed: 0, rate: 0, elastic: [], byCls: {} }); if (h && !q.h) q.h = h; return q; };
+  const flows = (state.flows || []).filter((f) => f.on !== false && state.devices[f.from]);
+  // 1. 每條流量走哪一條路
+  const items = [];
   for (const f of flows) {
     const ip = typeof f.ip === 'number' ? f.ip : parseIp(f.ip || '');
     const res = ip == null ? null : transact(state, f.from, { proto: 'tcp', dst: ip, dport: +f.port || 5201, quiet: true });
@@ -2442,18 +2497,67 @@ function flowsTick(state) {
     // TCP 的 SYN 與 ACK 走同一條路：每一段只算一次
     const once = new Set();
     const hops = res.hops.filter((h) => !h.wave && !h.reply && h.proto !== 'arp' && h.cable && !h.wifi && !once.has(dirKey(h)) && once.add(dirKey(h)));
-    let rate = Math.max(0, +f.mbps || 0), where = '';
-    for (const h of hops) {
-      const c = linkCap(state, h);
-      if (!c) continue;
-      const free = Math.max(0, c.mbps - (load[dirKey(h)] || 0));
-      if (free < rate) { rate = free; where = `${state.devices[h.from].name} ↔ ${state.devices[h.to].name}（${c.note}）`; }
+    const caps = hops.map((h) => linkCap(state, h));
+    items.push({ f, hops: hops.filter((h, n) => caps[n]), caps: caps.filter(Boolean), want: Math.max(0, +f.mbps || 0), rate: 0, ip, res });
+  }
+  // 2. max-min 公平分配（近似 TCP）：所有流量一起慢慢加速，某一段線路滿了，經過它的流量就停在那裡；
+  //    想要的量比較少的，拿到想要的就停。剩下的頻寬繼續分給其他還能加速的流量
+  const cap = {}, used = {};
+  for (const x of items) x.hops.forEach((h, n) => { cap[dirKey(h)] = x.caps[n].mbps; });
+  let active = items.filter((x) => x.want > 0 && x.hops.length);
+  for (let round = 0; active.length && round < 64; round++) {
+    const cnt = {};
+    for (const x of active) for (const h of x.hops) cnt[dirKey(h)] = (cnt[dirKey(h)] || 0) + 1;
+    let inc = Infinity;
+    for (const [k, n] of Object.entries(cnt)) inc = Math.min(inc, (cap[k] - (used[k] || 0)) / n);
+    for (const x of active) inc = Math.min(inc, x.want - x.rate);
+    inc = Math.max(0, inc);
+    for (const x of active) { x.rate += inc; for (const h of x.hops) used[dirKey(h)] = (used[dirKey(h)] || 0) + inc; }
+    active = active.filter((x) => x.rate < x.want - 1e-6 && x.hops.every((h) => cap[dirKey(h)] - used[dirKey(h)] > 1e-6));
+  }
+  // 3. 記下每一段的負載、每個出口佇列看到的量（給 QoS 與通話品質用）
+  for (const x of items) {
+    const { f, hops, res, ip } = x;
+    const pkt = { proto: 'tcp', kind: 'tcp', src: res.seenSrc ?? res.srcIp, dst: ip, dport: +f.port || 5201 };
+    const marks = markAlong(state, hops, { ...pkt, dscp: +f.dscp || 0 });
+    let upto = x.want, where = '', worst = Infinity;
+    hops.forEach((h, n) => {
+      const c = x.caps[n], k = dirKey(h);
+      // 這個出口看到的量：上游最窄的地方已經把它限制住了
+      const q = Q(k, h), eg = egressOf(state, h);
+      q.offered += upto; q.elastic.push(f.id); q.rate += x.rate;
+      const cls = eg && eg.queues ? classify(eg.dev, eg.queues, { ...pkt, dscp: marks[n] }).cls : null;
+      if (cls) { const b = (q.byCls[cls] ||= { n: 0, fixed: 0, rate: 0 }); b.n++; b.rate += x.rate; }
+      upto = Math.min(upto, c.mbps);
+      load[k] = (load[k] || 0) + x.rate; count[k] = (count[k] || 0) + 1;
+      // 瓶頸：這條流量經過、已經被塞滿的那一段（有好幾段就挑最窄的）
+      if (cap[k] - (used[k] || 0) <= 1e-6 && c.mbps < worst) { worst = c.mbps; where = `${state.devices[h.from].name} ↔ ${state.devices[h.to].name}（${c.note}${(count[k] || 0) > 1 || items.filter((y) => y.hops.some((g) => dirKey(g) === k)).length > 1 ? `，和其他 ${items.filter((y) => y !== x && y.hops.some((g) => dirKey(g) === k)).length} 條流量平分` : ''}）`; }
+    });
+    f.rt = { mbps: Math.round(x.rate * 10) / 10, where, full: x.rate < x.want - 0.5 };
+    if (dt > 0) for (const h of hops) countBytes(state, h, (x.rate * 1e6 * dt) / 8);
+  }
+  // 進行中的通話：每個方向一條固定速率的語音流量，品質看沿路每個出口佇列的狀況
+  callsTick(state, Q, dt);
+  // 壅塞的佇列一直在丟封包：累計起來給 show policy-map interface 的 total drops
+  if (dt > 0) {
+    const drops = (dyn.qdrop ||= {});
+    for (const [k, q] of Object.entries(qload)) {
+      if (!q.elastic.length || !q.h) continue;
+      const eg = egressOf(state, q.h);
+      if (!eg || q.offered < eg.rate * 0.98) continue;
+      const list = eg.queues ? Object.entries(q.byCls) : [['fifo', { n: q.elastic.length, rate: q.rate }]];
+      for (const [cls, b] of list) {
+        if (!b.n) continue;
+        const c = eg.queues && eg.queues.find((x) => x.cls === cls);
+        if (c && c.priority) continue;
+        const p = c && c.fq ? 0.002 : Math.min(0.12, 0.02 + 0.015 * b.n);
+        drops[k + '|' + cls] = (drops[k + '|' + cls] || 0) + Math.round((b.rate * 1e6 * p * dt) / 12000);
+      }
     }
-    for (const h of hops) { load[dirKey(h)] = (load[dirKey(h)] || 0) + rate; count[dirKey(h)] = (count[dirKey(h)] || 0) + 1; }
-    f.rt = { mbps: Math.round(rate * 10) / 10, where, full: rate < (+f.mbps || 0) - 0.5 };
-    if (dt > 0) for (const h of hops) countBytes(state, h, (rate * 1e6 * dt) / 8);
   }
 }
+export const dirKeyOf = (h) => dirKey(h);
+export { linkCap };
 
 /** 某條線路目前的使用率（兩個方向取比較高的那一個），給關卡檢查用 */
 export function linkUtil(state, devId, pid) {
