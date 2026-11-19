@@ -158,6 +158,14 @@ export const CATALOG = {
     kind: 'l3switch', shape: 'switch-dc', vendor: 'Cisco', title: 'Cisco Nexus 9332C',
     tagline: 'Spine / 核心交換器 · 32×100G QSFP28', ports: seq(32, (i) => qsfp('Eth1/' + i)),
   },
+  c9800: {
+    kind: 'wlc', shape: 'switch-r', vendor: 'Cisco', title: 'Cisco Catalyst 9800-L',
+    tagline: '無線控制器 (WLC) · 4×10G 上行', ports: seq(4, (i) => rj('Te0/1/' + i), 0),
+  },
+  c9120: {
+    kind: 'ap', shape: 'ap', vendor: 'Cisco', title: 'Cisco Catalyst 9120AXI',
+    tagline: '輕量型基地台 · 要由無線控制器管理 · 802.3at PoE', ports: [rj('Gi0', 'Gi0 / PoE')], needsPoe: true, poe: { cls: 4, watts: 20.9 }, lwap: true,
+  },
   internet: {
     kind: 'internet', shape: 'globe', vendor: 'ISP', title: '網際網路 (ISP)',
     tagline: '電信業者線路', ports: [rj('line1', '線路 1')],
@@ -216,6 +224,19 @@ export function makeDevice(model, id, o = {}) {
       d.sw = { mode: 'plain', ports: Object.fromEntries(d.ports.map((p) => [p.id, {}])) };
       d.wifi = newWifi();
       d.ifaces = [iface('mgmt', '管理介面', { t: 'bridge' }, { mode: 'dhcp' })];
+      d.radius = { ip: '', secret: '' };
+      if (m.lwap) d.lwap = { mode: 'local', primary: '' };
+      break;
+    case 'wlc':
+      // 無線控制器：連接埠是 Trunk（接核心交換器），無線管理介面 (WMI) 是一個 SVI；WLAN 由控制器推給輕量型 AP
+      d.sw = {
+        mode: 'vlan', vlans: [{ id: 1, name: 'default' }],
+        ports: Object.fromEntries(d.ports.map((p) => [p.id, { mode: 'trunk', vlan: 1, native: 1, allowed: 'all', shut: false }])),
+        stp: { on: false, prio: 32768 }, snoop: { on: false }, dai: { on: false },
+      };
+      d.ifaces = [iface('wmi', '無線管理介面', { t: 'svi', vlan: 1 })];
+      d.wlc = { wlans: [] };
+      d.mgmt = mgmt();
       d.radius = { ip: '', secret: '' };
       break;
     case 'mswitch':

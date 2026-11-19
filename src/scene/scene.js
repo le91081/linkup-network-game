@@ -2,7 +2,7 @@
 import * as THREE from 'three';
 import { buildDevice, refreshDevice, glowTexture, PALETTE, ACCENT } from './models.js';
 import { CABLES, cableKind, CATALOG, primaryIface } from '../engine/model.js';
-import { apRange } from '../engine/sim.js';
+import { apRange, rfAt, ssidsOf } from '../engine/sim.js';
 import { fmtIp } from '../engine/ip.js';
 import { fmtIp6 } from '../engine/ip6.js';
 
@@ -141,11 +141,12 @@ export class Scene3D {
     this.world = new THREE.Group();
     this.cableGroup = new THREE.Group();
     this.wifiGroup = new THREE.Group();
+    this.wallGroup = new THREE.Group();
     this.wifi = new Map(); // 'client>ap' → 曲線
     this.rings = new Map();
     this.wifiSig = '';
     this.fx = new THREE.Group();
-    this.scene.add(this.world, this.cableGroup, this.wifiGroup, this.fx);
+    this.scene.add(this.world, this.cableGroup, this.wifiGroup, this.wallGroup, this.fx);
 
     const ringGeo = new THREE.RingGeometry(0.93, 1, 64);
     ringGeo.rotateX(-Math.PI / 2);
@@ -454,13 +455,75 @@ export class Scene3D {
     }
   }
 
+  /** 牆：半透明的牆體，顏色代表材質（衰減越大越深） */
+  rebuildWalls(state) {
+    for (const o of [...this.wallGroup.children]) { this.wallGroup.remove(o); o.geometry.dispose(); o.material.dispose(); }
+    const COLOR = { drywall: 0xd9dee8, glass: 0x9fd8ff, wood: 0xc49a6c, brick: 0xb5654a, concrete: 0x8a8f99, metal: 0x5b6472 };
+    for (const w of state.walls || []) {
+      const dx = w.b[0] - w.a[0], dz = w.b[1] - w.a[1], len = Math.hypot(dx, dz);
+      if (len < 0.01) continue;
+      const glass = w.mat === 'glass';
+      const m = new THREE.Mesh(new THREE.BoxGeometry(len, 1.9, glass ? 0.08 : 0.16),
+        new THREE.MeshStandardMaterial({ color: COLOR[w.mat] || COLOR.drywall, roughness: glass ? 0.1 : 0.85, metalness: w.mat === 'metal' ? 0.6 : 0, transparent: true, opacity: glass ? 0.22 : 0.5, depthWrite: false }));
+      m.position.set((w.a[0] + w.b[0]) / 2, 0.95, (w.a[1] + w.b[1]) / 2);
+      m.rotation.y = -Math.atan2(dz, dx);
+      m.userData.wall = w.id;
+      this.wallGroup.add(m);
+    }
+  }
+
+  /** 訊號熱力圖：每一格取最強的基地台，-55 dBm 以上綠色、-67 黃綠、-72 黃、-78 橘，再弱就收不到 */
+  heatmap(state, aps) {
+    const xs = [], zs = [];
+    for (const d of Object.values(state.devices)) { xs.push(d.pos[0]); zs.push(d.pos[1]); }
+    for (const w of state.walls || []) { xs.push(w.a[0], w.b[0]); zs.push(w.a[1], w.b[1]); }
+    const x0 = Math.min(...xs) - 3, x1 = Math.max(...xs) + 3, z0 = Math.min(...zs) - 3, z1 = Math.max(...zs) + 3;
+    const step = 0.2, cols = Math.ceil((x1 - x0) / step), rows = Math.ceil((z1 - z0) / step);
+    const cv = document.createElement('canvas');
+    cv.width = cols; cv.height = rows;
+    const ctx = cv.getContext('2d'), img = ctx.createImageData(cols, rows);
+    const STOPS = [[-50, [46, 204, 113, 0.42]], [-60, [132, 214, 70, 0.36]], [-67, [190, 226, 60, 0.32]], [-72, [250, 204, 21, 0.28]], [-78, [251, 146, 60, 0.22]]];
+    for (let r = 0; r < rows; r++) {
+      for (let c = 0; c < cols; c++) {
+        const pos = [x0 + (c + 0.5) * step, z0 + (r + 0.5) * step];
+        let best = -999;
+        for (const ap of aps) { const f = rfAt(state, ap, pos); best = Math.max(best, f.band ? f.rssi : f.rssi24); }
+        let col = null;
+        if (best >= STOPS[0][0]) col = STOPS[0][1];
+        else for (let k = 1; k < STOPS.length; k++) {
+          if (best < STOPS[k][0]) continue;
+          const [hi, ca] = STOPS[k - 1], [lo, cb] = STOPS[k], t = (best - lo) / (hi - lo);
+          col = ca.map((v, n) => cb[n] + (v - cb[n]) * t);
+          break;
+        }
+        const o = (r * cols + c) * 4;
+        if (col) { img.data[o] = col[0]; img.data[o + 1] = col[1]; img.data[o + 2] = col[2]; img.data[o + 3] = Math.round(col[3] * 255); }
+      }
+    }
+    ctx.putImageData(img, 0, 0);
+    const tex = new THREE.CanvasTexture(cv);
+    tex.colorSpace = THREE.SRGBColorSpace;
+    tex.minFilter = tex.magFilter = THREE.LinearFilter;
+    const geo = new THREE.PlaneGeometry(cols * step, rows * step);
+    geo.rotateX(-Math.PI / 2);
+    const m = new THREE.Mesh(geo, new THREE.MeshBasicMaterial({ map: tex, transparent: true, depthWrite: false }));
+    m.position.set(x0 + (cols * step) / 2, 0.02, z0 + (rows * step) / 2);
+    this.wifiGroup.add(m);
+  }
+
   /** 畫出基地台的涵蓋範圍，以及每個無線用戶端連到基地台的虛線 */
   rebuildWifi(state) {
     this.clearWifi();
     const flat = (geo) => geo.rotateX(-Math.PI / 2);
+    // 有牆的地方訊號不是一個圓：改畫熱力圖
+    if ((state.walls || []).length) {
+      const aps = Object.values(state.devices).filter((d) => d.wifi && !state.rt.off[d.id] && !(state.down || {})[d.id] && ssidsOf(state, d).some((x) => !x.off && x.name));
+      if (aps.length) this.heatmap(state, aps);
+    }
     for (const d of Object.values(state.devices)) {
+      if ((state.walls || []).length) break;
       const g = this.devices.get(d.id);
-      if (!g || !d.wifi || state.rt.off[d.id] || !d.wifi.ssids.some((x) => !x.off && x.name)) continue;
+      if (!g || !d.wifi || state.rt.off[d.id] || !ssidsOf(state, d).some((x) => !x.off && x.name)) continue;
       const r = apRange(d);
       const mk = (geo, opacity, y) => {
         const m = new THREE.Mesh(flat(geo), new THREE.MeshBasicMaterial({ color: 0x62c4ff, transparent: true, opacity, depthWrite: false }));
@@ -470,11 +533,11 @@ export class Scene3D {
       };
       this.rings.set(d.id, { disc: mk(new THREE.CircleGeometry(r, 96), 0.03, 0.02), ring: mk(new THREE.RingGeometry(r - 0.07, r, 128), 0.2, 0.025) });
     }
-    for (const [apId, list] of Object.entries(state.rt.clients)) {
-      const ag = this.devices.get(apId);
-      if (!ag) continue;
-      const top = new THREE.Vector3(ag.position.x, ag.userData.h - 0.25, ag.position.z);
+    for (const [owner, list] of Object.entries(state.rt.clients)) {
       for (const c of list) {
+        const apId = c.ap || owner, ag = this.devices.get(apId);
+        if (!ag || !(state.devices[apId] || {}).wifi) continue;
+        const top = new THREE.Vector3(ag.position.x, ag.userData.h - 0.25, ag.position.z);
         const cg = this.devices.get(c.dev);
         const from = new THREE.Vector3(cg.position.x, cg.userData.h * 0.75, cg.position.z);
         const mid = from.clone().lerp(top, 0.5);
@@ -526,6 +589,8 @@ export class Scene3D {
       this.labels.set(d.id, { el, nm: el.querySelector('.nm'), sub: el.querySelector('.sub') });
     }
     if (!this.devices.size) { x0 = -8; x1 = 8; z0 = -5; z1 = 5; }
+    for (const w of state.walls || []) for (const p of [w.a, w.b]) { x0 = Math.min(x0, p[0]); x1 = Math.max(x1, p[0]); z0 = Math.min(z0, p[1]); z1 = Math.max(z1, p[1]); }
+    this.rebuildWalls(state);
     this.buildBoard(x0 - 2.4, x1 + 2.4, z0 - 2.2, z1 + 2.6);
     const cx = (x0 + x1) / 2, cz = (z0 + z1) / 2, r = Math.max(x1 - x0, z1 - z0) / 2 + 8;
     this.sun.target.position.set(cx, 0, cz);
@@ -666,8 +731,9 @@ export class Scene3D {
     const sig = state.cables.map((c) => `${c.id}:${c.a.dev}.${c.a.port}-${c.b.dev}.${c.b.port}:${state.rt.cable[c.id]}:${c.kind}:${state.rt.wait && state.rt.wait[c.id] > 0 ? 'w' : ''}`).join('|');
     if (sig !== this.cableSig) { this.cableSig = sig; this.rebuildCables(state); }
     const wsig = JSON.stringify([
-      Object.values(state.devices).filter((d) => d.wifi).map((d) => [d.id, apRange(d), !!state.rt.off[d.id] || !!(state.down || {})[d.id] || (state.rt.booting || {})[d.id] > 0, d.wifi.ssids.filter((x) => !x.off && x.name).length]),
-      Object.entries(state.rt.clients).map(([ap, l]) => [ap, l.map((c) => c.dev)]),
+      Object.values(state.devices).filter((d) => d.wifi).map((d) => [d.id, apRange(d), !!state.rt.off[d.id] || !!(state.down || {})[d.id] || (state.rt.booting || {})[d.id] > 0, ssidsOf(state, d).filter((x) => !x.off && x.name).length, ...((state.walls || []).length ? d.pos.map((v) => Math.round(v * 4)) : [])]),
+      (state.walls || []).map((w) => [w.a, w.b, w.mat]),
+      Object.entries(state.rt.clients).map(([ap, l]) => [ap, l.map((c) => c.dev + '@' + (c.ap || ap))]),
     ]);
     if (wsig !== this.wifiSig) { this.wifiSig = wsig; this.rebuildWifi(state); }
     // 每個埠的燈號：有連線是綠色，被 STP 封鎖、Port-channel 暫停或還在等待是琥珀色，沒有連線不亮

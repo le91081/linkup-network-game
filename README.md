@@ -41,7 +41,7 @@ npm run build    # 輸出到 dist/
 - 頂端列的「測驗」是觀念題與子網路速算，「證照」是考試大綱與關卡的對照表。
 - 關卡選單最上方的「自由模式」是沙盒：自己擺設備、接線、設定。可以把測試存成「應該要通 / 應該不通」的目標一鍵重跑，也可以把整個拓撲匯出成 JSON 檔再匯入。
 
-## 關卡（13 章 54 關）
+## 關卡（14 章 57 關）
 
 | 章節 | 關卡數 | 主題 |
 | --- | --- | --- |
@@ -58,6 +58,7 @@ npm run build    # 輸出到 dist/
 | 11 維運與管理 | 4 | 從 TFTP 還原設定（合併與整份取代的差別）、韌體升級（flash 空間、MD5、`boot system`、TFTP 與 FTP 的速度）、讓原廠交換器能用 SSH（主機名稱、網域、RSA 金鑰、`login local`）、用 SNMPv3 找出滿載的線路（線對斷掉自動降到 100 Mbps） |
 | 12 語音與 QoS | 2 | IP 電話：PoE、語音 VLAN、CDP 與 LLDP-MED、DHCP option 150、CUCM 註冊；線路塞車時用 QoS 保住通話：信任邊界、LLQ、配合營運商合約頻寬的整形 |
 | 13 進階路由 | 4 | OSPF 的 DR / BDR 選舉（不搶位、`clear ip ospf process`）、Router ID 與 Loopback、passive-interface；參考頻寬與 cost、等價多路徑 (ECMP)；多區域 OSPF、ABR 與 `area range` 彙總；用 eBGP 同時接兩家 ISP：local-preference 決定出去走哪家、AS-path prepend 影響進來走哪家、prefix-list 避免變成轉運站 |
+| 14 無線控制器與無線環境 | 3 | 輕量型 AP 與無線控制器（CAPWAP、DHCP option 43、Local 模式的流量經控制器放進 VLAN、RRM 自動分頻道）、牆面衰減與訊號熱力圖、漫遊（同一個 VLAN、sticky client 與 802.11k/v/r） |
 
 ## 證照對照
 
@@ -65,18 +66,18 @@ npm run build    # 輸出到 dist/
 
 | 考試 | 有對應關卡的條目 | 還沒有關卡的條目 |
 | --- | --- | --- |
-| Cisco CCNA 200-301 v1.1 | 53 條中的 42 條 | 1.5、1.12、2.6、5.2 與第 6 領域（自動化） |
+| Cisco CCNA 200-301 v1.1 | 53 條中的 43 條 | 1.5、1.12、5.2 與第 6 領域（自動化） |
 | CompTIA Network+ N10-009 | 25 條中的 24 條 | 1.3（雲端） |
 | CompTIA Security+ SY0-701 | 只列出與網路相關的 11 條，全部有對應 | — |
 
 沒有關卡的條目大多是觀念題，題庫裡有對應的題目（TCP / UDP、AAA、REST API、JSON、Ansible 等）。
 條目編號依公開的考試大綱，標題是中文摘要。CCNA v2.0 預計在 2027 年 2 月取代 v1.1，改版後需要重新對照。
-題庫（113 題觀念題加上隨機產生的子網路計算題）是自行編寫的練習題，不是實際試題。
+題庫（119 題觀念題加上隨機產生的子網路計算題）是自行編寫的練習題，不是實際試題。
 
 ## CLI 設定指令
 
 支援的範圍是 `show running-config` 會印出來的那些指令，都可以縮寫（`conf t`、`int gi0/1`、`sw mo tr`），前面加 `no` 是取消。
-把一台設備的 running-config 整份貼到另一台同型號的設備上，會得到相同的設定（測試會對 90 台設備逐一驗證）。
+把一台設備的 running-config 整份貼到另一台同型號的設備上，會得到相同的設定（測試會對 96 台設備逐一驗證）。
 
 | 模式 | 指令 |
 | --- | --- |
@@ -113,6 +114,7 @@ npm run build    # 輸出到 dist/
 - **SNMP**：`snmp-server community <字串> [RO|RW] [ACL]`、`snmp-server group <群組> v3 priv`、`snmp-server user <帳號> <群組> v3 auth sha <密碼> priv aes 128 <密碼>`、`snmp-server host <IP> [version 2c|3 priv] <community|帳號>`、`snmp-server enable traps`、`snmp-server location` / `contact`；`show snmp`、`show snmp user`、`show snmp host`。和真的 IOS 一樣，v3 的使用者不會出現在 running-config 裡。
 - **鄰居探索**：`cdp run` / `no cdp run`、`cdp timer`、`cdp holdtime`、`lldp run`、`lldp timer`、`lldp holdtime`；介面上的 `no cdp enable`、`no lldp transmit`、`no lldp receive`；`show cdp`、`show cdp neighbors [detail]`、`show cdp entry *`、`show cdp interface`、`show cdp traffic`、`show lldp`、`show lldp neighbors [detail]`、`show lldp interface`、`show lldp traffic`、`clear cdp table`、`clear lldp table`。
 - **DTP**：`switchport mode dynamic auto | desirable`、`switchport nonegotiate`；`show interfaces [埠] switchport`、`show dtp`、`show interfaces trunk`（Mode 欄位是 on / auto / desirable）。
+- **無線控制器**：Catalyst 9800 用圖形介面設定（WLAN、AP 模式、管理介面），CLI 可以用 `show ap summary`、`show wlan summary`、`show wireless client summary`、`show ap dot11 24ghz | 5ghz summary`；DHCP 位址池裡的 `option 43 hex f104.<控制器 IP>` 讓 AP 找到控制器。
 - **IP 電話**：`switchport voice vlan <ID>`、`power inline auto | never`、`show power inline`；DHCP 位址池裡的 `option 150 ip <TFTP 伺服器>`。
 - **QoS**：`class-map [match-any | match-all]`（`match dscp`、`match access-group name`、`match protocol rtp | sip`、`match cos`、`match any`）、`policy-map` → `class` →（`priority percent | <kbps>`、`bandwidth percent | remaining percent | <kbps>`、`fair-queue`、`queue-limit`、`set dscp`、`police cir`、`shape average`、`service-policy <子政策>`）、介面上的 `service-policy input | output`；Catalyst 2960 的 `mls qos`、`mls qos trust dscp | cos | device cisco-phone`、`mls qos map cos-dscp`、`auto qos voip cisco-phone | trust`；`show policy-map [interface <介面>]`、`show class-map`、`show mls qos [interface <埠> | maps cos-dscp]`。
 - **排除故障**：`traceroute`、`show interfaces [介面]`、`show interfaces counters errors`、`clear counters`、`debug ip packet`、`debug ip icmp`、`undebug all`、`show debugging`、`show ip protocols`、`show ip ospf interface brief`。
@@ -163,7 +165,8 @@ npm run build    # 輸出到 dist/
 | IPsec 金鑰壽命 | 第一階段 1 天；第二階段 IOS 1 小時、FortiGate 12 小時 | 兩端不同時取較短的，到期自動重新協商，流量不中斷 |
 | VPN 對端失聯 | FortiGate 60 秒；IOS 要等金鑰到期 | 這段時間通道還顯示 Up，封包照樣加密送出去然後被丟掉。IOS 設了 `crypto isakmp keepalive` 才會主動探測 |
 | NTP 對時 | IOS 約 4 分鐘、FortiGate 立刻 | 每 64 秒輪詢一次；IOS 要連續幾次都正常才採信。伺服器失聯八次輪詢之後失去同步 |
-| 開機 | Hub 2 秒、家用路由器與 AP 1 分鐘、FortiGate 70 – 90 秒、Catalyst 2960 2 分鐘、ISR 3 分鐘、Catalyst 9300 / Nexus 4 分鐘 | 按下電源或 `reload` 之後，這段時間和關機沒有兩樣 |
+| AP 加入無線控制器 | 約 25 秒 | 輕量型 AP 拿到 IP、找到控制器之後走 CAPWAP Discovery → Join → 下載設定，這段時間不放送 SSID |
+| 開機 | Hub 2 秒、家用路由器與 AP 1 分鐘、Cisco 9120 AP 2.5 分鐘、FortiGate 70 – 90 秒、Catalyst 2960 2 分鐘、ISR 3 分鐘、Catalyst 9300 / Nexus 4 分鐘、9800 無線控制器 6 分鐘 | 按下電源或 `reload` 之後，這段時間和關機沒有兩樣 |
 | 遠端登入閒置 | IOS 10 分鐘、FortiGate 5 分鐘 | `exec-timeout`、`admintimeout` 可以調整 |
 | 檔案傳輸 | 依檔案大小與線路 | TFTP 每送一個 512 位元組的區塊就要等一次確認，速度取決於來回時間，700 MB 的映像檔要二、三十分鐘；FTP 走 TCP，同一條線只要幾十秒。傳輸期間時鐘跟著前進 |
 | CDP 與 LLDP | CDP 每 60 秒、holdtime 180 秒；LLDP 每 30 秒、holdtime 120 秒 | 接線的那一刻兩端會立刻通告一次。對面把 CDP 關掉，這一端要等 holdtime 過了才忘記它；LLDP 關掉時會先送一個 TTL = 0 的通告，對方立刻刪除 |
@@ -258,6 +261,9 @@ npm run build    # 輸出到 dist/
 - **Router ID**：OSPF 程序啟動時決定（`router-id` > 最大的 Loopback > 最大的實體介面），之後改了位址或 router-id 都不會變，IOS 會提示要 `clear ip ospf process`。兩台 Router ID 一樣時鄰居建立不起來。
 - **cost 與等價多路徑**：cost = 參考頻寬 ÷ 介面頻寬（預設參考頻寬 100 Mbps，所以 1G 和 10G 都是 1）；cost 一樣的路最多 4 條一起放進路由表，依來源與目的位址雜湊分散，同一條連線永遠走同一條路。
 - **多區域**：ABR 把一個區域的網段用 Summary LSA 送進骨幹（`area range` 可以彙總成一筆），所有非骨幹區域都要接到 area 0；區域之間的路由是 O IA。`default-information originate` 送出的預設路由是 O*E2。
+- **無線控制器**：輕量型 AP 自己沒有設定，拿到 IP 之後依序用手動指定、DHCP option 43、同一個網段的廣播找控制器，CAPWAP（UDP 5246）通了約 25 秒後加入，SSID 由控制器下發。Local 模式的用戶端流量包在 CAPWAP 裡回到控制器才放進 VLAN（交換器在接控制器的埠學到用戶端的 MAC），所以員工 VLAN 要在控制器的 Trunk 上；FlexConnect 在 AP 的埠就地放進 VLAN，控制器斷線時本地交換的 WLAN 照樣服務 (standalone)。加入同一台控制器的 AP 由 RRM 自動錯開頻道。
+- **牆面衰減**：每穿過一道牆就扣掉固定的 dB（石膏板 3 / 4、玻璃 2 / 3、磚 8 / 10、混凝土 12 / 15、金屬 25 / 30，前面是 2.4 GHz、後面是 5 GHz），5 GHz 穿牆更差。有牆的關卡把涵蓋圓圈換成訊號熱力圖；用戶端的面板會說明隔著哪些牆、少了幾 dB。
+- **漫遊**：用戶端在目前的訊號還有 -75 dBm 以上時不會自己換基地台 (sticky client)；SSID 開了 802.11k/v，基地台會在別台好 8 dB 以上時建議它換過去。兩台基地台把同一個 SSID 放進不同的 VLAN，換基地台就換網段、IP 跟著變。任務裡有「拿著筆電走過去」的測試。
 - **RA 的旗標與 DHCPv6**：前綴的 A 旗標允許 SLAAC、M 旗標要主機向 DHCPv6 要位址、O 旗標只要 DNS；M 與 A 同時開著，Windows 會兩種位址各拿一個。DHCPv6 從來不給預設閘道，閘道一定來自 RA；Windows 收不到任何 RA 時還是會試 stateful DHCPv6，結果有位址卻出不了網段。路由器上 `show ipv6 dhcp binding` 查得到每台電腦的 DUID 與位址，電腦上 `ipconfig` 看得到 DUID 與 IAID。
 - **OSPFv3**：直接在介面上啟用；鄰居用 link-local 位址認識彼此（兩端的全域前綴不一樣也能 FULL），路由的下一站也是 FE80:: 位址。Router ID 仍然是 32 位元：路由器上沒有任何 IPv4 位址時程序起不來（`%OSPFv3-4-NORTRID`），要手動設定。
 - **IPv6 ACL**：和 IPv4 的 ACL 是兩套，IPv4 的 ACL 管不到 IPv6。結尾隱含 `permit icmp any any nd-na`、`nd-ns` 再 `deny ipv6 any any`；自己在最後寫了 `deny ipv6 any any`，鄰居探索就被擋掉，整個網段的 IPv6 都會斷。
@@ -281,7 +287,7 @@ npm run build    # 輸出到 dist/
 - 遠端存取的 SSL-VPN 沒有連線建立的時間。
 - STP 以每個 VLAN 各算一棵樹的方式近似 Rapid PVST+，只處理交換器直接相連的情況；非網管交換器形成迴圈會被判定為廣播風暴。邊緣埠用的是傳統的 30 秒計時（和 Cisco 預設的 PVST+ 一樣）。
 - IPsec 有 IKEv1 與 IKEv2，只用預先共用金鑰（沒有憑證、EAP、NAT-T）；IOS 的 IKEv2 smart defaults 簡化成 AES-CBC-128/256、SHA-1/256、DH 2/5/14/19 的組合；沒有 GRE、VTI、DMVPN。圖形介面建立的 FortiGate 通道會自動帶出通往對端的路由（相當於用精靈建立）。SSL-VPN 的加密流量在引擎內部仍然當成一層封裝來處理。
-- Wi-Fi 的訊號只看距離與發射功率，沒有牆面衰減。
+- Wi-Fi 的訊號依距離估算再扣掉沿路穿過的牆，沒有反射、多路徑與樓層；牆只能由關卡預先放好，自由模式還不能畫牆。802.11r 只是設定，沒有模擬漫遊所花的時間。無線控制器沒有 DNS 探索、DTLS、映像檔下載、AP group / tag 與跨控制器漫遊 (Mobility Group)，只能用圖形介面設定。
 - 802.1X 只驗證帳號密碼（沒有憑證）。
 - IPv6 有 SLAAC、DHCPv6（stateless / stateful 與 relay，沒有 Prefix Delegation）、靜態路由、OSPFv3（沒有 IPsec 驗證與 area range）、IOS 的 IPv6 ACL；FortiGate 的 IPv6 政策、NAT64、DNS 的 AAAA 記錄、經過 VPN 的 IPv6 還沒有。主機的 SLAAC 位址用 EUI-64（Windows 預設其實是隨機的介面識別碼加上暫時位址）。
 - PPPoE 的帳號密碼要在圖形介面設定（IOS 沒有做 Dialer 介面）。兩種 CLI 都只涵蓋這個遊戲有模擬的功能。
@@ -293,9 +299,9 @@ npm run build    # 輸出到 dist/
 
 完整的功能規劃（每個領域已完成、部分完成、尚未開始的項目，以及建議的實作順序）在 [PLAN.md](PLAN.md)。以下是最接近的幾項：
 
-1. 無線控制器、牆面衰減與漫遊（規劃中的階段 7）。
+1. 自動化與雲端（規劃中的階段 8）：REST API、JSON、Ansible / Terraform、VPC。
 2. FortiGate 的 IPv6 政策、DHCPv6 Prefix Delegation、GRE / VTI / DMVPN、TACACS+、IOS 的 Dialer 介面。
-3. iBGP、OSPF 的 stub / NSSA 區域。
+3. iBGP、OSPF 的 stub / NSSA 區域、自由模式畫牆、訪客入口 (Captive Portal)。
 4. Wi-Fi 的牆面衰減、802.1X 的憑證驗證。
 5. NTP 與 Syslog 的維運關卡（引擎已經有了，還沒有獨立的關卡）。
 
@@ -321,7 +327,7 @@ src/engine/   模擬引擎（不依賴瀏覽器，可直接用 Node 測試）
                   L3（路由表、最長相符與 ECMP、VRRP）、DHCP 與 Relay、PPPoE、NAT、ACL、防火牆政策、VPN、DNS、
                   模擬時鐘（advance / settle / pendingOf）與傳輸速率（throughput）
   sim6.js         IPv6：SLAAC 與 DHCPv6（RA 的 M / O / A 旗標、relay、binding）、鄰居探索、靜態路由與 OSPFv3、IPv6 ACL、ICMPv6 / TCP / UDP
-src/levels/   關卡定義：設備、初始設定、任務目標、提示、參考解法（trouble.js 是故障排除章，maint.js 是維運章，voip.js 是語音與 QoS 章，routing.js 是進階路由章，ipv6.js 是 IPv6 章的補充，vpn2.js 是多站台 VPN）
+src/levels/   關卡定義：設備、初始設定、任務目標、提示、參考解法（trouble.js 是故障排除章，maint.js 是維運章，voip.js 是語音與 QoS 章，routing.js 是進階路由章，ipv6.js 是 IPv6 章的補充，vpn2.js 是多站台 VPN，wireless.js 是無線控制器章）
 src/data/     題庫與證照對照表
 src/scene/    three.js 場景、設備模型、網路線、無線涵蓋範圍與封包動畫
 src/ui/       設定面板、終端機、CLI、任務面板、測驗、自由模式與對話框

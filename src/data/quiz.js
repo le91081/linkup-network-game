@@ -28,6 +28,7 @@ export const LEVEL_TOPIC = {
   l44: 'switching', l45: 'ops', l46: 'security',
   l47: 'routing', l48: 'routing', l49: 'routing', l50: 'routing',
   l51: 'ipv6', l52: 'ipv6', l53: 'ipv6', l54: 'vpn',
+  l55: 'wireless', l56: 'wireless', l57: 'wireless',
 };
 
 export const QUESTIONS = {
@@ -160,6 +161,12 @@ export const QUESTIONS = {
     { q: 'Hub-and-Spoke 的 VPN，台中 PC ping 高雄 PC 時封包在總公司防火牆上經過了什麼？', a: ['直接轉送，不用解密', '從台中的通道解密、比對防火牆政策（VPN → VPN）、再加密送進高雄的通道', '交給網際網路轉送', '只要路由正確就好，不需要政策'], c: 1, e: '總公司要有一條從台中的 VPN 介面到高雄的 VPN 介面的政策；兩條通道的加密範圍也都要包含對方分公司的網段。', r: 'CCNA 5.5' },
     { q: '總公司的防火牆改用 IKEv2，分公司還是 IKEv1。會發生什麼事？', a: ['自動降回 IKEv1', '協商失敗：IKEv1 的一端聽不懂 IKE_SA_INIT', '可以通，但比較慢', '只有第二階段會失敗'], c: 1, e: '兩端的 IKE 版本必須一致。IKEv2 用 IKE_SA_INIT + IKE_AUTH 四個訊息建立 IKE SA 與第一個 CHILD_SA；IKEv1 是 Main Mode（或 Aggressive Mode）加 Quick Mode。', r: 'CCNA 5.5' },
     { q: 'IKEv2 通道一端開了 PFS (DH 14)、另一端沒開。通道會怎樣？', a: ['完全建不起來', '一開始通，到第一次重新協商 CHILD_SA 時失敗，通道就斷了', '永遠正常', '只有 IKE SA 會斷'], c: 1, e: '第一個 CHILD_SA 是在 IKE_AUTH 裡順便建立的，不做 DH 交換，所以 PFS 不一致也建得起來；重新協商 (CREATE_CHILD_SA) 時才要交換 DH，這時才失敗。IOS 的 IPsec SA 預設一小時重新協商一次。', r: 'Security+ 3.2' },
+    { q: '輕量型 AP 在 VLAN 20、無線控制器在 VLAN 10。AP 怎麼才找得到控制器？', a: ['AP 會自動掃描所有網段', '在 AP 的 DHCP 位址池加上 option 43，告訴它控制器的 IP', '把 AP 的埠設成 Trunk', '控制器會主動去找 AP'], c: 1, e: 'AP 依序用手動指定、DHCP option 43、DNS (CISCO-CAPWAP-CONTROLLER)、同網段廣播找控制器。不同網段時廣播到不了，最常用的就是 option 43（Cisco 的格式：f1 + 長度 + 控制器 IP，例如 f104.0a0a.0a05）。', r: 'CCNA 2.6' },
+    { q: 'AP 與無線控制器之間用什麼協定溝通？', a: ['LWAPP 與 TCP 443', 'CAPWAP：UDP 5246（控制）與 5247（資料）', 'SNMP', 'RADIUS'], c: 1, e: 'CAPWAP 把控制訊息與（Local 模式下的）用戶端資料都包起來送到控制器。控制通道是 DTLS 加密的。', r: 'CCNA 2.6' },
+    { q: 'Local 模式與 FlexConnect 模式的 AP 差在哪裡？', a: ['Local 不能放送 SSID', 'Local 把用戶端流量經 CAPWAP 送回控制器才放進 VLAN；FlexConnect 可以在 AP 的交換器埠就地放進 VLAN，控制器斷線時還能繼續服務', 'FlexConnect 只能用在 2.4 GHz', '兩者完全一樣'], c: 1, e: 'Local 模式的 AP 接一般的 Access 埠，員工 VLAN 要在控制器的 Trunk 上；FlexConnect 本地交換時，AP 接的埠要是 Trunk。分公司常用 FlexConnect，WAN 斷了員工照樣上網。', r: 'CCNA 2.6' },
+    { q: '會議室在混凝土牆後面收不到 Wi-Fi。最好的做法是？', a: ['把 AP 的功率開到最大', '在牆的另一邊再加一台 AP，讓控制器的 RRM 錯開頻道', '改用 5 GHz', '換一個 SSID'], c: 1, e: '混凝土牆衰減 12 – 15 dB，5 GHz 更多。功率開大，牆後面也許勉強收得到，但用戶端回傳的功率沒變，還會干擾更多鄰居；語音、視訊以 -67 dBm 為規劃標準。', r: 'CCNA 1.11' },
+    { q: '筆電走到另一台 AP 旁邊，卻還連著遠的那台、速度很慢。這叫做什麼？怎麼改善？', a: ['頻道干擾；改頻道', 'Sticky client；開啟 802.11k/v，讓 AP 提供鄰近清單、建議用戶端換過去', 'DHCP 衝突；換 IP', '隱藏 SSID'], c: 1, e: '漫遊是用戶端決定的，很多用戶端要等訊號低到一定程度才會換。802.11k 提供鄰近 AP 清單，802.11v 的 BSS Transition 建議換過去，802.11r 讓換過去時不用重新完整驗證。', r: 'Network+ 2.3' },
+    { q: '兩台 AP 都放送 SSID「Corp」，但一台放進 VLAN 31、另一台放進 VLAN 32。筆電從一台漫遊到另一台時會怎樣？', a: ['沒有影響', '換了網段：IP 改變，進行中的連線（遠端桌面、通話）都會斷', '速度會變快', 'SSID 會消失'], c: 1, e: '漫遊要在同一個第二層網段裡才不會斷。用無線控制器時，所有 AP 的用戶端都從控制器放進同一個 VLAN，就沒有這個問題。', r: 'CCNA 1.11' },
     { q: '控制器式網路中，「南向介面 (southbound API)」連接的是什麼？', a: ['控制器與應用程式', '控制器與網路設備', '兩台控制器之間', '使用者與網頁介面'], c: 1, e: '南向介面讓控制器下達指令給設備（例如 NETCONF、OpenFlow）；北向介面則提供給上層的應用程式與自動化工具呼叫。', r: 'CCNA 6.3' },
   ],
 };

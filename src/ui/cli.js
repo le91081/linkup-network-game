@@ -74,6 +74,34 @@ const SHOW = {
     }
     return o;
   },
+  'show ap summary': (st, d) => {
+    if (d.kind !== 'wlc') return ['% 這個指令只有無線控制器有'];
+    const aps = Object.values(st.devices).filter((x) => x.lwap && ((st.dyn.capwap || {})[x.id] || {}).wlc === d.id);
+    const o = [`Number of APs: ${aps.filter((x) => (st.dyn.capwap[x.id] || {}).joined).length}`, '',
+      pad('AP Name', 33) + pad('Slots', 9) + pad('AP Model', 21) + pad('Ethernet MAC', 16) + pad('Location', 18) + pad('Country', 9) + pad('IP Address', 17) + 'State', '-'.repeat(130)];
+    for (const x of aps) {
+      const rec = st.dyn.capwap[x.id];
+      o.push(pad(x.name, 33) + pad(2, 9) + pad('C9120AXI-T', 21) + pad(dotMac(x.ifaces[0].rt.mac || '0000.0000.0000'), 16) + pad('default location', 18) + pad('TW', 9) + pad(x.ifaces[0].rt.ip != null ? fmtIp(x.ifaces[0].rt.ip) : '0.0.0.0', 17) + (rec.joined ? 'Registered' : 'Joining'));
+    }
+    const lost = Object.values(st.devices).filter((x) => x.lwap && !aps.includes(x));
+    if (lost.length) o.push('', ...lost.map((x) => `（${x.name} 沒有加入這台控制器：${(x.rt.capwap || {}).why || ((st.dyn.capwap || {})[x.id] || {}).why || '找不到控制器'}）`));
+    return o;
+  },
+  'show wlan summary': (st, d) => {
+    if (d.kind !== 'wlc') return ['% 這個指令只有無線控制器有'];
+    const SEC = { open: '[open]', wep: '[WEP]', wpa2: '[WPA2][PSK][AES]', wpa2wpa3: '[WPA2][WPA3][PSK][SAE][AES]', wpa3: '[WPA3][SAE][AES]', wpa2ent: '[WPA2][802.1x][AES]' };
+    return [`Number of WLANs: ${d.wlc.wlans.length}`, '', pad('ID', 5) + pad('Profile Name', 33) + pad('SSID', 33) + pad('Status', 7) + 'Security', '-'.repeat(110),
+      ...d.wlc.wlans.map((w) => pad(w.id, 5) + pad(w.ssid || '', 33) + pad(w.ssid || '', 33) + pad(w.on === false ? 'DOWN' : 'UP', 7) + (SEC[w.sec || 'wpa2'] || '') + (w.ft ? '[FT]' : '') + (w.kv ? '[11k/v]' : ''))];
+  },
+  'show wireless client summary': (st, d) => {
+    if (d.kind !== 'wlc') return ['% 這個指令只有無線控制器有'];
+    const list = [...(st.rt.clients[d.id] || []).map((c) => ({ c, ap: c.ap, mode: 'Local' })),
+      ...Object.values(st.devices).filter((x) => x.lwap && x.rt.capwap && x.rt.capwap.wlc === d.id).flatMap((x) => (st.rt.clients[x.id] || []).map((c) => ({ c, ap: x.id, mode: 'Flex' })))];
+    return [`Number of Clients: ${list.length}`, '', pad('MAC Address', 15) + pad('AP Name', 33) + pad('Type ID', 10) + pad('State', 13) + pad('Protocol', 10) + pad('Method', 11) + 'Role', '-'.repeat(100),
+      ...list.map(({ c, ap, mode }) => { const a = c.iface.rt.assoc; const w = d.wlc.wlans.find((x) => x.ssid === a.ssid) || {}; return pad(dotMac(c.iface.rt.mac), 15) + pad(st.devices[ap].name, 33) + pad('WLAN ' + (w.id || '?'), 10) + pad(c.iface.rt.ip != null ? 'Run' : 'IP Learn', 13) + pad(a.band === '5GHz' ? '11ac' : '11n(2.4)', 10) + pad(a.sec === 'wpa2ent' ? 'Dot1x' : a.sec === 'open' ? 'None' : 'PSK', 11) + mode; })];
+  },
+  'show ap dot11 24ghz summary': (st, d) => apRadio(st, d, 'ch24'),
+  'show ap dot11 5ghz summary': (st, d) => apRadio(st, d, 'ch5'),
   'show ip route': (st, d) => routeLines(st, d, () => true),
   'show ip route connected': (st, d) => routeLines(st, d, (r) => r.type === 'C' || r.type === 'L'),
   'show ip route static': (st, d) => routeLines(st, d, (r) => r.type === 'S' || r.type === 'D'),
@@ -754,6 +782,15 @@ function switchportLines(st, d, p) {
 // ───────────────────────── BGP ─────────────────────────
 /** 有類別的網段（A /8、B /16、C /24）不印長度，其他的才印，和 IOS 一樣 */
 const bgpNet = (r) => { const a = r.net >>> 24, cls = a < 128 ? 8 : a < 192 ? 16 : 24; return r.bits === cls || (r.net === 0 && r.bits === 0) ? fmtIp(r.net) : `${fmtIp(r.net)}/${r.bits}`; };
+/** show ap dot11 24ghz | 5ghz summary：RRM 指定的頻道 */
+function apRadio(st, d, k) {
+  if (d.kind !== 'wlc') return ['% 這個指令只有無線控制器有'];
+  const aps = Object.values(st.devices).filter((x) => x.lwap && x.rt.capwap && x.rt.capwap.joined && x.rt.capwap.wlc === d.id);
+  return [pad('AP Name', 33) + pad('Mac Address', 16) + pad('Slot', 6) + pad('Admin State', 13) + pad('Oper State', 12) + pad('Width', 7) + pad('Txpwr', 10) + 'Channel', '-'.repeat(110),
+    ...aps.map((x) => pad(x.name, 33) + pad(dotMac(x.ifaces[0].rt.mac || '0000.0000.0000'), 16) + pad(k === 'ch24' ? 0 : 1, 6) + pad('Enabled', 13) + pad('Up', 12) + pad(k === 'ch24' ? 20 : 40, 7) + pad(`*${{ low: 6, mid: 4, high: 1 }[x.wifi.power || 'mid']}/8`, 10) + `(${x.rt.rrm ? x.rt.rrm[k] : '-'})*`),
+    '', '（* 代表由 RRM 自動指定）'];
+}
+
 // ── show ip route：和真的 IOS 一樣依主網段 (classful) 分組、列出介面自己的位址 (L)、動態路由的存在時間 ──
 const ROUTE_CODES = ['Codes: L - local, C - connected, S - static, R - RIP, M - mobile, B - BGP',
   '       D - EIGRP, EX - EIGRP external, O - OSPF, IA - OSPF inter area',
@@ -1364,6 +1401,10 @@ function showOrPing(app, devId, line, print) {
  */
 export function iosRun(app, devId, sess, line, print) {
   const text = line.trim(), low = text.toLowerCase();
+  if (app.state.devices[devId].kind === 'wlc' && low && !/^(sh|sho|show|ping|tr|traceroute|ter|terminal|exit|end|\?|help|cls|clear$)/.test(low)) {
+    print('% 這個模擬的 Catalyst 9800 請用圖形介面設定（CCNA 也只要求用 GUI 設定 WLAN）；CLI 可以用 show ap summary、show wlan summary、show wireless client summary、show ap dot11 24ghz summary 查看', 'warn');
+    return {};
+  }
   const booting = (app.state.rt.booting || {})[devId], rom = (app.state.rt.rommon || {})[devId];
   if (booting > 0 && !rom) { print(`% 設備還在開機中，還要 ${Math.ceil(booting)} 秒才能下指令`, 'warn'); return {}; }
   const before = app.state.devices[devId].name;

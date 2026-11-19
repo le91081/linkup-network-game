@@ -1,4 +1,5 @@
 // 設備設定面板：依設備類別產生對應的管理頁面
+import * as W from './panel-wlc.js';
 import { h, icon, button, faceplate, toast } from './dom.js';
 import {
   inp, sel, toggle, seg, field, note, kv, del, cardHead, grid2, bind, linkBadge, ifaceNote,
@@ -64,7 +65,9 @@ function dhcpBlock(ctx, i) {
       field('發給用戶端的閘道', inp(ctx, ...bind(d, 'gw'), { ph: '留空＝本介面 IP', check: isIp })),
       field('租約時間', sel(ctx, () => String(d.lease || ''), (v) => { d.lease = v ? +v : ''; }, [['', '1 天（預設）'], ['300', '5 分鐘'], ['3600', '1 小時'], ['28800', '8 小時'], ['604800', '7 天']]),
         '用戶端過了一半的時間會自動續約；到期還續不到就會失去位址。'),
-      ctx.dev.kind !== 'homerouter' && field('TFTP 伺服器（option 150）', inp(ctx, ...bind(d, 'tftp'), { ph: 'IP 電話下載設定檔用，沒有電話就留空', check: isIpList }))),
+      ctx.dev.kind !== 'homerouter' && field('TFTP 伺服器（option 150）', inp(ctx, ...bind(d, 'tftp'), { ph: 'IP 電話下載設定檔用，沒有電話就留空', check: isIpList })),
+      ctx.dev.kind === 'router' && field('WLC 位址（option 43）', inp(ctx, ...bind(d, 'wlc'), { ph: 'Cisco 輕量型 AP 找控制器用，沒有就留空', check: isIpList }),
+        d.wlc ? `IOS 的寫法：option 43 hex f1${(String(d.wlc).split(/[,\s]+/).filter(Boolean).length * 4).toString(16).padStart(2, '0')}…（類型 f1、長度、控制器 IP 的十六進位）` : '')),
     d.on && h('div', { class: 'rsv' },
       h('div', { class: 'acl-h' }, h('span', { text: '保留位址' }), h('em', { text: '指定的 MAC 永遠拿到同一個 IP' }),
         button('新增', { ic: 'plus', small: true, onclick: () => { (d.reserved ||= []).push({ mac: '', ip: '' }); ctx.commit(true); } })),
@@ -558,7 +561,7 @@ const T = {
 function tabsFor(dev) {
   const t = baseTabs(dev);
   // Cisco 的網路設備多一個唯讀的 IOS 風格 CLI
-  if (!dev.locked && CATALOG[dev.model].vendor === 'Cisco' && ['router', 'mswitch', 'l3switch'].includes(dev.kind)) t.push(['cli', 'CLI', buildCli]);
+  if (!dev.locked && CATALOG[dev.model].vendor === 'Cisco' && ['router', 'mswitch', 'l3switch', 'wlc'].includes(dev.kind)) t.push(['cli', 'CLI', buildCli]);
   return t;
 }
 
@@ -572,7 +575,8 @@ function baseTabs(dev) {
       (isTftp(dev) || isFtp(dev)) && ['files', '檔案', OPS.filesTab], dev.nms && ['nms', '網管', OPS.nmsTab], dev.cucm && ['cucm', 'CUCM', V.cucmTab],
       ['cap', '封包擷取', DG.captureTab], T.term].filter(Boolean);
     case 'hub': case 'switch': return [T.ports];
-    case 'ap': return [['ssid', '無線網路', X.ssidTab], ['radio', '無線電', X.radioTab], T.ports];
+    case 'ap': return dev.lwap ? [['lwap', 'AP', W.lwapTab]] : [['ssid', '無線網路', X.ssidTab], ['radio', '無線電', X.radioTab], T.ports];
+    case 'wlc': return [['wlan', 'WLAN', W.wlanTab], ['aps', 'AP', W.apsTab], ['wcl', '用戶端', W.wlcClientsTab], ['wmi', '管理介面', W.wmiTab], T.swports];
     case 'mswitch': return [T.swports, T.vlan, T.sec, T.mgmt, T.status];
     case 'l3switch': return [T.swports, T.vlan, T.l3, T.route, T.sec, ['qos', 'QoS', V.qosTab], T.mgmt, T.status];
     case 'router': return [T.ifs, T.route, T.nat, T.acl, T.vpn, ['qos', 'QoS', V.qosTab], T.mgmt, T.status];
@@ -584,7 +588,7 @@ function baseTabs(dev) {
 
 const KIND_NAME = {
   host: '終端設備', hub: '集線器', switch: '交換器', mswitch: '網管型交換器', l3switch: 'L3 交換器',
-  router: '路由器', homerouter: '家用路由器', firewall: '防火牆', ap: '無線基地台', internet: 'ISP',
+  router: '路由器', homerouter: '家用路由器', firewall: '防火牆', ap: '無線基地台', wlc: '無線控制器', internet: 'ISP',
 };
 
 /** 把選取的設備畫到面板上；回傳 false 表示沒有選取設備 */

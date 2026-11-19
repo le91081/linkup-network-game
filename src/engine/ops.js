@@ -301,6 +301,7 @@ export function markReboot(state, devId) {
 const BOOT_TIME = {
   hub4: 2, sw5: 5, sw8: 5, homerouter: 60, ap: 60, erx: 60, c2960: 120, c2960p: 120, isr4321: 180, isr4331: 180, c9300: 240, n93180: 240, n9332: 240,
   fg60f: 70, fg100f: 90, pc: 30, laptop: 20, phone: 20, printer: 30, wprinter: 30, nas: 90, tower: 90, rack1u: 150, ipphone: 90,
+  c9800: 360, c9120: 150, // 9800-L 開機大約六分鐘；AP 開機之後還要再花半分鐘找 WLC、加入
 };
 export const bootTime = (d) => BOOT_TIME[d.model] ?? 30;
 

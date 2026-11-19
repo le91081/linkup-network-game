@@ -194,6 +194,12 @@ function ikev2Objects(d) {
   return { v, prof };
 }
 
+/** WLC 的位址清單 → option 43 的十六進位（每四個字一個點，和 IOS 的寫法一樣） */
+const opt43 = (list) => {
+  const ips = String(list).split(/[,\s]+/).map(parseIp).filter((x) => x != null);
+  const hex = 'f1' + (ips.length * 4).toString(16).padStart(2, '0') + ips.map((x) => (x >>> 0).toString(16).padStart(8, '0')).join('');
+  return hex.match(/.{1,4}/g).join('.');
+};
 /** ACL 改了之後，把它套回引用這份 ACL 的通道 */
 function syncVpnAcl(d, name) {
   const rules = ((d.aclDefs || {})[name] || []).filter((r) => r.action === 'permit');
@@ -329,7 +335,7 @@ function attachPools(dev) {
   for (const p of dev.dhcpPools || []) {
     const i = p.net != null && dev.ifaces.find((x) => { const n = staticNet(x); return n && n.bits === p.bits && n.net === p.net; });
     if (!i) { rest.push(p); continue; }
-    Object.assign(i.dhcp, { on: true, pool: p.name, gw: p.gw || '', dns: p.dns || '', lease: p.lease || '', ...(p.tftp ? { tftp: p.tftp } : {}) });
+    Object.assign(i.dhcp, { on: true, pool: p.name, gw: p.gw || '', dns: p.dns || '', lease: p.lease || '', ...(p.tftp ? { tftp: p.tftp } : {}), ...(p.wlc ? { wlc: p.wlc } : {}) });
     applyPoolRange(dev, i);
   }
   // 單一主機的位址池：掛到有 DHCP 伺服器、而且包含這個 IP 的介面上
@@ -398,7 +404,7 @@ const HELP = {
     'spanning-tree bpduguard enable / spanning-tree guard root', 'ip dhcp snooping trust', 'ipv6 address <位址/前綴>', 'speed 10|100|1000|auto、duplex auto|full|half'],
   vlan: ['name <名稱>'],
   router: ['network <網段> <萬用遮罩> area 0', 'default-information originate'],
-  dhcp: ['network <網段> <遮罩>', 'default-router <IP>', 'dns-server <IP> [IP]', 'option 150 ip <TFTP 伺服器>（IP 電話下載設定檔）', 'lease <天> [小時] [分鐘]', 'host <IP> <遮罩> 加上 hardware-address <MAC>（保留位址）'],
+  dhcp: ['network <網段> <遮罩>', 'default-router <IP>', 'dns-server <IP> [IP]', 'option 150 ip <TFTP 伺服器>（IP 電話下載設定檔）', 'option 43 hex f104.<WLC 的 IP（十六進位）>（Cisco AP 找無線控制器）', 'lease <天> [小時] [分鐘]', 'host <IP> <遮罩> 加上 hardware-address <MAC>（保留位址）'],
   line: ['transport input ssh | telnet | all | none', 'access-class <名稱> in', 'login local'],
   acl: ['permit|deny <ip|tcp|udp|icmp> <來源> <目的> [eq <埠>]', '來源 / 目的的寫法：any、host <IP>、<網段> <萬用遮罩>', 'no <序號>   刪除一條規則'],
   stdacl: ['permit <網段> <萬用遮罩> | permit host <IP>'],
@@ -1664,7 +1670,17 @@ export function iosSession(getDev, getState, who = null) {
         return undefined;
       }],
       ['option 66 ascii <ip>', ([ip]) => { if (parseIp(ip) == null) return err('用法：option 66 ascii <TFTP 伺服器 IP>'); const p = S.cur; (p.iface ? p.iface.dhcp : p).tftp = ip; return undefined; }],
-      ['no option <n> [...]', () => { const p = S.cur; delete (p.iface ? p.iface.dhcp : p).tftp; }],
+      // option 43：type f1、長度（4 × WLC 數量）、每台 WLC 的 IPv4 位址，例如 10.10.10.5 → f104.0a0a.0a05
+      ['option 43 hex <...>', ([hex]) => {
+        const h = hex.replace(/[.\s]/g, '').toLowerCase();
+        const m = h.match(/^f1([0-9a-f]{2})((?:[0-9a-f]{8})+)$/);
+        if (!m || parseInt(m[1], 16) !== m[2].length / 2) return err('Cisco AP 的 option 43 格式：f1 + 長度（04 × WLC 的數量）+ 每台 WLC 的 IP（十六進位）。例如 WLC 是 10.10.10.5 → option 43 hex f104.0a0a.0a05');
+        const ips = m[2].match(/.{8}/g).map((x) => fmtIp(parseInt(x, 16) >>> 0));
+        const p = S.cur; (p.iface ? p.iface.dhcp : p).wlc = ips.join(', ');
+        return undefined;
+      }],
+      ['option 43 <...>', () => err('Cisco AP 的 option 43 要用十六進位：option 43 hex f104.0a0a.0a05（f1 = 類型、04 = 一台 WLC、後面是 WLC 的 IP）')],
+      ['no option <n> [...]', ([n]) => { const p = S.cur, o = p.iface ? p.iface.dhcp : p; if (n === '43') delete o.wlc; else delete o.tftp; }],
     ],
     line: [
       ['transport input [...]', ([list]) => {
@@ -2468,6 +2484,7 @@ export function runningConfig(state, dev) {
     o.push(`ip dhcp pool ${poolName(i)}`, ` network ${fmtIp(net)} ${fmtMask(i.rt.bits)}`, ` default-router ${i.dhcp.gw || fmtIp(i.rt.ip)}`);
     if (i.dhcp.dns) o.push(` dns-server ${i.dhcp.dns.replace(/[,\s]+/g, ' ')}`);
     if (i.dhcp.tftp) o.push(` option 150 ip ${i.dhcp.tftp.replace(/[,\s]+/g, ' ')}`);
+    if (i.dhcp.wlc) o.push(` option 43 hex ${opt43(i.dhcp.wlc)}`);
     if (+i.dhcp.lease > 0 && +i.dhcp.lease !== 86400) o.push(` lease ${leaseText(+i.dhcp.lease)}`);
     o.push('!');
     for (const r of i.dhcp.reserved || []) {
@@ -2483,6 +2500,7 @@ export function runningConfig(state, dev) {
     if (p.gw) o.push(` default-router ${p.gw}`);
     if (p.dns) o.push(` dns-server ${p.dns.replace(/[,\s]+/g, ' ')}`);
     if (p.tftp) o.push(` option 150 ip ${p.tftp.replace(/[,\s]+/g, ' ')}`);
+    if (p.wlc) o.push(` option 43 hex ${opt43(p.wlc)}`);
     o.push('!');
   }
   // IPsec VPN：第一階段政策、金鑰、第二階段的 transform-set，最後用 crypto map 把它們和對端、ACL 綁在一起

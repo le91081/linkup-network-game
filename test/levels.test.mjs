@@ -1808,6 +1808,66 @@ console.log('\nIKEv2 與 Hub-and-Spoke：版本、IOS 的 ikev2 profile、PFS �
   ok(!back.ok && back.log.some((l) => /先做 NAT 再檢查 VPN/.test(l.text)), '高雄的 NAT 例外沒有加上台中：路由器先 NAT 再加密，往台中的流量沒有進通道');
 }
 
+console.log('\n無線控制器與無線環境：CAPWAP、option 43、Local / FlexConnect、RRM、牆面衰減、漫遊');
+{
+  const { iosSession, runningConfig } = await import('../src/engine/ios.js');
+  const { iosRun } = await import('../src/ui/cli.js');
+  const sim = await import('../src/engine/sim.js');
+  const ok = (cond, title) => (cond ? console.log('  ✔ ' + title) : fail(title));
+  const sessions = new WeakMap();
+  const sessOf = (s, id) => { const m = sessions.get(s) || new Map(); sessions.set(s, m); if (!m.has(id)) m.set(id, iosSession(() => s.devices[id], () => s)); return m.get(id); };
+  const run = (s, id, ...lines) => { const out = []; for (const line of lines) { const r = iosRun({ state: s }, id, sessOf(s, id), line, (l) => out.push(l)); if (r.changed) recomputeNow(s); } return out; };
+  const fresh = (id) => { const x = LEVELS.find((l) => l.id === id).setup(); recompute(x); return x; };
+  // option 43：IOS 的 TLV 寫法
+  const s = fresh('l55');
+  ok(run(s, 'rt', 'configure terminal', 'ip dhcp pool AP', 'option 43 ip 10.10.10.5').some((l) => /option 43 hex f104\.0a0a\.0a05/.test(l)), 'option 43 寫成 ip 會被拒絕，提示要用 hex（f104.0a0a.0a05）');
+  run(s, 'rt', 'option 43 hex f104.0a0a.0a05', 'end');
+  ok([].concat(runningConfig(s, s.devices.rt)).includes(' option 43 hex f104.0a0a.0a05'), 'option 43 hex 出現在 DHCP 位址池的 running-config');
+  const rec = () => s.dyn.capwap.ap1;
+  ok(!rec().joined && /正在加入 WLC（DHCP option 43/.test(rec().why), '拿到 option 43 之後開始加入：CAPWAP Discovery → Join，還沒好');
+  advance(s, 26); recomputeNow(s);
+  ok(rec().joined && rec().how === 'DHCP option 43' && s.devices.ap1.rt.rrm && s.devices.ap1.rt.rrm.ch24 !== s.devices.ap2.rt.rrm.ch24, '大約 25 秒後加入控制器；RRM 把兩台 AP 分在不同的 2.4 GHz 頻道');
+  const nb = () => s.devices.nb1.ifaces.find((i) => i.bind.t === 'wlan').rt;
+  ok(nb().assoc && nb().assoc.via === 'wlc' && nb().src === 'apipa' && /DHCP 沒有回應/.test(nb().note), 'Local 模式：筆電連上了（掛在 WLC 上），但控制器的 Trunk 不允許 VLAN 30，DHCP 沒有回應、退回 169.254 的 APIPA');
+  run(s, 'sw', 'configure terminal', 'interface gi0/10', 'switchport trunk allowed vlan 10,30', 'end');
+  recompute(s);
+  const mac = nb().mac.replace(/:/g, '');
+  ok(nb().ip != null && run(s, 'sw', 'show mac address-table').some((l) => l.replace(/\./g, '').includes(mac) && /Gi0\/10/.test(l)), 'Trunk 加上 VLAN 30 之後拿到 IP；交換器在接控制器的 Gi0/10 學到筆電的 MAC（流量經 CAPWAP 回到控制器才放出來）');
+  ok(run(s, 'wlc', 'show ap summary').some((l) => /^AP-1F-West .*Registered$/.test(l)) && run(s, 'wlc', 'show wireless client summary').some((l) => /Local$/.test(l)), 'show ap summary / show wireless client summary');
+  ok(run(s, 'wlc', 'configure terminal').some((l) => /圖形介面/.test(l)), '9800 的 CLI 只能 show：設定請用圖形介面');
+  // 同一個網段的廣播：AP 和控制器在同一個 VLAN 就不需要 option 43
+  const s2 = fresh('l55');
+  for (const p2 of ['Gi0/1', 'Gi0/2']) s2.devices.sw.sw.ports[p2].vlan = 10;
+  s2.devices.rt.ifaces.find((i) => i.id === 'Gi0/0/1.10').dhcp = { on: true, pool: 'MGMT', start: '10.10.10.100', end: '10.10.10.199', dns: '', gw: '' };
+  recompute(s2);
+  ok(s2.dyn.capwap.ap1.joined && s2.dyn.capwap.ap1.how === '同一個網段的廣播', 'AP 和控制器在同一個網段：靠廣播就找得到控制器');
+  // FlexConnect：控制器斷線時本地交換的 WLAN 照樣服務；Local 模式的用戶端跟著斷
+  const s3 = fresh('l55');
+  LEVELS.find((l) => l.id === 'l55').solve(s3); recompute(s3);
+  s3.devices.ap2.lwap.mode = 'flex';
+  for (const p3 of ['Gi0/2']) Object.assign(s3.devices.sw.sw.ports[p3], { mode: 'trunk', native: 20, allowed: '20,30' });
+  recompute(s3);
+  const has = (id) => !!s3.devices[id].ifaces.find((i) => i.bind.t === 'wlan').rt.assoc;
+  ok(has('nb1') && has('nb2') && s3.devices.nb2.ifaces.find((i) => i.bind.t === 'wlan').rt.ip != null, 'FlexConnect：AP 的埠改成 Trunk（Native VLAN 20），用戶端在 AP 就地放進 VLAN 30，照樣拿到 IP');
+  s3.down = { wlc: true }; recompute(s3);
+  ok(!has('nb1') && has('nb2') && s3.devices.ap2.rt.capwap.standalone, '控制器斷線：Local 模式的 AP 停止放送，FlexConnect 的 AP 進入 standalone，筆電照樣連著');
+  // 牆面衰減
+  const s4 = fresh('l56');
+  const w = sim.wallsBetween(s4, [0, 3], [6, 3]);
+  ok(w.db24 === 12 && w.db5 === 15 && sim.rfAt(s4, s4.devices.ap2, [6.5, 6.5]).band === null, '混凝土牆：2.4 GHz 少 12 dB、5 GHz 少 15 dB；會議室的筆電收不到辦公區的 AP');
+  s4.devices.ap2.wifi.power = 'high'; recompute(s4);
+  const a4 = s4.devices.nb2.ifaces.find((i) => i.bind.t === 'wlan').rt.assoc;
+  ok(a4 && a4.band === '2.4GHz' && a4.rssi < -67 && a4.walls.includes('concrete'), '把功率開到最大：牆後面勉強收得到 2.4 GHz，但訊號不到 -67 dBm');
+  // 漫遊
+  const lv57 = LEVELS.find((l) => l.id === 'l57');
+  const s5 = fresh('l57');
+  for (const id of ['apa', 'apb']) s5.devices[id].wifi.ssids[0].kv = true;
+  recompute(s5);
+  const r5 = sim.runObjective(s5, lv57.objectives[2]);
+  ok(!r5.pass && /IP 從 10\.31\.0\.\d+ 變成 10\.32\.0\.\d+/.test(r5.reason), '開了 802.11k/v 會換到 AP-B，但兩台 AP 的 VLAN 不同：IP 從 10.31 變成 10.32，連線會斷');
+  ok(sim.runObjective(s5, lv57.objectives[1]).pass, '802.11k/v：基地台建議之後，筆電換到訊號好 8 dB 以上的 AP-B');
+}
+
 // ── FortiGate 的 CLI ──
 console.log('\nFortiGate CLI');
 {

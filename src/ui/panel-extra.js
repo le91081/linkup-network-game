@@ -7,7 +7,7 @@ import {
 } from './form.js';
 import { fmtIp } from '../engine/ip.js';
 import { CATALOG, peerOf, portOf, newSsid, cableAt, linkInfo } from '../engine/model.js';
-import { visibleSsids, WIFI_SEC, macsBehind, isBridgePort, hitsOf, P1, accessOf, portfastOn, macRows, clearMac, macAgeOf, saInfo, fmtDur, isTrunk, dtpSpeaker } from '../engine/sim.js';
+import { visibleSsids, WIFI_SEC, macsBehind, isBridgePort, hitsOf, P1, accessOf, portfastOn, macRows, clearMac, macAgeOf, saInfo, fmtDur, isTrunk, dtpSpeaker, WALL_MATS } from '../engine/sim.js';
 import { cdpCfg, lldpCfg, cdpOn, lldpTxOn, lldpRxOn, portNd, setPortNd, neighbors, speaksCdp, speaksLldp } from '../engine/disc.js';
 import { ntpInfo, deviceTime, plainStamp, logRows, clearLog, syslogStats, NTP_POLL } from '../engine/ops.js';
 import * as M from './panel-more.js';
@@ -33,7 +33,8 @@ export const wifiSignal = (ctx, i) => ctx.live(() => {
     h('div', { class: 'sigline', title: '訊號強度依距離與基地台的發射功率估算' },
       h('span', { class: 'sigbars' }, [1, 2, 3, 4].map((n) => h('i', { class: n <= bars ? 'on' : '', style: { height: 2 + n * 2.75 + 'px' } }))),
       h('span', { class: 'mono', text: `${a.band} · 頻道 ${a.ch} · ${a.rssi} dBm · ${a.rate} Mbps` })),
-    bars === 1 && note('warn', '訊號很弱：離基地台太遠，速率很低也容易斷線。把基地台移近，或調高它的發射功率。'),
+    a.walls && a.walls.length > 0 && note(a.wallDb >= 12 ? 'warn' : 'muted', `和基地台之間隔著 ${Object.entries(a.walls.reduce((m, w) => ((m[w] = (m[w] || 0) + 1), m), {})).map(([w, n]) => `${(WALL_MATS[w] || WALL_MATS.drywall).name}${n > 1 ? ' ×' + n : ''}`).join('、')}，訊號少了 ${a.wallDb} dB${a.band === '2.4GHz' ? '（5 GHz 穿牆更差，所以退回 2.4 GHz）' : ''}。`),
+    bars === 1 && note('warn', `訊號很弱：${a.walls && a.walls.length ? '牆擋掉了不少訊號，' : '離基地台太遠，'}速率很低也容易斷線。把基地台移近、在這一側再加一台，或調高它的發射功率。`),
     a.noisy && note('warn', `基地台在 ${a.band} 與鄰近基地台的頻道重疊，速率只剩一半。`),
   ];
 });
@@ -213,7 +214,9 @@ export function ssidTab(ctx, body) {
         field('加密方式', sel(ctx, () => s.sec || 'open', (v) => { s.sec = v; }, Object.entries(WIFI_SEC), { rerender: true })),
         s.sec && s.sec !== 'open' && s.sec !== 'wpa2ent' && field('密碼', inp(ctx, ...bind(s, 'pass'), { ph: '至少 8 個字元', check: (v) => v.length >= 8 })),
         dev.kind === 'ap' && field('對應的 VLAN', inp(ctx, ...bind(s, 'vlan'), { ph: '留空＝不貼標籤', check: isNum(1, 4094) }))),
-      h('div', { class: 'toggles' }, toggle(ctx, ...bind(s, 'isolate'), '用戶端隔離（連上這個 SSID 的設備彼此不能互連）')),
+      h('div', { class: 'toggles' }, toggle(ctx, ...bind(s, 'isolate'), '用戶端隔離（連上這個 SSID 的設備彼此不能互連）'),
+        dev.kind === 'ap' && toggle(ctx, ...bind(s, 'kv'), '802.11k/v：提供鄰近基地台的清單、建議用戶端換到訊號更好的基地台（改善 sticky client）'),
+        dev.kind === 'ap' && toggle(ctx, ...bind(s, 'ft'), '802.11r（Fast Transition）：漫遊時沿用金鑰，不用重新做完整的驗證')),
       (!s.sec || s.sec === 'open') && note('warn', '開放網路沒有任何加密，任何人都能連線，也能側錄別人的流量。'),
       s.sec === 'wep' && note('warn', 'WEP 的加密早已被破解，幾分鐘內就能算出密碼，不應該再使用。'),
       s.sec === 'wpa3' && note('muted', '純 WPA3 最安全，但比較舊的設備可能不支援。'),

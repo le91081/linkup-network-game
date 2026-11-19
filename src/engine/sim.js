@@ -165,7 +165,7 @@ export function l2Explore(state, devId, iface) {
     for (const c of rt.clients[d.id] || []) {
       if (c.key !== key || c.iface === iface) continue;
       if (viaWifi && (viaWifi.isolate || c.isolate)) continue; // 用戶端隔離
-      out.push({ dev: c.dev, iface: c.iface, path: [...path, wifiHop(d.id, c.dev)] });
+      out.push({ dev: c.dev, iface: c.iface, path: [...path, ...(c.back || [wifiHop(d.id, c.dev)])] });
     }
     for (const pid of Object.keys(d.sw.ports)) {
       if (pid === exceptPort || !isBridgePort(d, pid)) continue;
@@ -182,7 +182,7 @@ export function l2Explore(state, devId, iface) {
   else if (b.t === 'bridge') flood(dev, bridgeKey(dev), null, []);
   else if (b.t === 'wlan') {
     const a = iface.rt.assoc;
-    if (a) flood(state.devices[a.ap], a.key, null, [wifiHop(devId, a.ap)], a);
+    if (a) flood(state.devices[a.via || a.ap], a.key, null, a.path || [wifiHop(devId, a.ap)], a);
   }
 
   while (queue.length) {
@@ -709,18 +709,105 @@ export const WIFI_SEC = { open: '開放（無加密）', wep: 'WEP', wpa2: 'WPA2
 const SEC_MODES = { open: ['open'], wep: ['wep'], wpa2: ['wpa2'], wpa2wpa3: ['wpa3', 'wpa2'], wpa3: ['wpa3'], wpa2ent: ['wpa2'] };
 export const apRange = (d) => ({ low: 6, mid: 9, high: 12 })[(d.wifi && d.wifi.power) || 'mid'];
 const distOf = (a, b) => Math.hypot(a.pos[0] - b.pos[0], a.pos[1] - b.pos[1]);
+
+// ── 牆面衰減 ──
+// state.walls = [{ id, a: [x, y], b: [x, y], mat }]。每穿過一道牆就少掉一些訊號，5 GHz 穿牆比 2.4 GHz 差
+export const WALL_MATS = {
+  drywall: { name: '石膏板隔間', db24: 3, db5: 4 },
+  glass: { name: '玻璃隔間', db24: 2, db5: 3 },
+  wood: { name: '木門', db24: 3, db5: 4 },
+  brick: { name: '磚牆', db24: 8, db5: 10 },
+  concrete: { name: '混凝土牆', db24: 12, db5: 15 },
+  metal: { name: '金屬（電梯、機櫃）', db24: 25, db5: 30 },
+};
+/** 兩條線段有沒有相交（端點剛好碰到不算） */
+function cross(p1, p2, q1, q2) {
+  const d = (a, b, c) => (b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0]);
+  const d1 = d(q1, q2, p1), d2 = d(q1, q2, p2), d3 = d(p1, p2, q1), d4 = d(p1, p2, q2);
+  return d1 * d2 < 0 && d3 * d4 < 0;
+}
+/** 從 a 到 b 的直線穿過哪些牆、總共衰減多少 dB */
+export function wallsBetween(state, a, b) {
+  const hit = (state.walls || []).filter((w) => cross(a, b, w.a, w.b));
+  const m = (w) => WALL_MATS[w.mat] || WALL_MATS.drywall;
+  return { walls: hit, db24: hit.reduce((x, w) => x + m(w).db24, 0), db5: hit.reduce((x, w) => x + m(w).db5, 0) };
+}
+/**
+ * 基地台在某個位置的訊號。距離的部分沿用原本的估算（涵蓋範圍的邊緣大約 -78 dBm），再扣掉牆的衰減。
+ * 5 GHz 傳得比較近：-68 dBm 以上才用 5 GHz，不然退回 2.4 GHz；2.4 GHz 也低於 -78 就收不到
+ */
+export function rfAt(state, ap, pos) {
+  const rng = apRange(ap), dist = Math.hypot(ap.pos[0] - pos[0], ap.pos[1] - pos[1]);
+  const base = -38 - 40 * (dist / rng);
+  const w = wallsBetween(state, ap.pos, pos);
+  const r24 = Math.round(base - w.db24), r5 = Math.round(base - w.db5);
+  const band = r5 >= -68 ? '5GHz' : r24 >= -78 ? '2.4GHz' : null;
+  return { dist, rssi24: r24, rssi5: r5, band, rssi: band === '5GHz' ? r5 : r24, walls: w.walls, db: band === '5GHz' ? w.db5 : w.db24 };
+}
+// ── 無線控制器 (WLC) 與輕量型 AP ──
+// 輕量型 AP (d.lwap = { mode: 'local' | 'flex', primary }) 自己沒有 SSID：拿到 IP 之後找 WLC（手動指定、DHCP option 43、
+// 同一個網段的廣播），CAPWAP (UDP 5246) 通了之後約 25 秒加入，WLC 才把 WLAN 推給它。
+// Local 模式：用戶端的流量包在 CAPWAP 裡回到 WLC，從 WLC 的 Trunk 放進 WLAN 對應的 VLAN；
+// FlexConnect：在 AP 自己的交換器埠就地放進 VLAN（AP 的埠要是 Trunk），WLC 斷線時本地交換的 WLAN 照樣服務。
+// WLC：d.wlc = { wlans: [{ id, ssid, sec, pass, vlan, on, isolate, kv, ft }] }；無線管理介面是 SVI
+export const CAPWAP_JOIN = 25;
+/** WLC 上啟用中的 WLAN，換成基地台的 SSID 格式 */
+export const wlansOf = (w) => ((w.wlc && w.wlc.wlans) || []).filter((x) => x.on !== false && x.ssid)
+  .map((x) => ({ name: x.ssid, sec: x.sec || 'wpa2', pass: x.pass || '', vlan: x.vlan || '', isolate: !!x.isolate, kv: !!x.kv, ft: !!x.ft, wlan: x.id }));
+/** 基地台現在放送的 SSID：一般的基地台是自己的設定；輕量型 AP 要加入 WLC 之後才有（FlexConnect 斷線時沿用最後一份） */
+export const ssidsOf = (state, ap) => (ap.lwap ? ((ap.rt && ap.rt.capwap && ap.rt.capwap.wlans) || []) : ap.wifi.ssids);
+/** 頻道：輕量型 AP 由 WLC 的 RRM 自動指定 */
+const chOf = (ap, band) => (band === '2.4GHz' ? +(ap.rt.rrm ? ap.rt.rrm.ch24 : ap.wifi.ch24) || 1 : +(ap.rt.rrm ? ap.rt.rrm.ch5 : ap.wifi.ch5) || 36);
 const apsOf = (state) =>
-  Object.values(state.devices).filter((d) => d.wifi && !state.rt.off[d.id] && !(state.down || {})[d.id] && d.wifi.ssids.some((s) => !s.off && s.name));
+  Object.values(state.devices).filter((d) => d.wifi && !state.rt.off[d.id] && !(state.down || {})[d.id] && ssidsOf(state, d).some((s) => !s.off && s.name));
+/** 反向的路徑（給 WLC 送回 AP 的 CAPWAP 隧道動畫用） */
+const backHops = (hops) => hops.slice().reverse().map((h) => ({ ...h, from: h.to, to: h.from, fromPort: h.toPort, toPort: h.fromPort }));
+/** 每一輪計算開始時：把上一輪 CAPWAP 的狀態掛到 AP 上，加入同一台 WLC 的 AP 由 RRM 分頻道 */
+/** 控制器上的 VLAN：無線管理介面與各 WLAN 用到的 VLAN 自動建立（在每次計算一開始，管理介面才會在第一輪就啟用） */
+function wlcVlans(state) {
+  for (const w of Object.values(state.devices)) {
+    if (w.kind !== 'wlc') continue;
+    for (const v of [w.ifaces[0].bind.vlan, ...w.wlc.wlans.map((x) => +x.vlan).filter((x) => x > 0)]) if (!w.sw.vlans.some((x) => x.id === v)) w.sw.vlans.push({ id: v, name: 'VLAN' + String(v).padStart(4, '0') });
+  }
+}
+function prepCapwap(state, isOn) {
+  const dyn = (state.dyn.capwap ||= {});
+  const byWlc = {};
+  for (const ap of Object.values(state.devices)) {
+    if (!ap.lwap) continue;
+    const rec = dyn[ap.id] || {}, w = rec.wlc && state.devices[rec.wlc];
+    if (rec.joined && w && isOn(w)) {
+      ap.rt.capwap = { joined: true, wlc: w.id, mode: ap.lwap.mode || 'local', wlans: wlansOf(w), path: rec.path || [], how: rec.how };
+      (byWlc[w.id] ||= []).push(ap);
+    } else if ((ap.lwap.mode === 'flex') && rec.cache && rec.cache.length) {
+      // FlexConnect 的 standalone 模式：WLC 不在了，本地交換、預先共用金鑰的 WLAN 照樣服務
+      ap.rt.capwap = { joined: false, standalone: true, mode: 'flex', wlans: rec.cache.filter((x) => x.sec !== 'wpa2ent'), why: rec.why || '和無線控制器失去聯絡' };
+    } else ap.rt.capwap = { joined: false, mode: ap.lwap.mode || 'local', wlans: [], why: rec.why || '還沒有加入無線控制器' };
+  }
+  // RRM 的動態頻道分配 (DCA)：依序替每台 AP 挑鄰居用得最少的頻道（2.4 GHz 只有 1 / 6 / 11 不重疊）
+  for (const list of Object.values(byWlc)) {
+    const done = [];
+    for (const ap of list.sort((a, b) => a.id.localeCompare(b.id))) {
+      const near = done.filter((b) => distOf(ap, b) + wallsBetween(state, ap.pos, b.pos).db24 * (apRange(ap) + apRange(b)) / 80 < apRange(ap) + apRange(b));
+      const pick = (chs, k) => chs.map((c) => [c, near.filter((b) => b.rt.rrm[k] === c).length]).sort((a, b) => a[1] - b[1])[0][0];
+      ap.rt.rrm = { ch24: pick([1, 6, 11], 'ch24'), ch5: pick([36, 40, 44, 48, 149, 153, 157, 161], 'ch5') };
+      done.push(ap);
+    }
+  }
+}
 
 function prepWifi(state) {
+  prepCapwap(state, (d) => !state.rt.off[d.id] && !(state.down || {})[d.id]);
   const rt = state.rt, aps = apsOf(state);
+  const assocMem = (state.dyn.assoc ||= {});
   for (let i = 0; i < aps.length; i++) {
     for (let j = i + 1; j < aps.length; j++) {
       const a = aps[i], b = aps[j];
-      if (distOf(a, b) >= apRange(a) + apRange(b)) continue;
+      const wl = wallsBetween(state, a.pos, b.pos).db24;
+      if (distOf(a, b) + wl * (apRange(a) + apRange(b)) / 80 >= apRange(a) + apRange(b)) continue;
       const bands = [];
-      if (Math.abs((+a.wifi.ch24 || 1) - (+b.wifi.ch24 || 1)) < 5) bands.push('2.4GHz');
-      if ((+a.wifi.ch5 || 36) === (+b.wifi.ch5 || 36)) bands.push('5GHz');
+      if (Math.abs(chOf(a, '2.4GHz') - chOf(b, '2.4GHz')) < 5) bands.push('2.4GHz');
+      if (chOf(a, '5GHz') === chOf(b, '5GHz')) bands.push('5GHz');
       for (const band of bands) { a.rt.interf.push({ dev: b.id, band }); b.rt.interf.push({ dev: a.id, band }); }
     }
   }
@@ -731,10 +818,11 @@ function prepWifi(state) {
       if (!w.ssid) { i.rt.note = '尚未選擇無線網路'; continue; }
       const caps = CATALOG[d.model].wifiCaps || ['open', 'wep', 'wpa2', 'wpa3'];
       let best = null, why = `找不到無線網路「${w.ssid}」— 不在任何基地台的訊號範圍內`;
+      const cands = [];
       for (const ap of aps) {
-        const dist = distOf(d, ap);
-        if (dist > apRange(ap)) continue;
-        ap.wifi.ssids.forEach((s, idx) => {
+        const rf = rfAt(state, ap, d.pos), dist = rf.dist;
+        if (!rf.band) continue;
+        ssidsOf(state, ap).forEach((s, idx) => {
           if (s.off || s.name !== w.ssid) return;
           if (!SEC_MODES[s.sec || 'open'].some((m) => caps.includes(m))) { why = `${d.name} 不支援 ${WIFI_SEC[s.sec]}，連不上「${s.name}」`; return; }
           if (s.sec === 'wpa2ent') {
@@ -744,37 +832,111 @@ function prepWifi(state) {
             if ((s.pass || '').length < 8) { why = `「${s.name}」的密碼少於 8 個字元，基地台無法啟用加密`; return; }
             if ((w.pass || '') !== s.pass) { why = `無線網路「${s.name}」的密碼錯誤`; return; }
           }
-          if (!best || dist < best.dist) best = { ap: ap.id, idx, dist, key: +s.vlan > 0 ? +s.vlan : 'u', isolate: !!s.isolate, sec: s.sec || 'open' };
+          const cw = ap.rt.capwap, central = !!(cw && cw.joined && cw.mode === 'local');
+          const c = { ap: ap.id, idx, dist, key: +s.vlan > 0 ? +s.vlan : central ? 1 : 'u', isolate: !!s.isolate, sec: s.sec || 'open', rssi: rf.rssi, band: rf.band, walls: rf.walls.map((x) => x.mat), wallDb: rf.db, kv: !!s.kv, ft: !!s.ft, ssid: s.name };
+          if (central) Object.assign(c, { via: cw.wlc, capwap: cw.path });
+          cands.push(c);
+          if (!best || rf.rssi > best.rssi) best = c;
         });
       }
-      if (!best) { i.rt.note = why; continue; }
-      // 訊號強度、頻段與速率（依距離估算）
-      const apd = state.devices[best.ap], rng = apRange(apd);
-      best.band = best.dist <= rng * 0.75 ? '5GHz' : '2.4GHz'; // 5GHz 比較快但傳不遠，靠近邊緣時退回 2.4GHz
-      best.ch = best.band === '5GHz' ? +apd.wifi.ch5 || 36 : +apd.wifi.ch24 || 1;
-      best.rssi = Math.round(-38 - 40 * (best.dist / rng)); // 涵蓋範圍的邊緣大約是 -78 dBm
+      if (!best) { i.rt.note = why; delete assocMem[d.id + '/' + i.id]; continue; }
+      // 漫遊：用戶端不會一看到更好的基地台就換（sticky client）— 目前的訊號還有 -75 dBm 以上就繼續用。
+      // WLAN 開了 802.11k/v，基地台會提供鄰近基地台的清單、建議用戶端換過去 (BSS Transition)：好 8 dB 以上就換
+      const memKey = d.id + '/' + i.id, prev = assocMem[memKey];
+      const stay = prev && cands.find((c) => c.ap === prev.ap && c.ssid === best.ssid);
+      if (stay && stay !== best && stay.rssi >= -75) {
+        if (stay.kv && best.rssi >= stay.rssi + 8) best.roamed = { from: prev.ap, rssi: stay.rssi, why: '802.11v BSS Transition' };
+        else { stay.sticky = { ap: best.ap, rssi: best.rssi }; best = stay; }
+      } else if (prev && prev.ap !== best.ap) best.roamed = { from: prev.ap, rssi: stay ? stay.rssi : null, why: stay ? '原本的訊號低於 -75 dBm' : '原本的基地台收不到了' };
+      assocMem[memKey] = { ap: best.ap };
+      // 訊號強度、頻段與速率（依距離與牆的衰減估算）：5GHz 比較快但傳不遠、穿牆也比較差，訊號弱時退回 2.4GHz
+      const apd = state.devices[best.ap];
+
       const noisy = apd.rt.interf.some((x) => x.band === best.band);
       best.rate = Math.round((best.band === '5GHz' ? (best.rssi > -52 ? 866 : best.rssi > -62 ? 585 : 292) : best.rssi > -72 ? 144 : 72) * (noisy ? 0.5 : 1));
       best.noisy = noisy;
+      best.ch = chOf(apd, best.band);
       i.rt.assoc = best;
-      (rt.clients[best.ap] ||= []).push({ dev: d.id, iface: i, key: best.key, isolate: best.isolate });
+      if (best.via) {
+        // Local 模式：用戶端掛在 WLC 上（流量經 CAPWAP 回到 WLC 才放進 VLAN）。動畫照實際的隧道路徑走
+        best.path = [wifiHop(d.id, best.ap), ...(best.capwap || [])];
+        (rt.clients[best.via] ||= []).push({ dev: d.id, iface: i, key: best.key, isolate: best.isolate, ap: best.ap, back: [...backHops(best.capwap || []), wifiHop(best.ap, d.id)] });
+      } else (rt.clients[best.ap] ||= []).push({ dev: d.id, iface: i, key: best.key, isolate: best.isolate });
     }
   }
+}
+
+/**
+ * 輕量型 AP 找 WLC、加入 WLC（在每一輪計算之後跑，因為要用到 IP 與路由）。回傳加入狀態有沒有改變
+ */
+function capwapTick(state) {
+  const dyn = (state.dyn.capwap ||= {}), now = state.clock, live = new Set();
+  let changed = false;
+  for (const ap of Object.values(state.devices)) {
+    if (!ap.lwap) continue;
+    live.add(ap.id);
+    const rec = (dyn[ap.id] ||= {});
+    const was = !!rec.joined;
+    const fail = (why) => {
+      if (rec.joined && rec.wlc && state.devices[rec.wlc]) logEvent(state, state.devices[rec.wlc], 5, 'CAPWAPAC_SMGR_TRACE_MESSAGE-5-AP_JOIN_DISJOIN', `AP Name: ${ap.name} Mac: ${ap.ifaces[0].rt.mac || ''} Disjoined`);
+      rec.joined = false; rec.wlc = null; rec.since = null; rec.why = why;
+    };
+    const mi = ap.ifaces[0];
+    if (state.rt.off[ap.id] || (state.down || {})[ap.id]) fail(state.rt.off[ap.id] ? 'AP 沒有電（需要 PoE 供電）' : 'AP 關機或開機中');
+    else if (mi.rt.ip == null) fail('AP 還沒有拿到 IP 位址' + (mi.rt.note ? '：' + mi.rt.note : '（DHCP）'));
+    else {
+      // 找 WLC：手動指定的主要控制器 > DHCP option 43 > 同一個網段的廣播 (CAPWAP Discovery)
+      const cands = [];
+      if (parseIp(ap.lwap.primary || '') != null) cands.push({ ip: parseIp(ap.lwap.primary), how: '手動指定的主要控制器' });
+      for (const ip of mi.rt.wlc || []) cands.push({ ip, how: 'DHCP option 43' });
+      for (const e of l2Explore(state, ap.id, mi)) {
+        const x = state.devices[e.dev];
+        if (x.kind === 'wlc' && e.iface.rt.ip != null && !cands.some((c) => c.ip === e.iface.rt.ip)) cands.push({ ip: e.iface.rt.ip, how: '同一個網段的廣播' });
+      }
+      let got = null, why = '';
+      for (const c of cands) {
+        const r = transact(state, ap.id, { proto: 'udp', dst: c.ip, dport: 5246, quiet: true });
+        const w = r.ok && state.devices[r.responder];
+        if (w && w.kind === 'wlc') { got = { w, how: c.how, hops: r.hops.filter((h) => !h.reply && !h.wave && h.proto !== 'arp') }; break; }
+        why = r.ok ? `${fmtIp(c.ip)}（${c.how}）不是無線控制器` : `CAPWAP 封包到不了 ${fmtIp(c.ip)}（${c.how}）：${r.reason}`;
+      }
+      if (!cands.length) fail(`找不到無線控制器：AP 在 ${fmtIp(netOf(mi.rt.ip, mi.rt.bits))}/${mi.rt.bits}，這個網段上沒有 WLC，DHCP 也沒有提供 option 43`);
+      else if (!got) fail(why);
+      else {
+        if (rec.wlc !== got.w.id) { if (rec.joined) fail('換到另一台控制器'); rec.wlc = got.w.id; rec.since = state.dyn.boot ? -1e9 : now; }
+        rec.how = got.how;
+        rec.path = got.hops.map((h) => ({ cable: h.cable, from: h.from, to: h.to, fromPort: h.fromPort, toPort: h.toPort, tag: h.tag ?? null, wifi: !!h.wifi }));
+        const ready = rec.since + CAPWAP_JOIN;
+        if (!rec.joined && now >= ready) {
+          rec.joined = true;
+          logEvent(state, got.w, 5, 'CAPWAPAC_SMGR_TRACE_MESSAGE-5-AP_JOIN_DISJOIN', `AP Name: ${ap.name} Mac: ${mi.rt.mac || ''} Session-IP: ${fmtIp(mi.rt.ip)}[5246] ${fmtIp(state.devices[got.w.id].ifaces.find((x) => x.rt.ip != null).rt.ip)}[5246] Joined`);
+        }
+        if (rec.joined) { rec.why = ''; rec.cache = wlansOf(got.w); }
+        else {
+          rec.why = `正在加入 ${got.w.name}（${got.how}；CAPWAP Discovery → Join → 下載設定），再 ${Math.ceil(ready - now)} 秒`;
+          state.rt.pending.push({ at: ready, dev: ap.id, kind: 'wifi', text: `${ap.name}：正在加入無線控制器 (CAPWAP)` });
+        }
+      }
+    }
+    if (was !== !!rec.joined) changed = true;
+  }
+  for (const k of Object.keys(dyn)) if (!live.has(k)) delete dyn[k];
+  return changed;
 }
 
 /** 某台設備掃描得到的無線網路清單 */
 export function visibleSsids(state, dev) {
   const out = new Map();
   for (const ap of apsOf(state)) {
-    const dist = distOf(dev, ap), r = apRange(ap);
-    if (dist > r) continue;
-    for (const s of ap.wifi.ssids) {
+    const rf = rfAt(state, ap, dev.pos);
+    if (!rf.band) continue;
+    for (const s of ssidsOf(state, ap)) {
       if (s.off || !s.name) continue;
       const cur = out.get(s.name);
-      if (!cur || dist < cur.dist) out.set(s.name, { name: s.name, sec: s.sec || 'open', ap: ap.name, dist, bars: dist < r * 0.4 ? 3 : dist < r * 0.75 ? 2 : 1 });
+      if (!cur || rf.rssi > cur.rssi) out.set(s.name, { name: s.name, sec: s.sec || 'open', ap: ap.name, dist: rf.dist, rssi: rf.rssi, bars: rf.rssi >= -54 ? 3 : rf.rssi >= -68 ? 2 : 1 });
     }
   }
-  return [...out.values()].sort((a, b) => a.dist - b.dist);
+  return [...out.values()].sort((a, b) => b.rssi - a.rssi);
 }
 
 // ───────────────────────── 位址取得 / 路由表 ─────────────────────────
@@ -802,7 +964,7 @@ function touchLease(state, key, clientKey, ip) {
 }
 /** 用戶端記下自己拿到的租約：之後就算連不到伺服器，到期之前都可以繼續用 */
 function rememberLease(state, d, i, key, exp) {
-  state.dyn.lease[d.id + '/' + i.id] = { ip: i.rt.ip, bits: i.rt.bits, gw: i.rt.gw, dns: i.rt.dns, tftp: i.rt.tftp || [], server: i.rt.server, relay: i.rt.relay || null, key, exp };
+  state.dyn.lease[d.id + '/' + i.id] = { ip: i.rt.ip, bits: i.rt.bits, gw: i.rt.gw, dns: i.rt.dns, tftp: i.rt.tftp || [], wlc: i.rt.wlc || [], server: i.rt.server, relay: i.rt.relay || null, key, exp };
   i.rt.exp = exp;
 }
 /** ipconfig /release：歸還位址，之後要 /renew 才會再去要 */
@@ -907,6 +1069,7 @@ function acquire(state, old, d, i) {
     if (!dns.length && sd.dnsProxy) dns = [s.rt.ip];
     set(ip, s.rt.bits, parseIp(s.dhcp.gw) ?? s.rt.ip, dns, 'dhcp', sd.id);
     i.rt.tftp = dnsList(s.dhcp.tftp); // option 150：IP 電話去哪裡下載設定檔
+    i.rt.wlc = dnsList(s.dhcp.wlc); // option 43：Cisco 的 AP 去哪裡找無線控制器
     const lk = sd.id + '/' + s.id, ck = d.id + '/' + i.id;
     rememberLease(state, d, i, lk, touchLease(state, lk, ck, ip));
     // 這一刻真的有 DHCP 封包在走（新的租約或續約）：沿路的交換器學到用戶端與伺服器的 MAC
@@ -951,7 +1114,7 @@ function relayPass(state, old) {
         if (!sc) { i.rt.note = `${sd.name} 沒有適用於 ${fmtIp(netOf(r.rt.ip, r.rt.bits))}/${r.rt.bits} 的位址範圍 (Scope)`; continue; }
         const ip = leaseFrom(state, old, sd.id + '/scope/' + sc.start, parseIp(sc.start), parseIp(sc.end), null, d.id + '/' + i.id);
         if (ip == null) { i.rt.note = `${sd.name} 的位址範圍已經用完`; continue; }
-        Object.assign(i.rt, { ip, bits: r.rt.bits, gw: parseIp(sc.gw) ?? r.rt.ip, dns: dnsList(sc.dns), tftp: dnsList(sc.tftp), src: 'dhcp', server: sd.id, relay: rd.id, note: '' });
+        Object.assign(i.rt, { ip, bits: r.rt.bits, gw: parseIp(sc.gw) ?? r.rt.ip, dns: dnsList(sc.dns), tftp: dnsList(sc.tftp), wlc: dnsList(sc.wlc), src: 'dhcp', server: sd.id, relay: rd.id, note: '' });
         rememberLease(state, d, i, sd.id + '/scope/' + sc.start, touchLease(state, sd.id + '/scope/' + sc.start, d.id + '/' + i.id, ip));
         changed = true;
         break;
@@ -1367,9 +1530,10 @@ function computeAuth(state) {
       if (i.bind.t !== 'wlan' || !i.wifi || !i.wifi.ssid) continue;
       const key = d.id + '/' + i.id;
       for (const ap of apsOf(state)) {
-        if (distOf(d, ap) > apRange(ap) || !ap.wifi.ssids.some((s) => !s.off && s.name === i.wifi.ssid && s.sec === 'wpa2ent')) continue;
+        if (!rfAt(state, ap, d.pos).band || !ssidsOf(state, ap).some((s) => !s.off && s.name === i.wifi.ssid && s.sec === 'wpa2ent')) continue;
         if (auth.ent[key] && auth.ent[key].ok) continue;
-        auth.ent[key] = res(radiusCheck(state, ap, i.wifi.user, i.wifi.pass));
+        const nas = ap.lwap && ap.rt.capwap && ap.rt.capwap.wlc ? state.devices[ap.rt.capwap.wlc] : ap;
+        auth.ent[key] = res(radiusCheck(state, nas, i.wifi.user, i.wifi.pass));
       }
     }
   }
@@ -1398,19 +1562,25 @@ export function recompute(state) {
   const side = {};
   for (const k of ['cap', 'con']) if (state.dyn[k]) { side[k] = state.dyn[k]; delete state.dyn[k]; }
   // 還在開機的設備：這一次計算把它當成關機（沒有燈號、不轉送、不回應），算完再把 state.down 還原
+  wlcVlans(state);
   const booting = opsBefore(state), realDown = state.down, ids = Object.keys(booting);
   if (ids.length) state.down = { ...(realDown || {}), ...Object.fromEntries(ids.map((id) => [id, true])) };
   try {
     let auth = { dot1x: {}, ent: {} };
-    // 802.1X 可能要算好幾輪。前幾輪只是試算，計時的狀態以最後一輪為準，所以每一輪都從同一份起點開始
-    const dyn0 = JSON.stringify(state.dyn);
-    for (let round = 0; round < 3; round++) {
-      if (round) state.dyn = JSON.parse(dyn0);
-      computePass(state, auth);
-      const next = computeAuth(state);
-      if (JSON.stringify(next) === JSON.stringify(auth)) break;
-      auth = next; // 802.1X 的結果改變了連接埠的狀態，要重算一次
-    }
+    const passes = () => {
+      // 802.1X 可能要算好幾輪。前幾輪只是試算，計時的狀態以最後一輪為準，所以每一輪都從同一份起點開始
+      const dyn0 = JSON.stringify(state.dyn);
+      for (let round = 0; round < 3; round++) {
+        if (round) state.dyn = JSON.parse(dyn0);
+        computePass(state, auth);
+        const next = computeAuth(state);
+        if (JSON.stringify(next) === JSON.stringify(auth)) break;
+        auth = next; // 802.1X 的結果改變了連接埠的狀態，要重算一次
+      }
+    };
+    passes();
+    // 輕量型 AP 加入或離開 WLC 之後，它放送的 SSID 跟著改變：用新的狀態再算一輪，用戶端才會連上 / 斷線
+    if (capwapTick(state)) { passes(); capwapTick(state); }
     if (state.v6) recompute6(state);
     state.rt.booting = booting;
     for (const id of ids) if (isFinite(booting[id])) state.rt.pending.push({ at: state.clock + booting[id], dev: id, kind: 'boot', text: `${state.devices[id].name}：開機中` });
@@ -1502,7 +1672,7 @@ function computePass(state, auth) {
       // 這一次沒有要到位址。手上的租約還沒到期的話繼續用（伺服器暫時連不到並不會讓電腦馬上斷線）
       const ck = d.id + '/' + i.id, L = state.dyn.lease[ck];
       if (L && L.exp > now && state.devices[L.server]) {
-        Object.assign(i.rt, { ip: L.ip, bits: L.bits, gw: L.gw, dns: L.dns, tftp: L.tftp || [], src: 'dhcp', server: L.server, relay: L.relay, exp: L.exp, held: i.rt.note || 'DHCP 伺服器沒有回應' });
+        Object.assign(i.rt, { ip: L.ip, bits: L.bits, gw: L.gw, dns: L.dns, tftp: L.tftp || [], wlc: L.wlc || [], src: 'dhcp', server: L.server, relay: L.relay, exp: L.exp, held: i.rt.note || 'DHCP 伺服器沒有回應' });
         if (L.key) (state.leases[L.key] ||= {})[ck] = L.ip;
         again = true;
         continue;
@@ -1752,6 +1922,7 @@ function deliver(dev, inIf, pkt) {
     if ((pkt.dport === 1812 || pkt.dport === 1813) && dev.radiusServer) return ok;
     if ((pkt.dport === 500 || pkt.dport === 4500) && dev.vpns && dev.vpns.length) return ok;
     if (pkt.dport === 123 && dev.rt.ntpServe) return ok; // 設成 ntp master，或自己已經對好時的設備可以替別人報時
+    if ((pkt.dport === 5246 || pkt.dport === 5247) && dev.kind === 'wlc') return ok; // CAPWAP 控制 / 資料
     if (pkt.dport === 161 && dev.mgmt && agentOn(dev)) {
       // FortiGate 每個介面要在 allowaccess 開放 snmp，代理才會回答
       if (dev.kind === 'firewall' && inIf && !accessOf(dev, inIf).includes('snmp')) return no(`${dev.name} 的 ${inIf.label} 介面沒有開放 SNMP（allowaccess 裡沒有 snmp）`);
@@ -2386,6 +2557,31 @@ export function runObjective(state, o) {
     const log = [...tr.log];
     if (reason && !log.some((l) => l.text === reason)) log.push({ dev: d.id, kind: 'drop', text: reason });
     return { pass: !reason, ok: !reason, reason, failDev: reason ? d.id : null, log, hops: tr.hops };
+  }
+  if (o.type === 'roam') {
+    // 漫遊：拿著筆電走到另一個位置（在複本上），看它有沒有換到該換的基地台、IP 有沒有變、連線還在不在
+    const s2 = cloneState(state);
+    recompute(s2);
+    const d = s2.devices[o.dev], i = d.ifaces.find((x) => x.bind.t === 'wlan');
+    const ip0 = i.rt.ip, ap0 = i.rt.assoc ? i.rt.assoc.ap : null;
+    d.pos = [...o.to];
+    recompute(s2);
+    const a = i.rt.assoc, nm = (id) => (s2.devices[id] || {}).name || id;
+    const log = [{ dev: d.id, kind: 'info', text: `${d.name} 走到 ${o.where || '另一個位置'}${ap0 ? `（原本連在 ${nm(ap0)}）` : ''}` }];
+    let reason = '';
+    if (!a) reason = `${d.name} 走到 ${o.where || '那裡'} 之後連不上無線網路：${i.rt.note || '收不到訊號'}`;
+    else if (o.ap && a.ap !== o.ap) {
+      reason = a.sticky
+        ? `${d.name} 還連在 ${nm(a.ap)}（${a.rssi} dBm），旁邊的 ${nm(a.sticky.ap)} 有 ${a.sticky.rssi} dBm 卻不換：用戶端要等目前的訊號低於 -75 dBm 才會自己找新的基地台 (sticky client)。在 SSID 開啟 802.11k/v，基地台會建議它換過去`
+        : `${d.name} 連到了 ${nm(a.ap)}，不是 ${nm(o.ap)}`;
+    } else if (o.minRssi && a.rssi < o.minRssi) reason = `${d.name} 連在 ${nm(a.ap)}，訊號只有 ${a.rssi} dBm（要 ${o.minRssi} dBm 以上）`;
+    else if (o.keepIp && ip0 != null && i.rt.ip !== ip0) reason = `${d.name} 換到 ${nm(a.ap)} 之後，IP 從 ${fmtIp(ip0)} 變成 ${i.rt.ip != null ? fmtIp(i.rt.ip) : '沒有 IP'}：兩台基地台把同一個 SSID 放進不同的 VLAN，換基地台就換了網段，進行中的連線全部會斷`;
+    if (a) log.push({ dev: d.id, kind: 'info', text: `連在 ${nm(a.ap)} · ${a.band} ${a.rssi} dBm${a.roamed ? `（從 ${nm(a.roamed.from)} 漫遊過來：${a.roamed.why}）` : ''}` });
+    if (!reason && o.test) {
+      const r = runObjective(s2, o.test);
+      return { ...r, log: [...log, ...r.log] };
+    }
+    return { pass: !reason, ok: !reason, reason, failDev: d.id, log, hops: [] };
   }
   if (o.type === 'after') {
     // 過一段時間之後再測（例如 VPN 第一次重新協商之後）：在複本上把時鐘往前撥，不影響玩家眼前的網路
