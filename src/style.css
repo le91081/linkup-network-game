@@ -147,6 +147,7 @@ h1, h2, h3, p { margin: 0; }
 .chip.tiny { height: 19px; font-size: 10.5px; padding: 0 7px; font-family: var(--mono); background: rgba(245, 181, 71, 0.12); color: #ffd995; border-color: rgba(245, 181, 71, 0.25); }
 .btnchip { font-family: var(--mono); font-size: 11px; cursor: pointer; }
 .btnchip:hover { background: rgba(110, 168, 255, 0.24); }
+.btnchip.on { background: rgba(79, 216, 196, 0.2); border-color: rgba(79, 216, 196, 0.55); color: #a8f5e9; }
 
 /* ───────── 任務面板 ───────── */
 .m-scroll { overflow-y: auto; padding: 18px 18px 8px; display: flex; flex-direction: column; gap: 14px; flex: 1; min-height: 0; }

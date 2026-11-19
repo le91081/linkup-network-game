@@ -1,6 +1,6 @@
 # LinkUp 功能規劃
 
-最後更新：2026-11-18
+最後更新：2026-11-19
 
 README 說明「現在有什麼、怎麼玩」，這份文件說明「整體應該做到什麼、目前做到哪裡、還差多少」。
 每完成或新增一項功能，請同時更新這裡的狀態。
@@ -29,8 +29,8 @@ README 說明「現在有什麼、怎麼玩」，這份文件說明「整體應�
 
 | 領域 | ✅ 已完成 | 🟡 部分完成 | ⬜ 尚未開始 |
 | --- | --- | --- | --- |
-| 1. 實體層與接線 | 5 | 2 | 7 |
-| 2. 第二層：交換 | 9 | 1 | 7 |
+| 1. 實體層與接線 | 6 | 2 | 6 |
+| 2. 第二層：交換 | 10 | 1 | 6 |
 | 3. 第三層：路由 | 6 | 0 | 9 |
 | 4. IP 服務 | 8 | 4 | 2 |
 | 5. 網路安全 | 8 | 3 | 6 |
@@ -38,14 +38,14 @@ README 說明「現在有什麼、怎麼玩」，這份文件說明「整體應�
 | 7. 無線網路 | 3 | 2 | 5 |
 | 8. IPv6 | 2 | 0 | 6 |
 | 9. 高可用 | 5 | 0 | 6 |
-| 10. 時間、效能與流量 | 4 | 2 | 5 |
-| 11. 設備管理與維運 | 8 | 1 | 6 |
+| 10. 時間、效能與流量 | 6 | 1 | 4 |
+| 11. 設備管理與維運 | 10 | 3 | 3 |
 | 12. 自動化、雲端與虛擬化 | 0 | 0 | 5 |
 | 13. 設備型錄 | 9 | 1 | 3 |
 | 14. 遊戲系統 | 10 | 3 | 9 |
 | 15. 介面與體驗 | 5 | 1 | 8 |
 | 16. 工程品質 | 2 | 0 | 8 |
-| **合計** | **90** | **21** | **98** |
+| **合計** | **96** | **22** | **92** |
 
 另外：關卡 39 關（第 17 節）、證照條目涵蓋情形（第 18 節）、建議的實作順序（第 19 節）。
 
@@ -62,7 +62,7 @@ README 說明「現在有什麼、怎麼玩」，這份文件說明「整體應�
 | 設備電源、介面 shutdown | ✅ | 任何設備可以關機，介面可以停用，錯誤訊息會指出是哪一台 |
 | 連線狀態與原因 | ✅ | 點網路線可以看線材、距離、協商結果與斷線原因 |
 | 線路故障 | 🟡 | 故障演練會切斷指定的線路；沒有接觸不良、光衰過大這類造成 CRC 錯誤與間歇掉包的故障 |
-| 介面計數器 | ⬜ | `show interfaces` 的封包數、CRC、collisions、input errors |
+| 介面計數器 | ✅ | 由真正跑過的訊框累積：封包數、位元組、廣播 / 多點傳送、CRC、runt、碰撞、late collision；背景有 BPDU、CDP、OSPF Hello、VRRP；`show interfaces`、`clear counters`、`netstat -e`、FortiGate 的 `diagnose hardware deviceinfo nic` |
 | 收發器不相容 | ⬜ | 目前線材與收發器是成套的，沒辦法接出 SR 對 LR、速率不符的情況 |
 | 分歧線 (breakout) | ⬜ | 40G / 100G 拆成 4 條 10G / 25G |
 | Console 線與帶外管理 | ⬜ | Console 埠、管理埠 (mgmt)、帶外管理網路 |
@@ -90,7 +90,7 @@ README 說明「現在有什麼、怎麼玩」，這份文件說明「整體應�
 | Voice VLAN | ⬜ | 需要新增 IP 電話設備 |
 | Private VLAN、Storm Control | ⬜ | |
 | STP 進階 | ⬜ | MST、Loop Guard、UDLD、拓撲變更通知、交換器不是直接相連的拓撲 |
-| SPAN（連接埠鏡像） | ⬜ | 搭配封包擷取使用 |
+| SPAN（連接埠鏡像） | ✅ | `monitor session` 與圖形介面；目的埠不轉送一般流量；搭配主機的封包擷取 |
 
 ## 3. 第三層：路由
 
@@ -140,12 +140,12 @@ README 說明「現在有什麼、怎麼玩」，這份文件說明「整體應�
 | 狀態檢查 | ✅ | TCP 三向交握、連線紀錄，後續封包不重新比對政策 |
 | DMZ 與 VIP | ✅ | |
 | 防火牆紀錄 | ✅ | 每條新連線被哪一條政策放行或拒絕 |
-| 管理介面加固 | 🟡 | SSH 取代 Telnet、vty `access-class`、FortiGate 各介面的 allowaccess、密碼以雜湊顯示；`enable secret`、`exec-timeout` 指令會接受但沒有作用 |
+| 管理介面加固 | 🟡 | SSH 取代 Telnet、vty `access-class`、`exec-timeout`、`login block-for`、`banner motd`、FortiGate 各介面的 allowaccess 與 `admintimeout`、密碼以雜湊顯示；`enable secret` 會接受但沒有作用（模擬裡沒有 enable 模式） |
 | DHCP Snooping、DAI | ✅ | |
 | Port Security | ✅ | 靜態與 sticky MAC、違規時 err-disabled |
 | 802.1X / RADIUS | 🟡 | 有線埠與 WPA2-Enterprise 的帳號密碼驗證；沒有憑證 (EAP-TLS) |
 | Wi-Fi 加密 | ✅ | 開放、WEP、WPA2、WPA2 / WPA3 混合、WPA3 |
-| 攻擊情境 | 🟡 | 已有冒牌 DHCP、ARP 欺騙、搶根橋、未授權設備；還沒有 MAC flooding、VLAN hopping、SYN flood、暴力破解 |
+| 攻擊情境 | 🟡 | 已有冒牌 DHCP、ARP 欺騙、搶根橋、未授權設備、密碼暴力嘗試（`login block-for`）、側錄 Telnet 明文密碼；還沒有 MAC flooding、VLAN hopping、SYN flood |
 | TACACS+ 與 AAA | ⬜ | 授權、稽核、權限等級 |
 | 登入保護 | ⬜ | 登入橫幅、`login block-for`、閒置逾時 |
 | IOS 進階過濾 | ⬜ | Zone-Based Firewall、時間型 ACL、Reflexive ACL |
@@ -224,8 +224,8 @@ README 說明「現在有什麼、怎麼玩」，這份文件說明「整體應�
 | 頻寬模型 | ✅ | 找出路徑上最慢的一段；全雙工、半雙工、duplex mismatch、Wi-Fi、IPsec 各有折扣 |
 | `iperf3` 與速率目標 | ✅ | |
 | 延遲 | 🟡 | `ping` 的時間依站數估算；沒有距離、線路種類、抖動與封包遺失率 |
-| 其他逾時 | 🟡 | MAC 位址表、NAT 轉換表、防火牆連線、IPsec SA 都會過期了；但模擬裡還沒有長時間保持的連線，所以不會出現「閒置太久被切斷」（等 SSH 連線做完） |
-| 開機時間 | ⬜ | `reload` 與開機目前是瞬間完成；真實設備要一到數分鐘，這段時間不通 |
+| 其他逾時 | ✅ | MAC 位址表、NAT 轉換表、防火牆連線、IPsec SA 都會過期；SSH / Telnet 是長時間保持的連線，閒置太久會被設備登出、或被路上的防火牆忘掉 |
+| 開機時間 | ✅ | 依機型 2 秒到 4 分鐘；按下電源或 `reload` / `execute reboot` 之後，這段時間和關機一樣 |
 | 流量互相擠壓 | ⬜ | 多條連線共用一條線路時的頻寬分配 |
 | QoS | ⬜ | 分類、DSCP 標記、佇列、整形與管制（CCNA 4.7 的缺口） |
 | 排程事件 | ⬜ | 關卡劇本：「60 秒後主線斷線」 |
@@ -237,15 +237,16 @@ README 說明「現在有什麼、怎麼玩」，這份文件說明「整體應�
 | --- | --- | --- |
 | 圖形介面 | ✅ | 每一種設備都有對應的設定頁面與即時狀態 |
 | IOS CLI | ✅ | 模式切換、縮寫、`no`、Tab 補齊、`?` 說明、`do show` |
-| IOS 的查看指令 | ✅ | 32 個 `show` 指令，包含 MAC 位址表、NAT 轉換表、IPsec SA、時鐘、NTP、紀錄 |
+| IOS 的查看指令 | ✅ | 四十多個 `show` 指令，包含 MAC 位址表、NAT 轉換表、IPsec SA、時鐘、NTP、紀錄、介面計數器、SPAN、登入的使用者 |
 | 設定可以整份貼回 | ✅ | 測試對 54 台 Cisco 設備、6 台 FortiGate 逐一驗證 |
 | running / startup-config | ✅ | `write memory`、`reload`、未存檔的提示、斷電後回到上一次存檔 |
 | FortiOS CLI | ✅ | `config` / `edit` / `set` / `next` / `end`、`show`、`get`、`diagnose`、`execute ping` |
 | 主機終端機 | ✅ | `ping`、`ipconfig`、`arp`、`tracert`、`nslookup`、`curl`、`iperf3` |
 | 封包追蹤 | ✅ | 每一段的 MAC、IP、TTL、埠號、TCP 旗標都可以打開看 |
-| 封包擷取 | ⬜ | 在某個介面上持續擷取、過濾、匯出 pcap（類似 Wireshark） |
-| 遠端登入 | ⬜ | 從主機 `ssh` / `telnet` 進設備的 CLI，受 vty 與 ACL 限制；目前只能測 TCP 22 有沒有通 |
-| IOS 的診斷指令 | ⬜ | `traceroute`、`debug`、`show interfaces`、`show ip protocols`、`show ip ospf interface` |
+| 封包擷取 | 🟡 | 主機上的 Wireshark：顯示篩選、逐層標頭；FortiGate 的 `diagnose sniffer packet`；還不能匯出 pcap，沒有 IOS 的 `monitor capture` |
+| FortiGate 的 debug flow | ✅ | `diagnose debug flow`：收到封包、找路由、符合哪一條政策、SNAT / DNAT、進 VPN、沒有符合的連線 |
+| 遠端登入 | ✅ | 主機 `ssh` / `telnet` 進 IOS 與 FortiGate 的命令列；金鑰指紋、密碼錯誤次數、閒置登出、`terminal monitor` |
+| IOS 的診斷指令 | 🟡 | 已有 `traceroute`、`debug ip packet` / `debug ip icmp`、`show interfaces`、`show ip protocols`、`show ip ospf interface brief`；其他 `debug`（OSPF、DHCP、crypto）還沒有 |
 | 設定管理 | ⬜ | 差異比對、回復、備份到 TFTP、韌體升級 |
 | 監控 | 🟡 | Syslog 伺服器已完成；還沒有 SNMP 監控面板、NetFlow |
 | 其他廠牌的 CLI | ⬜ | Junos、Aruba、MikroTik、Linux (`ip` / `nmcli`) |
@@ -406,7 +407,7 @@ CCNA v2.0 預計在 2027 年 2 月取代 v1.1，改版後整張對照表要重�
 | 階段 | 內容 | 理由 |
 | --- | --- | --- |
 | 1（已完成） | MAC 位址表的學習與逾時、NAT 與連線紀錄逾時、IPsec 協商時間與 SA 生命週期、NTP 對時、Syslog 伺服器 | 時鐘已經有了，這些原本都假裝「瞬間完成、永不過期」 |
-| 2 | 從主機 SSH 進設備（長時間保持的連線，連線逾時才有作用）、開機時間、IOS 的 `traceroute` / `debug` / `show interfaces`、介面計數器、封包擷取 | 排除故障的工具補齊，故障排除章才能做得更深 |
+| 2（已完成） | 從主機 SSH 進設備（長時間保持的連線，連線逾時才有作用）、開機時間、IOS 的 `traceroute` / `debug` / `show interfaces`、介面計數器、封包擷取與 SPAN、FortiGate 的 sniffer 與 debug flow | 排除故障的工具補齊，故障排除章才能做得更深 |
 | 3 | TFTP 備份與韌體升級、SNMP 監控 → 第 11 章 | 補上 CCNA 4.9 |
 | 4 | LLDP、DTP、Voice VLAN、QoS 與流量擠壓 → 第 13 章 | 補上 CCNA 2.3、4.7 |
 | 5 | OSPF 進階、ECMP、BGP → 第 12 章 | |

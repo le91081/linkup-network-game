@@ -124,7 +124,8 @@ export function buildTerminal(ctx, body) {
       ctx.commit(false);
       if (a.ok) {
         r.stage = 'shell';
-        r.sess = r.kind === 'ios' ? iosSession(() => st().devices[c.to], st) : fortiSession(() => st().devices[c.to], st);
+        const line = 'vty' + Math.max(0, ((st().dyn.vty || {})[c.to] || []).findIndex((v) => v.cid === c.cid));
+        r.sess = r.kind === 'ios' ? iosSession(() => st().devices[c.to], st, { user: c.user, line, ip: c.seen }) : fortiSession(() => st().devices[c.to], st);
         if (c.proto === 'ssh') banner(r);
         consoleFollow(app, c.to, 'vty:' + c.cid, () => {}); // 從現在開始看：以前的紀錄不會倒出來
         print('');

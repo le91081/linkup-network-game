@@ -28,8 +28,9 @@ npm run build    # 輸出到 dist/
 | 場景上方的時鐘 | 暫停 / 繼續模擬時間、切換 1× / 10× / 60×、直接前進 30 秒；出現「收斂中」時點一下會快轉到網路穩定為止 |
 | Shift + 拖曳設備（自由模式） | 移動設備 |
 
-- 電腦與伺服器有「終端機」分頁：`ping`（支援 IPv6）、`ipconfig`、`ipconfig /renew`、`ipconfig /release`、`arp -a`、`arp -d`、`tracert`、`nslookup`、`curl`、`date`、`iperf3 -c <IP>`（量實際傳輸速率，會讓時間前進 10 秒）。
-- Cisco 的路由器與交換器有「CLI」分頁：IOS 風格的命令列。`show running-config`、`show startup-config`、`show ip route`、`show vlan brief`、`show interfaces trunk`、`show arp` 等三十多個 `show` 指令用來查看狀態；輸入 `configure terminal` 之後可以直接用指令設定（見下方「CLI 設定指令」），改的和圖形介面是同一份設定。
+- 電腦與伺服器有「終端機」分頁：`ping`（支援 IPv6）、`ipconfig`、`ipconfig /renew`、`ipconfig /release`、`arp -a`、`arp -d`、`tracert`、`nslookup`、`curl`、`date`、`netstat -e`、`iperf3 -c <IP>`（量實際傳輸速率，會讓時間前進 10 秒），以及 `ssh 帳號@IP`、`telnet IP` 登入網路設備的命令列（見下方「遠端登入」）。
+- 電腦與伺服器還有「封包擷取」分頁：像 Wireshark 一樣記下網路卡收送的訊框，可以用 `ip.addr == …`、`tcp.port == …`、`arp`、`telnet` 之類的條件篩選，點一下看每一層的標頭。
+- Cisco 的路由器與交換器有「CLI」分頁：IOS 風格的命令列。`show running-config`、`show startup-config`、`show ip route`、`show vlan brief`、`show interfaces trunk`、`show arp` 等四十多個 `show` 指令用來查看狀態；輸入 `configure terminal` 之後可以直接用指令設定（見下方「CLI 設定指令」），改的和圖形介面是同一份設定。
 - FortiGate 防火牆也有「CLI」分頁，用的是 FortiOS 的階層式語法（`config firewall policy` → `edit 1` → `set …` → `next` → `end`）。
 - 網址加上 `?profile=名稱` 會使用另一份獨立的進度，適合多人共用一台電腦。
 - 防火牆有「紀錄」分頁，家用路由器與路由器的「狀態」分頁有連線紀錄與 NAT 轉換表；政策與 ACL 規則會顯示命中次數。
@@ -94,6 +95,9 @@ npm run build    # 輸出到 dist/
 - **時鐘與 NTP**：`show clock [detail]`、`clock set`、`clock timezone`、`ntp server`、`ntp master [stratum]`、`show ntp status`、`show ntp associations`。
 - **紀錄**：`show logging`、`logging host`、`logging trap <等級>`、`clear logging`。
 - **OSPF**：`router-id`。
+- **遠端登入**：`line vty 0 4` 裡的 `exec-timeout`、`login block-for … attempts … within …`、`login on-failure log` / `login on-success log`、`banner motd`；`show users`、`show login`。
+- **連接埠鏡像**：`monitor session <n> source interface <介面> [rx|tx|both]`、`monitor session <n> destination interface <介面>`、`show monitor`。
+- **排除故障**：`traceroute`、`show interfaces [介面]`、`show interfaces counters errors`、`clear counters`、`debug ip packet`、`debug ip icmp`、`undebug all`、`show debugging`、`show ip protocols`、`show ip ospf interface brief`。
 
 ### FortiGate（FortiOS）
 
@@ -108,11 +112,14 @@ npm run build    # 輸出到 dist/
 | `firewall policy` | 介面、位址、服務、動作、NAT；`move` 調整順序、`delete` 刪除 |
 | `vpn ipsec phase1-interface` / `phase2-interface` | 站對站 IPsec：提案可以列好幾組，第二階段預設開啟 PFS；`keylife` / `keylifeseconds`（金鑰壽命）、`dpd`（對端失聯偵測） |
 | `system session-ttl` | TCP 連線可以閒置多久 |
+| `system global` 的 `admintimeout` | 管理者登入之後閒置幾分鐘自動登出 |
 | `vpn ssl settings` / `vpn ssl web portal`、`user local` / `user group` | 遠端存取的 SSL-VPN |
 | `router static` | 靜態路由；用指令建立的通道要有一筆 `set device "<通道>"` 的路由才會導流量 |
 | `system global`、`system admin`、`system ntp`、`log syslogd setting`、`system snmp community` | 主機名稱與管理設定 |
 
-查看狀態：`get system status`、`get system interface`、`get router info routing-table all`、`get vpn ipsec tunnel summary`、`diagnose vpn tunnel list`、`diagnose vpn ike gateway list`、`diagnose sys session list`、`diagnose sys session clear`、`diagnose sys ntp status`、`execute log display`、`execute date`、`execute time`、`execute ping`。
+查看狀態：`get system status`、`get system interface`、`get router info routing-table all`、`get vpn ipsec tunnel summary`、`diagnose vpn tunnel list`、`diagnose vpn ike gateway list`、`diagnose sys session list`、`diagnose sys session clear`、`diagnose sys ntp status`、`execute log display`、`execute date`、`execute time`、`execute ping`、`execute traceroute`、`execute reboot`、`get system info admin status`、`diagnose hardware deviceinfo nic <埠>`。
+
+排除故障：`diagnose sniffer packet <介面|any> '<篩選條件>' [詳細程度] [數量]`（篩選條件用 tcpdump 的寫法：`host`、`net`、`port`、`icmp`、`tcp`、`arp`，用 `and` / `or` / `not` 組合）；`diagnose debug flow filter addr <IP>`、`diagnose debug flow trace start <數量>`、`diagnose debug enable` 會逐步印出封包在防火牆裡經過的每一關（收到封包、找路由、符合哪一條政策、NAT、進 VPN）。
 
 ## 模擬時間
 
@@ -133,6 +140,8 @@ npm run build    # 輸出到 dist/
 | IPsec 金鑰壽命 | 第一階段 1 天；第二階段 IOS 1 小時、FortiGate 12 小時 | 兩端不同時取較短的，到期自動重新協商，流量不中斷 |
 | VPN 對端失聯 | FortiGate 60 秒；IOS 要等金鑰到期 | 這段時間通道還顯示 Up，封包照樣加密送出去然後被丟掉。IOS 設了 `crypto isakmp keepalive` 才會主動探測 |
 | NTP 對時 | IOS 約 4 分鐘、FortiGate 立刻 | 每 64 秒輪詢一次；IOS 要連續幾次都正常才採信。伺服器失聯八次輪詢之後失去同步 |
+| 開機 | Hub 2 秒、家用路由器與 AP 1 分鐘、FortiGate 70 – 90 秒、Catalyst 2960 2 分鐘、ISR 3 分鐘、Catalyst 9300 / Nexus 4 分鐘 | 按下電源或 `reload` 之後，這段時間和關機沒有兩樣 |
+| 遠端登入閒置 | IOS 10 分鐘、FortiGate 5 分鐘 | `exec-timeout`、`admintimeout` 可以調整 |
 
 關卡裡的交換器已經預先開好 `spanning-tree portfast default`，不用每接一條線就等 30 秒；自由模式的設備是原廠預設值，要自己開。
 時間只在遊戲分頁開著、沒有對話框的時候前進。復原 / 重做不會把時鐘倒轉。
@@ -144,6 +153,23 @@ npm run build    # 輸出到 dist/
 - 設備會記下發生的事：介面上線與斷線、err-disabled、OSPF 鄰居、VRRP 換手、VPN 通道、IP 衝突、duplex mismatch、有人改過設定、重新開機。紀錄放在記憶體裡（`show logging`），重開機就沒了。
 - 設定了 Syslog 伺服器，訊息會用 UDP 514 送過去；伺服器連不到，那一筆就掉了。伺服器（有 Syslog 服務的主機）有一個「Syslog」分頁可以看收到的訊息。
 - 紀錄上的時間是設備自己的時間，所以沒對時的設備，紀錄會和別人對不起來。
+
+## 遠端登入
+
+- 從電腦輸入 `ssh admin@10.0.99.2` 或 `telnet 10.0.99.2`，就會登入那台設備的命令列；之後打的每一行都送到對方，`exit` 登出。第一次 SSH 到一台設備要確認它的金鑰指紋，同一個 IP 換了一台設備，用戶端會拒絕連線。
+- 這是一條一直開著的 TCP 連線：每打一行指令，封包都要真的走一趟。登入之後閒置太久，設備會自動登出（IOS 預設 10 分鐘、FortiGate 5 分鐘）；如果路上有防火牆，它的連線表可能更早就把這條連線忘了，下一行指令就送不過去。
+- 密碼錯三次連線就斷了。設了 `login block-for`（FortiGate 預設就有），短時間內失敗太多次，設備會暫時拒絕所有登入。
+- 用 SSH 登入時，紀錄與 debug 的訊息預設不會出現在畫面上，要先輸入 `terminal monitor`。CLI 分頁則相當於接著 console 線，訊息會直接跳出來。
+
+## 排除故障的工具
+
+| 工具 | 看得到什麼 |
+| --- | --- |
+| 介面計數器 | 每個埠收送了多少封包與位元組、廣播與多點傳送、CRC 錯誤、runt、碰撞、late collision。交換器每 2 秒送一個 STP BPDU、Cisco 設備每 60 秒送一次 CDP，所以沒人在用計數器也會增加。雙工不一致時，全雙工那端的 CRC 與半雙工那端的 late collision 會一直長 |
+| 封包擷取 | 電腦的網路卡收送的訊框。接在交換器上只看得到廣播與給自己的；接在 Hub 上，或交換器用 SPAN 把別的埠鏡像過來，才看得到別人的流量。Telnet 的帳號密碼在這裡是明文，SSH 只看得到加密的封包 |
+| SPAN | 把來源埠進出的訊框複製到目的埠。目的埠只送出複製的訊框，接在上面的設備不能再用它上網（和真的交換器一樣） |
+| `debug ip packet` / `debug ip icmp` | 只看得到給路由器自己、它自己送出的、以及它丟掉的封包；經過它轉送的封包由 CEF 處理，不會出現（真的路由器也是這樣） |
+| FortiGate 的 sniffer 與 debug flow | 封包從哪個介面進來、從哪個介面出去；在防火牆裡被哪一條政策放行或拒絕、有沒有 NAT |
 
 ## 頻寬與傳輸速率
 
@@ -178,8 +204,10 @@ npm run build    # 輸出到 dist/
 ## 模擬的範圍與簡化
 
 - MAC 位址表會學習、過期與泛洪，但實際的轉送路徑仍然由拓撲算出，所以不會出現「表裡的項目指到錯的埠」這種狀況。
-- 測試用的連線（ping、curl、iperf3）建立之後就結束了，沒有長時間保持的連線。所以連線逾時目前只會讓表裡的項目消失，還不會造成「閒置太久被防火牆切斷」。
-- `reload` 與開機是瞬間完成的（真實設備要一到數分鐘）。
+- 只有 SSH / Telnet 是長時間保持的連線；ping、curl、iperf3 建立之後就結束了。
+- 封包擷取記錄的是模擬裡真的跑過的訊框（測試、終端機指令、背景的 BPDU 與 CDP）；沒有模擬一般使用者上網的背景流量。OSPF Hello、VRRP 通告只算進計數器，不會出現在擷取畫面上。
+- FortiGate 的 sniffer 與 debug flow 是在背景執行，輸入任何指令就會停止（相當於 Ctrl-C）。IOS 的 `debug` 只做了 `ip packet` 與 `ip icmp`。
+- DR / BDR 只依 Router ID 決定，不模擬「先上線的不讓位」。
 - NTP 只有一台伺服器、沒有驗證；設備的時鐘不會慢慢漂移（沒對時的誤差是固定的）。
 - 頻寬是每條路徑各自計算，多條連線同時搶同一條線路時不會互相擠壓；沒有 QoS。Hub 的碰撞只反映在速率打折上。
 - 遠端存取的 SSL-VPN 沒有連線建立的時間。
@@ -198,7 +226,7 @@ npm run build    # 輸出到 dist/
 2. Voice VLAN（需要新的 IP 電話設備）、TACACS+、IKEv2、IOS 的 Dialer 介面。
 3. QoS 與多條連線互相搶頻寬、SNMP Trap、設定備份等維運情境的關卡。
 4. Wi-Fi 的牆面衰減、802.1X 的憑證驗證。
-5. 從電腦 SSH 進設備（長時間保持的連線、閒置逾時）、開機需要時間、SNMP 監控。
+5. SNMP 監控、TFTP 備份與韌體升級（規劃中的階段 3）。
 
 ## 程式結構
 
@@ -208,7 +236,9 @@ src/engine/   模擬引擎（不依賴瀏覽器，可直接用 Node 測試）
   model.js        設備型錄（真實機型）、線材與狀態物件
   ios.js          IOS 風格的設定指令解譯器、show running-config、startup-config
   fortios.js      FortiOS 風格的設定樹（config / edit / set / next / end）
-  ops.js          每台設備的時鐘、NTP、事件紀錄與 Syslog
+  ops.js          每台設備的時鐘、NTP、事件紀錄與 Syslog、開機時間
+  remote.js       SSH / Telnet 登入（長時間保持的連線、驗證、閒置逾時、登入封鎖）
+  wire.js         線路上的訊框：介面計數器、封包擷取、SPAN、IOS debug、FortiGate sniffer 與 debug flow
   sim.js          供電與連線狀態、L2（VLAN / STP / LACP / Port Security / DHCP Snooping / DAI / 802.1X / Wi-Fi）、
                   L3（路由 / OSPF / VRRP）、DHCP 與 Relay、PPPoE、NAT、ACL、防火牆政策、VPN、DNS、
                   模擬時鐘（advance / settle / pendingOf）與傳輸速率（throughput）

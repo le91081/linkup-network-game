@@ -276,7 +276,8 @@ const HELP = {
  * 建立一個 CLI 工作階段。getDev() 回傳目前的設備物件，getState() 回傳目前的狀態。
  * exec(line) 回傳 { out: [文字…], changed: 是否改了設定, pass: 這一行不是設定指令（交給 show / ping 處理） }
  */
-export function iosSession(getDev, getState) {
+/** who：從遠端登入時是誰、從哪裡（{ user, line, ip }），用在紀錄裡 */
+export function iosSession(getDev, getState, who = null) {
   const S = { mode: 'exec', cur: null };
   const dev = () => getDev();
 
@@ -1144,7 +1145,7 @@ export function iosSession(getDev, getState) {
     const leave = () => {
       const touched = S.touched;
       S.touched = false;
-      if (touched) logEvent(getState(), dev(), 5, 'SYS-5-CONFIG_I', 'Configured from console by console');
+      if (touched) logEvent(getState(), dev(), 5, 'SYS-5-CONFIG_I', who ? `Configured from console by ${who.user} on ${who.line} (${who.ip})` : 'Configured from console by console');
       return done(touched);
     };
     if (match(tok, 'end') || t0 === '^z') { S.mode = 'exec'; S.cur = null; return leave(); }

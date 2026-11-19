@@ -82,7 +82,7 @@ function ctr(state, devId, pid) {
 /** 這個埠的計數器（沒有就是全部 0） */
 export function counters(state, devId, pid) {
   const c = ((state.dyn.ifc || {})[devId] || {})[pid];
-  if (!c) return blank(state.clock);
+  if (!c) return { ...blank(state.clock), inRate: 0, outRate: 0, inPps: 0, outPps: 0 };
   const ref = c.pw || c.w, dt = Math.max(1, state.clock - ref.t);
   return { ...c, inRate: Math.round(((c.ib - ref.ib) * 8) / dt), outRate: Math.round(((c.ob - ref.ob) * 8) / dt), inPps: Math.round((c.ip - ref.ip) / dt), outPps: Math.round((c.op - ref.op) / dt) };
 }
@@ -304,6 +304,8 @@ export function background(state, { isBridge, ospfOn, uptime0 }) {
       if (ospfOn(d, i)) send(d, i.bind.port, { proto: 'ospf', dmac: '01:00:5e:00:00:05' }, ticks(10));
     }
   }
+  // 剛才一次補上的是開機以來三天的量：五分鐘平均速率從現在開始算
+  if (first) for (const all of Object.values(dyn.ifc || {})) for (const c of Object.values(all)) { c.w = { t: now, ib: c.ib, ob: c.ob, ip: c.ip, op: c.op }; c.pw = null; }
 }
 
 // ───────────────────────── 命令列上的即時輸出 ─────────────────────────
