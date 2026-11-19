@@ -3,6 +3,7 @@ import { h, icon, button, toast } from './dom.js';
 import { CATALOG, makeDevice, makeState, setLine, uniqueId, cloneState } from '../engine/model.js';
 import { recompute, runObjective } from '../engine/sim.js';
 import { isIos, saveStartup } from '../engine/ios.js';
+import { editorSection } from './editor.js';
 
 const VENDOR = /^(Cisco|TP-Link|Ubiquiti|Fortinet|NETGEAR|ASUS|Dell|Lenovo|Apple|HP|Synology) /;
 const HOST_NAME = { pc: 'PC', laptop: '筆電', phone: '手機', printer: '印表機', wprinter: '無線印表機', nas: 'NAS', tower: '伺服器', rack1u: '機架伺服器' };
@@ -44,7 +45,7 @@ export function sandboxObjectives(state) {
 }
 
 /** 檢查匯入的內容；有問題就回傳錯誤訊息 */
-function checkImport(data) {
+export function checkImport(data) {
   const st = data && typeof data === 'object' ? data.state : null;
   if (!st || typeof st.devices !== 'object' || !Array.isArray(st.cables)) return '這不是 LinkUp 匯出的拓撲檔';
   for (const [id, d] of Object.entries(st.devices)) {
@@ -130,6 +131,8 @@ export function renderSandbox(app) {
           h('button', { class: 'mini danger', type: 'button', title: '移除這個目標', onclick: () => app.sandboxDropGoal(i) }, icon('x', 13)));
       }))
       : h('p', { class: 'tip', text: '還沒有目標。存幾個「應該要通」與「應該不通」的測試，改設定之後就能一鍵驗證。' }),
+    h('h3', { class: 'sec', text: '關卡設計' }),
+    editorSection(app),
     h('h3', { class: 'sec', text: '儲存與分享' }),
     h('div', { class: 'sbx-row' },
       button('匯出拓撲', { ic: 'download', small: true, onclick: () => app.sandboxExport() }),

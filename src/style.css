@@ -411,7 +411,7 @@ h3.sec { font-size: 11.5px; letter-spacing: 0.08em; color: var(--faint); text-tr
 
 /* ───────── 測驗 / 證照地圖 ───────── */
 .hero-ic { flex: none; width: 54px; height: 54px; border-radius: 16px; display: grid; place-items: center; color: var(--accent); background: rgba(79, 216, 196, 0.12); border: 1px solid rgba(79, 216, 196, 0.3); }
-.qhead { display: flex; justify-content: space-between; align-items: baseline; font-size: 12.5px; }
+.qhead { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; font-size: 12.5px; }
 .qq { font-size: 17px !important; line-height: 1.55; user-select: text; }
 .qopts { display: flex; flex-direction: column; gap: 8px; }
 .qopt { display: flex; gap: 11px; align-items: center; text-align: left; padding: 11px 13px; border-radius: 12px; border: 1px solid var(--line); background: var(--card); font-size: 13.5px; line-height: 1.5; transition: border-color 0.14s, background 0.14s; }
@@ -699,3 +699,43 @@ textarea.code:focus { outline: none; border-color: var(--accent); }
 .cl-rule .inp.sel { padding-right: 20px; background-position: right 5px center; }
 .cl-term { min-height: 150px; margin-top: 6px; }
 .cl-term-out { max-height: 180px; }
+
+/* ── 故障演練、模擬考、評分、關卡編輯器 ── */
+.mode-cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 10px; margin-bottom: 6px; }
+.mode-card .no { display: inline-flex; align-items: center; gap: 4px; }
+.drill-opts { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 14px; margin: 12px 0 4px; }
+.drill-list { display: flex; flex-wrap: wrap; gap: 6px; }
+.drill-list .chip.lvchip { height: auto; padding: 4px 9px; font-family: var(--sans); font-size: 12px; }
+.drill-bar { display: flex; align-items: center; gap: 7px; padding: 7px 10px; border-radius: 10px; background: rgba(245, 181, 71, 0.1); border: 1px solid rgba(245, 181, 71, 0.3); color: #ffe2a8; font-size: 12.5px; }
+.drill-bar span { font-variant-numeric: tabular-nums; }
+.drill-bar span.low { color: var(--bad); font-weight: 700; }
+.drill-bar .mini { margin-left: auto; width: auto; padding: 0 9px; font-size: 11.5px; }
+.exam-w { display: flex; flex-wrap: wrap; gap: 5px; }
+.exam-clock { flex: none; font-size: 15px; color: var(--accent); }
+.exam-clock.low { color: var(--bad); }
+.exam-grid { display: flex; flex-wrap: wrap; gap: 4px; margin: 8px 0 2px; }
+.exam-grid .eg { width: 28px; height: 24px; border-radius: 6px; border: 1px solid var(--line); background: rgba(6, 10, 22, 0.5); color: var(--muted); font: 11px var(--mono); cursor: pointer; }
+.exam-grid .eg.ans { background: rgba(79, 216, 196, 0.16); color: #b8f5ea; border-color: rgba(79, 216, 196, 0.35); }
+.exam-grid .eg.flag { border-color: var(--warn); box-shadow: inset 0 -2px 0 var(--warn); }
+.exam-grid .eg.cur { border-color: var(--accent); color: #fff; }
+.qopt.picked { border-color: var(--accent); background: rgba(79, 216, 196, 0.12); }
+.exam-doms { display: flex; flex-direction: column; gap: 7px; margin: 12px 0; }
+.exam-doms .ed { display: grid; grid-template-columns: 150px 1fr 48px; gap: 10px; align-items: center; font-size: 12.5px; }
+.exam-doms .cbar { margin: 0; }
+.exam-review summary { cursor: pointer; color: var(--muted); margin: 6px 0; }
+.exam-review .qexp { margin: 8px 0; }
+.score-box { display: flex; gap: 16px; align-items: center; padding: 12px 14px; margin: 4px 0 10px; border-radius: 14px; background: rgba(6, 10, 22, 0.45); border: 1px solid var(--line); }
+.score-box .grade { display: flex; flex-direction: column; align-items: center; min-width: 84px; }
+.score-box .grade b { font-size: 40px; line-height: 1; }
+.score-box .grade.g-S b { color: #ffd166; } .score-box .grade.g-A b { color: var(--ok); } .score-box .grade.g-B b { color: var(--blue); } .score-box .grade.g-C b { color: var(--muted); }
+.score-box .grade em { font-style: normal; font-size: 11px; color: var(--faint); margin-top: 2px; }
+.score-rows { flex: 1; display: flex; flex-direction: column; gap: 4px; font-size: 12px; }
+.score-rows > div { display: grid; grid-template-columns: 64px 1fr 44px; gap: 8px; }
+.score-rows b { text-align: right; }
+.ed-box { border: 1px solid var(--line); border-radius: 12px; padding: 8px 10px; background: rgba(6, 10, 22, 0.35); display: flex; flex-direction: column; gap: 8px; }
+.ed-box[open] { gap: 8px; }
+.ed-box summary { cursor: pointer; font-size: 12.5px; font-weight: 600; display: flex; align-items: center; gap: 6px; }
+.ed-box .field, .ed-box .sbx-row, .ed-box .chips, .ed-box .f-label, .ed-box .tip, .ed-box .note, .ed-box .ed-hint { margin-top: 8px; }
+textarea.inp.ed-brief { height: auto; min-height: 80px; padding: 7px 10px; line-height: 1.5; resize: vertical; font-family: var(--sans); }
+.ed-hint { display: grid; grid-template-columns: 18px 1fr 26px; gap: 6px; align-items: center; font-size: 12px; }
+.chip.btnchip.on { background: rgba(245, 181, 71, 0.18); border-color: rgba(245, 181, 71, 0.4); color: #ffe2a8; }

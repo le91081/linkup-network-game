@@ -2097,6 +2097,38 @@ console.log('\n雲端：VPC、IGW 與 EIP、NAT 閘道、安全群組、網路 A
   ok(fg.includes('set remote-gw 54.199.20.2') && fg.includes('set ike-version 2'), 'FortiGate 版本的設定檔');
 }
 
+console.log('\n故障演練與模擬考');
+{
+  const { injectFaults, drillable, faultCandidates } = await import('../src/engine/faults.js');
+  const ok = (cond, title) => (cond ? console.log('  ✔ ' + title) : fail(title));
+  const solvedOf = (id) => { const lv = LEVELS.find((l) => l.id === id); const s = lv.setup(); recompute(s); lv.solve(s); settle(s); return { lv, s }; };
+  let all = true, kinds = new Set(), n = 0;
+  for (const id of ['l07', 'l10', 'l12', 'l18', 'l24', 'l25', 'l47', 'l55', 'l60']) {
+    const a = solvedOf(id), b = solvedOf(id);
+    const fa = injectFaults(a.s, a.lv.objectives, { count: 2, seed: 42 }).faults, fb = injectFaults(b.s, b.lv.objectives, { count: 2, seed: 42 }).faults;
+    settle(a.s);
+    const broken = evaluate(a.s, a.lv.objectives).filter((r) => !r.pass).length;
+    if (!fa.length || !broken || fa.map((f) => f.text).join() !== fb.map((f) => f.text).join() || new Set(fa.map((f) => f.dev)).size !== fa.length) { all = false; console.log('      ' + id, fa.map((f) => f.text)); }
+    for (const f of fa) kinds.add(f.kind);
+    n += fa.length;
+  }
+  ok(all, '隨機故障：每個網路都挑到會讓目標失敗的故障、同一個種子結果一樣、一台設備最多壞一個地方');
+  ok(kinds.size >= 6, `故障的種類夠多樣（${n} 個故障裡有 ${kinds.size} 種）`);
+  const { s: s7, lv: l7 } = solvedOf('l07');
+  const one = injectFaults(s7, l7.objectives, { count: 1, seed: 3 }).faults[0];
+  const fixed = solvedOf('l07').s;
+  ok(one && faultCandidates(fixed).some((f) => f.text === one.text), '故障的說明可以對回原本的設定（揭曉答案時用）');
+  ok(!drillable(LEVELS.find((l) => l.id === 'l57')) && drillable(LEVELS.find((l) => l.id === 'l07')), '依賴移動或等待的關卡不拿來做演練');
+
+  const { buildExam, EXAMS } = await import('../src/ui/exam.js');
+  const ex = buildExam('ccna', 20);
+  const per = {};
+  for (const q of ex) per[q.dom] = (per[q.dom] || 0) + 1;
+  ok(ex.length === 20 && JSON.stringify(per) === JSON.stringify({ 1: 4, 2: 4, 3: 5, 4: 2, 5: 3, 6: 2 }) && ex.every((q) => q.a.length >= 2 && q.c >= 0 && q.c < q.a.length), 'CCNA 模擬考依領域比重配題（20 題：4/4/5/2/3/2），選項打亂之後正確答案仍然對得上');
+  const np = buildExam('netplus', 40);
+  ok(np.length === 40 && EXAMS.netplus.domains.every(([d]) => np.some((q) => q.dom === d)) && new Set(np.map((q) => q.q)).size >= 36, 'Network+ 模擬考：40 題、五個領域都有、題目幾乎不重複');
+}
+
 // ── 題庫與證照對照表的資料檢查 ──
 {
   const { QUESTIONS, TOPICS, LEVEL_TOPIC } = await import('../src/data/quiz.js');

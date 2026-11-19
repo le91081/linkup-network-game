@@ -59,6 +59,11 @@ const ICONS = {
   download: '<path d="M12 4v11M7.5 10.5L12 15l4.5-4.5M5 19.5h14"/>',
   upload: '<path d="M12 15V4M7.5 8.5L12 4l4.5 4.5M5 19.5h14"/>',
   redo: '<path d="M15.5 5L20 9.5 15.5 14"/><path d="M20 9.5h-9.5a5 5 0 0 0 0 10H13"/>',
+  bolt: '<path d="M13 3L5.5 13.5h5.5L10 21l8-11h-5.5z"/>',
+  shuffle: '<path d="M4 7h3.5c4.5 0 5.5 10 10 10H20"/><path d="M4 17h3.5c1.8 0 3-1.6 4-3.6M13.4 9.6c1-2 2.2-3.6 4.1-3.6H20"/><path d="M17.5 4L20 6.5 17.5 9M17.5 15L20 17.5 17.5 20"/>',
+  clock: '<circle cx="12" cy="12" r="8"/><path d="M12 7.5V12l3 2"/>',
+  edit: '<path d="M4.5 19.5l1-4.5L15.8 4.7a1.8 1.8 0 0 1 2.5 0l1 1a1.8 1.8 0 0 1 0 2.5L9 18.5z"/><path d="M13.5 7l3.5 3.5"/>',
+  flag: '<path d="M5.5 21V4"/><path d="M5.5 4.5h11l-2 4 2 4h-11"/>',
 };
 
 export function icon(name, size = 16) {

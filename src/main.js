@@ -9,6 +9,9 @@ import { renderDevicePanel } from './ui/panel.js';
 import { toast, sleep } from './ui/dom.js';
 import { SANDBOX, installSandbox, sandboxObjectives } from './ui/sandbox.js';
 import { isIos, iosDirty, saveStartup, restoreStartup } from './engine/ios.js';
+import { makeDrill, openDrillComplete, fmtSecs } from './ui/drill.js';
+import { scoreOf } from './ui/score.js';
+import { customLevel } from './ui/editor.js';
 
 // 網址加上 ?profile=名稱 就會用另一份獨立的進度（多人共用一台電腦，或測試時不想動到自己的存檔）
 const PROFILE = (new URLSearchParams(location.search).get('profile') || '').replace(/[^\w-]/g, '').slice(0, 24);
@@ -42,7 +45,28 @@ const app = {
   },
 
   loadLevel(idx, opts) { app.openLevel(LEVELS[idx], opts); },
+  /** 故障演練：meta = { base, count, seed, timed }。resume 是重新整理頁面後接著做 */
+  openDrill(meta, { resume = false } = {}) {
+    const base = LEVELS.find((l) => l.id === meta.base);
+    if (!base) return;
+    let m = { ...meta }, lv = makeDrill(base, m);
+    // 有的網路找不到適合的故障（例如只有 IPv6 的關卡）：換一個種子再試，還是不行就換關卡
+    if (!resume) {
+      for (let k = 0; k < 4; k++) { lv.setup(); if (lv.faults.length) break; m = { ...m, seed: m.seed + 7919 }; lv = makeDrill(base, m); }
+      if (!lv.faults.length) { toast(`「${base.title}」找不到適合的故障，換一個網路試試`, 'bad'); return; }
+    }
+    app.store.drill = m;
+    app.openLevel(lv, { fresh: !resume });
+  },
   openSandbox(opts) { app.openLevel(SANDBOX, opts); },
+  /** 自訂關卡（自由模式做的、或匯入的）。test 是從自由模式按「試玩」 */
+  openCustom(c, { test = false } = {}) {
+    const lv = customLevel(c);
+    lv.test = test;
+    if (test) app.store.customTest = c; // 還沒存成自訂關卡也能在重新整理後接著玩
+    app.openLevel(lv, { fresh: true });
+  },
+  renderMissionNow() { hud.renderMission(app); },
 
   openLevel(lv, { fresh = false } = {}) {
     const idx = LEVELS.indexOf(lv);
@@ -65,6 +89,11 @@ const app = {
       undoStack: [], redoStack: [], snap: snapOf(st), cliSess: {}, remote: {}, knownHosts: {}, conSeen: {}, capUi: {},
     });
     app.store.last = lv.id;
+    // 這一關的作答紀錄：實際花的時間、完整測試的次數、設定變更的次數（重置就重新開始）
+    const att = (app.store.att ||= {});
+    if (fresh || !att[lv.id] || lv.drill) att[lv.id] = { ms: 0, runs: 0, changes: 0 };
+    app.attempt = att[lv.id];
+    app.timeUp = false;
     app.runToken = (app.runToken || 0) + 1;
     app.saveStore();
     hud.closePopover();
@@ -119,6 +148,7 @@ const app = {
     const now = snapOf(app.state);
     if (now !== app.snap) {
       if (!app.restoring) {
+        if (app.attempt) app.attempt.changes++;
         app.undoStack.push(app.snap);
         if (app.undoStack.length > 80) app.undoStack.shift();
         app.redoStack = [];
@@ -260,7 +290,7 @@ const app = {
     app.running = true;
     app.scene.fast = false;
     app.scene.clearBubbles();
-    if (!indices) app.results = [];
+    if (!indices) { app.results = []; if (app.attempt) app.attempt.runs++; }
     app.con.clear();
     $('console').classList.remove('min');
     for (const i of list) {
@@ -317,13 +347,25 @@ const app = {
 
   async complete() {
     const lv = app.level;
-    const stars = Math.max(1, 3 - app.hintsShown);
-    app.store.done[lv.id] = { stars: Math.max(stars, app.store.done[lv.id]?.stars || 0) };
-    app.saveStore();
     const ids = Object.keys(app.state.devices);
+    if (lv.drill) {
+      const secs = Math.round(app.attempt.ms / 1000), late = !!lv.drill.timed && secs > lv.drill.timed * 60;
+      (app.store.drills ||= []).push({ base: lv.drill.base, count: lv.drill.count, timed: lv.drill.timed, secs, hints: app.hintsShown, ok: !late, at: Date.now() });
+      if (app.store.drills.length > 30) app.store.drills.shift();
+      app.saveStore();
+      ids.forEach((id, n) => setTimeout(() => app.scene.pulse(id, GREEN, true), n * 70));
+      await sleep(900);
+      if (app.level === lv) openDrillComplete(app, hud, { secs, late, hints: app.hintsShown });
+      return;
+    }
+    const stars = Math.max(1, 3 - app.hintsShown);
+    const sc = scoreOf(lv, app.attempt, app.hintsShown);
+    const prev = app.store.done[lv.id] || {};
+    app.store.done[lv.id] = { stars: Math.max(stars, prev.stars || 0), best: Math.max(sc.score, prev.best || 0) };
+    app.saveStore();
     ids.forEach((id, n) => setTimeout(() => app.scene.pulse(id, GREEN, true), n * 70));
     await sleep(900);
-    if (app.level === lv) hud.openComplete(app, stars);
+    if (app.level === lv) hud.openComplete(app, stars, { ...sc, prevBest: prev.best || 0 });
   },
 };
 
@@ -387,6 +429,16 @@ let lastTick = performance.now(), carry = 0;
 setInterval(() => {
   const t = performance.now(), dt = Math.min(2, (t - lastTick) / 1000);
   lastTick = t;
+  if (app.attempt && app.level && !app.level.sandbox && !document.hidden && !hud.modalOpen()) {
+    app.attempt.ms += dt * 1000;
+    const tm = document.getElementById('drill-timer');
+    if (tm && app.level.drill) {
+      const lim = app.level.drill.timed * 60, used = app.attempt.ms / 1000;
+      tm.textContent = lim ? `剩下 ${fmtSecs(Math.max(0, lim - used))}` : `已經 ${fmtSecs(used)}`;
+      tm.classList.toggle('low', !!lim && lim - used < 60);
+      if (lim && used >= lim && !app.timeUp) { app.timeUp = true; toast('時間到！可以繼續修，但這次演練會記成超時', 'bad', 5000); }
+    }
+  }
   if (app.paused || document.hidden || !app.state || hud.modalOpen()) return;
   carry += dt * app.speed;
   const n = Math.floor(carry);
@@ -421,6 +473,12 @@ window.addEventListener('keydown', (e) => {
 });
 
 if (app.store.last === 'sandbox') app.openSandbox();
+else if (app.store.last === 'drill' && app.store.drill) app.openDrill(app.store.drill, { resume: true });
+else if (/^custom-/.test(app.store.last || '')) {
+  const c = (app.store.custom || []).find((x) => x.id === app.store.last) || (app.store.customTest && app.store.customTest.id === app.store.last ? app.store.customTest : null);
+  if (c) { app.openLevel(customLevel(c)); app.level.test = c === app.store.customTest; } else app.loadLevel(0);
+}
 else app.loadLevel(Math.max(0, LEVELS.findIndex((l) => l.id === app.store.last)));
 hud.openLevels(app);
+app.levelNo = hud.levelNo;
 window.linkup = app; // 方便在主控台除錯

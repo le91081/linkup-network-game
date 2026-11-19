@@ -7,11 +7,15 @@ import { pendingOf, fmtDur } from '../engine/sim.js';
 import { renderSandbox } from './sandbox.js';
 import { LEVEL_CERTS } from '../data/certs.js';
 import { openQuiz, openCerts, openLevelQuiz, hasLevelQuiz } from './quiz.js';
+import { openDrillPicker, randomSeed } from './drill.js';
+import { openExamPicker } from './exam.js';
+import { openCustomLevels } from './editor.js';
+import { drillable } from '../engine/faults.js';
 
 const LOGO =
   '<svg viewBox="0 0 32 32"><rect width="32" height="32" rx="9" fill="#111a38"/><path d="M9 21c5 0 4-10 14-10" stroke="#4fd8c4" stroke-width="3" fill="none" stroke-linecap="round"/><circle cx="9" cy="21" r="3.5" fill="#6ea8ff"/><circle cx="23" cy="11" r="3.5" fill="#4fd8c4"/></svg>';
 
-export const levelNo = (lv) => (lv.sandbox ? '∞' : `${lv.chapter}-${LEVELS.filter((l) => l.chapter === lv.chapter).indexOf(lv) + 1}`);
+export const levelNo = (lv) => (lv.drill ? '演練' : lv.custom ? '自訂' : lv.sandbox ? '∞' : `${lv.chapter}-${LEVELS.filter((l) => l.chapter === lv.chapter).indexOf(lv) + 1}`);
 
 // ───────────── 頂端列 ─────────────
 export function renderTopbar(app) {
@@ -19,7 +23,7 @@ export function renderTopbar(app) {
   const ch = CHAPTERS.find((c) => c.id === lv.chapter);
   app.el.topbar.replaceChildren(
     h('div', { class: 'brand', html: LOGO + '<span>Link<em>Up</em></span>' }),
-    h('div', { class: 'crumb' }, h('span', { text: ch ? `第 ${ch.id} 章 · ${ch.title}` : '自由模式' }), h('b', { text: ch ? `${levelNo(lv)}　${lv.title}` : lv.subtitle })),
+    h('div', { class: 'crumb' }, h('span', { text: ch ? `第 ${ch.id} 章 · ${ch.title}${lv.drill ? ' · 故障演練' : ''}` : lv.custom ? '自訂關卡' : '自由模式' }), h('b', { text: ch || lv.custom ? `${levelNo(lv)}　${lv.title}` : lv.subtitle })),
     h('div', { class: 'spacer' }),
     h('div', { class: 'histbtns' },
       h('button', { class: 'btn ghost icon', id: 'btn-undo', type: 'button', title: '復原上一個變更（Ctrl + Z）', disabled: !app.undoStack.length, onclick: () => app.undo() }, icon('undo', 16)),
@@ -61,6 +65,7 @@ export function renderMission(app) {
   const copy = (v) => () => navigator.clipboard?.writeText(v).then(() => toast('已複製：' + v), () => {});
   const scroll = h('div', { class: 'm-scroll' },
     h('div', { class: 'm-head' }, h('span', { class: 'm-no', text: levelNo(lv) }), h('div', null, h('h1', { text: lv.title }), h('p', { text: lv.subtitle }))),
+    lv.drill && h('div', { class: 'drill-bar' }, icon('clock', 14), h('span', { id: 'drill-timer', text: '' }), h('button', { class: 'mini', type: 'button', title: '放棄這次演練，看答案', onclick: () => giveUp(app) }, '看答案')),
     h('div', { class: 'chips' }, lv.tags.map((t) => h('span', { class: 'chip', text: t }))),
     LEVEL_CERTS[lv.id] && h('div', { class: 'chips', title: '這一關對應的證照考試條目（點一下開啟證照地圖）', onclick: () => openCerts(app) },
       LEVEL_CERTS[lv.id].slice(0, 4).map((t) => h('span', { class: 'chip cert', text: t })),
@@ -327,6 +332,17 @@ export function openPortPick(app, aId, bId) {
   draw();
 }
 
+/** 演練放棄：揭曉被改壞的地方 */
+function giveUp(app) {
+  const lv = app.level;
+  modal([
+    h('h2', { text: '被改壞的地方' }),
+    h('div', { class: 'recap' }, lv.faults.map((f) => h('div', null, icon('x', 14), h('span', { text: f.text })))),
+    h('div', { class: 'd-actions' }, button('繼續修', { kind: 'ghost', onclick: closeModal }),
+      button('換一個網路', { ic: 'shuffle', kind: 'primary', onclick: () => { closeModal(); openDrillPicker(app, { modal, closeModal, levelNo }); } })),
+  ]);
+}
+
 export function openLevels(app) {
   const done = app.store.done;
   const n = LEVELS.filter((l) => done[l.id]).length;
@@ -337,6 +353,16 @@ export function openLevels(app) {
     h('button', { type: 'button', class: 'lv sbx-card' + (app.level && app.level.sandbox ? ' cur' : ''), onclick: () => { closeModal(); app.openSandbox(); } },
       h('div', { class: 'top' }, h('span', { class: 'no', text: '∞  自由模式' })),
       h('b', { text: '自己擺設備、自由接線' }), h('p', { text: '沒有任務目標的沙盒。所有設備與功能都可以用，適合自己練習拓撲或重現工作上遇到的情境。' })),
+    h('div', { class: 'mode-cards' },
+      h('button', { type: 'button', class: 'lv mode-card', onclick: () => openDrillPicker(app, { modal, closeModal, levelNo }) },
+        h('div', { class: 'top' }, h('span', { class: 'no' }, icon('bolt', 13), ' 故障演練')),
+        h('b', { text: '隨機改壞一個做好的網路' }), h('p', { text: '閘道打錯、VLAN 放錯、Trunk 少了 VLAN、介面被關、路由被刪…每次都不一樣，可以限時。' })),
+      h('button', { type: 'button', class: 'lv mode-card', onclick: () => openExamPicker(app, { modal, closeModal }) },
+        h('div', { class: 'top' }, h('span', { class: 'no' }, icon('clock', 13), ' 模擬考')),
+        h('b', { text: 'CCNA / Network+ 限時模擬考' }), h('p', { text: '依考試領域的比重抽題、交卷後才看答案，依領域分析強弱。' })),
+      (app.store.custom || []).length ? h('button', { type: 'button', class: 'lv mode-card', onclick: () => openCustomLevels(app) },
+        h('div', { class: 'top' }, h('span', { class: 'no' }, icon('edit', 13), ' 自訂關卡')),
+        h('b', { text: `${app.store.custom.length} 個自己做的關卡` }), h('p', { text: '在自由模式設計、匯入別人分享的關卡。' })) : null),
     CHAPTERS.map((ch) => h('section', { class: 'chapter' },
       h('h2', null, `第 ${ch.id} 章　${ch.title}`, h('small', { text: ch.desc })),
       h('div', { class: 'lv-grid' }, LEVELS.filter((l) => l.chapter === ch.id).map((lv) => {
@@ -345,7 +371,7 @@ export function openLevels(app) {
           type: 'button', class: `lv ${d ? 'done' : ''} ${lv === app.level ? 'cur' : ''}`,
           onclick: () => { closeModal(); app.loadLevel(LEVELS.indexOf(lv)); if (!app.store.seenHelp) openHelp(app); },
         },
-        h('div', { class: 'top' }, h('span', { class: 'no', text: levelNo(lv) + (d ? '  ✓' : '') }),
+        h('div', { class: 'top' }, h('span', { class: 'no', text: levelNo(lv) + (d ? '  ✓' : '') + (d && d.best ? `  ${gradeOf(d.best)}` : '') }),
           h('span', { class: 'stars' }, [1, 2, 3].map((s) => { const i = icon('star', 13); if (d && d.stars >= s) i.classList.add('on'); return i; }))),
         h('b', { text: lv.title }), h('p', { text: lv.subtitle }),
         h('div', { class: 'chips' }, lv.tags.slice(0, 3).map((t) => h('span', { class: 'chip', text: t }))));
@@ -402,18 +428,25 @@ export function confirmPowerOff(name, onSave, onDiscard) {
   ]);
 }
 
-export function openComplete(app, stars) {
+const gradeOf = (score) => (score >= 950 ? 'S' : score >= 850 ? 'A' : score >= 700 ? 'B' : 'C');
+export function openComplete(app, stars, sc) {
   const lv = app.level;
-  const next = LEVELS[app.levelIdx + 1];
+  const next = lv.custom ? null : LEVELS[app.levelIdx + 1];
   modal([
     h('div', { class: 'done-top' }, h('div', { class: 'done-ring' }, icon('check', 34)),
-      h('h2', { text: next ? '任務完成！' : '全部破關！' }),
+      h('h2', { text: next || lv.custom ? '任務完成！' : '全部破關！' }),
       h('p', { class: 'muted', text: `${levelNo(lv)}　${lv.title}` }),
       h('div', { class: 'big-stars' }, [1, 2, 3].map((s) => { const i = icon('star', 30); if (stars >= s) i.classList.add('on'); return i; }))),
+    sc && h('div', { class: 'score-box' },
+      h('div', { class: 'grade g-' + sc.grade }, h('b', { text: sc.grade }), h('span', { class: 'mono', text: `${sc.score} 分` }), sc.prevBest ? h('em', { text: sc.score > sc.prevBest ? `新紀錄（原本 ${sc.prevBest}）` : `最佳 ${sc.prevBest}` }) : null),
+      h('div', { class: 'score-rows' }, sc.rows.map(([k, v, p]) => h('div', null, h('span', { text: k }), h('span', { class: 'muted', text: v }), h('b', { class: 'mono', text: p ? String(p) : '—' }))))),
     h('div', { class: 'recap' }, lv.recap.map((t) => h('div', null, icon('check', 14), h('span', { text: t })))),
     h('div', { class: 'd-actions' }, button('留在這一關', { kind: 'ghost', onclick: closeModal }),
       hasLevelQuiz(lv.id) && button('觀念小考 3 題', { ic: 'book', onclick: () => openLevelQuiz(app, lv.id) }),
+      !lv.custom && drillable(lv) && button('故障演練', { ic: 'bolt', onclick: () => { closeModal(); app.openDrill({ base: lv.id, count: 2, seed: randomSeed(), timed: 0 }); } }),
       next ? button('下一關：' + next.title, { ic: 'chevron', kind: 'primary', onclick: () => { closeModal(); app.loadLevel(app.levelIdx + 1); } })
-        : button('回到關卡選單', { ic: 'grid', kind: 'primary', onclick: () => openLevels(app) })),
+        : lv.custom && lv.test ? button('回到自由模式', { ic: 'edit', kind: 'primary', onclick: () => { closeModal(); app.openSandbox(); } })
+          : lv.custom ? button('自訂關卡', { ic: 'grid', kind: 'primary', onclick: () => openCustomLevels(app) })
+            : button('回到關卡選單', { ic: 'grid', kind: 'primary', onclick: () => openLevels(app) })),
   ]);
 }

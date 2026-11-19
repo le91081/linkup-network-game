@@ -40,6 +40,10 @@ npm run build    # 輸出到 dist/
 - 防火牆有「紀錄」分頁，家用路由器與路由器的「狀態」分頁有連線紀錄與 NAT 轉換表；政策與 ACL 規則會顯示命中次數。
 - 頂端列的「測驗」是觀念題與子網路速算，「證照」是考試大綱與關卡的對照表。
 - 關卡選單最上方的「自由模式」是沙盒：自己擺設備、接線、設定。可以把測試存成「應該要通 / 應該不通」的目標一鍵重跑，也可以把整個拓撲匯出成 JSON 檔再匯入。
+- **故障演練**：挑一個關卡（或隨機），從「已經做好」的網路開始，系統隨機改壞 1 – 3 個地方——閘道或遮罩打錯、埠被放錯 VLAN 或被 shutdown、Trunk 少了 VLAN 或變成 access、VLAN 被刪、介面被關或 IP 打錯、靜態路由被刪或下一站打錯、NAT 被關、多了一條只放 ICMP 的 ACL、DHCP / Relay / OSPF 被停用、防火牆政策被停用、Wi-Fi 密碼被改、雲端的路由 / 安全群組 / 彈性 IP 被拿掉。每個故障都先在副本上試過「真的會讓目標失敗」才算數，一台設備最多壞一個地方。可以限時 10 或 20 分鐘，修好之後揭曉被改壞的地方；提示會依序指出是哪台設備。
+- **模擬考**：CCNA 或 Network+，20 題 25 分鐘或 40 題 50 分鐘，依考試領域的比重抽題（Network+ 沒有直接標註的題目用 CCNA 的領域對照），部分是隨機產生的子網路計算題。可以標記稍後檢查、跳題；交卷後換算成 1000 / 900 分制，依領域顯示答對率與比較弱的領域，再逐題看解說。
+- **評分**：過關時依實際作答時間（畫面在前景、沒有開對話框才算；標準時間是 3 分鐘加上每個目標 1.5 分鐘）、看了幾個提示、跑了幾次完整測試給 S / A / B / C 與分數，關卡選單上顯示最佳等級。設定變更的次數只列出來參考。
+- **關卡編輯器**：自由模式的「關卡設計」可以寫關卡名稱、任務說明、提示，指定哪些設備鎖定（玩家看得到、不能設定），然後試玩、存成自訂關卡、或匯出成關卡檔分享；關卡選單的「自訂關卡」可以遊玩、匯出、刪除與匯入。
 
 ## 關卡（16 章 61 關）
 
@@ -302,13 +306,14 @@ npm run build    # 輸出到 dist/
 - IOS XE 只模擬 bundle 模式（直接用 `.bin` 開機），沒有 install 模式與 `packages.conf` 的展開；Nexus 也用 IOS 風格的 CLI 操作。FortiOS 的升級路徑簡化成「同一個主版本、次版本一次最多跳兩版」。
 - 檔案傳輸只有 TFTP 與 FTP，沒有 SCP / SFTP、`archive` 自動備份與 `configure replace`。
 - RESTCONF 只有介面、主機名稱、VLAN 與靜態路由幾個 YANG 路徑，內容只接受 JSON；沒有 NETCONF、gNMI 與 Catalyst Center 的 API。Ansible 沒有 roles、handlers、host_vars 檔案與 Vault，Jinja 只有變數與幾個常用的 filter。雲端只有一個 VPC（沒有 VPC peering、Transit Gateway、Direct Connect），VPN 只有一條通道（AWS 實際上給兩條），EC2 由關卡建立，也沒有 Terraform。
+- 故障演練的故障只從固定的種類裡挑（沒有 IPv6、無線控制器與 BGP 的故障），只有 IPv6 的關卡挑不到故障。模擬考的題目來自題庫，題型只有單選；Network+ 的領域是依 CCNA 條目對照的近似。評分的標準時間是依目標數估計的，不是每一關各自訂的。
 - SNMP 只回答系統資訊與介面表（名稱、速率、狀態、位元組與錯誤計數器），沒有 MIB 瀏覽器、`snmpwalk` 與 SET；Trap 只有 linkUp、linkDown、coldStart、authenticationFailure。
 
 ## 還可以做的
 
 完整的功能規劃（每個領域已完成、部分完成、尚未開始的項目，以及建議的實作順序）在 [PLAN.md](PLAN.md)。以下是最接近的幾項：
 
-1. 隨機故障、模擬考模式、評分與關卡編輯器（規劃中的階段 9）。
+1. Catalyst Center 的意圖式 API 與 AI 分析（CCNA 6.2 – 6.4）、虛擬化（CCNA 1.12）。
 2. FortiGate 的 IPv6 政策、DHCPv6 Prefix Delegation、GRE / VTI / DMVPN、TACACS+、IOS 的 Dialer 介面。
 3. iBGP、OSPF 的 stub / NSSA 區域、自由模式畫牆、訪客入口 (Captive Portal)。
 4. Wi-Fi 的牆面衰減、802.1X 的憑證驗證。
@@ -339,11 +344,12 @@ src/engine/   模擬引擎（不依賴瀏覽器，可直接用 Node 測試）
   yaml.js         YAML 解析（PyYAML 風格的錯誤訊息）
   automation.js   Ansible：inventory、Jinja 變數、network_cli 與 cisco.ios 模組、PLAY RECAP
   cloud.js        公有雲的 VPC：子網路與路由表、IGW 與彈性 IP、NAT 閘道、安全群組、網路 ACL、VPN 設定檔
+  faults.js       故障演練：可能的故障清單、在副本上驗證、依種子重現
   sim6.js         IPv6：SLAAC 與 DHCPv6（RA 的 M / O / A 旗標、relay、binding）、鄰居探索、靜態路由與 OSPFv3、IPv6 ACL、ICMPv6 / TCP / UDP
 src/levels/   關卡定義：設備、初始設定、任務目標、提示、參考解法（trouble.js 是故障排除章，maint.js 是維運章，voip.js 是語音與 QoS 章，routing.js 是進階路由章，ipv6.js 是 IPv6 章的補充，vpn2.js 是多站台 VPN，wireless.js 是無線控制器章，auto.js 是自動化章，cloud.js 是雲端章）
 src/data/     題庫與證照對照表
 src/scene/    three.js 場景、設備模型、網路線、無線涵蓋範圍與封包動畫
-src/ui/       設定面板、終端機、CLI、任務面板、測驗、自由模式與對話框
+src/ui/       設定面板、終端機、CLI、任務面板、測驗、模擬考、故障演練、評分、自由模式與關卡編輯器、對話框
 test/         對每個關卡套用參考解法，並用負面案例確認引擎真的會擋
 ```
 
