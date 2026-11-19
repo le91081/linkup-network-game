@@ -339,11 +339,11 @@ export function computeOspf(state, ospfOn) {
   }
   // 骨幹裡的路由器（包括 ABR）：從其他 ABR 的 summary 算出區域間的路由
   const inter = {}; // 設備 → '網段' → { net, bits, metric, hops }
-  const addInter = (id, s, metric, hops) => {
+  const addInter = (id, s, metric, hops, adv) => {
     const t = (inter[id] ||= {}), k = s.net + '/' + s.bits;
     if ((intra[id] || {})[k]) return; // 區域內的路由永遠優先
     const cur = t[k];
-    if (!cur || metric < cur.metric) t[k] = { net: s.net, bits: s.bits, metric, hops: hops.slice() };
+    if (!cur || metric < cur.metric) t[k] = { net: s.net, bits: s.bits, metric, hops: hops.slice(), owner: adv };
     else if (metric === cur.metric) for (const h of hops) if (!cur.hops.some((x) => x.via === h.via && x.iface === h.iface)) cur.hops.push(h);
   };
   for (const d of nodes) {
@@ -351,7 +351,7 @@ export function computeOspf(state, ospfOn) {
     const { dist, first } = spf[d.id][0];
     for (const b of abrs) {
       if (b === d.id || dist[b] == null) continue;
-      for (const s of Object.values(sumInto0[b] || {})) addInter(d.id, s, dist[b] + s.cost, first[b] || []);
+      for (const s of Object.values(sumInto0[b] || {})) addInter(d.id, s, dist[b] + s.cost, first[b] || [], b);
     }
   }
   // ABR 再把骨幹的網段、以及從骨幹學到的其他區域，送進自己連著的非骨幹區域
@@ -372,7 +372,7 @@ export function computeOspf(state, ospfOn) {
       const { dist, first } = spf[d.id][area];
       for (const b of abrs) {
         if (dist[b] == null) continue;
-        for (const s of Object.values(((sumOut[b] || {})[area]) || {})) addInter(d.id, s, dist[b] + s.cost, first[b] || []);
+        for (const s of Object.values(((sumOut[b] || {})[area]) || {})) addInter(d.id, s, dist[b] + s.cost, first[b] || [], b);
       }
     }
   }
@@ -407,12 +407,14 @@ export function computeOspf(state, ospfOn) {
     const put = (r, sub) => {
       if (d.rt.routes.some((x) => x.type === 'C' && x.net === r.net && x.bits === r.bits)) return;
       const hops = r.hops.filter((h) => h.iface).slice(0, maxPaths(d));
-      for (const h of hops) d.rt.routes.push({ net: r.net, bits: r.bits, via: h.via, iface: h.iface, type: 'O', sub, ad: 110, metric: r.metric });
+      // adv：發布這筆 LSA 的路由器（show ip route <網段> 的 from），E2 另外記往 ASBR 的內部 cost (forward metric)
+      const adv = r.owner != null ? rid[r.owner] : null;
+      for (const h of hops) d.rt.routes.push({ net: r.net, bits: r.bits, via: h.via, iface: h.iface, type: 'O', sub, ad: 110, metric: r.metric, adv, ...(r.fwd != null ? { fwd: r.fwd } : {}) });
     };
     for (const r of Object.values(intra[d.id] || {})) if (r.hops.length) put(r, '');
     for (const r of Object.values(inter[d.id] || {})) put(r, 'IA');
     const ext = d.rt.ospf.ext;
-    if (ext) put({ net: 0, bits: 0, metric: 1, hops: ext.hops }, 'E2');
+    if (ext) put({ net: 0, bits: 0, metric: 1, hops: ext.hops, owner: ext.asbr, fwd: ext.fwd }, 'E2');
     d.rt.ospf.abr = abrs.has(d.id);
     d.rt.ospf.asbr = asbrs.includes(d);
     d.rt.ospf.areas = areasOf(d.id);

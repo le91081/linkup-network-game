@@ -41,7 +41,7 @@ npm run build    # 輸出到 dist/
 - 頂端列的「測驗」是觀念題與子網路速算，「證照」是考試大綱與關卡的對照表。
 - 關卡選單最上方的「自由模式」是沙盒：自己擺設備、接線、設定。可以把測試存成「應該要通 / 應該不通」的目標一鍵重跑，也可以把整個拓撲匯出成 JSON 檔再匯入。
 
-## 關卡（12 章 46 關）
+## 關卡（13 章 50 關）
 
 | 章節 | 關卡數 | 主題 |
 | --- | --- | --- |
@@ -57,6 +57,7 @@ npm run build    # 輸出到 dist/
 | 10 故障排除 | 4 | 網路已經設定好但被改壞了：IP 衝突與 DHCP 保留、Trunk / VLAN / shutdown、閘道 / 回程路由 / NAT / ACL / DNS、ping 會通但傳檔很慢（速率寫死、duplex mismatch、舊 Hub） |
 | 11 維運與管理 | 4 | 從 TFTP 還原設定（合併與整份取代的差別）、韌體升級（flash 空間、MD5、`boot system`、TFTP 與 FTP 的速度）、讓原廠交換器能用 SSH（主機名稱、網域、RSA 金鑰、`login local`）、用 SNMPv3 找出滿載的線路（線對斷掉自動降到 100 Mbps） |
 | 12 語音與 QoS | 2 | IP 電話：PoE、語音 VLAN、CDP 與 LLDP-MED、DHCP option 150、CUCM 註冊；線路塞車時用 QoS 保住通話：信任邊界、LLQ、配合營運商合約頻寬的整形 |
+| 13 進階路由 | 4 | OSPF 的 DR / BDR 選舉（不搶位、`clear ip ospf process`）、Router ID 與 Loopback、passive-interface；參考頻寬與 cost、等價多路徑 (ECMP)；多區域 OSPF、ABR 與 `area range` 彙總；用 eBGP 同時接兩家 ISP：local-preference 決定出去走哪家、AS-path prepend 影響進來走哪家、prefix-list 避免變成轉運站 |
 
 ## 證照對照
 
@@ -70,18 +71,18 @@ npm run build    # 輸出到 dist/
 
 沒有關卡的條目大多是觀念題，題庫裡有對應的題目（TCP / UDP、AAA、REST API、JSON、Ansible 等）。
 條目編號依公開的考試大綱，標題是中文摘要。CCNA v2.0 預計在 2027 年 2 月取代 v1.1，改版後需要重新對照。
-題庫（93 題觀念題加上隨機產生的子網路計算題）是自行編寫的練習題，不是實際試題。
+題庫（102 題觀念題加上隨機產生的子網路計算題）是自行編寫的練習題，不是實際試題。
 
 ## CLI 設定指令
 
 支援的範圍是 `show running-config` 會印出來的那些指令，都可以縮寫（`conf t`、`int gi0/1`、`sw mo tr`），前面加 `no` 是取消。
-把一台設備的 running-config 整份貼到另一台同型號的設備上，會得到相同的設定（測試會對 70 台設備逐一驗證）。
+把一台設備的 running-config 整份貼到另一台同型號的設備上，會得到相同的設定（測試會對 84 台設備逐一驗證）。
 
 | 模式 | 指令 |
 | --- | --- |
-| 全域 | `hostname`、`interface` / `interface range` / `interface vlan`、`vlan`、`ip route`、`ipv6 route`、`router ospf`、`ip dhcp pool`、`ip dhcp excluded-address`、`ip nat inside source …`、`ip access-list extended`、`spanning-tree vlan … priority`、`ip dhcp snooping`、`ip arp inspection vlan`、`line vty`、`ntp server`、`logging host`、`snmp-server …`、`username`、`ip domain name`、`ip ssh version`、`boot system`、`ip ftp username / password` |
-| 介面 | `ip address`、`shutdown`、`switchport mode / access vlan / trunk native vlan / trunk allowed vlan`、`no switchport`、`encapsulation dot1q`、`ip nat inside / outside`、`ip helper-address`、`ip ospf cost`、`ip access-group`、`vrrp`、`channel-group`、`switchport port-security`、`spanning-tree bpduguard`、`ip dhcp snooping trust`、`ipv6 address` |
-| 其他 | VLAN 的 `name`、OSPF 的 `network` 與 `default-information originate`、DHCP 位址池的 `network` / `default-router` / `dns-server`、ACL 的 `permit` / `deny`、`line vty` 的 `transport input` / `access-class` |
+| 全域 | `hostname`、`interface` / `interface range` / `interface vlan` / `interface loopback`、`vlan`、`ip route`、`ipv6 route`、`router ospf`、`router bgp`、`route-map`、`ip prefix-list`、`ip as-path access-list`、`ip dhcp pool`、`ip dhcp excluded-address`、`ip nat inside source …`、`ip access-list extended`、`spanning-tree vlan … priority`、`ip dhcp snooping`、`ip arp inspection vlan`、`line vty`、`ntp server`、`logging host`、`snmp-server …`、`username`、`ip domain name`、`ip ssh version`、`boot system`、`ip ftp username / password` |
+| 介面 | `ip address`、`shutdown`、`switchport mode / access vlan / trunk native vlan / trunk allowed vlan`、`no switchport`、`encapsulation dot1q`、`ip nat inside / outside`、`ip helper-address`、`ip ospf cost / priority / network / hello-interval / dead-interval / authentication / message-digest-key / mtu-ignore`、`ip ospf <pid> area <區域>`、`ip mtu`、`ip access-group`、`vrrp`、`channel-group`、`switchport port-security`、`spanning-tree bpduguard`、`ip dhcp snooping trust`、`ipv6 address` |
+| 其他 | VLAN 的 `name`、OSPF 的 `network … area`、`router-id`、`passive-interface [default]`、`auto-cost reference-bandwidth`、`maximum-paths`、`area … range`、`area … authentication [message-digest]` 與 `default-information originate`、BGP 的 `bgp router-id`、`network … mask`、`neighbor … remote-as / description / route-map / prefix-list / filter-list / weight / default-originate / shutdown`、route-map 的 `match ip address prefix-list`、`match as-path`、`set local-preference / as-path prepend / metric / weight`、DHCP 位址池的 `network` / `default-router` / `dns-server`、ACL 的 `permit` / `deny`、`line vty` 的 `transport input` / `access-class` |
 
 在設定模式下要看狀態請用 `do show …`。按 Tab 可以補齊指令，指令打到一半加上 `?` 會列出接下來可以輸入的字。
 
@@ -100,7 +101,10 @@ npm run build    # 輸出到 dist/
 - **VPN 的時間面**：`show crypto isakmp sa`、`show crypto ipsec sa`、isakmp policy 裡的 `lifetime`、`crypto ipsec security-association lifetime seconds`、crypto map 裡的 `set security-association lifetime seconds`、`crypto isakmp keepalive <秒> [重試間隔]`。
 - **時鐘與 NTP**：`show clock [detail]`、`clock set`、`clock timezone`、`ntp server`、`ntp master [stratum]`、`show ntp status`、`show ntp associations`。
 - **紀錄**：`show logging`、`logging host`、`logging trap <等級>`、`clear logging`。
-- **OSPF**：`router-id`。
+- **OSPF**：`show ip ospf`、`show ip ospf neighbor`（Pri、FULL/DR、2WAY/DROTHER、EXSTART）、`show ip ospf interface [brief | <介面>]`、`show ip ospf database`、`clear ip ospf process`（Router ID 改了要清除程序才會生效）。
+- **路由表**：`show ip route` 和真的 IOS 一樣依主網段分組（`is subnetted` / `is variably subnetted`）、列出介面自己的位址 (L)、動態路由的存在時間與 Gateway of last resort；可以篩選 `show ip route ospf | bgp | static | connected`，也可以查單一網段 `show ip route <位址> [遮罩]`（Known via、distance、metric、from、等價的每一條路）。沒放進路由表的路（下一站不通的靜態路由、管理距離比較大的備援路由）會在最後用提示說明原因。
+- **BGP**：`show ip bgp`、`show ip bgp summary`、`show ip bgp neighbors [<IP> [advertised-routes | received-routes | routes]]`、`show ip prefix-list`、`show route-map`、`show ip as-path-access-list`、`clear ip bgp *`。
+- **ACL 的來源埠**：`permit tcp any eq 179 any`（回應的封包、或對方主動連過來時的來源埠）。
 - **遠端登入**：`line vty 0 4` 裡的 `exec-timeout`、`login block-for … attempts … within …`、`login on-failure log` / `login on-success log`、`banner motd`；`show users`、`show login`。
 - **連接埠鏡像**：`monitor session <n> source interface <介面> [rx|tx|both]`、`monitor session <n> destination interface <介面>`、`show monitor`。
 - **檔案與韌體**：`dir [flash: | bootflash:]`、`show flash:`、`show boot`、`show version`、`delete`、`verify /md5 <檔案> [MD5]`、`copy <來源> <目的>`（`running-config`、`startup-config`、`flash:`、`tftp://伺服器/檔名`、`ftp://帳號:密碼@伺服器/檔名`，沒寫完整會一行一行問）、`boot system flash:<檔名>`、`ip tftp blocksize`、`ip ftp username` / `password`。ROMMON 下可以用 `dir`、`boot <檔案>` 與 `reset`。
@@ -145,8 +149,10 @@ npm run build    # 輸出到 dist/
 | --- | --- | --- |
 | STP 邊緣埠 | 30 秒 | 連線後先 listening 15 秒、learning 15 秒才轉送；開了 PortFast 的埠立刻轉送。等待中的網路線會閃橘色 |
 | 交換器之間的連線 | 2 秒 | 兩端都跑 Rapid STP，用提議 / 同意快速收斂 |
-| OSPF 鄰居建立 | 40 秒 | 乙太網路上要先等 DR 選舉 (Wait timer) 才會交換路由 |
+| OSPF 鄰居建立 | 點對點約 4 秒；乙太網路 40 秒 | 乙太網路上第一次要等 DR 選舉 (Wait timer) 才會交換路由；網段上已經有 DR 時，新加入的路由器約 6 秒就 FULL。MTU 不一致會卡在 EXSTART |
 | OSPF 鄰居失聯 | 40 秒 | 隔著交換器、自己的介面沒有斷的時候，要等 Dead timer 才發現；這段時間封包照舊送往已經不在的鄰居 |
+| BGP 鄰居建立 | 約 10 秒 | TCP 179 連上之後交換 OPEN 與 KEEPALIVE（Active → OpenSent → Established）；remote-as 寫錯停在 Idle |
+| BGP 鄰居失聯 | hold time 180 秒 | 介面斷線立刻知道；線路沒斷、只是 TCP 179 被 ACL 擋住時，要等 hold time 過了才斷，這段時間還顯示 Established |
 | VRRP 接手 | 3 秒 | Backup 連續沒聽到通告才成為 Master；原本的 Master 回來時立刻搶回 |
 | DHCP 租約 | 預設 1 天 | 過一半時間自動續約；伺服器連不到時，到期前繼續使用，到期後退回 169.254.x.x |
 | ARP 快取 | 主機 2 分鐘、防火牆與家用路由器 5 分鐘、Cisco 4 小時 | 逐筆計時，用到就更新；介面斷線時清掉 |
@@ -245,6 +251,11 @@ npm run build    # 輸出到 dist/
 - **running-config 與 startup-config**：IOS 設備改的是 running-config，沒有 `write memory` 就 `reload` 或斷電，設定會回到上一次存檔的樣子。
 - **速率與雙工**：一端寫死、另一端自動協商時，自動的那一端會退回半雙工，形成 duplex mismatch；兩端速率寫死成不同的值則連線建立不起來。
 - **OSPF 的 network 敘述**：持續生效，之後才設定 IP 的介面只要位址符合就自動加入。
+- **DR / BDR**：priority 最高的當 DR（一樣就比 Router ID），priority 0 永遠不參加。DR 選出來之後不會被搶走：後來加入、條件更好的路由器只能當 DROTHER，要等 DR 不在了（BDR 先升上來）或 `clear ip ospf process` 才會重選。DROTHER 之間停在 2WAY 是正常的。
+- **Router ID**：OSPF 程序啟動時決定（`router-id` > 最大的 Loopback > 最大的實體介面），之後改了位址或 router-id 都不會變，IOS 會提示要 `clear ip ospf process`。兩台 Router ID 一樣時鄰居建立不起來。
+- **cost 與等價多路徑**：cost = 參考頻寬 ÷ 介面頻寬（預設參考頻寬 100 Mbps，所以 1G 和 10G 都是 1）；cost 一樣的路最多 4 條一起放進路由表，依來源與目的位址雜湊分散，同一條連線永遠走同一條路。
+- **多區域**：ABR 把一個區域的網段用 Summary LSA 送進骨幹（`area range` 可以彙總成一筆），所有非骨幹區域都要接到 area 0；區域之間的路由是 O IA。`default-information originate` 送出的預設路由是 O*E2。
+- **BGP 的最佳路徑**：weight → local-preference → 自己發出的 → AS path 長短 → origin → MED → Router ID。同時接兩家 ISP 時，從 ISP-A 學到的路如果沒有過濾就送給 ISP-B，ISP-B 會把往 ISP-A 的流量丟給你（ISP 偏好客戶給的路），公司就成了兩家 ISP 之間的轉運站。
 - **管理存取**：FortiGate 每個介面各自決定開放 ping / HTTPS / SSH / SNMP / HTTP / Telnet。
 - **故障模擬**：任何設備都可以關機，路由器的介面與交換器的連接埠可以 `shutdown`；錯誤訊息會指出是哪一台關機或哪個介面被停用。
 
@@ -254,7 +265,8 @@ npm run build    # 輸出到 dist/
 - 只有 SSH / Telnet 是長時間保持的連線；ping、curl、iperf3 建立之後就結束了。
 - 封包擷取記錄的是模擬裡真的跑過的訊框（測試、終端機指令、檔案傳輸、SNMP、背景的 BPDU、CDP、LLDP 與 DTP）；持續傳輸的背景流量、OSPF Hello、VRRP 通告只算進計數器，不會出現在擷取畫面上。檔案傳輸只記下開頭幾個封包，不會把 70 萬個 TFTP 區塊一個一個列出來。
 - FortiGate 的 sniffer 與 debug flow 是在背景執行，輸入任何指令就會停止（相當於 Ctrl-C）。IOS 的 `debug` 只做了 `ip packet` 與 `ip icmp`。
-- DR / BDR 只依 Router ID 決定，不模擬「先上線的不讓位」。
+- OSPF 只有一個程序 (`ospf 1`)；沒有 stub / NSSA 區域、虛擬連結 (virtual link)，外部路由只有 `default-information originate` 的 E2 預設路由；`show ip ospf database` 是依計算結果整理的摘要，不是逐筆 LSA 的洪泛。
+- BGP 只有 eBGP（沒有 iBGP、route reflector、community），鄰居要直接相連；網際網路的核心簡化成一個 AS 64999，ISP 對客戶路由的偏好簡化成 local-preference 200。
 - NTP 只有一台伺服器、沒有驗證；設備的時鐘不會慢慢漂移（沒對時的誤差是固定的）。
 - 背景流量之間用 max-min 公平分配近似 TCP 的行為，沒有模擬壅塞控制本身。佇列的延遲與遺失用「TCP 會把佇列塞滿」的穩態估計（平均約七成滿、遺失率隨流量條數增加），不是逐封包的模擬；營運商的管制 (policing) 也是用估計的遺失率。Hub 的碰撞只反映在速率打折上。
 - QoS 只模擬路由器的 MQC 與 Catalyst 2960 的 `mls qos` 信任邊界；交換器自己的出口佇列（`srr-queue`）、WRED、NBAR 的完整協定庫、FortiGate 的流量整形都沒有做。Wi-Fi 的 WMM 也沒有。
@@ -275,9 +287,9 @@ npm run build    # 輸出到 dist/
 
 完整的功能規劃（每個領域已完成、部分完成、尚未開始的項目，以及建議的實作順序）在 [PLAN.md](PLAN.md)。以下是最接近的幾項：
 
-1. OSPF 進階（DR 選舉、多區域、passive-interface）、ECMP、BGP（規劃中的階段 5）。
-2. IPv6 的 ACL、防火牆政策與 OSPFv3。
-3. TACACS+、IKEv2、IOS 的 Dialer 介面。
+1. IPv6 的 DHCPv6、ACL、防火牆政策與 OSPFv3（規劃中的階段 6）。
+2. IKEv2、多站台 VPN、TACACS+、IOS 的 Dialer 介面。
+3. iBGP、OSPF 的 stub / NSSA 區域。
 4. Wi-Fi 的牆面衰減、802.1X 的憑證驗證。
 5. NTP 與 Syslog 的維運關卡（引擎已經有了，還沒有獨立的關卡）。
 
@@ -294,14 +306,16 @@ src/engine/   模擬引擎（不依賴瀏覽器，可直接用 Node 測試）
   files.js        flash 與檔案、映像檔清單與 MD5、開機時挑選映像檔、TFTP / FTP 傳輸
   snmp.js         SNMP 代理程式的驗證（community、ACL、v3）、網管伺服器的輪詢與使用率、Trap
   disc.js         CDP 與 LLDP 的通告、鄰居表與 holdtime
+  ospf.js         OSPF：Router ID、Hello / Dead、DR / BDR 選舉、驗證與 MTU、SPF、多區域與 ABR、E2 預設路由、等價多路徑
+  bgp.js          BGP：TCP 179 的鄰居狀態、hold time、路徑向量與迴圈偵測、最佳路徑、route-map / prefix-list / as-path ACL
   qos.js          QoS：標記與信任邊界、class-map / policy-map 的分類、出口佇列、整形與營運商的管制
   voice.js        IP 電話的開機與註冊、CUCM、通話品質（E-model / MOS）
   wire.js         線路上的訊框：介面計數器、封包擷取、SPAN、IOS debug、FortiGate sniffer 與 debug flow
   sim.js          供電與連線狀態、L2（VLAN / STP / LACP / Port Security / DHCP Snooping / DAI / 802.1X / Wi-Fi）、
-                  L3（路由 / OSPF / VRRP）、DHCP 與 Relay、PPPoE、NAT、ACL、防火牆政策、VPN、DNS、
+                  L3（路由表、最長相符與 ECMP、VRRP）、DHCP 與 Relay、PPPoE、NAT、ACL、防火牆政策、VPN、DNS、
                   模擬時鐘（advance / settle / pendingOf）與傳輸速率（throughput）
   sim6.js         IPv6：SLAAC、鄰居探索、靜態路由
-src/levels/   關卡定義：設備、初始設定、任務目標、提示、參考解法（trouble.js 是故障排除章，maint.js 是維運章，voip.js 是語音與 QoS 章）
+src/levels/   關卡定義：設備、初始設定、任務目標、提示、參考解法（trouble.js 是故障排除章，maint.js 是維運章，voip.js 是語音與 QoS 章，routing.js 是進階路由章）
 src/data/     題庫與證照對照表
 src/scene/    three.js 場景、設備模型、網路線、無線涵蓋範圍與封包動畫
 src/ui/       設定面板、終端機、CLI、任務面板、測驗、自由模式與對話框

@@ -31,7 +31,7 @@ README 說明「現在有什麼、怎麼玩」，這份文件說明「整體應�
 | --- | --- | --- | --- |
 | 1. 實體層與接線 | 7 | 1 | 6 |
 | 2. 第二層：交換 | 13 | 0 | 4 |
-| 3. 第三層：路由 | 6 | 0 | 9 |
+| 3. 第三層：路由 | 10 | 0 | 6 |
 | 4. IP 服務 | 9 | 4 | 1 |
 | 5. 網路安全 | 8 | 3 | 5 |
 | 6. VPN 與廣域網路 | 6 | 1 | 6 |
@@ -45,9 +45,9 @@ README 說明「現在有什麼、怎麼玩」，這份文件說明「整體應�
 | 14. 遊戲系統 | 10 | 3 | 9 |
 | 15. 介面與體驗 | 5 | 1 | 8 |
 | 16. 工程品質 | 2 | 0 | 8 |
-| **合計** | **105** | **22** | **84** |
+| **合計** | **109** | **22** | **81** |
 
-另外：關卡 46 關（第 17 節）、證照條目涵蓋情形（第 18 節）、建議的實作順序（第 19 節）。
+另外：關卡 50 關（第 17 節）、證照條目涵蓋情形（第 18 節）、建議的實作順序（第 19 節）。
 
 ---
 
@@ -96,17 +96,18 @@ README 說明「現在有什麼、怎麼玩」，這份文件說明「整體應�
 
 | 功能 | 狀態 | 說明 |
 | --- | --- | --- |
-| 直連、靜態、預設路由 | ✅ | 最長遮罩比對；下一站不在直連網段時會標示無效 |
+| 直連、靜態、預設路由 | ✅ | 最長遮罩比對；下一站不在直連網段時會標示無效；`show ip route` 和真的 IOS 一樣依主網段分組、列出 L 路由、Gateway of last resort 與動態路由的存在時間，可以篩選協定或查單一網段 |
 | 管理距離與浮動靜態路由 | ✅ | |
 | 回程路由檢查 | ✅ | 去程通、回程不通時會分開說明 |
 | 跨 VLAN 路由 | ✅ | 子介面 (router-on-a-stick)、SVI、routed port (`no switchport`) |
-| OSPF 單一區域 | ✅ | `network` 敘述、cost、`default-information originate`、鄰居建立 40 秒、Dead timer 40 秒 |
+| OSPF 單一區域 | ✅ | `network` 敘述或介面上的 `ip ospf … area`、cost、`default-information originate`；鄰居建立（乙太網路要等 40 秒的 Wait timer、點對點約 4 秒）、Dead timer 40 秒 |
 | TTL 與路徑追蹤 | ✅ | TTL 逐站遞減；主機有 `tracert` |
-| OSPF 進階 | ⬜ | DR / BDR 選舉、`router-id`（指令會接受但沒有作用）、`passive-interface`、Hello / Dead 可調、驗證、MTU 不一致、多區域與 ABR、路由彙總 |
-| ECMP（等價多路徑） | ⬜ | Spine-Leaf 目前只走一條最佳路徑，另一條只在故障時接手 |
+| OSPF 進階 | ✅ | DR / BDR 選舉（priority、Router ID、不搶位、BDR 升上來、`clear ip ospf process`）、Router ID 在程序啟動時決定（Loopback）、Router ID 重複、`passive-interface [default]`、Hello / Dead 可調、network type、明文與 MD5 驗證、MTU 不一致卡在 EXSTART、參考頻寬、多區域與 ABR、`area range` 彙總、O IA 與 O*E2；`show ip ospf` / `neighbor` / `interface` / `database` |
+| ECMP（等價多路徑） | ✅ | cost 一樣的路最多 `maximum-paths` 條（預設 4）一起放進路由表；依來源與目的位址雜湊（CEF 的 per-destination），同一對位址永遠走同一條 |
 | ICMP 細節 | ⬜ | Unreachable 的各種類型、Redirect、分片與 PMTUD |
-| IOS 的 `traceroute` | ⬜ | IOS CLI 目前只有 `ping` |
-| BGP | ⬜ | eBGP 雙 ISP、AS Path、路由過濾 |
+| IOS 的 `traceroute` | ✅ | 逐站顯示，每一站三個探測封包；ECMP 時跟著雜湊走 |
+| BGP（eBGP） | ✅ | TCP 179 的鄰居狀態（Idle / Active / OpenSent / Established）、remote-as 寫錯 (Bad Peer AS)、hold time 180 秒、路徑向量與迴圈偵測、最佳路徑（weight、local-preference、AS path、origin、MED）、route-map / prefix-list / as-path ACL、`default-originate`；雙 ISP 的轉運站問題 |
+| iBGP 與 BGP 進階 | ⬜ | iBGP 與 next-hop-self、route reflector、community、多跳 eBGP (`ebgp-multihop`) |
 | EIGRP、RIP | ⬜ | 優先度低：CCNA v1.1 只要求看得懂 |
 | 路由重分配、PBR、VRF | ⬜ | |
 | IP SLA 與物件追蹤 | ⬜ | 上游故障但介面沒斷的時候切換路由 |
@@ -346,7 +347,7 @@ README 說明「現在有什麼、怎麼玩」，這份文件說明「整體應�
 
 ## 17. 關卡規劃
 
-### 現有的 46 關
+### 現有的 50 關
 
 | 章 | 關卡 |
 | --- | --- |
@@ -362,6 +363,7 @@ README 說明「現在有什麼、怎麼玩」，這份文件說明「整體應�
 | 10 故障排除 | 誰搶了我的 IP、樓層之間又斷了、分公司的求救電話、明明連得上，為什麼這麼慢 |
 | 11 維運與管理 | 還好有備份、韌體升級、讓 SSH 能用、網路怎麼變慢了 |
 | 12 語音與 QoS | 電話接上了，然後呢？、語音斷斷續續 |
+| 13 進階路由 | 誰當 DR？、10G 和 1G 一樣快？、分公司自成一區、兩家 ISP 都要用 |
 
 ### 規劃中的關卡
 
@@ -370,7 +372,7 @@ README 說明「現在有什麼、怎麼玩」，這份文件說明「整體應�
 | 章 | 規劃的關卡 | 需要的功能 |
 | --- | --- | --- |
 | 補進第 11 章 | 對時與紀錄（用 NTP 與 Syslog 把事件順序對起來）、設定被誰改了（差異比對） | 第 4、11 節 |
-| 13 進階路由 | OSPF 多區域、DR 選舉、ECMP、雙 ISP 的 BGP、路由重分配 | 第 3 節 |
+| 補進第 13 章 | 路由重分配、iBGP、OSPF 的 stub 區域、IP SLA 追蹤上游 | 第 3、9 節 |
 | 補進第 12 章 | 不看圖用 CDP / LLDP 把拓撲畫出來、PoE 預算不夠、雙 WAN 的 QoS | 第 1、2、10 節 |
 | 14 無線控制器 | 用 WLC 集中管理 AP、漫遊、訪客入口 | 第 7、13 節 |
 | 15 自動化 | 用 REST API 讀設定、用 JSON 批次改 VLAN、用 playbook 部署多台設備 | 第 12 節 |
@@ -410,7 +412,7 @@ CCNA v2.0 預計在 2027 年 2 月取代 v1.1，改版後整張對照表要重�
 | 2（已完成） | 從主機 SSH 進設備（長時間保持的連線，連線逾時才有作用）、開機時間、IOS 的 `traceroute` / `debug` / `show interfaces`、介面計數器、封包擷取與 SPAN、FortiGate 的 sniffer 與 debug flow | 排除故障的工具補齊，故障排除章才能做得更深 |
 | 3（已完成） | TFTP / FTP 備份與還原、韌體升級與 ROMMON、SSH 的前置條件、SNMP 監控與 Trap、背景流量 → 第 11 章 | 補上 CCNA 4.9、Network+ 3.1 |
 | 4（已完成） | CDP / LLDP 的計時與鄰居表、DTP、IP 電話（PoE、語音 VLAN、option 150、CUCM）、QoS（信任邊界、LLQ、整形、營運商管制、通話品質）→ 第 12 章與 6-8 | 補上 CCNA 2.3、4.7 |
-| 5 | OSPF 進階、ECMP、BGP → 第 13 章 | |
+| 5（已完成） | OSPF 進階（DR / BDR、Router ID、passive、驗證、MTU、多區域與彙總）、ECMP、eBGP 與路由政策、真實格式的 `show ip route` → 第 13 章 | 補強 CCNA 3.1、3.2、3.4，Network+ 2.1 |
 | 6 | IPv6 補齊（DHCPv6、OSPFv3、ACL）、IKEv2、多站台 VPN | |
 | 7 | 無線控制器、牆面衰減、漫遊 → 第 14 章 | 補上 CCNA 2.6 |
 | 8 | 自動化與雲端 → 第 15、16 章 | 補上 CCNA 第 6 領域、Network+ 1.3 |

@@ -1,6 +1,6 @@
 // IOS 風格的 CLI：用 show 指令查看狀態；configure terminal 之後可以直接用指令修改設定
 import { h } from './dom.js';
-import { fmtIp, parseIp } from '../engine/ip.js';
+import { fmtIp, parseIp, parseMask, netOf } from '../engine/ip.js';
 import { fmtIp6 } from '../engine/ip6.js';
 import { transact, routeRows, isBridgePort, arpRows, clearArp, hitsOf, fmtDur, portfastOn, macRows, clearMac, macAgeOf, sessionRows, clearSessions, saInfo, isTrunk, dtpSpeaker } from '../engine/sim.js';
 import { cdpCfg, lldpCfg, cdpOn, lldpTxOn, lldpRxOn, neighbors, ndCounters, cdpCapText, speaksCdp, speaksLldp } from '../engine/disc.js';
@@ -70,24 +70,11 @@ const SHOW = {
     }
     return o;
   },
-  'show ip route': (st, d) => {
-    if (!d.routing) return ['% 這台設備沒有啟用 IP 路由（L2 交換器）'];
-    const rows = routeRows(d);
-    if (!rows.length) return ['路由表是空的'];
-    const o = ['Codes: L - local, C - connected, S - static, O - OSPF, B - BGP, IA - OSPF inter area', '       E2 - OSPF external type 2, * - candidate default', ''];
-    // 同一個網段有好幾條等價的路：第一行印網段，其他的路縮排在下面（和真的 IOS 一樣）
-    let prev = null;
-    for (const r of rows) {
-      const code = ((r.type === 'D' ? 'S' : r.type) + (r.dst.startsWith('0.0.0.0') ? '*' : ' ') + (r.sub || '')).padEnd(5);
-      const dst = r.dst.replace('（預設）', '');
-      if (r.via === '直連') { o.push(`${code}   ${dst} is directly connected, ${r.iface}`); prev = null; continue; }
-      const tail = `[${r.ad}/${r.metric}] via ${r.via}, ${r.iface}${r.bad ? '   (inactive)' : ''}`;
-      if (prev && prev.dst === dst && prev.type === r.type && prev.metric === r.metric) o.push(' '.repeat(9 + dst.length) + tail);
-      else o.push(`${code}   ${dst} ${tail}`);
-      prev = r;
-    }
-    return o;
-  },
+  'show ip route': (st, d) => routeLines(st, d, () => true),
+  'show ip route connected': (st, d) => routeLines(st, d, (r) => r.type === 'C' || r.type === 'L'),
+  'show ip route static': (st, d) => routeLines(st, d, (r) => r.type === 'S' || r.type === 'D'),
+  'show ip route ospf': (st, d) => routeLines(st, d, (r) => r.type === 'O'),
+  'show ip route bgp': (st, d) => routeLines(st, d, (r) => r.type === 'B'),
   'show ipv6 route': (st, d) => {
     const rows = route6Rows(d);
     return rows.length ? rows.map((r) => (r.via === '直連' ? `C   ${r.dst}\n     via ${r.iface}, directly connected` : `S   ${r.dst.replace('（預設）', '')}\n     via ${r.via}${r.bad ? '  (inactive)' : ''}`)).join('\n').split('\n') : ['IPv6 路由表是空的'];
@@ -667,6 +654,118 @@ function switchportLines(st, d, p) {
 // ───────────────────────── BGP ─────────────────────────
 /** 有類別的網段（A /8、B /16、C /24）不印長度，其他的才印，和 IOS 一樣 */
 const bgpNet = (r) => { const a = r.net >>> 24, cls = a < 128 ? 8 : a < 192 ? 16 : 24; return r.bits === cls || (r.net === 0 && r.bits === 0) ? fmtIp(r.net) : `${fmtIp(r.net)}/${r.bits}`; };
+// ── show ip route：和真的 IOS 一樣依主網段 (classful) 分組、列出介面自己的位址 (L)、動態路由的存在時間 ──
+const ROUTE_CODES = ['Codes: L - local, C - connected, S - static, R - RIP, M - mobile, B - BGP',
+  '       D - EIGRP, EX - EIGRP external, O - OSPF, IA - OSPF inter area',
+  '       N1 - OSPF NSSA external type 1, N2 - OSPF NSSA external type 2',
+  '       E1 - OSPF external type 1, E2 - OSPF external type 2',
+  '       i - IS-IS, su - IS-IS summary, L1 - IS-IS level-1, L2 - IS-IS level-2',
+  '       ia - IS-IS inter area, * - candidate default, U - per-user static route',
+  '       o - ODR, P - periodic downloaded static route, H - NHRP, l - LISP',
+  '       + - replicated route, % - next hop override', ''];
+/** A / B / C 類的主網段長度 */
+const classBits = (net) => { const a = net >>> 24; return a < 128 ? 8 : a < 192 ? 16 : 24; };
+/** 路由存在多久：一天以內 hh:mm:ss，再久就是 1d02h */
+const rtAge = (st, r) => {
+  const s = Math.max(0, Math.floor(st.clock - (r.since ?? st.clock)));
+  return s < 86400 ? hms(s) : `${Math.floor(s / 86400)}d${String(Math.floor((s % 86400) / 3600)).padStart(2, '0')}h`;
+};
+/** 路由代碼：O IA、O*E2、S*、B* … （DHCP 學到的預設路由在 IOS 也是 S*） */
+const routeCode = (r) => { const t = r.type === 'D' ? 'S' : r.type, def = r.bits === 0 ? '*' : ''; return t + def + (r.sub ? (def ? '' : ' ') + r.sub : ''); };
+/**
+ * 真正放進路由表的路：每個網段只留管理距離（再來是 metric）最好的那一種，等價的全部留下；再加上每個介面自己的 /32 (L)。
+ * 沒放進去的（下一站不通的靜態路由、管理距離比較大的備援路由）另外列出來，畫面上用提示說明原因
+ */
+function ribOf(d) {
+  const all = d.rt.routes || [], key = (r) => r.net + '/' + r.bits, best = {};
+  for (const r of all) {
+    if (r.bad) continue;
+    const b = best[key(r)];
+    if (!b || r.ad < b.ad || (r.ad === b.ad && r.metric < b.metric)) best[key(r)] = r;
+  }
+  const rib = [], out = [];
+  for (const r of all) { const b = best[key(r)]; (!r.bad && b && b.ad === r.ad && b.metric === r.metric && b.type === r.type ? rib : out).push(r); }
+  for (const i of d.ifaces) if (i.rt && i.rt.ip != null && i.rt.link && i.rt.bits < 32) rib.push({ net: i.rt.ip, bits: 32, via: null, iface: i, type: 'L', ad: 0, metric: 0 });
+  rib.sort((a, b) => a.net - b.net || a.bits - b.bits); // 穩定排序：等價的路維持原本的順序
+  return { rib, out };
+}
+const routeTail = (st, r) => {
+  if (r.type === 'C' || r.type === 'L') return `is directly connected, ${longIf(r.iface.label)}`;
+  const m = `[${r.ad}/${r.metric}] via ${fmtIp(r.via)}`;
+  if (r.type === 'O') return `${m}, ${rtAge(st, r)}, ${longIf(r.iface.label)}`;
+  if (r.type === 'B') return `${m}, ${rtAge(st, r)}`; // BGP 的下一站要再查一次路由表（遞迴），所以不寫介面
+  return m; // 靜態路由只寫下一站
+};
+function routeLines(st, d, keep) {
+  if (!d.routing) {
+    // L2 交換器沒有路由表：只有管理用的預設閘道
+    const gw = d.ifaces.find((i) => i.rt && i.rt.gw != null);
+    return [gw ? `Default gateway is ${fmtIp(gw.rt.gw)}` : 'Default gateway is not set', '', 'Host               Gateway           Last Use    Total Uses  Interface', 'ICMP redirect cache is empty',
+      '（這是一台 L2 交換器，沒有啟用 ip routing：它只有管理用的預設閘道，不會替別人轉送封包）'];
+  }
+  const { rib, out } = ribOf(d);
+  const def = rib.filter((r) => r.bits === 0).sort((a, b) => a.ad - b.ad)[0];
+  const o = [...ROUTE_CODES, def ? `Gateway of last resort is ${fmtIp(def.via)} to network 0.0.0.0` : 'Gateway of last resort is not set', ''];
+  // 依主網段分組；比主網段還大的（預設路由、supernet）自己一組、不印標題
+  const groups = [];
+  for (const r of rib.filter(keep)) {
+    const cb = classBits(r.net), major = r.bits >= cb ? netOf(r.net, cb) : null;
+    let g = groups[groups.length - 1];
+    if (!g || major == null || g.major !== major) { g = { major, cb, rows: [] }; groups.push(g); }
+    g.rows.push(r);
+  }
+  for (const g of groups) {
+    const nets = new Set(g.rows.map((r) => r.net + '/' + r.bits)), masks = new Set(g.rows.map((r) => r.bits));
+    const header = g.major != null && !(nets.size === 1 && g.rows[0].bits === g.cb);
+    if (header) {
+      o.push(masks.size === 1 ? `      ${fmtIp(g.major)}/${g.rows[0].bits} is subnetted, ${nets.size} subnets`
+        : `      ${fmtIp(g.major)}/${g.cb} is variably subnetted, ${nets.size} subnets, ${masks.size} masks`);
+    }
+    const width = header ? 9 : 6, withMask = !header || masks.size > 1;
+    let prev = null;
+    for (const r of g.rows) {
+      const dst = fmtIp(r.net) + (withMask ? '/' + r.bits : '');
+      // 等價多路徑：第二條以後只印「[AD/metric] via …」，對齊在第一條的 [ 底下
+      if (prev && prev.net === r.net && prev.bits === r.bits && prev.type === r.type && r.via != null) o.push(' '.repeat(width + dst.length + 1) + routeTail(st, r));
+      else o.push(routeCode(r).padEnd(width) + dst + ' ' + routeTail(st, r));
+      prev = r;
+    }
+  }
+  const hidden = out.filter(keep);
+  if (hidden.length) {
+    o.push('');
+    for (const r of hidden) {
+      const what = `${routeCode(r)} ${fmtIp(r.net)}/${r.bits} [${r.ad}/${r.metric}] via ${fmtIp(r.via)}`;
+      o.push(r.bad ? `（沒有放進路由表：${what}。${r.bad}）` : `（沒有放進路由表：${what}。同一個網段已經有管理距離更小的路，這條是備援，平常不會用到）`);
+    }
+  }
+  return o;
+}
+/** show ip route <位址> [遮罩]：單一網段的詳細資料 */
+function routeEntry(st, d, rs) {
+  const r = rs[0], def = r.bits === 0;
+  const o = [`Routing entry for ${fmtIp(r.net)}/${r.bits}${r.bits < classBits(r.net) ? ', supernet' : ''}`];
+  const metricLine = (m) => `      Route metric is ${m}, traffic share count is 1`;
+  if (r.type === 'C' || r.type === 'L') {
+    o.push(`  Known via "connected", distance 0, metric 0 (connected${r.type === 'C' ? ', via interface' : ''})`, '  Routing Descriptor Blocks:', `  * directly connected, via ${longIf(r.iface.label)}`, metricLine(0));
+  } else if (r.type === 'S' || r.type === 'D') {
+    o.push(`  Known via "static", distance ${r.ad}, metric 0${def ? ', candidate default path' : ''}`, '  Routing Descriptor Blocks:');
+    rs.forEach((x, k) => o.push(`  ${k ? ' ' : '*'} ${fmtIp(x.via)}`, metricLine(0)));
+  } else if (r.type === 'O') {
+    const type = r.sub === 'IA' ? 'inter area' : r.sub === 'E2' ? 'extern 2' : 'intra area';
+    if (r.sub === 'E2') o.push(`  Known via "ospf 1", distance 110, metric ${r.metric}${def ? ', candidate default path' : ''}`, `  Tag 1, type ${type}, forward metric ${r.fwd ?? 1}`);
+    else o.push(`  Known via "ospf 1", distance 110, metric ${r.metric}, type ${type}`);
+    o.push(`  Last update from ${fmtIp(r.via)} on ${longIf(r.iface.label)}, ${rtAge(st, r)} ago`, '  Routing Descriptor Blocks:');
+    rs.forEach((x, k) => o.push(`  ${k ? ' ' : '*'} ${fmtIp(x.via)}, from ${x.adv != null ? fmtIp(x.adv) : fmtIp(x.via)}, ${rtAge(st, x)} ago, via ${longIf(x.iface.label)}`, metricLine(x.metric)));
+  } else if (r.type === 'B') {
+    const asn = (bgpCfg(d) || {}).asn, path = r.aspath || [];
+    o.push(`  Known via "bgp ${asn}", distance ${r.ad}, metric ${r.metric}${def ? ', candidate default path' : ''}`, `  Tag ${path[0] ?? 0}, type external`,
+      `  Last update from ${fmtIp(r.via)} ${rtAge(st, r)} ago`, '  Routing Descriptor Blocks:');
+    rs.forEach((x, k) => o.push(`  ${k ? ' ' : '*'} ${fmtIp(x.via)}, from ${fmtIp(x.via)}, ${rtAge(st, x)} ago`, metricLine(x.metric), `      AS Hops ${path.length}`, `      Route tag ${path[0] ?? 0}`, '      MPLS label: none'));
+  }
+  return o;
+}
+
 /** show ip bgp：只看某個鄰居時，adv = 送給它的（advertised-routes），不然是從它收到的 */
 function bgpTable(st, d, only) {
   const b = d.rt.bgp;
@@ -977,6 +1076,22 @@ function showOrPing(app, devId, line, print) {
     (lines.length ? lines : [`（${i.label} 上沒有套用任何 service-policy）`]).forEach((l) => print(l, l.startsWith('（') ? 'hint' : 'pre'));
     return true;
   }
+  if (tok[0].length >= 2 && 'show'.startsWith(tok[0]) && tok[1] === 'ip' && (tok[2] || '').length >= 2 && 'route'.startsWith(tok[2]) && tok[3] && parseIp(tok[3]) != null) {
+    if (!d.routing) { routeLines(st, d, () => true).forEach((l) => print(l, l.startsWith('（') ? 'hint' : 'pre')); return true; }
+    const ip = parseIp(tok[3]), bits = tok[4] != null ? parseMask(tok[4]) : null;
+    if (tok[4] != null && bits == null) { print(`% Invalid input detected：${tok[4]} 不是子網路遮罩`, 'warn'); return true; }
+    const { rib } = ribOf(d);
+    let hit;
+    if (bits != null) hit = rib.filter((r) => r.bits === bits && r.net === netOf(ip, bits));
+    else {
+      // 和真的 IOS 一樣：只符合預設路由的位址算「不在路由表裡」（要看預設路由就查 0.0.0.0）
+      const best = rib.filter((r) => netOf(ip, r.bits) === r.net && (r.bits > 0 || ip === 0)).reduce((a, r) => (!a || r.bits > a.bits ? r : a), null);
+      hit = best ? rib.filter((r) => r.net === best.net && r.bits === best.bits) : [];
+    }
+    if (!hit.length) { print(bits != null ? '% Subnet not in table' : '% Network not in table', 'warn'); return true; }
+    routeEntry(st, d, hit).forEach((l) => print(l, 'pre'));
+    return true;
+  }
   if (tok[0].length >= 2 && 'show'.startsWith(tok[0]) && tok[1] === 'ip' && tok[2] === 'bgp' && tok[3] && tok[3].length >= 3 && 'neighbors'.startsWith(tok[3])) {
     const b = d.rt.bgp;
     if (!b) { print('% BGP not active', 'warn'); return true; }
@@ -1034,7 +1149,7 @@ function showOrPing(app, devId, line, print) {
   }
   const cmd = CMDS.find((c) => match(tok, c));
   if (!cmd) return false;
-  SHOW[cmd](st, d).forEach((l) => print(l, 'pre')); // 表格不折行，太寬時左右捲動
+  SHOW[cmd](st, d).forEach((l) => print(l, l.startsWith('（') ? 'hint' : 'pre')); // 表格不折行，太寬時左右捲動；全形括號開頭的是說明
   return true;
 }
 

@@ -56,11 +56,18 @@ export function bgpCard(ctx) {
       } })),
     h('div', { class: 'acl-h' }, h('span', { text: '鄰居' }), h('em', { text: 'eBGP 只和直連的鄰居建立關係（TCP 179）' })),
     b.neighbors.map((n, k) => h('div', { class: 'qos-pm' },
-      h('div', { class: 'line' }, h('b', { class: 'mono', text: n.ip }), h('span', { class: 'mono', text: `AS ${n.remoteAs}` }),
-        inp(ctx, ...bind(n, 'desc'), { ph: '說明，例如 ISP-A', mono: false }),
-        ctx.live(() => { const p = ((dev.rt.bgp || {}).peers || []).find((x) => x.ip === n.ip); return p ? badge(p.state === 'Established' ? 'on' : 'warn', p.state === 'Established' ? `Established · 收到 ${p.pfx} 筆` : p.state) : null; }),
+      h('div', { class: 'line' }, h('b', { class: 'mono', text: n.ip }),
+        h('span', { style: { marginLeft: 'auto' } }, ctx.live(() => { const p = ((dev.rt.bgp || {}).peers || []).find((x) => x.ip === n.ip); return p ? badge(p.state === 'Established' ? 'on' : 'warn', p.state === 'Established' ? `Established · 收到 ${p.pfx} 筆` : p.state) : null; })),
         del(() => { b.neighbors.splice(k, 1); ctx.commit(true); })),
       ctx.live(() => { const p = ((dev.rt.bgp || {}).peers || []).find((x) => x.ip === n.ip); return p && p.state !== 'Established' && p.why ? note('warn', p.why) : null; }),
+      grid2(
+        // 改 remote-as 就像在 CLI 重打一次 neighbor … remote-as：鄰居關係會重新建立
+        field('對方的 AS (remote-as)', inp(ctx, () => String(n.remoteAs), (v) => {
+          if (!/^\d+$/.test(v) || !(+v > 0) || +v > 4294967295) return toast('AS 號碼是 1 到 4294967295 的整數', 'bad');
+          if (+v === +b.asn) return toast('這個模擬只做 eBGP：鄰居的 AS 要和自己不一樣', 'bad');
+          n.remoteAs = +v;
+        }, { check: isNum(1, 4294967295), rerender: true })),
+        field('說明 (description)', inp(ctx, ...bind(n, 'desc'), { ph: '例如 ISP-A', mono: false }))),
       grid2(
         field('收到的路由：local-preference', inp(ctx, () => String(lpOf(dev, n)), (v) => setLp(dev, n, v), { ph: '預設 100，越高越優先（決定往外走哪一家）', check: isNum(0, 4294967295) })),
         field('送出去時 AS path 多加幾次自己', inp(ctx, () => (prependOf(dev, n) ? String(prependOf(dev, n)) : ''), (v) => setPrepend(dev, n, v), { ph: '0（AS path 越長，別人越不會從這裡進來）', check: isNum(0, 10) }))),
@@ -83,8 +90,10 @@ export function bgpCard(ctx) {
       const t = ((dev.rt.bgp || {}).table || []).filter((r) => r.best);
       if (!t.length) return null;
       return [h('div', { class: 'acl-h' }, h('span', { text: '最佳路徑' }), h('em', { text: 'weight → local-preference → AS path 長短 → …' })),
-        ...t.map((r) => h('div', { class: 'line' }, h('b', { class: 'mono', text: r.bits === 0 ? '0.0.0.0/0' : fmtNet(r) }),
-          h('span', { class: 'mono muted', style: { marginLeft: 'auto' }, text: r.local ? '自己發出的' : `經由 ${fmtIp(r.nh)} · AS path ${r.aspath.join(' ')}${r.lp != null && r.lp !== 100 ? ' · LP ' + r.lp : ''}` })))];
+        ...t.map((r) => h('div', { class: 'bgp-best' },
+          h('div', { class: 'top' }, h('b', { class: 'mono', text: r.bits === 0 ? '0.0.0.0/0' : fmtNet(r) }),
+            r.local ? h('span', { class: 'muted', text: '自己發出的' }) : h('span', { class: 'mono muted', text: `經由 ${fmtIp(r.nh)}` })),
+          r.local ? null : h('span', { class: 'mono path', text: `AS path ${r.aspath.join(' ') || '(空)'}${r.lp != null && r.lp !== 100 ? ' · local-pref ' + r.lp : ''}` })))];
     }));
   void netOf; void state;
 }

@@ -1070,6 +1070,17 @@ function routesAll(state) {
   for (const d of Object.values(state.devices)) buildRoutes(d);
   computeOspf(state, ospfOn);
   computeBgp(state, { transact, logEvent });
+  // show ip route 的「00:03:43」：OSPF / BGP 的路從什麼時候開始在路由表裡
+  const since = (state.dyn.rtSince ||= {});
+  for (const d of Object.values(state.devices)) {
+    const old = since[d.id] || {}, now = {};
+    for (const r of d.rt.routes || []) {
+      if (r.type !== 'O' && r.type !== 'B') continue;
+      const k = r.type + '|' + r.net + '/' + r.bits + '|' + r.via;
+      r.since = now[k] = old[k] ?? state.clock;
+    }
+    if (Object.keys(now).length) since[d.id] = now; else delete since[d.id];
+  }
 }
 
 // ───────────────────────────── VPN 通道 ─────────────────────────────

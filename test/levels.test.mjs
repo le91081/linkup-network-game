@@ -1653,6 +1653,35 @@ console.log('\nBGP：鄰居、最佳路徑、local-preference、AS-path prepend�
   ok(still === 'Established' && peer('198.51.100.1').state === 'Active', 'BGP 的封包被擋住：線路沒斷，鄰居還是 Established，要等 hold time 180 秒過了才斷');
 }
 
+console.log('\nshow ip route：主網段分組、L 路由、等價多路徑、單筆查詢、沒放進路由表的路');
+{
+  const { iosSession } = await import('../src/engine/ios.js');
+  const { iosRun } = await import('../src/ui/cli.js');
+  const ok = (cond, title) => (cond ? console.log('  ✔ ' + title) : fail(title));
+  const sessions = new WeakMap();
+  const sessOf = (s, id) => { const m = sessions.get(s) || new Map(); sessions.set(s, m); if (!m.has(id)) m.set(id, iosSession(() => s.devices[id], () => s)); return m.get(id); };
+  const run = (s, id, line) => { const out = []; const sess = sessOf(s, id); const r = iosRun({ state: s }, id, sess, line, (l, cls) => out.push(cls === 'hint' ? '[hint]' + l : l)); if (r.changed) recompute(s); return out; };
+  const solvedState = (id) => { const lv = LEVELS.find((l) => l.id === id); const s = lv.setup(); recompute(s); lv.solve(s); recompute(s); advance(s, 60); recomputeNow(s); return s; };
+  const s = solvedState('l50');
+  const rt = run(s, 'r1', 'show ip route');
+  ok(rt.includes('Gateway of last resort is 203.0.113.1 to network 0.0.0.0') && rt.some((l) => /^B\*    0\.0\.0\.0\/0 \[20\/0\] via 203\.0\.113\.1, \d\d:\d\d:\d\d$/.test(l)),
+    '預設路由：Gateway of last resort，B* 0.0.0.0/0 後面是存在時間，BGP 的路不寫出介面');
+  ok(rt.includes('      192.0.2.0/24 is variably subnetted, 2 subnets, 2 masks') && rt.includes('L        192.0.2.1/32 is directly connected, GigabitEthernet0/0/2')
+    && rt.includes('      8.0.0.0/24 is subnetted, 1 subnets') && rt.some((l) => l.startsWith('B        8.8.8.0 [20/0]')), '依主網段分組、介面自己的位址是 L、遮罩都一樣時不印遮罩');
+  const one = run(s, 'r1', 'sh ip ro 8.8.8.8');
+  ok(one[0] === 'Routing entry for 8.8.8.0/24' && one.includes('  Known via "bgp 65010", distance 20, metric 0') && one.includes('      AS Hops 2'), 'show ip route <位址>：最長相符的那一筆，連同 AS path 長度');
+  ok(run(s, 'r1', 'show ip route 9.9.9.9')[0] === '% Network not in table' && run(s, 'r1', 'show ip route 0.0.0.0')[0] === 'Routing entry for 0.0.0.0/0, supernet', '只有預設路由符合的位址：Network not in table（要查預設路由就打 0.0.0.0）');
+  run(s, 'r1', 'configure terminal'); run(s, 'r1', 'ip route 0.0.0.0 0.0.0.0 198.51.100.1 250'); run(s, 'r1', 'end');
+  const st = run(s, 'r1', 'show ip route static');
+  ok(st.some((l) => l.startsWith('[hint]（沒有放進路由表：S* 0.0.0.0/0 [250/0]')), '管理距離 250 的備援預設路由不在路由表裡，畫面上說明原因');
+  const dc = solvedState('l48');
+  const ecmp = run(dc, 'dc1', 'show ip route ospf');
+  const at = ecmp.findIndex((l) => l.startsWith('O        10.10.2.0/24 [110/'));
+  ok(at > 0 && /^ {22}\[110\/\d+\] via /.test(ecmp[at + 1]), '等價多路徑：第二條路縮排對齊在第一條的 [ 底下');
+  const ia = run(solvedState('l49'), 'br1', 'show ip route');
+  ok(ia.some((l) => /^O IA     10\.0\.0\.0\/24 \[110\/\d+\] via /.test(l)), '區域之間的路由是 O IA');
+}
+
 // ── FortiGate 的 CLI ──
 console.log('\nFortiGate CLI');
 {
