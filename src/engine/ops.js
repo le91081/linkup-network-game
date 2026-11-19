@@ -384,7 +384,7 @@ export function routerId(d) {
 }
 
 function snapshot(state, d) {
-  const s = { port: {}, nbr: {}, vrrp: {}, tun: {}, dup: {}, dupIp: {}, pool: [], auth: {} };
+  const s = { port: {}, nbr: {}, nbr6: {}, norid6: false, vrrp: {}, tun: {}, dup: {}, dupIp: {}, pool: [], auth: {} };
   const shutIf = (pid) => d.ifaces.some((i) => i.shut && i.bind.t === 'port' && i.bind.port === pid);
   for (const p of d.ports) {
     const pc = d.sw && d.sw.ports[p.id], err = d.rt.err && d.rt.err[p.id];
@@ -395,6 +395,8 @@ function snapshot(state, d) {
     if (a && state.rt.links[d.id + ':' + p.id]) s.auth[p.id] = a.ok ? 'ok' : 'fail';
   }
   for (const n of d.rt.nbrs || []) if (n.state === 'full' || n.state === 'dying') s.nbr[n.dev + '|' + n.iface] = { st: n.state, rid: routerId(state.devices[n.dev]) ?? n.ip };
+  for (const n of d.rt.nbrs6 || []) if (n.state === 'full' || n.state === 'dying') s.nbr6[n.dev + '|' + n.iface] = { st: n.state, rid: n.rid };
+  s.norid6 = !!(d.rt.ospf6 && d.rt.ospf6.norid);
   for (const i of d.ifaces) {
     if (i.vrrp && i.vrrp.on && i.rt.vrrp) s.vrrp[i.id] = i.rt.vrrp.state;
     if (i.rt.conflict) s.dupIp[i.id] = i.rt.ip;
@@ -471,6 +473,14 @@ function diffDevice(state, d, a, b) {
   for (const [k, n] of Object.entries(a.nbr)) {
     if (!b.nbr[k]) ev(5, 'OSPF-5-ADJCHG', `Process 1, Nbr ${fmtIp(n.rid)} on ${longIf(ifLabel(k.split('|')[1]))} from FULL to DOWN, Neighbor Down: ${n.st === 'dying' ? 'Dead timer expired' : 'Interface down or detached'}`);
   }
+  // OSPFv3 鄰居（舊的快照可能沒有 nbr6）
+  for (const [k, n] of Object.entries(b.nbr6 || {})) {
+    if (!(a.nbr6 || {})[k]) ev(5, 'OSPFv3-5-ADJCHG', `Process 1, Nbr ${fmtIp(n.rid)} on ${longIf(ifLabel(k.split('|')[1]))} from LOADING to FULL, Loading Done`);
+  }
+  for (const [k, n] of Object.entries(a.nbr6 || {})) {
+    if (!(b.nbr6 || {})[k]) ev(5, 'OSPFv3-5-ADJCHG', `Process 1, Nbr ${fmtIp(n.rid)} on ${longIf(ifLabel(k.split('|')[1]))} from FULL to DOWN, Neighbor Down: ${n.st === 'dying' ? 'Dead timer expired' : 'Interface down or detached'}`);
+  }
+  if (b.norid6 && !a.norid6) ev(4, 'OSPFv3-4-NORTRID', 'Process 1 could not pick a router-id, please configure manually');
   // VRRP
   for (const [id, st] of Object.entries(b.vrrp)) {
     const was = a.vrrp[id];
@@ -556,7 +566,7 @@ export function opsAfter(state) {
     if (c.restarted) {
       // 剛開完機：有接線的介面會一個一個亮起來
       delete c.restarted;
-      prev = { port: Object.fromEntries(d.ports.map((p) => [p.id, 'down'])), nbr: {}, vrrp: {}, tun: {}, dup: {}, dupIp: {}, pool: [], auth: {} };
+      prev = { port: Object.fromEntries(d.ports.map((p) => [p.id, 'down'])), nbr: {}, nbr6: {}, norid6: false, vrrp: {}, tun: {}, dup: {}, dupIp: {}, pool: [], auth: {} };
     }
     if (prev && !boot) diffDevice(state, d, prev, snap);
     snap.dupAt = (prev && prev.dupAt) || {};

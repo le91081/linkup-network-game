@@ -6,7 +6,7 @@ import { transact } from '../engine/sim.js';
 import { dev, ifc, link, swp, WEB } from './util.js';
 
 export const CHAPTERS3 = [
-  { id: 9, title: 'IPv6', desc: '位址類型、SLAAC、IPv6 路由與雙協定。' },
+  { id: 9, title: 'IPv6', desc: '位址類型、SLAAC 與 DHCPv6、IPv6 路由與 OSPFv3、雙協定與 IPv6 ACL。' },
 ];
 
 export const LEVELS3 = [

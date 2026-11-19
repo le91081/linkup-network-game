@@ -1,4 +1,5 @@
-// OSPFv2：Router ID、鄰居（Hello / Dead、區域、驗證、MTU、被動介面）、DR / BDR 選舉、多區域與 ABR、外部預設路由、等價多路徑
+// OSPFv2 與 OSPFv3：Router ID、鄰居（Hello / Dead、區域、驗證、MTU、被動介面）、DR / BDR 選舉、多區域與 ABR、外部預設路由、等價多路徑
+// 兩個版本的計算完全一樣，差別只在「位址家族」：鄰居用什麼位址認識彼此、網段長什麼樣子、路由裝進哪一張表（見下方的 V4 / V6）
 //
 // 設定（IOS）：
 //   d.ospfNets = [{ net, bits, area }]   router ospf 底下的 network 敘述
@@ -12,7 +13,15 @@
 //   state.dyn.seg[網段]  這個廣播網段的 DR / BDR（選出來之後不會被搶走）
 //   state.dyn.rid[設備]  OSPF 程序啟動時選定的 Router ID（改了 router-id 要 clear ip ospf process 才生效）
 //   d.rt.nbrs、d.rt.ospf  給 show 指令與圖形介面看的
+//
+// OSPFv3（ipv6 router ospf 1）：
+//   d.ospf6 = { rid, default, passive: [介面 id], passiveDefault, noPassive: [介面 id], maxPaths, refBw }
+//   介面：i.ospf6Area（ipv6 ospf 1 area x）、i.ospf6Cost、i.ospf6Prio、i.ospf6Hello、i.ospf6Dead、i.ospf6Net（'p2p'）
+//   執行期：state.dyn.adj6 / seg6 / lsa6 / rid6，d.rt.nbrs6、d.rt.ospf6、state.rt.ospf6
+//   和 OSPFv2 不同的地方：鄰居用 link-local 位址建立（兩端的全域前綴不一樣也能成為鄰居），路由的下一站也是 link-local；
+//   Router ID 仍然是 32 位元，路由器上完全沒有 IPv4 位址時要手動設定，不然程序起不來
 import { netOf, sameNet, fmtIp, parseIp } from './ip.js';
+import { net6, fmtIp6 } from './ip6.js';
 import { linkInfo } from './model.js';
 import { l2Explore } from './sim.js';
 
@@ -79,12 +88,13 @@ export function ospfRid(state, d) {
   if (rid != null) tbl[d.id] = { rid, pending: false };
   return rid;
 }
-export function clearOspfProcess(state, d) {
+export function clearOspfProcess(state, d, ns = '') {
   if (!state.dyn) return;
-  delete (state.dyn.rid || {})[d.id];
-  for (const k of Object.keys(state.dyn.adj || {})) if (k.split('~').some((s) => s.startsWith(d.id + '/'))) delete state.dyn.adj[k];
+  delete (state.dyn['rid' + ns] || {})[d.id];
+  const adjT = state.dyn['adj' + ns] || {};
+  for (const k of Object.keys(adjT)) if (k.split('~').some((s) => s.startsWith(d.id + '/'))) delete adjT[k];
   // 這台當過 DR / BDR 的網段：它重新啟動，別人重新選；它要等完 Wait timer 才能再參加
-  for (const seg of Object.values(state.dyn.seg || {})) {
+  for (const seg of Object.values(state.dyn['seg' + ns] || {})) {
     const mine = (k) => k && k.startsWith(d.id + '/');
     if (mine(seg.dr)) { seg.dr = mine(seg.bdr) ? null : seg.bdr; seg.bdr = null; }
     if (mine(seg.bdr)) seg.bdr = null;
@@ -92,6 +102,87 @@ export function clearOspfProcess(state, d) {
     for (const i of d.ifaces) seg.cleared[d.id + '/' + i.id] = state.clock + OSPF_WAIT;
   }
 }
+
+// ───────────────────────── OSPFv3 的參數 ─────────────────────────
+
+export const ospf6Area = (d, i) => (d.ospf6 && i.ospf6Area != null && i.ospf6Area !== '' ? +i.ospf6Area : null);
+export const ospf6Passive = (d, i) => {
+  const c = d.ospf6 || {};
+  return (c.passiveDefault ? !(c.noPassive || []).includes(i.id) : (c.passive || []).includes(i.id)) || isLoopback(i);
+};
+export const ospf6NetType = (i) => (isLoopback(i) ? 'loopback' : i.ospf6Net === 'p2p' ? 'point-to-point' : 'broadcast');
+export const ospf6Hello = (i) => +i.ospf6Hello || 10;
+export const ospf6Dead = (i) => +i.ospf6Dead || 4 * ospf6Hello(i);
+export const ospf6Prio = (i) => (i.ospf6Prio == null || i.ospf6Prio === '' ? 1 : +i.ospf6Prio);
+export function ospf6Cost(state, d, i) {
+  if (+i.ospf6Cost > 0) return +i.ospf6Cost;
+  if (isLoopback(i)) return 1;
+  return Math.max(1, Math.floor((+(d.ospf6 || {}).refBw || 100) / bwOf(state, d, i)));
+}
+/** OSPFv3 的 Router ID 還是 32 位元：router-id 指令 > 最大的 IPv4 Loopback > 最大的 IPv4 介面位址；都沒有就是 null（程序起不來） */
+function pickRid6(d) {
+  const set = parseIp((d.ospf6 || {}).rid || '');
+  if (set != null) return set;
+  const loops = d.ifaces.filter((i) => isLoopback(i) && i.rt && i.rt.ip != null).map((i) => i.rt.ip >>> 0);
+  if (loops.length) return Math.max(...loops);
+  const all = d.ifaces.filter((i) => i.rt && i.rt.ip != null && i.rt.link).map((i) => i.rt.ip >>> 0);
+  return all.length ? Math.max(...all) : null;
+}
+export function ospf6Rid(state, d) {
+  const tbl = (state.dyn.rid6 ||= {});
+  const cur = tbl[d.id];
+  const want = parseIp((d.ospf6 || {}).rid || '');
+  if (cur && cur.rid != null) { cur.pending = want != null && want !== cur.rid; return cur.rid; }
+  const rid = pickRid6(d);
+  if (rid != null) tbl[d.id] = { rid, pending: false };
+  return rid;
+}
+/** 全域位址（OSPFv3 通告的前綴；link-local 不通告） */
+const globals6 = (i) => (i.rt && i.rt.v6 ? i.rt.v6.addrs : []);
+
+/** 一個位址家族需要的東西 */
+const V4 = (ospfOn) => ({
+  ns: '', key: 'ospf', nkey: 'nbrs', name: 'OSPF', zero: 0, enc: (x) => x, dec: (x) => x,
+  on: (d, i) => ospfOn(d, i) && i.rt.ip != null,
+  area: ospfArea, cost: ospfCost, passive: ospfPassive, prio: ospfPrio, hello: ospfHello, dead: ospfDead, netType: ospfNetType,
+  rid: ospfRid, mismatch: helloMismatch,
+  // 同一個子網路的才會成為鄰居
+  peer: (i, j) => sameNet(j.rt.ip, i.rt.ip, Math.min(i.rt.bits, j.rt.bits)),
+  addr: (i) => i.rt.ip,
+  // Loopback 一律以 /32 主機路由通告（除非改成 point-to-point）
+  stubs: (d, i, cost, area) => [isLoopback(i) ? { net: i.rt.ip, bits: 32, cost: 1, area } : { net: netOf(i.rt.ip, i.rt.bits), bits: i.rt.bits, cost, area }],
+  segKey: (list, area) => `${area}|${fmtIp(netOf(list[0].i.rt.ip, list[0].i.rt.bits))}/${list[0].i.rt.bits}`,
+  maxPaths: (d) => d.ospfMaxPaths,
+  ranges: (d, area) => (d.ospfRanges || []).filter((r) => +r.area === area),
+  netOf,
+  routes: (d) => d.rt.routes,
+  originates: (d) => !!d.ospfDefault,
+});
+const V6 = {
+  ns: '6', key: 'ospf6', nkey: 'nbrs6', name: 'OSPFv3', zero: 0n,
+  // state.dyn 會被序列化（存檔、試算），BigInt 要存成字串
+  enc: (x) => (x == null ? x : x.toString()), dec: (x) => (x == null ? x : BigInt(x)),
+  on: (d, i) => !!d.v6routing && !!i.rt.v6 && i.rt.v6.ll != null,
+  area: ospf6Area, cost: ospf6Cost, passive: ospf6Passive, prio: ospf6Prio, hello: ospf6Hello, dead: ospf6Dead, netType: ospf6NetType,
+  rid: ospf6Rid,
+  // OSPFv3 的 Hello 沒有子網路遮罩，也沒有自己的驗證欄位（靠 IPsec），所以只比區域與計時器
+  mismatch: (d, i, x, j, ai, aj) => (ai !== aj ? `區域不一致（這一端 area ${ai}，對面 area ${aj}）`
+    : ospf6Hello(i) !== ospf6Hello(j) || ospf6Dead(i) !== ospf6Dead(j) ? `Hello / Dead 計時器不一致（這一端 ${ospf6Hello(i)} / ${ospf6Dead(i)} 秒，對面 ${ospf6Hello(j)} / ${ospf6Dead(j)} 秒）` : ''),
+  // 用 link-local 認識彼此：同一條鏈路就行，不看全域前綴
+  peer: () => true,
+  addr: (i) => i.rt.v6.ll,
+  stubs: (d, i, cost, area) => globals6(i).map((a) => (isLoopback(i) ? { net: a.ip, bits: 128, cost: 0, area } : { net: net6(a.ip, a.bits), bits: a.bits, cost, area })),
+  // 網段的代號：成員上最小的全域前綴；整條鏈路只有 link-local 時用成員裡最小的介面
+  segKey: (list, area) => {
+    const pfx = list.flatMap((s) => globals6(s.i).map((a) => `${fmtIp6(net6(a.ip, a.bits))}/${a.bits}`)).sort();
+    return `${area}|${pfx[0] || 'll:' + list.map((s) => s.d.id + '/' + s.i.id).sort()[0]}`;
+  },
+  maxPaths: (d) => (d.ospf6 || {}).maxPaths,
+  ranges: () => [],
+  netOf: net6,
+  routes: (d) => d.rt.routes6,
+  originates: (d) => !!(d.ospf6 || {}).default,
+};
 
 // ───────────────────────── 主要的計算 ─────────────────────────
 
@@ -106,14 +197,27 @@ function helloMismatch(d, i, x, j, ai, aj) {
   return '';
 }
 
-export function computeOspf(state, ospfOn) {
+export function computeOspf(state, ospfOn) { computeOspfAf(state, V4(ospfOn)); }
+/** OSPFv3：在 IPv6 的路由表算好直連與靜態路由之後呼叫 */
+export function computeOspf6(state) { computeOspfAf(state, V6); }
+
+function computeOspfAf(state, af) {
   const dyn = state.dyn, now = state.clock, devs = state.devices;
-  dyn.adj ||= {}; dyn.seg ||= {}; dyn.lsa ||= {};
-  const running = (d, i) => !!i && ospfOn(d, i) && i.rt.ip != null && i.rt.link && ospfArea(d, i) != null;
-  const nodes = Object.values(devs).filter((d) => d.ifaces.some((i) => running(d, i)));
-  const isNode = new Set(nodes.map((d) => d.id));
+  const adjT = (dyn['adj' + af.ns] ||= {}), segT = (dyn['seg' + af.ns] ||= {}), lsaT = (dyn['lsa' + af.ns] ||= {});
+  const running = (d, i) => !!i && i.rt.link && af.on(d, i) && af.area(d, i) != null;
+  const cand = Object.values(devs).filter((d) => d.ifaces.some((i) => running(d, i)));
   const rid = {};
-  for (const d of nodes) { d.rt.nbrs = []; d.rt.ospf = { ifs: {}, rid: ospfRid(state, d), pending: dyn.rid[d.id] && dyn.rid[d.id].pending }; rid[d.id] = d.rt.ospf.rid; }
+  for (const d of cand) {
+    d.rt[af.nkey] = [];
+    d.rt[af.key] = { ifs: {}, rid: af.rid(state, d) };
+    d.rt[af.key].pending = !!((dyn['rid' + af.ns] || {})[d.id] || {}).pending;
+    rid[d.id] = d.rt[af.key].rid;
+    // OSPFv3 選不出 Router ID（沒有任何 IPv4 位址、也沒有設定 router-id）：程序起不來
+    if (rid[d.id] == null) d.rt[af.key].norid = true;
+  }
+  const nodes = cand.filter((d) => rid[d.id] != null);
+  const isNode = new Set(nodes.map((d) => d.id));
+  const O = (d) => d.rt[af.key], NB = (d) => d.rt[af.nkey];
   const key = (d, i) => d.id + '/' + i.id;
 
   // 1. 找出每個介面聽得到的鄰居（Hello 的參數要一致），廣播網段順便分組
@@ -124,20 +228,19 @@ export function computeOspf(state, ospfOn) {
     stubs[d.id] = [];
     for (const i of d.ifaces) {
       if (!running(d, i)) continue;
-      const area = ospfArea(d, i), cost = ospfCost(state, d, i);
-      d.rt.ospf.ifs[i.id] = { area, cost, type: ospfNetType(i), passive: ospfPassive(d, i), prio: ospfPrio(i), hello: ospfHello(i), dead: ospfDead(i), state: 'DOWN', nbrs: 0, full: 0, why: [] };
-      // Loopback 一律以 /32 主機路由通告（除非改成 point-to-point）
-      stubs[d.id].push(isLoopback(i) ? { net: i.rt.ip, bits: 32, cost: 1, area } : { net: netOf(i.rt.ip, i.rt.bits), bits: i.rt.bits, cost, area });
-      if (ospfPassive(d, i)) { d.rt.ospf.ifs[i.id].state = isLoopback(i) ? 'LOOP' : 'PASSIVE'; continue; }
+      const area = af.area(d, i), cost = af.cost(state, d, i);
+      O(d).ifs[i.id] = { area, cost, type: af.netType(i), passive: af.passive(d, i), prio: af.prio(i), hello: af.hello(i), dead: af.dead(i), state: 'DOWN', nbrs: 0, full: 0, why: [] };
+      stubs[d.id].push(...af.stubs(d, i, cost, area));
+      if (af.passive(d, i)) { O(d).ifs[i.id].state = isLoopback(i) ? 'LOOP' : 'PASSIVE'; continue; }
       for (const e of l2Explore(state, d.id, i)) {
         const x = devs[e.dev], j = e.iface;
-        if (!isNode.has(x.id) || !running(x, j) || !sameNet(j.rt.ip, i.rt.ip, Math.min(i.rt.bits, j.rt.bits))) continue;
+        if (!isNode.has(x.id) || !running(x, j) || !af.peer(i, j)) continue;
         const k = [key(d, i), key(x, j)].sort().join('~');
         if (seenPair.has(k)) continue;
         seenPair.add(k);
-        if (ospfPassive(x, j)) continue; // 對面不送 Hello
-        const why = helloMismatch(d, i, x, j, ospfArea(d, i), ospfArea(x, j)) || (rid[d.id] === rid[x.id] ? `Router ID 重複（兩台都是 ${fmtIp(rid[d.id])}）` : '');
-        pairs.push({ a: { d, i }, b: { d: x, i: j }, area: ospfArea(d, i), why, k });
+        if (af.passive(x, j)) continue; // 對面不送 Hello
+        const why = af.mismatch(d, i, x, j, af.area(d, i), af.area(x, j)) || (rid[d.id] === rid[x.id] ? `Router ID 重複（兩台都是 ${fmtIp(rid[d.id])}）` : '');
+        pairs.push({ a: { d, i }, b: { d: x, i: j }, area: af.area(d, i), why, k });
       }
     }
   }
@@ -149,7 +252,7 @@ export function computeOspf(state, ospfOn) {
   for (const p of pairs) if (!p.why) for (const s of [p.a, p.b]) { const g = find(key(s.d, s.i)); (groups[g] ||= new Map()).set(key(s.d, s.i), s); }
   // 網段上暫時只有自己：等完 Wait timer 自己當 DR。之後有人加入，聽到 Hello 裡已經有 DR，就不用再等
   for (const d of nodes) for (const i of d.ifaces) {
-    if (!running(d, i) || ospfPassive(d, i) || ospfNetType(i) !== 'broadcast' || parent[key(d, i)] != null) continue;
+    if (!running(d, i) || af.passive(d, i) || af.netType(i) !== 'broadcast' || parent[key(d, i)] != null) continue;
     groups[key(d, i)] = new Map([[key(d, i), { d, i }]]);
   }
   const role = {}; // 介面 → 'DR' | 'BDR' | 'DROTHER' | 'P2P'
@@ -157,20 +260,20 @@ export function computeOspf(state, ospfOn) {
   const seenSeg = new Set();
   for (const members of Object.values(groups)) {
     const list = [...members.values()];
-    const p2p = list.every((s) => ospfNetType(s.i) === 'point-to-point');
+    const p2p = list.every((s) => af.netType(s.i) === 'point-to-point');
     if (p2p) { for (const s of list) role[key(s.d, s.i)] = 'P2P'; continue; }
     const s0 = list[0];
-    const sk = `${ospfArea(s0.d, s0.i)}|${fmtIp(netOf(s0.i.rt.ip, s0.i.rt.bits))}/${s0.i.rt.bits}`;
+    const sk = af.segKey(list, af.area(s0.d, s0.i));
     seenSeg.add(sk);
-    let seg = dyn.seg[sk];
-    if (!seg) seg = dyn.seg[sk] = { since: dyn.boot ? -1e9 : now, dr: null, bdr: null };
+    let seg = segT[sk];
+    if (!seg) seg = segT[sk] = { since: dyn.boot ? -1e9 : now, dr: null, bdr: null };
     const ids = new Set(list.map((s) => key(s.d, s.i)));
     // 剛 clear ip ospf process 的路由器：重新啟動中，這段時間不參加選舉
     const cleared = seg.cleared || {};
     for (const k of Object.keys(cleared)) if (cleared[k] <= now) delete cleared[k];
-    for (const t of new Set(Object.values(cleared))) state.rt.pending.push({ at: t, dev: s0.d.id, kind: 'ospf', text: `${s0.d.name}：OSPF 程序重新啟動中，等 Wait timer 之後才參加 DR 選舉` });
-    const elig = list.filter((s) => ospfPrio(s.i) > 0 && !cleared[key(s.d, s.i)]);
-    const better = (a, b) => ospfPrio(a.i) - ospfPrio(b.i) || (rid[a.d.id] >>> 0) - (rid[b.d.id] >>> 0);
+    for (const t of new Set(Object.values(cleared))) state.rt.pending.push({ at: t, dev: s0.d.id, kind: 'ospf', text: `${s0.d.name}：${af.name} 程序重新啟動中，等 Wait timer 之後才參加 DR 選舉` });
+    const elig = list.filter((s) => af.prio(s.i) > 0 && !cleared[key(s.d, s.i)]);
+    const better = (a, b) => af.prio(a.i) - af.prio(b.i) || (rid[a.d.id] >>> 0) - (rid[b.d.id] >>> 0);
     const pick = (cands) => cands.slice().sort((a, b) => better(b, a))[0] || null;
     if (seg.since + OSPF_WAIT <= now) {
       // 選出來的 DR / BDR 不會被後來的路由器搶走；DR 不見了由 BDR 接手，再補選一個 BDR
@@ -182,32 +285,32 @@ export function computeOspf(state, ospfOn) {
       if (!seg.dr) { const c = pick(elig); seg.dr = c ? key(c.d, c.i) : null; }
       if (!seg.bdr) { const c = pick(elig.filter((s) => key(s.d, s.i) !== seg.dr)); seg.bdr = c ? key(c.d, c.i) : null; }
     } else {
-      state.rt.pending.push({ at: seg.since + OSPF_WAIT, dev: s0.d.id, kind: 'ospf', text: `${s0.d.name}：OSPF 正在等 Wait timer，之後才選 DR / BDR` });
+      state.rt.pending.push({ at: seg.since + OSPF_WAIT, dev: s0.d.id, kind: 'ospf', text: `${s0.d.name}：${af.name} 正在等 Wait timer，之後才選 DR / BDR` });
     }
     for (const s of list) { const k = key(s.d, s.i); role[k] = !seg.dr && !seg.bdr ? 'WAITING' : k === seg.dr ? 'DR' : k === seg.bdr ? 'BDR' : 'DROTHER'; segOf[k] = seg; }
   }
-  for (const k of Object.keys(dyn.seg)) if (!seenSeg.has(k)) delete dyn.seg[k];
+  for (const k of Object.keys(segT)) if (!seenSeg.has(k)) delete segT[k];
 
   // 3. 每一對鄰居的狀態：計時、FULL / 2WAY / EXSTART
   const adj = {}; // 區域 → 設備 → [{ to, iface, via, cost }]
   const seen = new Set();
   const edge = (area, a, b, stale) => {
-    ((adj[area] ||= {})[a.d.id] ||= []).push({ to: b.d.id, iface: a.i, via: b.i.rt.ip, cost: ospfCost(state, a.d, a.i), stale });
+    ((adj[area] ||= {})[a.d.id] ||= []).push({ to: b.d.id, iface: a.i, via: af.addr(b.i), cost: af.cost(state, a.d, a.i), stale });
   };
   for (const p of pairs) {
     const { a, b } = p;
     for (const [s, o] of [[a, b], [b, a]]) {
-      const inf = s.d.rt.ospf.ifs[s.i.id];
+      const inf = O(s.d).ifs[s.i.id];
       inf.nbrs++;
       if (p.why) inf.why.push(`${o.d.name}：${p.why}`);
     }
     if (p.why) continue;
-    let rec = dyn.adj[p.k];
-    if (!rec) rec = dyn.adj[p.k] = { since: dyn.boot ? -1e9 : now };
+    let rec = adjT[p.k];
+    if (!rec) rec = adjT[p.k] = { since: dyn.boot ? -1e9 : now };
     if (rec.gone) { rec.since = now; delete rec.gone; }
     rec.last = now;
-    rec[key(a.d, a.i)] = { ip: a.i.rt.ip, cost: ospfCost(state, a.d, a.i) };
-    rec[key(b.d, b.i)] = { ip: b.i.rt.ip, cost: ospfCost(state, b.d, b.i) };
+    rec[key(a.d, a.i)] = { ip: af.enc(af.addr(a.i)), cost: af.cost(state, a.d, a.i) };
+    rec[key(b.d, b.i)] = { ip: af.enc(af.addr(b.i)), cost: af.cost(state, b.d, b.i) };
     seen.add(p.k);
     const ra = role[key(a.d, a.i)], rb = role[key(b.d, b.i)];
     const p2p = ra === 'P2P';
@@ -215,7 +318,7 @@ export function computeOspf(state, ospfOn) {
     const up = rec.since + (p2p ? P2P_UP : seg && seg.since + OSPF_WAIT <= rec.since ? JOIN_UP : 0) - now;
     const waitSeg = seg && seg.since + OSPF_WAIT > now;
     const mtuBad = mtuOf(a.i) !== mtuOf(b.i) && !a.i.ospfMtuIgnore && !b.i.ospfMtuIgnore;
-    const typeBad = ospfNetType(a.i) !== ospfNetType(b.i);
+    const typeBad = af.netType(a.i) !== af.netType(b.i);
     // 兩台都不是 DR / BDR：只到 2WAY，不交換資料庫（路還是通的，經過 DR 同步）
     const twoWay = !p2p && ra === 'DROTHER' && rb === 'DROTHER';
     let st;
@@ -226,12 +329,12 @@ export function computeOspf(state, ospfOn) {
     else st = 'FULL';
     for (const [s, o, ro] of [[a, b, rb], [b, a, ra]]) {
       const left = st === 'INIT' ? seg.since + OSPF_WAIT - now : st === 'LOADING' ? up : 0;
-      const dead = Math.max(1, ospfDead(s.i) - ((now - Math.max(rec.since, 0)) % ospfHello(s.i)));
-      s.d.rt.nbrs.push({ dev: o.d.id, iface: s.i.id, ip: o.i.rt.ip, rid: rid[o.d.id], prio: ospfPrio(o.i), cost: ospfCost(state, s.d, s.i), state: st === 'FULL' || st === '2WAY' ? st.toLowerCase() : st === 'EXSTART' ? 'exstart' : 'forming', role: ro, left, dead,
-        note: st === 'EXSTART' ? `MTU 不一致（這一端 ${mtuOf(s.i)}，對面 ${mtuOf(o.i)}）：資料庫交換卡在 EXSTART` : typeBad ? `網路類型不一致（這一端 ${ospfNetType(s.i)}，對面 ${ospfNetType(o.i)}）` : '' });
-      if (st === 'FULL') s.d.rt.ospf.ifs[s.i.id].full++;
+      const dead = Math.max(1, af.dead(s.i) - ((now - Math.max(rec.since, 0)) % af.hello(s.i)));
+      NB(s.d).push({ dev: o.d.id, iface: s.i.id, ip: af.addr(o.i), rid: rid[o.d.id], prio: af.prio(o.i), cost: af.cost(state, s.d, s.i), state: st === 'FULL' || st === '2WAY' ? st.toLowerCase() : st === 'EXSTART' ? 'exstart' : 'forming', role: ro, left, dead,
+        note: st === 'EXSTART' ? `MTU 不一致（這一端 ${mtuOf(s.i)}，對面 ${mtuOf(o.i)}）：資料庫交換卡在 EXSTART` : typeBad ? `網路類型不一致（這一端 ${af.netType(s.i)}，對面 ${af.netType(o.i)}）` : '' });
+      if (st === 'FULL') O(s.d).ifs[s.i.id].full++;
     }
-    if (left(st)) state.rt.pending.push({ at: now + left(st), dev: a.d.id, kind: 'ospf', text: `${a.d.name} ↔ ${b.d.name}：OSPF 鄰居關係建立中` });
+    if (left(st)) state.rt.pending.push({ at: now + left(st), dev: a.d.id, kind: 'ospf', text: `${a.d.name} ↔ ${b.d.name}：${af.name} 鄰居關係建立中` });
     // 網路類型不一致：鄰居是 FULL，但兩邊的 LSA 對不起來，SPF 算不出經過這條線的路
     if (st !== 'FULL' && st !== '2WAY') continue;
     if (typeBad) continue;
@@ -239,7 +342,7 @@ export function computeOspf(state, ospfOn) {
     edge(p.area, a, b); edge(p.area, b, a);
     function left(x) { return x === 'INIT' ? seg.since + OSPF_WAIT - now : x === 'LOADING' ? up : 0; }
   }
-  for (const d of nodes) for (const [id, inf] of Object.entries(d.rt.ospf.ifs)) {
+  for (const d of nodes) for (const [id, inf] of Object.entries(O(d).ifs)) {
     if (inf.state === 'PASSIVE' || inf.state === 'LOOP') continue;
     inf.state = role[key(d, { id })] || (inf.nbrs ? 'DOWN' : inf.type === 'point-to-point' ? 'P2P' : 'DR');
     inf.dr = segOf[key(d, { id })] ? segOf[key(d, { id })].dr : null;
@@ -248,12 +351,12 @@ export function computeOspf(state, ospfOn) {
 
   // 4. 這一次沒聽到的鄰居：自己的介面還亮著，要等 Dead timer 到期才會把它從資料庫拿掉
   const ghosts = new Set();
-  for (const [k, rec] of Object.entries(dyn.adj)) {
+  for (const [k, rec] of Object.entries(adjT)) {
     if (seen.has(k)) continue;
     const sides = k.split('~').map((s) => ({ s, dev: s.slice(0, s.indexOf('/')), iface: s.slice(s.indexOf('/') + 1) }));
     const di = devs[sides[0].dev] && devs[sides[0].dev].ifaces.find((x) => x.id === sides[0].iface);
-    const deadT = di ? ospfDead(di) : 40;
-    if (now - rec.last >= deadT || rec.since + P2P_UP > rec.last) { delete dyn.adj[k]; continue; }
+    const deadT = di ? af.dead(di) : 40;
+    if (now - rec.last >= deadT || rec.since + P2P_UP > rec.last) { delete adjT[k]; continue; }
     rec.gone = true;
     for (const [a, b] of [[sides[0], sides[1]], [sides[1], sides[0]]]) {
       const d = devs[a.dev], other = devs[b.dev];
@@ -262,17 +365,17 @@ export function computeOspf(state, ospfOn) {
       const believes = isNode.has(d.id) && running(d, i);
       if (!believes && isNode.has(d.id)) continue;
       if (!isNode.has(d.id)) ghosts.add(d.id);
-      const area = i ? ospfArea(d, i) ?? 0 : 0;
-      ((adj[area] ||= {})[d.id] ||= []).push({ to: b.dev, iface: i, via: rec[b.s].ip, cost: rec[a.s] ? rec[a.s].cost : 1, stale: true });
+      const area = i ? af.area(d, i) ?? 0 : 0;
+      ((adj[area] ||= {})[d.id] ||= []).push({ to: b.dev, iface: i, via: af.dec(rec[b.s].ip), cost: rec[a.s] ? rec[a.s].cost : 1, stale: true });
       if (!believes) continue;
       const leftT = rec.last + deadT - now;
-      d.rt.nbrs.push({ dev: b.dev, iface: a.iface, ip: rec[b.s].ip, rid: rid[b.dev] ?? (dyn.rid[b.dev] || {}).rid, prio: 1, cost: rec[a.s] ? rec[a.s].cost : 1, state: 'dying', role: 'DROTHER', left: leftT, dead: leftT });
-      state.rt.pending.push({ at: rec.last + deadT, dev: d.id, kind: 'ospf', text: `${d.name} 還沒發現 ${other.name} 已經失聯（OSPF Dead timer）` });
+      NB(d).push({ dev: b.dev, iface: a.iface, ip: af.dec(rec[b.s].ip), rid: rid[b.dev] ?? ((dyn['rid' + af.ns] || {})[b.dev] || {}).rid, prio: 1, cost: rec[a.s] ? rec[a.s].cost : 1, state: 'dying', role: 'DROTHER', left: leftT, dead: leftT });
+      state.rt.pending.push({ at: rec.last + deadT, dev: d.id, kind: 'ospf', text: `${d.name} 還沒發現 ${other.name} 已經失聯（${af.name} Dead timer）` });
     }
   }
-  for (const id of ghosts) stubs[id] = (dyn.lsa[id] || []).map((x) => ({ ...x }));
-  for (const d of nodes) dyn.lsa[d.id] = stubs[d.id];
-  for (const id of Object.keys(dyn.lsa)) if (!isNode.has(id) && !ghosts.has(id)) delete dyn.lsa[id];
+  for (const id of ghosts) stubs[id] = (lsaT[id] || []).map((x) => ({ ...x, net: af.dec(x.net) }));
+  for (const d of nodes) lsaT[d.id] = stubs[d.id].map((x) => ({ ...x, net: af.enc(x.net) }));
+  for (const id of Object.keys(lsaT)) if (!isNode.has(id) && !ghosts.has(id)) delete lsaT[id];
 
   // 5. SPF：每個區域各算一次，記下所有等價的第一站
   const everyone = [...nodes.map((d) => d.id), ...ghosts];
@@ -298,8 +401,8 @@ export function computeOspf(state, ospfOn) {
       spf[d.id][area] = { dist, first };
     }
   }
-  const maxPaths = (d) => Math.max(1, Math.min(32, +d.ospfMaxPaths || 4));
-  const ranges = (d, area) => (d.ospfRanges || []).filter((r) => +r.area === area);
+  const maxPaths = (d) => Math.max(1, Math.min(32, +af.maxPaths(d) || 4));
+  const ranges = af.ranges;
   const abrs = new Set(everyone.filter((id) => { const a = areasOf(id); return a.includes(0) && a.length > 1; }));
 
   // 區域內的路由：每台設備對每個區域裡每個網段的最佳 cost 與第一站
@@ -331,7 +434,7 @@ export function computeOspf(state, ospfOn) {
     const s0 = (sumInto0[b] = {});
     for (const r of Object.values(t)) {
       if (r.area === 0) continue;
-      const rg = D ? ranges(D, r.area).find((x) => netOf(r.net, x.bits) === x.net && r.bits >= x.bits) : null;
+      const rg = D ? ranges(D, r.area).find((x) => af.netOf(r.net, x.bits) === x.net && r.bits >= x.bits) : null;
       const k = rg ? rg.net + '/' + rg.bits : r.net + '/' + r.bits;
       const cur = s0[k];
       if (!cur || r.metric > cur.cost) s0[k] = { net: rg ? rg.net : r.net, bits: rg ? rg.bits : r.bits, cost: r.metric, range: !!rg };
@@ -378,7 +481,8 @@ export function computeOspf(state, ospfOn) {
   }
 
   // 6. 外部路由：default-information originate 送出的預設路由是 E2，cost 固定 1，往 ASBR 的內部 cost 只用來挑出口
-  const asbrs = nodes.filter((d) => d.ospfDefault && d.rt.routes.some((r) => r.bits === 0 && !r.bad && r.type !== 'O'));
+  const ownDefault = (d) => af.routes(d).some((r) => r.bits === 0 && !r.bad && r.type !== 'O');
+  const asbrs = nodes.filter((d) => af.originates(d) && ownDefault(d));
   for (const d of nodes) {
     // 往每一台 ASBR 的內部 cost：它任何一個網段的最佳路由
     let best = null;
@@ -399,26 +503,26 @@ export function computeOspf(state, ospfOn) {
       if (!best || c < best.fwd) best = { fwd: c, hops: hops.slice(), asbr: a.id };
       else if (c === best.fwd) for (const h of hops) if (!best.hops.some((x) => x.via === h.via)) best.hops.push(h);
     }
-    if (best && !d.rt.routes.some((r) => r.bits === 0 && !r.bad && r.type !== 'O')) d.rt.ospf.ext = best;
+    if (best && !ownDefault(d)) O(d).ext = best;
   }
 
   // 7. 裝進路由表：每個等價的第一站各一筆（最多 maximum-paths 條）
   for (const d of nodes) {
     const put = (r, sub) => {
-      if (d.rt.routes.some((x) => x.type === 'C' && x.net === r.net && x.bits === r.bits)) return;
+      if (af.routes(d).some((x) => x.type === 'C' && x.net === r.net && x.bits === r.bits)) return;
       const hops = r.hops.filter((h) => h.iface).slice(0, maxPaths(d));
       // adv：發布這筆 LSA 的路由器（show ip route <網段> 的 from），E2 另外記往 ASBR 的內部 cost (forward metric)
       const adv = r.owner != null ? rid[r.owner] : null;
-      for (const h of hops) d.rt.routes.push({ net: r.net, bits: r.bits, via: h.via, iface: h.iface, type: 'O', sub, ad: 110, metric: r.metric, adv, ...(r.fwd != null ? { fwd: r.fwd } : {}) });
+      for (const h of hops) af.routes(d).push({ net: r.net, bits: r.bits, via: h.via, iface: h.iface, type: 'O', sub, ad: 110, metric: r.metric, adv, ...(r.fwd != null ? { fwd: r.fwd } : {}) });
     };
     for (const r of Object.values(intra[d.id] || {})) if (r.hops.length) put(r, '');
     for (const r of Object.values(inter[d.id] || {})) put(r, 'IA');
-    const ext = d.rt.ospf.ext;
-    if (ext) put({ net: 0, bits: 0, metric: 1, hops: ext.hops, owner: ext.asbr, fwd: ext.fwd }, 'E2');
-    d.rt.ospf.abr = abrs.has(d.id);
-    d.rt.ospf.asbr = asbrs.includes(d);
-    d.rt.ospf.areas = areasOf(d.id);
+    const ext = O(d).ext;
+    if (ext) put({ net: af.zero, bits: 0, metric: 1, hops: ext.hops, owner: ext.asbr, fwd: ext.fwd }, 'E2');
+    O(d).abr = abrs.has(d.id);
+    O(d).asbr = asbrs.includes(d);
+    O(d).areas = areasOf(d.id);
   }
   // 給 show ip ospf database 用
-  state.rt.ospf = { stubs, abrs: [...abrs], sumInto0, sumOut, rid, asbrs: asbrs.map((d) => d.id) };
+  state.rt[af.key] = { stubs, abrs: [...abrs], sumInto0, sumOut, rid, asbrs: asbrs.map((d) => d.id) };
 }

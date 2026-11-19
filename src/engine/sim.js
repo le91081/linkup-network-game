@@ -2299,8 +2299,10 @@ export function runObjective(state, o) {
       const reason = `${t.name} 還沒有 IPv6 位址${t.ifaces.map((i) => i.rt.v6 && i.rt.v6.note).find(Boolean) ? '（' + t.ifaces.map((i) => i.rt.v6 && i.rt.v6.note).find(Boolean) + '）' : ''}`;
       return { pass: !expect, ok: false, reason, failDev: t.id, log: [{ dev: t.id, kind: 'drop', text: reason }], hops: [] };
     }
-    const r = transact6(state, o.from, dst);
-    return { pass: r.ok === expect, ok: r.ok, reason: r.reason, failDev: r.failDev, log: r.log, hops: r.hops };
+    // port 有值時測的是 TCP / UDP 連線（例如 IPv6 的 SSH、HTTP），不然是 ICMPv6 Echo
+    const r = transact6(state, o.from, dst, o.port ? { proto: o.proto || 'tcp', dport: o.port } : {});
+    const what = o.port ? `${(o.proto || 'tcp').toUpperCase()}/${o.port} 的連線` : 'ping ';
+    return { pass: r.ok === expect, ok: r.ok, reason: r.ok === expect ? '' : expect ? r.reason : `${what}成功了，但這應該要被擋下`, failDev: r.failDev, log: r.log, hops: r.hops };
   }
   if (o.type === 'dhcp') {
     const d = state.devices[o.dev];

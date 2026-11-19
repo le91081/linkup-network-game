@@ -323,6 +323,8 @@ function rtIfaces(ctx, body) {
     body.append(h('div', { class: 'addrow nested' }, h('span', { class: 'muted', text: `在 ${p.label} 新增子介面` }), vidInp,
       button('新增', { ic: 'plus', small: true, onclick: add })));
   }
+  const pools6 = M.dhcp6PoolsCard(ctx);
+  if (pools6) body.append(pools6);
   loopbackCards(ctx, body);
 }
 

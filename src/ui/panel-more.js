@@ -2,10 +2,8 @@
 import { h, button } from './dom.js';
 import { sessionLog, clearSessionLog, arpRows, sessionRows, clearSessions, fmtDur } from '../engine/sim.js';
 import { syslogRows, clearSyslog, SIM_EPOCH } from '../engine/ops.js';
-import { inp, sel, toggle, seg, field, note, kv, del, cardHead, grid2, bind, isIp, isIp6, isCidr6 } from './form.js';
+import { inp, sel, toggle, field, note, kv, del, cardHead, grid2, bind, isIp } from './form.js';
 import { fmtIp } from '../engine/ip.js';
-import { fmtIp6 } from '../engine/ip6.js';
-import { route6Rows, mode6 } from '../engine/sim6.js';
 
 // ───────────────────────── RADIUS / 802.1X ─────────────────────────
 
@@ -71,61 +69,8 @@ export function staticNatCard(ctx) {
 
 // ───────────────────────── IPv6 ─────────────────────────
 
-function v6Status(ctx, i) {
-  return ctx.live(() => {
-    const v = i.rt.v6;
-    if (!v) return null;
-    if (v.ll == null) return mode6(ctx.dev, i) === 'off' ? null : note('muted', '介面沒有連線，IPv6 尚未啟用。');
-    return h('div', { class: 'kv ' + (v.addrs.length ? 'ok' : '') },
-      v.addrs.map((a) => kv(a.src === 'slaac' ? '全域位址 (SLAAC)' : '全域位址', `${fmtIp6(a.ip)}/${a.bits}`)),
-      kv('Link-local', fmtIp6(v.ll)),
-      v.gw != null && kv('預設閘道', fmtIp6(v.gw)),
-      v.note && kv('狀態', v.note));
-  });
-}
-
-/** 終端設備的 IPv6 設定 */
-export function hostV6(ctx, i) {
-  if (!ctx.state.v6) return null;
-  const m = mode6(ctx.dev, i);
-  return h('div', { class: 'sub' }, h('span', { class: 'f-label', text: 'IPv6' }),
-    seg(ctx, () => m, (v) => { i.mode6 = v; }, [['auto', '自動 (SLAAC)'], ['static', '手動'], ['off', '關閉']]),
-    m === 'static' && grid2(
-      field('IPv6 位址 / 前綴', inp(ctx, ...bind(i, 'ip6'), { ph: '2001:db8:a::10/64', check: isCidr6 })),
-      field('IPv6 預設閘道', inp(ctx, ...bind(i, 'gw6'), { ph: '2001:db8:a::1', check: isIp6 }))),
-    v6Status(ctx, i));
-}
-
-/** 路由器介面的 IPv6 設定 */
-export function routerV6(ctx, i) {
-  return h('div', { class: 'sub' }, h('span', { class: 'f-label', text: 'IPv6' }),
-    field('IPv6 位址 / 前綴', inp(ctx, ...bind(i, 'ip6'), { ph: '例如 2001:db8:a::1/64', check: isCidr6 })),
-    h('div', { class: 'toggles' }, toggle(ctx, ...bind(i, 'ra'), '發送 Router Advertisement（讓這個網段的設備用 SLAAC 自動取得位址）')),
-    v6Status(ctx, i));
-}
-
-/** 路由分頁裡的 IPv6 區塊 */
-export function v6Routes(ctx, body) {
-  const { dev } = ctx;
-  const list = (dev.routes6 ||= []);
-  const card = h('div', { class: 'card' }, cardHead('IPv6'),
-    h('div', { class: 'toggles' }, toggle(ctx, ...bind(dev, 'v6routing'), 'IPv6 路由（ipv6 unicast-routing）')),
-    ctx.live(() => (dev.v6routing ? null : note('warn', '尚未啟用：這台路由器不會轉送 IPv6 封包，也不會送出 Router Advertisement。'))));
-  if (list.length) card.append(h('div', { class: 'thead c-r6' }, h('span', { text: '目的前綴' }), h('span', { text: '下一站' }), h('span')));
-  list.forEach((r, n) => card.append(h('div', { class: 'trow c-r6' },
-    inp(ctx, ...bind(r, 'dst'), { ph: '2001:db8:2::/64', check: isCidr6 }),
-    inp(ctx, ...bind(r, 'via'), { ph: '2001:db8:12::2', check: isIp6 }),
-    del(() => { list.splice(n, 1); ctx.commit(true); }))));
-  card.append(h('div', { class: 'addrow' }, button('新增 IPv6 靜態路由', { ic: 'plus', small: true, onclick: () => { list.push({ dst: '', via: '' }); ctx.commit(true); } })),
-    ctx.live(() => {
-      const rows = route6Rows(dev);
-      if (!rows.length) return note('muted', 'IPv6 路由表是空的。');
-      return h('div', { class: 'rtable' }, rows.map((r) => h('div', { class: 'rrow t-' + r.type + (r.bad ? ' bad' : '') },
-        h('span', { class: 'tag', text: r.typeName }), h('b', { class: 'mono', text: r.dst }), h('span', { class: 'mono', text: '→ ' + r.via }),
-        h('span', { class: 'mono muted', text: r.iface }), r.bad && h('em', { text: '無效：' + r.bad }))));
-    }));
-  body.append(card);
-}
+// 介面、路由、DHCPv6 位址池、IPv6 ACL 的頁面在 panel-v6.js
+export { hostV6, routerV6, v6Routes, dhcp6PoolsCard, acl6Cards } from './panel-v6.js';
 
 // ───────────────────────── 本機帳號與 SNMP ─────────────────────────
 

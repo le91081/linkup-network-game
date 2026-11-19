@@ -1,4 +1,5 @@
 // 進階功能的設定頁面：Wi-Fi、VPN、ACL、L2 安全、STP / LACP、管理加固、DHCP 範圍
+import { acl6Cards } from './panel-v6.js';
 import { h, icon, button, toast } from './dom.js';
 import {
   inp, sel, toggle, field, note, kv, del, cardHead, badge, grid2, bind, linkBadge, ifaceNote,
@@ -484,6 +485,7 @@ export function aclTab(ctx, body) {
     }
     body.append(card);
   }
+  acl6Cards(ctx, body);
 }
 
 // ───────────────────────── VPN ─────────────────────────

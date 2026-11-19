@@ -1682,6 +1682,83 @@ console.log('\nshow ip route：主網段分組、L 路由、等價多路徑、�
   ok(ia.some((l) => /^O IA     10\.0\.0\.0\/24 \[110\/\d+\] via /.test(l)), '區域之間的路由是 O IA');
 }
 
+console.log('\nIPv6：DHCPv6 的旗標、OSPFv3、IPv6 ACL 與鄰居探索');
+{
+  const { iosSession, runningConfig } = await import('../src/engine/ios.js');
+  const { iosRun } = await import('../src/ui/cli.js');
+  const { parseIp6 } = await import('../src/engine/ip6.js');
+  const { transact6 } = await import('../src/engine/sim6.js');
+  const { logRows } = await import('../src/engine/ops.js');
+  const ok = (cond, title) => (cond ? console.log('  ✔ ' + title) : fail(title));
+  const sessions = new WeakMap();
+  const sessOf = (s, id) => { const m = sessions.get(s) || new Map(); sessions.set(s, m); if (!m.has(id)) m.set(id, iosSession(() => s.devices[id], () => s)); return m.get(id); };
+  const run = (s, id, ...lines) => { const out = []; for (const line of lines) { const r = iosRun({ state: s }, id, sessOf(s, id), line, (l) => out.push(l)); if (r.changed) recompute(s); } return out; };
+  const fresh = (id) => { const s = LEVELS.find((l) => l.id === id).setup(); recompute(s); return s; };
+  const rcOf = (s, id) => [].concat(runningConfig(s, s.devices[id])).join('\n');
+
+  // ── DHCPv6 ──
+  {
+    const s = fresh('l51');
+    const lab = () => s.devices.lab.ifaces[0].rt.v6, pc1 = () => s.devices.pc1.ifaces[0].rt.v6;
+    const has = (v, src) => v.addrs.some((a) => a.src === src);
+    ok(has(lab(), 'dhcp6') && lab().gw == null && /DHCPv6 不提供預設閘道/.test(lab().note), '收不到 RA 的 Windows 還是會試 stateful DHCPv6：拿到位址，但沒有預設閘道');
+    run(s, 'rt', 'configure terminal', 'interface gi0/0/1', 'no ipv6 nd ra suppress', 'ipv6 nd managed-config-flag', 'end');
+    ok(has(lab(), 'slaac') && has(lab(), 'dhcp6') && lab().gw != null, 'RA 打開、M 旗標打開，但 A 旗標還開著：SLAAC 與 DHCPv6 各產生一個位址');
+    run(s, 'rt', 'configure terminal', 'interface gi0/0/1', 'ipv6 nd prefix default no-autoconfig', 'end');
+    ok(!has(lab(), 'slaac') && has(lab(), 'dhcp6') && lab().gw != null, '關掉 A 旗標：位址只剩 DHCPv6 發的，閘道仍然來自 RA');
+    run(s, 'rt', 'configure terminal', 'ipv6 dhcp pool OFFICE', 'dns-server 2001:db8:f::53', 'interface gi0/0/0', 'ipv6 nd other-config-flag', 'end');
+    ok(pc1().dhcp && !pc1().dhcp.ok && /沒有 DHCPv6 伺服器/.test(pc1().dhcp.why), 'O 旗標打開，但介面沒有 ipv6 dhcp server：主機問不到 DNS');
+    run(s, 'rt', 'configure terminal', 'interface gi0/0/0', 'ipv6 dhcp server OFFICE', 'end');
+    ok(pc1().dns.includes(parseIp6('2001:db8:f::53')) && has(pc1(), 'slaac') && !has(pc1(), 'dhcp6'), 'stateless DHCPv6：DNS 從位址池拿到，位址仍然是 SLAAC');
+    const bind = run(s, 'rt', 'show ipv6 dhcp binding');
+    ok(bind.some((l) => /^Client: FE80::/.test(l)) && bind.some((l) => /Address: 2001:DB8:20:/.test(l)), 'show ipv6 dhcp binding 列出實驗室電腦與它的位址（IOS 印大寫）');
+    ok(run(s, 'rt', 'show ipv6 interface gi0/0/1').includes('  Hosts use DHCP to obtain routable addresses.'), 'show ipv6 interface 看得到 M 旗標的效果');
+    const rc = rcOf(s, 'rt');
+    ok(rc.includes('ipv6 dhcp pool OFFICE') && rc.includes(' dns-server 2001:DB8:F::53') && rc.includes(' ipv6 nd prefix default no-autoconfig') && rc.includes(' ipv6 dhcp server LAB'), 'DHCPv6 位址池與介面的旗標都會出現在 running-config');
+  }
+  // ── OSPFv3 ──
+  {
+    const s = fresh('l52');
+    for (const id of ['r1', 'r2', 'r3']) run(s, id, 'configure terminal', 'interface gi0/0/0', 'ipv6 ospf 1 area 0', 'interface gi0/0/1', 'ipv6 ospf 1 area 0', 'interface gi0/0/2', 'ipv6 ospf 1 area 0', 'end');
+    advance(s, 45); recomputeNow(s);
+    ok(s.devices.r3.rt.ospf6.norid && run(s, 'r3', 'show ipv6 ospf')[0].startsWith('%OSPFv3-4-NORTRID') && logRows(s, s.devices.r3).some((r) => /OSPFv3-4-NORTRID/.test(r.line)), '純 IPv6 的 R3 選不出 Router ID：OSPFv3 起不來，紀錄裡有 NORTRID');
+    ok(s.devices.r2.rt.ospf6.rid === parseIp('10.2.0.1'), 'R2 沒有設定 router-id：自動用最大的 IPv4 位址');
+    const f = s.devices.r1.rt.ospf6.ifs['Gi0/0/1'];
+    ok(!(s.devices.r1.rt.nbrs6 || []).some((n) => n.dev === 'r2') && f.why.some((w) => /Hello \/ Dead/.test(w)), 'R2 那條線的 Hello 是 5 秒：OSPFv3 鄰居建立不起來，原因寫得出來');
+    run(s, 'r3', 'configure terminal', 'ipv6 router ospf 1', 'router-id 3.3.3.3', 'end');
+    run(s, 'r2', 'configure terminal', 'interface gi0/0/1', 'no ipv6 ospf hello-interval', 'end');
+    advance(s, 45); recomputeNow(s);
+    const rt = run(s, 'r1', 'show ipv6 route ospf');
+    const k = rt.findIndex((l) => l.startsWith('O   2001:DB8:3::/64 [110/'));
+    ok(k > 0 && /^ {5}via FE80::[0-9A-F:]+, GigabitEthernet0\/0\/2$/.test(rt[k + 1]), 'show ipv6 route：OSPFv3 路由的下一站是對方的 link-local');
+    ok(run(s, 'r1', 'show ipv6 ospf neighbor').some((l) => /^3\.3\.3\.3 +1 +FULL\//.test(l)) && logRows(s, s.devices.r1).some((r) => /OSPFv3-5-ADJCHG: Process 1, Nbr 3\.3\.3\.3 .* to FULL/.test(r.line)), 'R3 設了 router-id 之後成為 FULL 鄰居，紀錄裡有 OSPFv3-5-ADJCHG');
+    // OSPFv3 用 link-local 認識鄰居：R1–R2 兩端的全域前綴不一樣也沒關係
+    run(s, 'r2', 'configure terminal', 'interface gi0/0/1', 'ipv6 address 2001:db8:99::2/64', 'end');
+    advance(s, 10); recomputeNow(s);
+    ok((s.devices.r1.rt.nbrs6 || []).some((n) => n.dev === 'r2' && n.state === 'full'), 'R2 那端的前綴改成 2001:db8:99::/64，OSPFv3 鄰居照樣 FULL（靠 link-local）');
+    const rc = rcOf(s, 'r3');
+    ok(rc.includes('ipv6 router ospf 1') && rc.includes(' router-id 3.3.3.3') && rc.includes(' ipv6 ospf 1 area 0'), 'OSPFv3 出現在 running-config');
+  }
+  // ── IPv6 ACL ──
+  {
+    const s = fresh('l53');
+    run(s, 'rt', 'configure terminal', 'interface gi0/0/0', 'ipv6 traffic-filter GUEST6 in', 'end');
+    const web = () => transact6(s, 'guest', parseIp6('2001:db8:10::10'), { proto: 'tcp', dport: 80 });
+    const r1 = web();
+    ok(!r1.ok && /鄰居探索 \(NDP\) 失敗/.test(r1.reason) && /deny ipv6 any any/.test(r1.reason), '套用了以 deny ipv6 any any 結尾的 ACL：鄰居探索被擋，訪客連網站都開不了');
+    run(s, 'rt', 'configure terminal', 'ipv6 access-list GUEST6', 'sequence 5 permit icmp any any nd-ns', 'sequence 6 permit icmp any any nd-na', 'end');
+    const ssh = transact6(s, 'guest', parseIp6('2001:db8:10::10'), { proto: 'tcp', dport: 22 });
+    ok(web().ok && !ssh.ok && /IPv6 ACL「GUEST6」/.test(ssh.reason), '在前面放行 nd-ns / nd-na 之後：網站可以開，SSH 被 GUEST6 擋下');
+    ok(run(s, 'rt', 'show ipv6 access-list').some((l) => /permit tcp any host 2001:DB8:10::10 eq 80 \(\d+ match(es)?\) sequence 10/.test(l)), 'show ipv6 access-list 顯示每一條的命中次數與序號');
+    const S = sessOf(s, 'rt');
+    S.exec('configure terminal'); S.exec('ip dhcp pool TEST');
+    ok(S.mode === 'dhcp', 'ip dhcp pool 不會被當成 ipv6 dhcp pool 的縮寫（完整的關鍵字優先）');
+    S.exec('end');
+    run(s, 'rt', 'configure terminal', 'ipv6 route ::/0 gi0/0/1 fe80::1 200', 'end');
+    ok(rcOf(s, 'rt').includes('ipv6 route ::/0 Gi0/0/1 FE80::1 200') && rcOf(s, 'rt').includes(' sequence 5 permit icmp any any nd-ns'), 'ipv6 route 可以寫「出口介面 + link-local 下一站 + 管理距離」，插在中間的 ACL 序號也會寫出來');
+  }
+}
+
 // ── FortiGate 的 CLI ──
 console.log('\nFortiGate CLI');
 {

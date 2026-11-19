@@ -27,6 +27,7 @@ export const LEVEL_TOPIC = {
   l40: 'ops', l41: 'ops', l42: 'ops', l43: 'ops',
   l44: 'switching', l45: 'ops', l46: 'security',
   l47: 'routing', l48: 'routing', l49: 'routing', l50: 'routing',
+  l51: 'ipv6', l52: 'ipv6', l53: 'ipv6',
 };
 
 export const QUESTIONS = {
@@ -148,6 +149,13 @@ export const QUESTIONS = {
     { q: 'ABR (Area Border Router) 是什麼？', a: ['接到 ISP 的路由器', '同時有介面在 area 0 與其他區域的路由器', 'Router ID 最大的路由器', '跑 BGP 的路由器'], c: 1, e: 'ABR 把一個區域的網段用 Type 3 Summary LSA 送到其他區域，也可以用 area range 彙總成一筆。所有非骨幹區域都要經由 ABR 接到 area 0。', r: 'Network+ 2.1' },
     { q: '公司同時接了兩家 ISP。想讓「出去」的流量都走 ISP-A，應該調整哪一個 BGP 屬性？', a: ['MED', 'ISP-A 進來的路由的 local-preference', 'AS-path prepend', 'Router ID'], c: 1, e: 'local-preference 決定「我」往外走哪條路，越高越好（預設 100）。要影響別人「進來」走哪條路，才用 AS-path prepend 或 MED。', r: 'Network+ 2.1' },
     { q: '雙 ISP 的公司把從 ISP-A 學到的路由也通告給了 ISP-B，會發生什麼事？', a: ['沒有影響', 'ISP-B 可能把往 ISP-A 的流量丟給公司，公司變成兩家 ISP 之間的轉運站', 'BGP 鄰居會斷線', '路由表會被清空'], c: 1, e: 'ISP 通常偏好客戶給的路由。送出去的路由要過濾成只有自己的網段（prefix-list，或 as-path access-list 的 ^$）。', r: 'Network+ 2.1' },
+    { q: 'RA 裡設了 M 旗標，前綴的 A 旗標也還開著。Windows 電腦會怎麼取得 IPv6 位址？', a: ['只用 SLAAC', '只用 DHCPv6', 'SLAAC 與 DHCPv6 各產生一個位址', '兩種都不用'], c: 2, e: 'A 旗標允許 SLAAC、M 旗標要求 DHCPv6，兩者不互斥。要讓位址只由 DHCPv6 發放（方便稽核），得把前綴的 A 旗標關掉：ipv6 nd prefix default no-autoconfig。', r: 'CCNA 1.9' },
+    { q: 'IPv6 主機的預設閘道是從哪裡學到的？', a: ['DHCPv6 的選項', 'Router Advertisement（閘道是送出 RA 的路由器的 link-local 位址）', '只能手動設定', 'DNS'], c: 1, e: 'DHCPv6 沒有「預設閘道」選項。就算位址與 DNS 都改用 DHCPv6，RA 也不能關，不然主機有位址卻出不了自己的網段。', r: 'CCNA 4.3' },
+    { q: '「Stateless DHCPv6」指的是什麼？', a: ['DHCPv6 伺服器不保存任何設定', '位址由主機用 SLAAC 自己產生，DHCPv6 只提供 DNS 這類「其他設定」（RA 設 O 旗標）', '租約永遠不會到期', '不需要 Router Advertisement'], c: 1, e: 'Stateless 的伺服器不用記住誰拿了哪個位址（因為它沒有發位址），只回答 Information-Request。Stateful 則由伺服器發位址並記錄 binding（RA 設 M 旗標）。', r: 'CCNA 1.9' },
+    { q: 'OSPFv3 的鄰居用什麼位址互相認識？show ipv6 route 裡 OSPF 路由的下一站通常長什麼樣子？', a: ['全域位址，2001: 開頭', 'Link-local 位址，FE80:: 開頭', 'IPv4 位址', '多點傳送位址 FF02::5'], c: 1, e: 'OSPFv3 的 Hello 從 link-local 送到 FF02::5，鄰居與路由的下一站都是 link-local。所以兩端的全域前綴就算打得不一樣，鄰居照樣建立得起來。', r: 'Network+ 2.1' },
+    { q: '一台完全沒有 IPv4 位址的路由器啟用 OSPFv3，出現 %OSPFv3-4-NORTRID。該怎麼辦？', a: ['重新設定 IPv6 位址', '在 ipv6 router ospf 底下手動設定 router-id（OSPFv3 的 Router ID 仍然是 32 位元）', '建立一個 IPv6 的 Loopback', '把 area 改成 0'], c: 1, e: 'OSPFv3 的 Router ID 和 OSPFv2 一樣是 IPv4 格式的 32 位元數字，只能從 IPv4 位址自動挑選。純 IPv6 的路由器一定要手動設定。', r: 'Network+ 2.1' },
+    { q: '一份 IPv6 ACL 只有 permit tcp any host 2001:db8:10::10 eq 80 和 deny ipv6 any any 兩條，套到訪客介面的 in 方向之後，訪客整個 IPv6 都斷了。為什麼？', a: ['方向應該是 out', '自己寫的 deny ipv6 any any 排在隱含的 permit icmp nd-ns / nd-na 前面，鄰居探索被擋掉，連閘道都找不到', 'IPv6 不支援具名 ACL', '要用 ip access-group 套用'], c: 1, e: '每份 IPv6 ACL 結尾隱含允許 nd-na、nd-ns，再拒絕全部。自己在最後寫了 deny ipv6 any any，就要在它前面明確 permit icmp any any nd-ns 與 nd-na。', r: 'CCNA 5.6' },
+    { q: '雙協定的網路，介面上已經用 IPv4 ACL 擋掉訪客 SSH 到伺服器。訪客改用 IPv6 呢？', a: ['一樣被擋', '不受影響：IPv4 的 ACL 完全管不到 IPv6，要另外寫 IPv6 ACL 並用 ipv6 traffic-filter 套用', '只擋得到一半', '看 ACL 的序號'], c: 1, e: 'IPv4 與 IPv6 是兩套各自獨立的位址、路由表與過濾規則。導入 IPv6 時，每一條 IPv4 的防護都要再寫一次。', r: 'CCNA 5.6' },
     { q: '控制器式網路中，「南向介面 (southbound API)」連接的是什麼？', a: ['控制器與應用程式', '控制器與網路設備', '兩台控制器之間', '使用者與網頁介面'], c: 1, e: '南向介面讓控制器下達指令給設備（例如 NETCONF、OpenFlow）；北向介面則提供給上層的應用程式與自動化工具呼叫。', r: 'CCNA 6.3' },
   ],
 };

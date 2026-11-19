@@ -1,7 +1,10 @@
 // IOS 風格的 CLI：用 show 指令查看狀態；configure terminal 之後可以直接用指令修改設定
 import { h } from './dom.js';
 import { fmtIp, parseIp, parseMask, netOf } from '../engine/ip.js';
-import { fmtIp6 } from '../engine/ip6.js';
+import { fmtIp6, parseIp6, parseCidr6, net6 } from '../engine/ip6.js';
+import { dhcp6Bindings, hits6Of, ACL6_IMPLICIT, DHCP6_PREF, DHCP6_VALID, duidOf } from '../engine/sim6.js';
+import { ospf6Area, ospf6Cost, ospf6Dead, ospf6Hello, ospf6Passive, ospf6Prio, ospf6NetType } from '../engine/ospf.js';
+import { acl6Text, up6 } from '../engine/ios.js';
 import { transact, routeRows, isBridgePort, arpRows, clearArp, hitsOf, fmtDur, portfastOn, macRows, clearMac, macAgeOf, sessionRows, clearSessions, saInfo, isTrunk, dtpSpeaker } from '../engine/sim.js';
 import { cdpCfg, lldpCfg, cdpOn, lldpTxOn, lldpRxOn, neighbors, ndCounters, cdpCapText, speaksCdp, speaksLldp } from '../engine/disc.js';
 import { dscpName, COS_DSCP_DEFAULT, portTrust, egressOf, classify, QLIMIT } from '../engine/qos.js';
@@ -75,14 +78,90 @@ const SHOW = {
   'show ip route static': (st, d) => routeLines(st, d, (r) => r.type === 'S' || r.type === 'D'),
   'show ip route ospf': (st, d) => routeLines(st, d, (r) => r.type === 'O'),
   'show ip route bgp': (st, d) => routeLines(st, d, (r) => r.type === 'B'),
-  'show ipv6 route': (st, d) => {
-    const rows = route6Rows(d);
-    return rows.length ? rows.map((r) => (r.via === '直連' ? `C   ${r.dst}\n     via ${r.iface}, directly connected` : `S   ${r.dst.replace('（預設）', '')}\n     via ${r.via}${r.bad ? '  (inactive)' : ''}`)).join('\n').split('\n') : ['IPv6 路由表是空的'];
-  },
+  'show ipv6 route': (st, d) => route6Lines(st, d, () => true),
+  'show ipv6 route connected': (st, d) => route6Lines(st, d, (r) => r.type === 'C'),
+  'show ipv6 route local': (st, d) => route6Lines(st, d, (r) => r.type === 'L'),
+  'show ipv6 route static': (st, d) => route6Lines(st, d, (r) => r.type === 'S'),
+  'show ipv6 route ospf': (st, d) => route6Lines(st, d, (r) => r.type === 'O'),
   'show ipv6 interface brief': (st, d) => {
-    const o = d.ifaces.filter((i) => i.rt && i.rt.v6 && i.rt.v6.ll != null)
-      .flatMap((i) => [`${pad(i.label, 24)}[up/up]`, '    ' + fmtIp6(i.rt.v6.ll), ...i.rt.v6.addrs.map((a) => '    ' + fmtIp6(a.ip))]);
-    return o.length ? o : ['沒有任何介面啟用 IPv6'];
+    if (!d.ifaces.some((i) => i.rt && i.rt.v6)) return ['% 這台設備沒有 IPv6'];
+    return d.ifaces.filter((i) => i.rt && i.rt.v6 && i.bind.t !== 'mgmt').flatMap((i) => {
+      const v = i.rt.v6, upDown = i.rt.link ? '[up/up]' : i.shut ? '[administratively down/down]' : '[down/down]';
+      return [`${pad(longIf(i.label), 24)}${upDown}`, ...(v.ll == null ? ['    unassigned'] : ['    ' + fmtIp6(v.ll).toUpperCase(), ...v.addrs.map((a) => '    ' + fmtIp6(a.ip).toUpperCase())])];
+    });
+  },
+  'show ipv6 interface': (st, d) => d.ifaces.filter((i) => i.rt && i.rt.v6 && i.rt.v6.ll != null).flatMap((i) => [...ipv6IfLines(st, d, i), '']),
+  'show ipv6 ospf': (st, d) => {
+    const o = d.rt.ospf6;
+    if (!d.ospf6) return ['% 這台設備沒有設定 OSPFv3（ipv6 router ospf 1）'];
+    if (!o || o.norid) return ['%OSPFv3-4-NORTRID: Process 1 could not pick a router-id, please configure manually', '（OSPFv3 的 Router ID 還是 32 位元的 IPv4 格式。這台路由器沒有任何 IPv4 位址，選不出來：在 ipv6 router ospf 1 底下設定 router-id）'];
+    const areas = o.areas || [];
+    return [` OSPFv3 Router with ID (${fmtIp(o.rid)}) (Process ID 1)`, ' Event-log enabled, Maximum number of events: 1000, Mode: cyclic',
+      ...(o.pending ? ['（設定了新的 router-id，要 clear ipv6 ospf process 才會換）'] : []),
+      ...(o.abr ? [' It is an area border router'] : []), ...(o.asbr ? [' It is an autonomous system boundary router', ' Redistributing External Routes from,', '   default'] : []),
+      ' Router is not originating router-LSAs with maximum metric', ' Initial SPF schedule delay 5000 msecs', ' Minimum hold time between two consecutive SPFs 10000 msecs',
+      ' Maximum wait time between two consecutive SPFs 10000 msecs', ' Minimum LSA interval 5 secs', ' Minimum LSA arrival 1000 msecs',
+      ` Number of areas in this router is ${areas.length}. ${areas.length} normal 0 stub 0 nssa`, ` Reference bandwidth unit is ${+(d.ospf6.refBw || 100)} mbps`,
+      ...areas.flatMap((a) => [`    Area ${a === 0 ? 'BACKBONE(0)' : a}`, `        Number of interfaces in this area is ${Object.values(o.ifs).filter((x) => x.area === a).length}`, '        SPF algorithm executed 2 times'])];
+  },
+  'show ipv6 ospf neighbor': (st, d) => {
+    const o = d.rt.ospf6;
+    if (!d.ospf6 || !o) return ['% 這台設備沒有在跑 OSPFv3'];
+    if (o.norid) return ['%OSPFv3-4-NORTRID: Process 1 could not pick a router-id, please configure manually'];
+    const n = d.rt.nbrs6 || [];
+    const two = (v) => String(Math.max(0, Math.ceil(v))).padStart(2, '0');
+    const ST = { full: 'FULL', '2way': '2WAY', exstart: 'EXSTART', forming: 'INIT', dying: 'FULL' };
+    const role = (x) => (x.role === 'P2P' ? ' -' : x.role === 'WAITING' ? 'DROTHER' : x.role || 'DROTHER');
+    const ifId = (x) => { const od = st.devices[x.dev]; const j = od && od.ifaces.findIndex((y) => y.rt && y.rt.v6 && y.rt.v6.ll === x.ip); return j >= 0 ? j + 1 : 0; };
+    const notes = n.filter((x) => x.note).map((x) => `（${(st.devices[x.dev] || {}).name}：${x.note}）`);
+    return [`            OSPFv3 Router with ID (${fmtIp(o.rid)}) (Process ID 1)`, '',
+      pad('Neighbor ID', 16) + pad('Pri', 6) + pad('State', 16) + pad('Dead Time', 12) + pad('Interface ID', 16) + 'Interface',
+      ...n.map((x) => pad(fmtIp(x.rid), 16) + pad(x.prio ?? 1, 6) + pad(`${ST[x.state] || 'INIT'}/${role(x)}`, 16) + pad('00:00:' + two(x.state === 'dying' ? x.left : x.dead), 12) + pad(ifId(x), 16) + longIf((d.ifaces.find((i) => i.id === x.iface) || {}).label || '')),
+      ...(n.length ? [] : ['（沒有鄰居。OSPFv3 用 link-local 位址互相認識：兩端的全域前綴不一樣也能成為鄰居，但區域與 Hello / Dead 要一致）']), ...notes];
+  },
+  'show ipv6 ospf interface brief': (st, d) => {
+    const o = d.rt.ospf6;
+    if (!o || !Object.keys(o.ifs).length) return ['（沒有任何介面啟用 OSPFv3）'];
+    const SHORT = { DROTHER: 'DROTH', WAITING: 'WAIT', P2P: 'P2P', LOOP: 'LOOP', PASSIVE: 'DR' };
+    return [pad('Interface', 12) + pad('PID', 6) + pad('Area', 16) + pad('Intf ID', 11) + pad('Cost', 6) + pad('State', 6) + 'Nbrs F/C',
+      ...d.ifaces.filter((i) => o.ifs[i.id]).map((i) => {
+        const f = o.ifs[i.id], nb = (d.rt.nbrs6 || []).filter((x) => x.iface === i.id);
+        return pad(i.label.replace('Loopback', 'Lo'), 12) + pad(1, 6) + pad(f.area, 16) + pad(d.ifaces.indexOf(i) + 1, 11) + pad(f.cost, 6) + pad(SHORT[f.state] || f.state, 6) + `${nb.filter((x) => x.state === 'full').length}/${nb.length}`;
+      })];
+  },
+  'show ipv6 dhcp pool': (st, d) => {
+    const pools = Object.entries(d.dhcp6Pools || {});
+    if (!pools.length) return ['（沒有任何 DHCPv6 位址池）'];
+    const binds = dhcp6Bindings(st, d.id);
+    return pools.flatMap(([name, pl]) => {
+      const used = binds.filter((b) => b.pool === name).length;
+      return [`DHCPv6 pool: ${name}`, ...(pl.prefix ? [`  Address allocation prefix: ${pl.prefix.toUpperCase()} valid ${DHCP6_VALID} preferred ${DHCP6_PREF} (${used} in use, 0 conflicts)`] : []),
+        ...(pl.dns || []).map((a) => `  DNS server: ${a.toUpperCase()}`), ...(pl.domain ? [`  Domain name: ${pl.domain}`] : []), `  Active clients: ${used}`,
+        ...(pl.prefix ? [] : ['（沒有 address prefix：這個位址池只提供 DNS 這些「其他設定」，給 stateless DHCPv6 用）'])];
+    });
+  },
+  'show ipv6 dhcp binding': (st, d) => {
+    const b = dhcp6Bindings(st, d.id);
+    if (!b.length) return ['（沒有任何 binding。stateful DHCPv6 才會有：RA 要設 M 旗標 (ipv6 nd managed-config-flag)，位址池要有 address prefix）'];
+    return b.flatMap((x) => {
+      const left = Math.max(0, Math.round(DHCP6_VALID - (st.clock - x.since)));
+      return [`Client: ${x.client.toUpperCase()}`, `  DUID: ${x.duid.replace(/-/g, '')}`, '  Username : unassigned', '  VRF : default',
+        `  IA NA: IA ID 0x${(x.iaid >>> 0).toString(16).toUpperCase().padStart(8, '0')}, T1 ${DHCP6_PREF / 2}, T2 ${DHCP6_PREF * 0.8}`,
+        `    Address: ${x.addr.toUpperCase()}`, `            preferred lifetime ${DHCP6_PREF}, valid lifetime ${DHCP6_VALID}`, `            expires in ${left} seconds`];
+    });
+  },
+  'show ipv6 dhcp interface': (st, d) => {
+    const on = d.ifaces.filter((i) => i.dhcp6 || i.relay6);
+    if (!on.length) return ['（沒有任何介面是 DHCPv6 伺服器或轉送）'];
+    return on.flatMap((i) => i.dhcp6
+      ? [`${longIf(i.label)} is in server mode`, `  Using pool: ${i.dhcp6}`, '  Preference value: 0', '  Hint from client: ignored', '  Rapid-Commit: disabled']
+      : [`${longIf(i.label)} is in relay mode`, '  Relay destinations:', `    ${i.relay6.toUpperCase()}`]);
+  },
+  'show ipv6 access-list': (st, d) => {
+    const all = Object.entries(d.acl6 || {});
+    if (!all.length) return ['（沒有任何 IPv6 ACL）'];
+    return all.flatMap(([name, l]) => [`IPv6 access list ${name}`, ...l.slice().sort((a, b) => a.seq - b.seq).map((r) => `    ${acl6Text(r)}${hits6Of(r) ? ` (${hits6Of(r)} match${hits6Of(r) > 1 ? 'es' : ''})` : ''} sequence ${r.seq}`),
+      '（結尾隱含：permit icmp any any nd-na、permit icmp any any nd-ns、deny ipv6 any any）']);
   },
   'show vlan brief': (st, d) => {
     if (!isSw(d)) return ['% 這個指令只適用於交換器'];
@@ -766,6 +845,88 @@ function routeEntry(st, d, rs) {
   return o;
 }
 
+// ── show ipv6 route：IOS 的格式（每筆兩行，L 是介面自己的 /128，最後有 FF00::/8） ──
+const ROUTE6_CODES = ['Codes: C - Connected, L - Local, S - Static, U - Per-user Static route',
+  '       B - BGP, R - RIP, H - NHRP, I1 - ISIS L1',
+  '       I2 - ISIS L2, IA - ISIS interarea, IS - ISIS summary, D - EIGRP',
+  '       EX - EIGRP external, ND - ND Default, NDp - ND Prefix, DCE - Destination',
+  '       NDr - Redirect, RL - RPL, O - OSPF Intra, OI - OSPF Inter',
+  '       OE1 - OSPF ext 1, OE2 - OSPF ext 2, ON1 - OSPF NSSA ext 1',
+  '       ON2 - OSPF NSSA ext 2, a - Application'];
+const v6up = (n) => fmtIp6(n).toUpperCase();
+const code6 = (r) => (r.type === 'O' ? (r.sub === 'IA' ? 'OI' : r.sub === 'E2' ? 'OE2' : 'O') : r.type);
+/** 放進 IPv6 路由表的路：每個前綴只留管理距離最好的那種（等價的全部留），加上 L 與 FF00::/8 */
+function rib6Of(d) {
+  const all = d.rt.routes6 || [], key = (r) => r.net + '/' + r.bits, best = {};
+  for (const r of all) { if (r.bad) continue; const b = best[key(r)]; if (!b || r.ad < b.ad || (r.ad === b.ad && r.metric < b.metric)) best[key(r)] = r; }
+  const rib = [], out = [];
+  for (const r of all) { const b = best[key(r)]; (!r.bad && b && b.ad === r.ad && b.metric === r.metric && b.type === r.type ? rib : out).push(r); }
+  if (d.routing) {
+    for (const i of d.ifaces) for (const a of (i.rt && i.rt.v6 ? i.rt.v6.addrs : [])) rib.push({ net: a.ip, bits: 128, via: null, iface: i, type: 'L', ad: 0, metric: 0 });
+    rib.push({ net: parseIp6('ff00::'), bits: 8, via: null, iface: null, type: 'L', ad: 0, metric: 0, null0: true });
+  }
+  rib.sort((a, b) => (a.net < b.net ? -1 : a.net > b.net ? 1 : a.bits - b.bits));
+  return { rib, out };
+}
+function route6Lines(st, d, keep) {
+  if (!d.routing) return ['% 這台設備沒有 IPv6 路由功能'];
+  if (!d.v6routing) return ['% IPv6 routing not enabled（ipv6 unicast-routing）'];
+  const { rib, out } = rib6Of(d);
+  const rows = rib.filter(keep);
+  const o = [`IPv6 Routing Table - default - ${new Set(rib.map((r) => r.net + '/' + r.bits)).size} entries`, ...ROUTE6_CODES];
+  let prev = null;
+  for (const r of rows) {
+    const same = prev && prev.net === r.net && prev.bits === r.bits && prev.type === r.type;
+    if (!same) o.push(`${pad(code6(r), 4)}${v6up(r.net)}/${r.bits} [${r.ad}/${r.metric}]${r.sub === 'E2' ? ', tag 1' : ''}`);
+    if (r.null0) o.push('     via Null0, receive');
+    else if (r.type === 'C') o.push(`     via ${longIf(r.iface.label)}, directly connected`);
+    else if (r.type === 'L') o.push(`     via ${longIf(r.iface.label)}, receive`);
+    else if (r.type === 'O') o.push(`     via ${v6up(r.via)}, ${longIf(r.iface.label)}`);
+    else o.push(`     via ${v6up(r.via)}${isLl6(r.via) && r.iface ? ', ' + longIf(r.iface.label) : ''}`);
+    prev = r;
+  }
+  const hidden = out.filter(keep);
+  if (hidden.length) o.push('', ...hidden.map((r) => `（沒有放進路由表：${code6(r)} ${v6up(r.net)}/${r.bits} via ${r.via != null ? v6up(r.via) : '-'}。${r.bad || '同一個前綴已經有管理距離更小的路'}）`));
+  return o;
+}
+const isLl6 = (ip) => ip != null && (ip >> 118n) === 0x3fan;
+/** show ipv6 route <位址或前綴> */
+function route6Entry(st, d, rs) {
+  const r = rs[0];
+  const o = [`Routing entry for ${v6up(r.net)}/${r.bits}`];
+  if (r.type === 'C' || r.type === 'L') {
+    o.push(`  Known via "${r.type === 'C' ? 'connected' : 'local'}", distance 0, metric 0, type ${r.type === 'C' ? 'connected' : 'receive'}`, '  Route count is 1/1, share count 0', '  Routing paths:',
+      r.null0 ? '    receive' : `    directly connected via ${longIf(r.iface.label)}`, '      Last updated 00:00:00 ago');
+    return o;
+  }
+  const how = r.type === 'O' ? `"ospf 1", distance 110, metric ${r.metric}, type ${r.sub === 'IA' ? 'inter area' : r.sub === 'E2' ? 'extern 2' : 'intra area'}` : `"static", distance ${r.ad}, metric 0`;
+  o.push(`  Known via ${how}`, `  Route count is ${rs.length}/${rs.length}, share count 0`, '  Routing paths:');
+  for (const x of rs) {
+    o.push(`    ${v6up(x.via)}${x.iface ? ', ' + longIf(x.iface.label) : ''}`, `      Route metric is ${x.metric}, traffic share count is 1`);
+    if (x.type === 'O') o.push(`      From ${v6up(x.via)}`, `      Last updated ${hms(st.clock - (x.since ?? st.clock))} ago`);
+  }
+  return o;
+}
+/** show ipv6 interface <介面> */
+function ipv6IfLines(st, d, i) {
+  const v = i.rt.v6;
+  if (!v || v.ll == null) return [`${longIf(i.label)} is ${i.rt.link ? 'up' : 'down'}, line protocol is ${i.rt.link ? 'up' : 'down'}`, '  IPv6 is disabled'];
+  const o6 = d.rt.ospf6 && d.rt.ospf6.ifs[i.id];
+  const groups = ['FF02::1', ...(d.routing && d.v6routing ? ['FF02::2'] : []), ...(o6 ? ['FF02::5', ...(['DR', 'BDR'].includes(o6.state) ? ['FF02::6'] : [])] : []), ...(i.dhcp6 ? ['FF02::1:2'] : []),
+    ...[...new Set([v.ll, ...v.addrs.map((a) => a.ip)].map((a) => fmtIp6(parseIp6('ff02::1:ff00:0') | (a & 0xffffffn)).toUpperCase()))]];
+  const hosts = i.raM ? 'Hosts use DHCP to obtain routable addresses.' : i.raO ? 'Hosts use stateless autoconfig for addresses.\n  Hosts use DHCP to obtain other configuration.' : 'Hosts use stateless autoconfig for addresses.';
+  return [`${longIf(i.label)} is up, line protocol is up`, `  IPv6 is enabled, link-local address is ${v6up(v.ll)}`, '  No Virtual link-local address(es):',
+    ...(v.addrs.length ? ['  Global unicast address(es):', ...v.addrs.map((a) => `    ${v6up(a.ip)}, subnet is ${v6up(net6(a.ip, a.bits))}/${a.bits}${a.src === 'slaac' ? ' [EUI]' : ''}`)] : ['  No global unicast address is configured']),
+    '  Joined group address(es):', ...groups.map((g) => '    ' + g), `  MTU is ${+i.mtu || 1500} bytes`, '  ICMP error messages limited to one every 100 milliseconds', '  ICMP redirects are enabled', '  ICMP unreachables are sent',
+    ...(i.acl6In ? [`  Inbound access list ${i.acl6In}`] : []), ...(i.acl6Out ? [`  Outgoing access list ${i.acl6Out}`] : []),
+    '  ND DAD is enabled, number of DAD attempts: 1', '  ND reachable time is 30000 milliseconds (using 30000)',
+    ...(d.routing ? ['  ND advertised reachable time is 0 (unspecified)', '  ND advertised retransmit interval is 0 (unspecified)',
+      ...(i.ra && d.v6routing ? ['  ND router advertisements are sent every 200 seconds', '  ND router advertisements live for 1800 seconds', '  ND advertised default router preference is Medium', ...hosts.split('\n').map((x) => '  ' + x.trim()).map((x) => x)]
+        : ['  ND RAs are suppressed (periodic)']),
+      ...(i.raNoAuto ? ['（前綴的 A 旗標關掉了：主機不能用 SLAAC 自己產生位址）'] : [])] : []),
+  ];
+}
+
 /** show ip bgp：只看某個鄰居時，adv = 送給它的（advertised-routes），不然是從它收到的 */
 function bgpTable(st, d, only) {
   const b = d.rt.bgp;
@@ -1008,7 +1169,8 @@ const stpState = (d, pid) => (d.rt.wait && d.rt.wait[pid] > 15 ? 'LSN' : d.rt.wa
 const CMDS = Object.keys(SHOW);
 const match = (tokens, cmd) => {
   const w = cmd.split(' ');
-  return tokens.length === w.length && tokens.every((t, i) => w[i].startsWith(t));
+  // 完整的關鍵字優先：ip 不是 ipv6 的縮寫
+  return tokens.length === w.length && tokens.every((t, i) => w[i].startsWith(t) && !(t === 'ip' && w[i] === 'ipv6'));
 };
 
 /** show、clear 與 ping：回傳 false 表示不是這幾種指令 */
@@ -1074,6 +1236,28 @@ function showOrPing(app, devId, line, print) {
     if (!i) { print(`% 找不到介面「${tok.slice(3).join(' ')}」`, 'warn'); return true; }
     const lines = policyIfLines(st, d, i);
     (lines.length ? lines : [`（${i.label} 上沒有套用任何 service-policy）`]).forEach((l) => print(l, l.startsWith('（') ? 'hint' : 'pre'));
+    return true;
+  }
+  if (tok[0].length >= 2 && 'show'.startsWith(tok[0]) && tok[1] === 'ipv6' && (tok[2] || '').length >= 2 && 'route'.startsWith(tok[2]) && tok[3] && (parseIp6(tok[3]) != null || parseCidr6(tok[3]) != null)) {
+    if (!d.routing || !d.v6routing) { print('% IPv6 routing not enabled', 'warn'); return true; }
+    const c = parseCidr6(tok[3]), exact = tok[3].includes('/');
+    const { rib } = rib6Of(d);
+    let hit;
+    if (exact) hit = rib.filter((r) => r.bits === c.bits && r.net === net6(c.ip, c.bits));
+    else {
+      const best = rib.filter((r) => net6(c.ip, r.bits) === r.net && (r.bits > 0 || c.ip === 0n) && !r.null0).reduce((a, r) => (!a || r.bits > a.bits ? r : a), null);
+      hit = best ? rib.filter((r) => r.net === best.net && r.bits === best.bits && r.type === best.type) : [];
+    }
+    if (!hit.length) { print('% Route not found', 'warn'); return true; }
+    route6Entry(st, d, hit).forEach((l) => print(l, 'pre'));
+    return true;
+  }
+  if (tok[0].length >= 2 && 'show'.startsWith(tok[0]) && tok[1] === 'ipv6' && (tok[2] || '').length >= 3 && 'interface'.startsWith(tok[2]) && tok[3] && !'brief'.startsWith(tok[3])) {
+    const name = tok.slice(3).join('');
+    const lo = name.match(/^lo[a-z]*(\d+)$/i);
+    const i = lo ? d.ifaces.find((x) => isLoopback(x) && x.bind.n === +lo[1]) : (() => { const p = portByName(d, name.replace(/\.\d+$/, '')); const sub = name.match(/\.(\d+)$/); return p && d.ifaces.find((x) => x.bind.port === p.id && (sub ? x.bind.t === 'sub' && x.bind.vlan === +sub[1] : x.bind.t === 'port')); })();
+    if (!i) { print(`% 找不到介面「${tok.slice(3).join(' ')}」`, 'warn'); return true; }
+    ipv6IfLines(st, d, i).forEach((l) => print(l, l.startsWith('（') ? 'hint' : 'pre'));
     return true;
   }
   if (tok[0].length >= 2 && 'show'.startsWith(tok[0]) && tok[1] === 'ip' && (tok[2] || '').length >= 2 && 'route'.startsWith(tok[2]) && tok[3] && parseIp(tok[3]) != null) {

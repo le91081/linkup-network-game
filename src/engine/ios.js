@@ -2,7 +2,8 @@
 // 不依賴瀏覽器，可以直接用 Node 測試。支援的範圍就是 show running-config 會印出來的那些指令，
 // 所以把一台設備的 running-config 整份貼到另一台同型號的設備上，會得到相同的設定。
 import { parseIp, fmtIp, parseMask, fmtMask, maskOf, netOf, bcastOf } from './ip.js';
-import { parseCidr6, parseIp6 } from './ip6.js';
+import { parseCidr6, parseIp6, fmtIp6, net6, isLinkLocal } from './ip6.js';
+import { ICMP6_TYPES } from './sim6.js';
 import { newIface, cloneState, CATALOG, makeDevice, defaultPortMode } from './model.js';
 import { cdpCfg, lldpCfg, portNd, setPortNd, speaksCdp, clearNeighbors, CDP_TIMER, CDP_HOLD, LLDP_TIMER, LLDP_HOLD } from './disc.js';
 import { parseDscp, dscpName, COS_DSCP_DEFAULT } from './qos.js';
@@ -82,6 +83,54 @@ const PROMPT = {
 };
 const SERVICE_PORT = { www: 80, http: 80, https: 443, domain: 53, dns: 53, ssh: 22, telnet: 23, ftp: 21, smtp: 25, ntp: 123, snmp: 161, tftp: 69, bgp: 179 };
 
+/** IOS 印 IPv6 位址一律用大寫 */
+export const up6 = (a) => (a === 'any' ? 'any' : String(a).startsWith('host ') ? 'host ' + String(a).slice(5).toUpperCase() : String(a).toUpperCase());
+/** IPv6 ACL 的一條規則（IOS 的寫法） */
+export const acl6Text = (r) => `${r.action} ${r.proto || 'ipv6'} ${up6(r.src)}${r.sport ? ' eq ' + r.sport : ''} ${up6(r.dst)}${r.port ? ' eq ' + r.port : ''}${r.icmp ? ' ' + r.icmp : ''}`;
+/**
+ * [sequence <n>] permit|deny <ipv6|tcp|udp|icmp> <來源> [eq <埠>] <目的> [eq <埠>] [ICMP 類型] [log] [sequence <n>]
+ * 位址：any、host <位址>、<前綴>/<長度>。回傳規則物件或 null
+ */
+export function parseAcl6(t) {
+  let n = 0, seq = null;
+  const low = (k) => (t[k] || '').toLowerCase();
+  if (low(0) === 'sequence' && /^\d+$/.test(t[1] || '')) { seq = +t[1]; n = 2; }
+  const action = ['permit', 'deny'].find((x) => low(n) && x.startsWith(low(n)));
+  if (!action) return null;
+  n++;
+  let proto = low(n++);
+  if (proto === 'ip') proto = 'ipv6';
+  if (!['ipv6', 'tcp', 'udp', 'icmp'].includes(proto)) return null;
+  const addr = () => {
+    const w = low(n);
+    if (w === 'any') { n++; return 'any'; }
+    if (w === 'host' && parseIp6(t[n + 1] || '') != null) { n += 2; return 'host ' + fmtIp6(parseIp6(t[n - 1])); }
+    const c = w.includes('/') ? parseCidr6(w) : null;
+    if (c) { n++; return `${fmtIp6(net6(c.ip, c.bits))}/${c.bits}`; }
+    return null;
+  };
+  const port = () => {
+    if (low(n) !== 'eq' || (proto !== 'tcp' && proto !== 'udp')) return '';
+    const v = SERVICE_PORT[low(n + 1)] || low(n + 1);
+    n += 2;
+    return /^\d+$/.test(String(v)) && +v <= 65535 ? String(v) : null;
+  };
+  const src = addr();
+  if (!src) return null;
+  const sport = port();
+  if (sport == null) return null;
+  const dst = addr();
+  if (!dst) return null;
+  const dport = port();
+  if (dport == null) return null;
+  let icmp = '';
+  if (proto === 'icmp' && ICMP6_TYPES.includes(low(n))) icmp = low(n++);
+  if (low(n) === 'log') n++;
+  if (low(n) === 'sequence' && /^\d+$/.test(t[n + 1] || '')) { seq = +t[n + 1]; n += 2; }
+  if (n < t.length) return null;
+  return { seq, action, proto, src, dst, ...(sport ? { sport } : {}), ...(dport ? { port: dport } : {}), ...(icmp ? { icmp } : {}) };
+}
+
 // 設定檔裡的密碼不是明文：和真的 IOS 一樣，印出來的字串可以原樣貼回另一台設備
 const hex = (s) => [...String(s)].map((c) => c.charCodeAt(0).toString(16).padStart(4, '0')).join('');
 const unhex = (h) => (h.match(/.{4}/g) || []).map((x) => String.fromCharCode(parseInt(x, 16))).join('');
@@ -154,7 +203,8 @@ function match(tok, pattern) {
     const t = tok[n];
     if (t == null) return null;
     if (p[0] === '<') args.push(t);
-    else if (!p.startsWith(t.toLowerCase())) return null;
+    // 縮寫可以，但完整的關鍵字優先：ip 就是 ip，不是 ipv6 的縮寫（和真的 IOS 一樣）
+    else if (!p.startsWith(t.toLowerCase()) || (t.toLowerCase() === 'ip' && p === 'ipv6')) return null;
   }
   return tok.length === pt.length ? args : null;
 }
@@ -425,10 +475,56 @@ export function iosSession(getDev, getState, who = null) {
     ['no vrrp <g>', () => onL3((i) => { if (i.vrrp) i.vrrp.on = false; })],
     ['standby <g> ip <vip>', ([, vip]) => (parseIp(vip) == null ? err('IP 位址的格式不正確') : onL3((i) => { Object.assign((i.vrrp ||= { on: false, vip: '', prio: '100' }), { on: true, vip }); }))],
     ['standby <g> priority <n>', ([, n]) => onL3((i) => { (i.vrrp ||= { on: false, vip: '', prio: '100' }).prio = String(+n); })],
-    ['ipv6 address <cidr>', ([c]) => (parseCidr6(c) == null ? err('IPv6 位址要帶前綴長度，例如 2001:db8:a::1/64') : onL3((i) => { if (!i.ip6) i.ra = true; i.ip6 = c; }))],
+    ['ipv6 address <ll> link-local', ([a]) => (parseIp6(a) != null && isLinkLocal(parseIp6(a)) ? onL3((i) => { i.ll6 = fmtIp6(parseIp6(a)); }) : err('link-local 位址要在 FE80::/10 裡，例如 ipv6 address FE80::1 link-local'))],
+    ['no ipv6 address <ll> link-local', () => onL3((i) => { delete i.ll6; })],
+    ['ipv6 address <cidr>', ([c]) => {
+      const x = parseCidr6(c);
+      if (x == null) return err('IPv6 位址要帶前綴長度，例如 2001:db8:a::1/64');
+      if (isLinkLocal(x.ip)) return err('FE80:: 開頭的是 link-local 位址：要手動指定請用 ipv6 address FE80::1 link-local');
+      return onL3((i) => { if (!i.ip6) i.ra = true; i.ip6 = c; });
+    }],
     ['no ipv6 address [...]', () => onL3((i) => { i.ip6 = ''; })],
+    ['ipv6 enable', () => onL3(() => {})],
+    ['no ipv6 enable', () => onL3(() => {})],
     ['ipv6 nd ra suppress [...]', () => onL3((i) => { i.ra = false; })],
     ['no ipv6 nd ra suppress [...]', () => onL3((i) => { i.ra = true; })],
+    // RA 的旗標：M = 位址向 DHCPv6 要 (stateful)、O = 其他設定 (DNS) 向 DHCPv6 要、前綴的 A = 可以用 SLAAC
+    ['ipv6 nd managed-config-flag', () => onL3((i) => { i.raM = true; })],
+    ['no ipv6 nd managed-config-flag', () => onL3((i) => { delete i.raM; })],
+    ['ipv6 nd other-config-flag', () => onL3((i) => { i.raO = true; })],
+    ['no ipv6 nd other-config-flag', () => onL3((i) => { delete i.raO; })],
+    ['ipv6 nd prefix default no-autoconfig', () => onL3((i) => { i.raNoAuto = true; })],
+    ['ipv6 nd prefix <pfx> [...]', ([, rest]) => onL3((i) => { if (/\bno-autoconfig\b/i.test(rest || '')) i.raNoAuto = true; else delete i.raNoAuto; })],
+    ['no ipv6 nd prefix [...]', () => onL3((i) => { delete i.raNoAuto; })],
+    ['ipv6 dhcp server <pool> [...]', ([name]) => onL3((i) => { i.dhcp6 = name; delete i.relay6; })],
+    ['no ipv6 dhcp server [...]', () => onL3((i) => { delete i.dhcp6; })],
+    ['ipv6 dhcp relay destination <ip> [...]', ([ip]) => (parseIp6(ip) == null ? err('用法：ipv6 dhcp relay destination <DHCPv6 伺服器的 IPv6 位址>') : onL3((i) => { i.relay6 = fmtIp6(parseIp6(ip)); delete i.dhcp6; }))],
+    ['no ipv6 dhcp relay destination [...]', () => onL3((i) => { delete i.relay6; })],
+    // OSPFv3：直接在介面上啟用（沒有 network 敘述）
+    ['ipv6 ospf <pid> area <a>', ([, a]) => {
+      const d = dev();
+      if (!d.v6routing) return err('% OSPFv3: IPv6 routing not enabled（先下 ipv6 unicast-routing）');
+      if (!/^\d+$/.test(a)) return err('區域請寫數字，例如 area 0');
+      const r = onL3((i) => { i.ospf6Area = +a; });
+      d.ospf6 ||= {};
+      return r;
+    }],
+    ['no ipv6 ospf <pid> area [...]', () => onL3((i) => { delete i.ospf6Area; })],
+    ['ipv6 ospf cost <n>', ([n]) => (+n >= 1 && +n <= 65535 ? onL3((i) => { i.ospf6Cost = +n; }) : err('cost 必須是 1 – 65535'))],
+    ['no ipv6 ospf cost [...]', () => onL3((i) => { delete i.ospf6Cost; })],
+    ['ipv6 ospf priority <n>', ([n]) => (/^\d+$/.test(n) && +n <= 255 ? onL3((i) => { if (+n === 1) delete i.ospf6Prio; else i.ospf6Prio = +n; }) : err('priority 的範圍是 0 – 255（0 表示永遠不當 DR / BDR）'))],
+    ['no ipv6 ospf priority [...]', () => onL3((i) => { delete i.ospf6Prio; })],
+    ['ipv6 ospf hello-interval <n>', ([n]) => (+n >= 1 && +n <= 65535 ? onL3((i) => { if (+n === 10) delete i.ospf6Hello; else i.ospf6Hello = +n; }) : err('hello-interval 的範圍是 1 – 65535 秒'))],
+    ['no ipv6 ospf hello-interval [...]', () => onL3((i) => { delete i.ospf6Hello; })],
+    ['ipv6 ospf dead-interval <n>', ([n]) => (+n >= 1 && +n <= 65535 ? onL3((i) => { i.ospf6Dead = +n; }) : err('dead-interval 的範圍是 1 – 65535 秒'))],
+    ['no ipv6 ospf dead-interval [...]', () => onL3((i) => { delete i.ospf6Dead; })],
+    ['ipv6 ospf network <t>', ([t]) => {
+      const v = ['point-to-point', 'broadcast'].find((x) => x.startsWith(t.toLowerCase()));
+      return v ? onL3((i) => { if (v === 'broadcast') delete i.ospf6Net; else i.ospf6Net = 'p2p'; }) : err('用法：ipv6 ospf network point-to-point | broadcast');
+    }],
+    ['no ipv6 ospf network [...]', () => onL3((i) => { delete i.ospf6Net; })],
+    ['ipv6 traffic-filter <name> <dir>', ([name, dir]) => (['in', 'out'].includes(dir.toLowerCase()) ? onL3((i) => { i[dir.toLowerCase() === 'in' ? 'acl6In' : 'acl6Out'] = name; }) : err('方向必須是 in 或 out'))],
+    ['no ipv6 traffic-filter <name> <dir>', ([, dir]) => onL3((i) => { delete i[dir.toLowerCase() === 'in' ? 'acl6In' : 'acl6Out']; })],
     ['encapsulation dot1q <vlan>', ([v]) => each((t) => {
       if (!t.sub) return err('encapsulation 只能用在子介面，例如 interface Gi0/0/0.10');
       if (!(+v >= 1 && +v <= 4094)) return err('VLAN ID 必須是 1 – 4094');
@@ -726,6 +822,31 @@ export function iosSession(getDev, getState, who = null) {
     ['ip routing', () => needRouting() || undefined],
     ['ipv6 unicast-routing', () => { if (dev().kind !== 'router') return err('這個模擬只有路由器支援 IPv6 路由'); dev().v6routing = true; return undefined; }],
     ['no ipv6 unicast-routing', () => { dev().v6routing = false; }],
+    ['ipv6 router ospf <pid>', () => {
+      const d = dev();
+      if (d.kind !== 'router') return err('這個模擬只有路由器支援 OSPFv3');
+      if (!d.v6routing) return err('% IPv6 routing not enabled（先下 ipv6 unicast-routing）');
+      d.ospf6 ||= {};
+      enter('ospf6', null);
+      return undefined;
+    }],
+    ['no ipv6 router ospf <pid>', () => { const d = dev(); delete d.ospf6; for (const i of d.ifaces) delete i.ospf6Area; }],
+    ['ipv6 dhcp pool <name>', ([name]) => {
+      const d = dev();
+      if (d.kind !== 'router') return err('這個模擬只有路由器能當 DHCPv6 伺服器');
+      ((d.dhcp6Pools ||= {})[name] ||= { prefix: '', dns: [], domain: '' });
+      enter('dhcp6', name);
+      return undefined;
+    }],
+    ['no ipv6 dhcp pool <name>', ([name]) => { const d = dev(); if (!(d.dhcp6Pools || {})[name]) return err('沒有這個 DHCPv6 位址池'); delete d.dhcp6Pools[name]; return undefined; }],
+    ['ipv6 access-list <name>', ([name]) => {
+      const d = dev();
+      if (d.kind !== 'router') return err('這個模擬只有路由器支援 IPv6 ACL');
+      ((d.acl6 ||= {})[name] ||= []);
+      enter('acl6', name);
+      return undefined;
+    }],
+    ['no ipv6 access-list <name>', ([name]) => { const d = dev(); if (!(d.acl6 || {})[name]) return err('沒有這個 IPv6 ACL'); delete d.acl6[name]; return undefined; }],
     ['ip default-gateway <ip>', ([ip]) => {
       const mg = dev().ifaces.find((x) => x.id === 'mgmt');
       if (!mg) return err('有路由功能的設備請用 ip route 0.0.0.0 0.0.0.0 <下一站>');
@@ -752,14 +873,32 @@ export function iosSession(getDev, getState, who = null) {
       if (parseIp(net) === 0 && maskBits(mask) === 0) for (const i of d.ifaces) if (i.gateway && (!via || i.gateway === via)) { i.gateway = ''; gw = true; }
       return d.routes.length < n || gw ? undefined : err('路由表裡沒有這一筆靜態路由');
     }],
-    ['ipv6 route <prefix> <via>', ([prefix, via]) => {
+    ['ipv6 route <prefix> <a> [...]', ([prefix, a, rest]) => {
       const d = dev();
       if (!d.routes6) return err('這個模擬只有路由器支援 IPv6 路由');
-      if (parseCidr6(prefix) == null || parseIp6(via) == null) return err('用法：ipv6 route <前綴/長度> <下一站>');
-      addUnique(d.routes6, { dst: prefix, via });
+      const t = (rest || '').split(/\s+/).filter(Boolean);
+      // ipv6 route ::/0 Gi0/0/1 FE80::1 [AD]：下一站是 link-local 時要寫出口介面
+      let via = a, ad = t[0];
+      if (parseIp6(a) == null) {
+        const i = ifByName(a);
+        if (isErr(i)) return err('用法：ipv6 route <前綴/長度> <下一站> [管理距離]，或 ipv6 route <前綴/長度> <出口介面> <link-local 下一站>');
+        via = t[0]; ad = t[1];
+        if (parseIp6(via || '') == null) return err('寫了出口介面，後面要接下一站的位址（通常是對方的 link-local，例如 FE80::2）');
+      } else if (isLinkLocal(parseIp6(a))) return err('下一站是 link-local 位址時要指定出口介面：ipv6 route <前綴> <介面> <FE80::…>');
+      if (parseCidr6(prefix) == null) return err('用法：ipv6 route <前綴/長度> <下一站>');
+      if (ad != null && !(+ad >= 1 && +ad <= 254)) return err('管理距離必須是 1 – 254');
+      const cur = d.routes6.find((r) => r.dst === prefix && r.via === via);
+      if (cur) { if (ad) cur.ad = +ad; else delete cur.ad; } else d.routes6.push({ dst: prefix, via, ...(ad ? { ad: +ad } : {}), ...(parseIp6(a) == null ? { dev: ifByName(a).label } : {}) });
       return undefined;
     }],
-    ['no ipv6 route <prefix> [...]', ([prefix, via]) => { const d = dev(); if (d.routes6) d.routes6 = d.routes6.filter((r) => !(r.dst === prefix && (!via || r.via === via))); }],
+    ['no ipv6 route <prefix> [...]', ([prefix, rest]) => {
+      const d = dev(), want = parseCidr6(prefix);
+      if (!d.routes6 || !want) return err('用法：no ipv6 route <前綴/長度> [下一站]');
+      const via = (rest || '').split(/\s+/).map(parseIp6).find((x) => x != null);
+      const n = d.routes6.length;
+      d.routes6 = d.routes6.filter((r) => { const c = parseCidr6(r.dst); return !(c && c.ip === want.ip && c.bits === want.bits && (via == null || parseIp6(r.via) === via)); });
+      return d.routes6.length < n ? undefined : err('沒有這一筆 IPv6 靜態路由');
+    }],
     ['router bgp <asn>', ([asn]) => {
       const d = dev();
       if (!d.routing || d.kind !== 'router') return err('這個模擬只有路由器能跑 BGP');
@@ -1356,6 +1495,71 @@ export function iosSession(getDev, getState, who = null) {
       ['log-adjacency-changes [...]', () => undefined],
       ['no router-id [...]', () => { delete dev().ospfRid; }],
     ],
+    ospf6: [
+      ['router-id <id>', ([id]) => {
+        if (parseIp(id) == null) return err('用法：router-id <A.B.C.D>（OSPFv3 的 Router ID 還是 32 位元的 IPv4 格式）');
+        const d = dev(), cur = ((getState().dyn || {}).rid6 || {})[d.id];
+        d.ospf6.rid = id;
+        return cur && cur.rid !== parseIp(id) ? '% OSPFv3: Reload or use "clear ipv6 ospf process" command, for this to take effect' : undefined;
+      }],
+      ['no router-id [...]', () => { delete dev().ospf6.rid; }],
+      ['default-information originate [...]', () => { dev().ospf6.default = true; }],
+      ['no default-information originate', () => { delete dev().ospf6.default; }],
+      ['passive-interface default', () => { const c = dev().ospf6; c.passiveDefault = true; c.noPassive = []; }],
+      ['no passive-interface default', () => { const c = dev().ospf6; delete c.passiveDefault; delete c.noPassive; }],
+      ['passive-interface <...>', ([t]) => { const i = ifByName(t); if (isErr(i)) return i; const c = dev().ospf6; if (c.passiveDefault) c.noPassive = (c.noPassive || []).filter((x) => x !== i.id); else if (!(c.passive ||= []).includes(i.id)) c.passive.push(i.id); return undefined; }],
+      ['no passive-interface <...>', ([t]) => { const i = ifByName(t); if (isErr(i)) return i; const c = dev().ospf6; if (c.passiveDefault) { if (!(c.noPassive ||= []).includes(i.id)) c.noPassive.push(i.id); } else c.passive = (c.passive || []).filter((x) => x !== i.id); return undefined; }],
+      ['auto-cost reference-bandwidth <n>', ([n]) => (+n >= 1 && +n <= 4294967 ? void (+n === 100 ? delete dev().ospf6.refBw : (dev().ospf6.refBw = +n)) || '% OSPFv3: Reference bandwidth is changed.\n        Please ensure reference bandwidth is consistent across all routers.' : err('reference-bandwidth 的單位是 Mbps，範圍 1 – 4294967'))],
+      ['no auto-cost reference-bandwidth [...]', () => { delete dev().ospf6.refBw; }],
+      ['maximum-paths <n>', ([n]) => (+n >= 1 && +n <= 32 ? void (+n === 4 ? delete dev().ospf6.maxPaths : (dev().ospf6.maxPaths = +n)) : err('maximum-paths 的範圍是 1 – 32'))],
+      ['no maximum-paths [...]', () => { delete dev().ospf6.maxPaths; }],
+      ['log-adjacency-changes [...]', () => undefined],
+    ],
+    dhcp6: [
+      ['address prefix <cidr> [...]', ([c]) => {
+        const x = parseCidr6(c);
+        if (!x || x.bits > 64) return err('用法：address prefix <前綴>/<長度>，例如 address prefix 2001:DB8:A::/64（長度最多 64）');
+        dev().dhcp6Pools[S.cur].prefix = `${fmtIp6(net6(x.ip, x.bits))}/${x.bits}`;
+        return undefined;
+      }],
+      ['no address prefix [...]', () => { dev().dhcp6Pools[S.cur].prefix = ''; }],
+      ['dns-server <ip>', ([ip]) => {
+        if (parseIp6(ip) == null) return err('用法：dns-server <IPv6 位址>（可以下好幾次，加入多台）');
+        const p = dev().dhcp6Pools[S.cur], a = fmtIp6(parseIp6(ip));
+        if (!(p.dns ||= []).includes(a)) p.dns.push(a);
+        return undefined;
+      }],
+      ['no dns-server <ip>', ([ip]) => { const p = dev().dhcp6Pools[S.cur]; p.dns = (p.dns || []).filter((x) => parseIp6(x) !== parseIp6(ip)); }],
+      ['domain-name <name>', ([n]) => { dev().dhcp6Pools[S.cur].domain = n; }],
+      ['no domain-name [...]', () => { dev().dhcp6Pools[S.cur].domain = ''; }],
+    ],
+    acl6: [
+      ['no sequence <n>', ([n]) => {
+        const l = dev().acl6[S.cur], k = l.findIndex((r) => r.seq === +n);
+        if (k < 0) return err(`沒有 sequence ${n} 這一條`);
+        l.splice(k, 1);
+        return undefined;
+      }],
+      ['no <...>', ([line]) => {
+        const r = parseAcl6(line.split(/\s+/));
+        const l = dev().acl6[S.cur];
+        const k = r ? l.findIndex((x) => acl6Text(x) === acl6Text(r)) : -1;
+        if (k < 0) return err('沒有這一條規則（也可以用 no sequence <序號> 刪除）');
+        l.splice(k, 1);
+        return undefined;
+      }],
+      ['<...>', ([line]) => {
+        const r = parseAcl6(line.split(/\s+/));
+        if (!r) return err('用法：permit|deny <ipv6|tcp|udp|icmp> <來源> [eq <埠>] <目的> [eq <埠>] [nd-ns|nd-na|echo-request|…]，位址寫 any、host <位址> 或 <前綴>/<長度>');
+        const l = dev().acl6[S.cur];
+        if (l.some((x) => acl6Text(x) === acl6Text(r))) return undefined;
+        if (r.seq == null) r.seq = (l.reduce((m, x) => Math.max(m, x.seq), 0) || 0) + 10;
+        else if (l.some((x) => x.seq === r.seq)) return err(`% Duplicate sequence number ${r.seq}`);
+        l.push(r);
+        l.sort((a, b) => a.seq - b.seq);
+        return undefined;
+      }],
+    ],
     dhcp: [
       ['network <net> <mask>', ([net, mask]) => {
         const n = parseIp(net), bits = maskBits(mask);
@@ -1683,6 +1887,12 @@ export function iosSession(getDev, getState, who = null) {
         S.pending = { fn: (ans, o2) => { S.pending = null; if (!/^y/i.test(ans.trim())) return { out: o2, changed: false }; clearOspfProcess(getState(), dev()); recompute(getState()); o2.push('（OSPF 程序重新啟動：重新選 Router ID，所有鄰居關係從頭建立）'); return { out: o2, changed: true }; } };
         return done(false);
       }
+      if (match(tok, 'clear ipv6 ospf process') || match(tok, 'clear ipv6 ospf <n> process')) {
+        out.push('Reset OSPF process? [no]: ');
+        S.pending = { fn: (ans, o2) => { S.pending = null; if (!/^y/i.test(ans.trim())) return { out: o2, changed: false }; clearOspfProcess(getState(), dev(), '6'); recompute(getState()); o2.push('（OSPFv3 程序重新啟動：重新選 Router ID，所有鄰居關係從頭建立）'); return { out: o2, changed: true }; } };
+        return done(false);
+      }
+      if (match(tok, 'clear ipv6 dhcp binding [...]')) { const st = getState(); if (st.dyn && st.dyn.lease6) delete st.dyn.lease6[dev().id]; recompute(st); return done(false); }
       if (match(tok, 'clear cdp table')) { clearNeighbors(getState(), dev(), 'cdp'); return done(false); }
       if (match(tok, 'clear lldp table')) { clearNeighbors(getState(), dev(), 'lldp'); return done(false); }
       if (match(tok, 'clear cdp counters') || match(tok, 'clear lldp counters')) { const c = ((getState().dyn.ndCnt ||= {})[dev().id] ||= {}); const k = tok[1].toLowerCase().startsWith('c') ? 'cdp' : 'lldp'; c[k + 'Out'] = 0; c[k + 'In'] = 0; return done(false); }
@@ -1744,8 +1954,8 @@ export function iosSession(getDev, getState, who = null) {
     // 介面模式裡單獨一個 sh 是 shutdown；後面還有字（sh ip int br）才是想看 show
     if (tok.length >= 2 && 'show'.startsWith(t0) && t0.length >= 2) { out.push('% 在設定模式要查看狀態請在前面加 do，例如 do show ip interface brief'); return done(false); }
     // ACL 模式的規則是整行一起解析，只有長得像規則的才交給它，其餘當成全域指令（可以直接跳到別的設定）
-    const aclMode = S.mode === 'acl' || S.mode === 'stdacl';
-    const trySub = S.mode !== 'config' && (!aclMode || /^(\d+\s+)?(permit|deny)\b/i.test(text) || /^no\s+\d+$/i.test(text));
+    const aclMode = S.mode === 'acl' || S.mode === 'stdacl' || S.mode === 'acl6';
+    const trySub = S.mode !== 'config' && (!aclMode || /^(\d+\s+|sequence\s+\d+\s+)?(permit|deny)\b/i.test(text) || /^no\s+(\d+|sequence\s+\d+|permit\b|deny\b)/i.test(text));
     let res = trySub ? run(SUB[S.mode], tok, out) : { hit: false };
     if (!res.hit && S.mode === 'config') res = run(CONFIG, tok, out);
     else if (!res.hit) {
@@ -2056,6 +2266,9 @@ export function runningConfig(state, dev) {
       ...(m.sshTimeout ? [`ip ssh time-out ${m.sshTimeout}`] : []), ...(m.sshRetries ? [`ip ssh authentication-retries ${m.sshRetries}`] : []), '!');
   }
   if (dev.v6routing) o.push('ipv6 unicast-routing', '!');
+  for (const [name, p] of Object.entries(dev.dhcp6Pools || {})) {
+    o.push(`ipv6 dhcp pool ${name}`, ...(p.prefix ? [` address prefix ${p.prefix.toUpperCase()}`] : []), ...(p.dns || []).map((a) => ` dns-server ${a.toUpperCase()}`), ...(p.domain ? [` domain-name ${p.domain}`] : []), '!');
+  }
   {
     const c = cdpCfg(dev), l = lldpCfg(dev), raw = dev.lldp || {};
     const g = [];
@@ -2202,8 +2415,22 @@ export function runningConfig(state, dev) {
     if (i.aclIn && i.aclIn.length) l.push(` ip access-group ${aclName(i, 'in')} in`);
     if (i.aclOut && i.aclOut.length) l.push(` ip access-group ${aclName(i, 'out')} out`);
     if (i.vrrp && i.vrrp.on) l.push(` vrrp 1 ip ${i.vrrp.vip || '(未設定)'}`, ` vrrp 1 priority ${i.vrrp.prio || 100}`);
-    if (i.ip6) l.push(` ipv6 address ${i.ip6}`);
+    if (i.ll6) l.push(` ipv6 address ${i.ll6.toUpperCase()} link-local`);
+    if (i.ip6) l.push(` ipv6 address ${i.ip6.toUpperCase()}`);
+    if (i.raNoAuto) l.push(' ipv6 nd prefix default no-autoconfig');
+    if (i.raM) l.push(' ipv6 nd managed-config-flag');
+    if (i.raO) l.push(' ipv6 nd other-config-flag');
     if (i.ip6 && !i.ra) l.push(' ipv6 nd ra suppress all');
+    if (i.dhcp6) l.push(` ipv6 dhcp server ${i.dhcp6}`);
+    if (i.relay6) l.push(` ipv6 dhcp relay destination ${i.relay6.toUpperCase()}`);
+    if (i.ospf6Cost) l.push(` ipv6 ospf cost ${i.ospf6Cost}`);
+    if (i.ospf6Net === 'p2p') l.push(' ipv6 ospf network point-to-point');
+    if (i.ospf6Prio != null && i.ospf6Prio !== '') l.push(` ipv6 ospf priority ${i.ospf6Prio}`);
+    if (i.ospf6Hello) l.push(` ipv6 ospf hello-interval ${i.ospf6Hello}`);
+    if (i.ospf6Dead) l.push(` ipv6 ospf dead-interval ${i.ospf6Dead}`);
+    if (i.ospf6Area != null && i.ospf6Area !== '' && dev.ospf6) l.push(` ipv6 ospf 1 area ${i.ospf6Area}`);
+    if (i.acl6In) l.push(` ipv6 traffic-filter ${i.acl6In} in`);
+    if (i.acl6Out) l.push(` ipv6 traffic-filter ${i.acl6Out} out`);
     if (i.cmap || cmIf.has(i)) l.push(` crypto map ${i.cmap || cmIf.get(i)}`);
     if (i.qosIn) l.push(` service-policy input ${i.qosIn}`);
     if (i.qosOut) l.push(` service-policy output ${i.qosOut}`);
@@ -2319,7 +2546,16 @@ export function runningConfig(state, dev) {
     if (!r.dst || !r.via) continue;
     o.push(`ip route ${r.dst} ${parseMask(r.mask || '') != null ? fmtMask(parseMask(r.mask)) : r.mask} ${r.via}${+r.ad > 1 ? ' ' + r.ad : ''}`);
   }
-  for (const r of dev.routes6 || []) if (r.dst && r.via) o.push(`ipv6 route ${r.dst} ${r.via}`);
+  for (const r of dev.routes6 || []) if (r.dst && r.via) o.push(`ipv6 route ${r.dst.toUpperCase()} ${r.dev ? r.dev + ' ' : ''}${r.via.toUpperCase()}${+r.ad > 1 ? ' ' + r.ad : ''}`);
+  if (dev.ospf6) {
+    const c = dev.ospf6, ifl = (id) => (dev.ifaces.find((x) => x.id === id) || { label: id }).label;
+    o.push('ipv6 router ospf 1', ...(c.rid ? [` router-id ${c.rid}`] : []), ...(c.refBw ? [` auto-cost reference-bandwidth ${c.refBw}`] : []));
+    if (c.passiveDefault) { o.push(' passive-interface default'); for (const id of c.noPassive || []) o.push(` no passive-interface ${ifl(id)}`); }
+    else for (const id of c.passive || []) o.push(` passive-interface ${ifl(id)}`);
+    if (c.maxPaths) o.push(` maximum-paths ${c.maxPaths}`);
+    if (c.default) o.push(' default-information originate');
+    o.push('!');
+  }
   const out = dev.ifaces.filter(natRule);
   // NAT 的範圍：指定的 ACL、圖形介面填的「NAT 例外」（轉成一份 ACL），或預設的 list 1（全部轉換）
   const natList = (i) => i.natAcl || (splitList(i.natSkip).length ? 'NAT-' + i.label.replace(/[^\w.]+/g, '_').toUpperCase() : '1');
@@ -2361,6 +2597,11 @@ export function runningConfig(state, dev) {
     }
     o.push('!', `ip access-list extended ${name}`);
     for (const r of list) o.push(' ' + aclLine(r));
+  }
+  for (const [name, list] of Object.entries(dev.acl6 || {})) {
+    o.push('!', `ipv6 access-list ${name}`);
+    // 序號照預設（10、20、30…）的不用寫出來；插進中間的（例如 15）要寫，貼回去順序才會一樣
+    list.slice().sort((a, b) => a.seq - b.seq).forEach((r, k) => o.push(` ${r.seq !== (k + 1) * 10 ? 'sequence ' + r.seq + ' ' : ''}${acl6Text(r)}`));
   }
   for (const [n, list] of Object.entries(dev.asPathAcl || {})) for (const e of list) o.push(`ip as-path access-list ${n} ${e.action} ${e.re}`);
   for (const [name, list] of Object.entries(dev.prefixLists || {})) for (const e of list.slice().sort((a, b) => a.seq - b.seq)) o.push(`ip prefix-list ${name} seq ${e.seq} ${e.action} ${fmtIp(e.net)}/${e.bits}${e.ge ? ' ge ' + e.ge : ''}${e.le ? ' le ' + e.le : ''}`);

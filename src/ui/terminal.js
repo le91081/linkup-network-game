@@ -9,12 +9,16 @@ import { fortiSession } from '../engine/fortios.js';
 import { iosRun, IOS_CMDS, consoleFollow } from './cli.js';
 import { counters, onBulk } from '../engine/wire.js';
 import { fortiRun } from './forticli.js';
-import { transact6 } from '../engine/sim6.js';
+import { transact6, dhcp6Trace, duidOf, iaidOf } from '../engine/sim6.js';
 import { parseIp6, fmtIp6 } from '../engine/ip6.js';
 
-const v6Lines = (rt) => (rt.v6 && rt.v6.ll != null
-  ? [...rt.v6.addrs.map((a) => `   IPv6 位址 . . . . . . : ${fmtIp6(a.ip)}/${a.bits}${a.src === 'slaac' ? '（SLAAC）' : ''}`),
-    `   連結-本機 IPv6 位址 . : ${fmtIp6(rt.v6.ll)}`, ...(rt.v6.gw != null ? [`   IPv6 預設閘道 . . . . : ${fmtIp6(rt.v6.gw)}`] : [])]
+const V6SRC = { slaac: '（SLAAC）', dhcp6: '（DHCPv6）' };
+const v6Lines = (rt, i) => (rt.v6 && rt.v6.ll != null
+  ? [...rt.v6.addrs.map((a) => `   IPv6 位址 . . . . . . : ${fmtIp6(a.ip)}${a.bits === 128 && a.src === 'dhcp6' ? '' : '/' + a.bits}${V6SRC[a.src] || ''}`),
+    `   連結-本機 IPv6 位址 . : ${fmtIp6(rt.v6.ll)}`, ...(rt.v6.gw != null ? [`   IPv6 預設閘道 . . . . : ${fmtIp6(rt.v6.gw)}`] : []),
+    ...(rt.v6.dhcp && rt.v6.dhcp.ok ? [`   DHCPv6 IAID . . . . . : ${iaidOf(i)}`, `   DHCPv6 用戶端 DUID  . : ${duidOf(i)}`] : []),
+    ...(rt.v6.dns && rt.v6.dns.length ? [`   IPv6 DNS 伺服器 . . . : ${rt.v6.dns.map(fmtIp6).join(', ')}`] : []),
+    ...(rt.v6.dhcp && !rt.v6.dhcp.ok ? [`   DHCPv6 . . . . . . . : 失敗（${rt.v6.dhcp.why}）`] : [])]
   : []);
 
 const HELP = [
@@ -23,6 +27,7 @@ const HELP = [
   '  ipconfig                顯示本機的網路設定',
   '  ipconfig /renew         重新向 DHCP 伺服器要一次 IP（播放 DORA 四個步驟）',
   '  ipconfig /release       歸還 DHCP 位址',
+  '  ipconfig /renew6        重新向 DHCPv6 要位址或 DNS（依 RA 的 M / O 旗標）',
   '  arp -a                  顯示 ARP 快取（IP 對應到哪個 MAC）',
   '  arp -d                  清空 ARP 快取',
   '  tracert <IP 或網域>     顯示封包經過的每一台路由器',
@@ -255,6 +260,12 @@ export function buildTerminal(ctx, body) {
       }
     } else if (c === 'ipconfig' || c === 'ifconfig' || (c === 'ip' && args[0])) {
       if (/^\/?release$/i.test(args[0] || '')) { dhcpRelease(st(), dev.id); ctx.commit(false); }
+      if (/^\/?renew6$/i.test(args[0] || '')) {
+        // DHCPv6 沒有「續約」的 DORA：stateful 是 Solicit / Advertise / Request / Reply，stateless 只有 Information-Request / Reply
+        const tr = dhcp6Trace(st(), dev.id);
+        app.showTrace(`${dev.name}> ${line}`, tr.log, tr.hops, { ok: tr.ok, reason: tr.reason, failDev: dev.id });
+        if (!tr.ok) print('更新介面時發生錯誤：' + tr.reason, 'bad');
+      }
       if (/^\/?renew$/i.test(args[0] || '')) {
         dhcpRenew(st(), dev.id);
         ctx.commit(false);
@@ -267,9 +278,11 @@ export function buildTerminal(ctx, body) {
         print('');
         print(`${i.bind.t === 'wlan' ? '無線區域網路介面卡' : '乙太網路卡'} ${i.label}:`);
         if (rt.ip == null || !rt.link) {
-          print(`   媒體狀態 . . . . . . : ${rt.link ? '尚未設定 IP' : '媒體已中斷連線'}` + (rt.note ? `（${rt.note}）` : ''), 'warn');
+          // 線有接、只是沒有 IPv4（例如純 IPv6 的網段）：不是「媒體中斷」
+          if (rt.link) print(`   IPv4 位址 . . . . . . : （尚未設定${rt.note ? '：' + rt.note : ''}）`, rt.v6 && rt.v6.addrs.length ? 'dim' : 'warn');
+          else print('   媒體狀態 . . . . . . : 媒體已中斷連線', 'warn');
           print(`   實體位址 (MAC) . . . : ${rt.mac}`);
-          v6Lines(rt).forEach((x) => print(x));
+          v6Lines(rt, i).forEach((x) => print(x));
           continue;
         }
         print(`   實體位址 (MAC) . . . : ${rt.mac}`);
@@ -279,7 +292,7 @@ export function buildTerminal(ctx, body) {
         print(`   子網路遮罩  . . . . . : ${fmtMask(rt.bits)}`);
         print(`   預設閘道 . . . . . . : ${rt.gw != null ? fmtIp(rt.gw) : ''}`);
         print(`   DNS 伺服器  . . . . . : ${rt.dns.map(fmtIp).join(', ')}`);
-        v6Lines(rt).forEach((x) => print(x));
+        v6Lines(rt, i).forEach((x) => print(x));
       }
     } else if (c === 'ping' || c === 'tracert' || c === 'traceroute') {
       const target = args[0];
@@ -291,9 +304,17 @@ export function buildTerminal(ctx, body) {
           const res = transact6(st(), dev.id, d6);
           app.showTrace(`${dev.name}> ${line}`, res.log, res.hops, res);
           print('');
-          print(`Ping ${fmtIp6(d6)} (使用 32 位元組的資料):`);
-          for (let n = 0; n < 4; n++) print(res.ok ? `回覆自 ${fmtIp6(d6)}: 時間=${Math.max(1, res.hops.length)}ms` : res.phase === 'reply' ? '要求等候逾時。' : '目的地主機無法連線。', res.ok ? 'ok' : 'bad');
-          if (!res.ok) print('  ↳ ' + res.reason, 'hint');
+          if (c !== 'ping') {
+            print(`在上限 30 個躍點上追蹤 ${fmtIp6(d6)} 的路由：`);
+            res.l3.forEach((x, n) => print(`  ${String(n + 1).padStart(2)}    ${String(n + 1).padStart(2)} ms    ${fmtIp6(x.ip6).padEnd(28)} ${st().devices[x.dev].name}`));
+            if (res.ok || res.phase === 'reply') print(`  ${String(res.l3.length + 1).padStart(2)}    ${String(res.l3.length + 1).padStart(2)} ms    ${fmtIp6(d6)}`, res.ok ? 'ok' : '');
+            if (!res.ok) { print(`  ${String(res.l3.length + 1 + (res.phase === 'reply' ? 1 : 0)).padStart(2)}     *        *        要求等候逾時。`, 'bad'); print('  ↳ ' + res.reason, 'hint'); }
+            else print('追蹤完成。');
+          } else {
+            print(`Ping ${fmtIp6(d6)} (使用 32 位元組的資料):`);
+            for (let n = 0; n < 4; n++) print(res.ok ? `回覆自 ${fmtIp6(d6)}: 時間=${Math.max(1, res.hops.length)}ms` : res.phase === 'reply' ? '要求等候逾時。' : '目的地主機無法連線。', res.ok ? 'ok' : 'bad');
+            if (!res.ok) print('  ↳ ' + res.reason, 'hint');
+          }
         }
       } else {
         const r = resolve(target);
@@ -330,6 +351,20 @@ export function buildTerminal(ctx, body) {
         app.showTrace(`${dev.name}> ${line}`, r.log, r.hops, r);
         if (r.ok) { print(`名稱:    ${args[0]}`); print(`Address: ${fmtIp(r.ip)}`, 'ok'); }
         else print('*** ' + r.reason, 'bad');
+      }
+    } else if ((c === 'curl' || c === 'telnet') && /^(https?:\/\/)?\[|^[0-9a-f]*:[0-9a-f:]*:/i.test(args[0] || '')) {
+      const raw = (args[0] || '').replace(/^https?:\/\//, '');
+      const m6 = raw.match(/^\[([^\]]+)\](?::(\d+))?/);
+      const addr = m6 ? m6[1] : raw.replace(/\/.*$/, '');
+      let port = m6 && m6[2] ? +m6[2] : /^http:/.test(args[0] || '') ? 80 : 443;
+      if (args[1] && /^\d+$/.test(args[1])) port = +args[1];
+      const d6 = parseIp6(addr);
+      if (d6 == null) print('IPv6 位址的格式不正確（網址裡的 IPv6 位址要加中括號，例如 curl http://[2001:db8::10]/）', 'bad');
+      else {
+        const res = transact6(st(), dev.id, d6, { proto: 'tcp', dport: port });
+        app.showTrace(`${dev.name}> ${line}`, res.log, res.hops, res);
+        if (res.ok) print(c === 'telnet' ? `已連線到 [${fmtIp6(d6)}]:${port}` : `已連線到 [${fmtIp6(d6)}]:${port} — HTTP/1.1 200 OK`, 'ok');
+        else { print(`${c}: 無法連線到 [${fmtIp6(d6)}] 埠 ${port}`, 'bad'); print('  ↳ ' + res.reason, 'hint'); }
       }
     } else if (c === 'curl' || c === 'telnet') {
       let t = (args[0] || '').replace(/^https?:\/\//, '').replace(/\/.*$/, '');
