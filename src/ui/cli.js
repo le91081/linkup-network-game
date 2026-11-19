@@ -336,20 +336,22 @@ const SHOW = {
     const m = d.mgmt || {};
     if (!m.snmp || m.snmp === 'off') return ['%SNMP agent not enabled'];
     const bad = snmpStats(st, d).bad;
-    return [, ...(m.contact ? [] : []), ...(m.location ? [] : []),
-      , , , '    0 Illegal operation for community name supplied',
-      , ...(m.trapHosts || []).map((h) => )];
+    return [`Chassis: ${host(d)}`, ...(m.contact ? [`Contact: ${m.contact}`] : []), ...(m.location ? [`Location: ${m.location}`] : []),
+      `${bad} SNMP packets input`, `    0 Bad SNMP version errors`, `    ${bad} Unknown community name`, '    0 Illegal operation for community name supplied',
+      `SNMP logging: ${m.traps && (m.trapHosts || []).length ? 'enabled' : 'disabled'}`, ...(m.trapHosts || []).map((h) => `    Logging to ${h.ip}.162, 0/10, 0 sent, 0 dropped.`)];
   },
   'show snmp user': (st, d) => {
     const u = (d.mgmt || {}).snmpUser;
     if (!u || d.mgmt.snmp !== 'v3') return ['（沒有任何 SNMPv3 使用者）'];
-    return [, , 'storage-type: nonvolatile        active',
-      'Authentication Protocol: SHA', , ];
+    const mac = (d.ifaces.find((i) => i.rt && i.rt.mac) || { rt: { mac: '' } }).rt.mac.replace(/:/g, '').toUpperCase();
+    return [`User name: ${u.user}`, `Engine ID: 800000090300${mac}`, 'storage-type: nonvolatile        active',
+      'Authentication Protocol: SHA', `Privacy Protocol: ${u.priv ? 'AES128' : 'None'}`, `Group-name: ${u.group || d.mgmt.snmpGroup || 'NMS'}`];
   },
   'show snmp host': (st, d) => {
     const m = d.mgmt || {};
     if (!(m.trapHosts || []).length) return ['（沒有設定 Trap 的接收端：snmp-server host）'];
-    return (m.trapHosts || []).flatMap((h) => [, , '']).concat(m.traps ? [] : ['（還沒有 snmp-server enable traps：設定好了也不會送）']);
+    return (m.trapHosts || []).flatMap((h) => [`Notification host: ${h.ip}  udp-port: 162  type: trap`, `user: ${h.name}  security model: ${h.ver === 'v3' ? 'v3 priv' : 'v2c'}`, ''])
+      .concat(m.traps ? [] : ['（還沒有 snmp-server enable traps：設定好了也不會送）']);
   },
   'show users': (st, d) => {
     const o = ['    Line       User       Host(s)              Idle       Location', '*  0 con 0                idle                 00:00:00'];
