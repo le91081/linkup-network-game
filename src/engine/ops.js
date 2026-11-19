@@ -37,7 +37,7 @@ const drift = (d) => ((hashStr(d.id + '/rtc') % 361) - 180) * 1000;
 
 /** 網際網路上要有一台公用的 NTP 伺服器（舊存檔裡沒有，這裡補上） */
 export function ensureInetNtp(d) {
-  if (!d.inet) return;
+  if (!d.inet || d.inet.transit) return; // 只是轉送流量的 ISP 自己不提供這些服務
   if (!d.inet.hosts.some((h) => h.ip === INET_NTP)) d.inet.hosts.push({ ip: INET_NTP, name: 'time.google.com', services: [{ proto: 'udp', port: 123 }] });
   if (!d.inet.dns['time.google.com']) d.inet.dns['time.google.com'] = INET_NTP;
 }

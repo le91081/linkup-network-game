@@ -7,6 +7,7 @@ import { cdpOn, lldpTxOn, lldpRxOn, speaksCdp } from './disc.js';
 import { egressOf, markAlong, classify, setCdpCheck } from './qos.js';
 import { callsTick, phoneTick, phoneState, PHONE_TEXT, callQuality, mosText } from './voice.js';
 import { computeOspf, ospfArea } from './ospf.js';
+import { computeBgp, bgpAccepts } from './bgp.js';
 setCdpCheck((d, pid, x, xp) => cdpOn(d, pid) && cdpOn(x, xp));
 import { recompute6, transact6, globalIp6 } from './sim6.js';
 import { parseIp6 } from './ip6.js';
@@ -1068,6 +1069,7 @@ export function setOspf(d, i, on) {
 function routesAll(state) {
   for (const d of Object.values(state.devices)) buildRoutes(d);
   computeOspf(state, ospfOn);
+  computeBgp(state, { transact, logEvent });
 }
 
 // ───────────────────────────── VPN 通道 ─────────────────────────────
@@ -1519,6 +1521,7 @@ function aclCheck(list, pkt) {
     if (r.proto && r.proto !== 'ip' && r.proto !== pkt.proto) continue;
     if (!addrMatch(r.src, pkt.src) || !addrMatch(r.dst, pkt.dst)) continue;
     if (r.port && (pkt.proto === 'tcp' || pkt.proto === 'udp') && +r.port !== pkt.dport) continue;
+    if (r.sport && (pkt.proto === 'tcp' || pkt.proto === 'udp') && +r.sport !== pkt.sport) continue;
     hit(r);
     return r.action === 'permit' ? null : `ACL 第 ${n + 1} 條規則拒絕了這個封包`;
   }
@@ -1649,6 +1652,8 @@ function deliver(dev, inIf, pkt) {
   }
   if (pkt.reply) return ok;
   const PROTO = pkt.proto.toUpperCase();
+  // BGP：只接受設定成鄰居的那個位址連進來的 TCP 179
+  if (pkt.proto === 'tcp' && pkt.dport === 179) return bgpAccepts(dev, pkt.src) ? ok : no(`${dev.name} 沒有把 ${fmtIp(pkt.src)} 設成 BGP 鄰居，拒絕了 TCP 179 的連線`);
   if (dev.kind === 'internet') {
     const h = dev.inet.hosts.find((x) => parseIp(x.ip) === pkt.dst);
     if (pkt.proto === 'icmp') return ok;
@@ -2530,7 +2535,7 @@ export function evaluate(state, objectives) {
 
 /** 給「狀態」分頁用的路由表文字 */
 export function routeRows(dev) {
-  const name = { C: '直連', S: '靜態', D: '自動', O: 'OSPF' };
+  const name = { C: '直連', S: '靜態', D: '自動', O: 'OSPF', B: 'BGP' };
   return dev.rt.routes
     .slice()
     .sort((a, b) => a.ad - b.ad || a.net - b.net)

@@ -26,6 +26,7 @@ export const LEVEL_TOPIC = {
   l36: 'services', l37: 'switching', l38: 'routing', l39: 'basics',
   l40: 'ops', l41: 'ops', l42: 'ops', l43: 'ops',
   l44: 'switching', l45: 'ops', l46: 'security',
+  l47: 'routing', l48: 'routing', l49: 'routing', l50: 'routing',
 };
 
 export const QUESTIONS = {
@@ -138,6 +139,15 @@ export const QUESTIONS = {
     { q: '在 QoS 裡，LLQ (Low Latency Queuing) 是指什麼？', a: ['把所有流量放進同一個佇列', '一個嚴格優先 (priority) 的佇列，語音不用排在其他流量後面', '把封包壓縮得比較小', '限制每個使用者的頻寬'], c: 1, e: 'policy-map 裡對語音的 class 下 priority，就是 LLQ：只要有語音封包就先送。其他 class 用 bandwidth 或 fair-queue 分剩下的頻寬。', r: 'CCNA 4.7' },
     { q: '實體 1 Gbps、營運商合約 20 Mbps 的 Metro Ethernet。只在出口設 LLQ、沒有 shape，語音品質會怎樣？', a: ['完全解決', '沒有改善：自己的出口不會塞車，超過合約的部分在營運商那端被丟，語音也一起被丟', '變得更差', '只影響下載'], c: 1, e: '佇列只在「塞車的地方」才有作用。要先 shape average 到 20 Mbps，讓壅塞發生在自己的路由器上，再用 child policy 做 LLQ（階層式 QoS）。', r: 'CCNA 4.7' },
     { q: 'Catalyst 2960 開了 mls qos，接電話的埠只設 mls qos trust cos。電話送出 CoS 5 的語音，到了路由器 DSCP 是多少？', a: ['46 (EF)', '40 (CS5)', '0', '34 (AF41)'], c: 1, e: '預設的 CoS→DSCP 對照表把 CoS 5 對應到 40。路由器的 class-map 如果 match dscp ef 就認不出來。auto qos voip cisco-phone 會把對照表改成 CoS 5 → 46。', r: 'CCNA 4.7' },
+    { q: '同一個乙太網段上有四台跑 OSPF 的路由器，priority 都是預設的 1。誰會當 DR？', a: ['最先開機的那一台', 'Router ID 最大的那一台', 'IP 位址最小的那一台', 'cost 最小的那一台'], c: 1, e: 'priority 一樣時比 Router ID，最大的當 DR、第二大的當 BDR。但 DR 選出來之後不會被搶走：後來加入、條件更好的路由器也要等 DR 不在了才有機會。', r: 'CCNA 3.4' },
+    { q: '兩台都不是 DR / BDR 的路由器 (DROTHER)，show ip ospf neighbor 看到彼此的狀態是什麼？', a: ['FULL', '2WAY', 'EXSTART', 'DOWN'], c: 1, e: 'DROTHER 之間只到 2WAY，不交換資料庫，LSA 都透過 DR / BDR 同步。這是正常的，不是故障。', r: 'CCNA 3.4' },
+    { q: '在 router ospf 底下把 router-id 改成 1.1.1.1，show ip ospf 還是舊的 Router ID。為什麼？', a: ['指令打錯了', 'Router ID 只在 OSPF 程序啟動時決定，要 clear ip ospf process 或重新開機', '要先設定 Loopback', '要等 30 分鐘'], c: 1, e: 'IOS 會提示「Reload or use clear ip ospf process command, for this to take effect」。清除程序會讓所有鄰居關係重新建立。', r: 'CCNA 3.4' },
+    { q: 'IOS 預設的 OSPF 參考頻寬是 100 Mbps。1 Gbps 與 10 Gbps 介面的 cost 各是多少？', a: ['10 與 1', '1 與 1', '100 與 10', '1000 與 10000'], c: 1, e: 'cost = 參考頻寬 ÷ 介面頻寬，最小是 1，所以 100M 以上全部都是 1。要用 auto-cost reference-bandwidth 調大，而且整個網域都要一致。', r: 'CCNA 3.4' },
+    { q: '兩條 OSPF cost 一樣的路，路由器會怎麼做？', a: ['只用 Router ID 比較大的那一條', '兩條都放進路由表，依來源與目的位址分散流量', '輪流每個封包換一條路', '兩條都不用'], c: 1, e: '等價多路徑 (ECMP)：預設最多 4 條。CEF 依位址雜湊，同一條連線永遠走同一條路，不會造成亂序。', r: 'CCNA 3.2' },
+    { q: '兩台路由器之間的 OSPF 鄰居一直停在 EXSTART，Hello 計時器、區域、遮罩都一樣。最可能的原因是？', a: ['Router ID 太小', '兩端介面的 MTU 不一樣', '沒有設定 DR', 'cost 不一樣'], c: 1, e: '交換資料庫的 DBD 封包會帶 MTU，對方的比較大就丟掉，鄰居卡在 EXSTART / EXCHANGE。把 MTU 改成一樣，或 ip ospf mtu-ignore。', r: 'CCNA 3.4' },
+    { q: 'ABR (Area Border Router) 是什麼？', a: ['接到 ISP 的路由器', '同時有介面在 area 0 與其他區域的路由器', 'Router ID 最大的路由器', '跑 BGP 的路由器'], c: 1, e: 'ABR 把一個區域的網段用 Type 3 Summary LSA 送到其他區域，也可以用 area range 彙總成一筆。所有非骨幹區域都要經由 ABR 接到 area 0。', r: 'Network+ 2.1' },
+    { q: '公司同時接了兩家 ISP。想讓「出去」的流量都走 ISP-A，應該調整哪一個 BGP 屬性？', a: ['MED', 'ISP-A 進來的路由的 local-preference', 'AS-path prepend', 'Router ID'], c: 1, e: 'local-preference 決定「我」往外走哪條路，越高越好（預設 100）。要影響別人「進來」走哪條路，才用 AS-path prepend 或 MED。', r: 'Network+ 2.1' },
+    { q: '雙 ISP 的公司把從 ISP-A 學到的路由也通告給了 ISP-B，會發生什麼事？', a: ['沒有影響', 'ISP-B 可能把往 ISP-A 的流量丟給公司，公司變成兩家 ISP 之間的轉運站', 'BGP 鄰居會斷線', '路由表會被清空'], c: 1, e: 'ISP 通常偏好客戶給的路由。送出去的路由要過濾成只有自己的網段（prefix-list，或 as-path access-list 的 ^$）。', r: 'Network+ 2.1' },
     { q: '控制器式網路中，「南向介面 (southbound API)」連接的是什麼？', a: ['控制器與應用程式', '控制器與網路設備', '兩台控制器之間', '使用者與網頁介面'], c: 1, e: '南向介面讓控制器下達指令給設備（例如 NETCONF、OpenFlow）；北向介面則提供給上層的應用程式與自動化工具呼叫。', r: 'CCNA 6.3' },
   ],
 };

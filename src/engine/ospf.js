@@ -83,6 +83,14 @@ export function clearOspfProcess(state, d) {
   if (!state.dyn) return;
   delete (state.dyn.rid || {})[d.id];
   for (const k of Object.keys(state.dyn.adj || {})) if (k.split('~').some((s) => s.startsWith(d.id + '/'))) delete state.dyn.adj[k];
+  // 這台當過 DR / BDR 的網段：它重新啟動，別人重新選；它要等完 Wait timer 才能再參加
+  for (const seg of Object.values(state.dyn.seg || {})) {
+    const mine = (k) => k && k.startsWith(d.id + '/');
+    if (mine(seg.dr)) { seg.dr = mine(seg.bdr) ? null : seg.bdr; seg.bdr = null; }
+    if (mine(seg.bdr)) seg.bdr = null;
+    seg.cleared ||= {};
+    for (const i of d.ifaces) seg.cleared[d.id + '/' + i.id] = state.clock + OSPF_WAIT;
+  }
 }
 
 // ───────────────────────── 主要的計算 ─────────────────────────
@@ -157,7 +165,11 @@ export function computeOspf(state, ospfOn) {
     let seg = dyn.seg[sk];
     if (!seg) seg = dyn.seg[sk] = { since: dyn.boot ? -1e9 : now, dr: null, bdr: null };
     const ids = new Set(list.map((s) => key(s.d, s.i)));
-    const elig = list.filter((s) => ospfPrio(s.i) > 0);
+    // 剛 clear ip ospf process 的路由器：重新啟動中，這段時間不參加選舉
+    const cleared = seg.cleared || {};
+    for (const k of Object.keys(cleared)) if (cleared[k] <= now) delete cleared[k];
+    for (const t of new Set(Object.values(cleared))) state.rt.pending.push({ at: t, dev: s0.d.id, kind: 'ospf', text: `${s0.d.name}：OSPF 程序重新啟動中，等 Wait timer 之後才參加 DR 選舉` });
+    const elig = list.filter((s) => ospfPrio(s.i) > 0 && !cleared[key(s.d, s.i)]);
     const better = (a, b) => ospfPrio(a.i) - ospfPrio(b.i) || (rid[a.d.id] >>> 0) - (rid[b.d.id] >>> 0);
     const pick = (cands) => cands.slice().sort((a, b) => better(b, a))[0] || null;
     if (seg.since + OSPF_WAIT <= now) {
@@ -166,7 +178,8 @@ export function computeOspf(state, ospfOn) {
       if (seg.bdr && !ids.has(seg.bdr)) seg.bdr = null;
       if (seg.dr && !elig.some((s) => key(s.d, s.i) === seg.dr)) seg.dr = null; // priority 改成 0：立刻放棄
       if (seg.bdr && !elig.some((s) => key(s.d, s.i) === seg.bdr)) seg.bdr = null;
-      if (!seg.dr) { const c = pick(elig.filter((s) => key(s.d, s.i) !== seg.bdr)); seg.dr = seg.bdr && !c ? seg.bdr : c ? key(c.d, c.i) : null; if (seg.dr === seg.bdr) seg.bdr = null; }
+      if (!seg.dr && seg.bdr) { seg.dr = seg.bdr; seg.bdr = null; } // DR 不在了：BDR 升上來
+      if (!seg.dr) { const c = pick(elig); seg.dr = c ? key(c.d, c.i) : null; }
       if (!seg.bdr) { const c = pick(elig.filter((s) => key(s.d, s.i) !== seg.dr)); seg.bdr = c ? key(c.d, c.i) : null; }
     } else {
       state.rt.pending.push({ at: seg.since + OSPF_WAIT, dev: s0.d.id, kind: 'ospf', text: `${s0.d.name}：OSPF 正在等 Wait timer，之後才選 DR / BDR` });

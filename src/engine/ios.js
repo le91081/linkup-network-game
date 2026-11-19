@@ -78,9 +78,9 @@ const TYPES = { gi: 'gigabitethernet', te: 'tengigabitethernet', fa: 'fastethern
 const PROMPT = {
   exec: '#', config: '(config)#', if: '(config-if)#', vlan: '(config-vlan)#', router: '(config-router)#', dhcp: '(dhcp-config)#',
   line: '(config-line)#', acl: '(config-ext-nacl)#', stdacl: '(config-std-nacl)#', radius: '(config-radius-server)#',
-  isakmp: '(config-isakmp)#', tset: '(cfg-crypto-trans)#', cmap: '(config-crypto-map)#', qcmap: '(config-cmap)#', pmap: '(config-pmap)#', pmapc: '(config-pmap-c)#',
+  isakmp: '(config-isakmp)#', tset: '(cfg-crypto-trans)#', cmap: '(config-crypto-map)#', bgp: '(config-router)#', rmap: '(config-route-map)#', qcmap: '(config-cmap)#', pmap: '(config-pmap)#', pmapc: '(config-pmap-c)#',
 };
-const SERVICE_PORT = { www: 80, http: 80, https: 443, domain: 53, dns: 53, ssh: 22, telnet: 23, ftp: 21, smtp: 25, ntp: 123, snmp: 161, tftp: 69 };
+const SERVICE_PORT = { www: 80, http: 80, https: 443, domain: 53, dns: 53, ssh: 22, telnet: 23, ftp: 21, smtp: 25, ntp: 123, snmp: 161, tftp: 69, bgp: 179 };
 
 // 設定檔裡的密碼不是明文：和真的 IOS 一樣，印出來的字串可以原樣貼回另一台設備
 const hex = (s) => [...String(s)].map((c) => c.charCodeAt(0).toString(16).padStart(4, '0')).join('');
@@ -283,22 +283,32 @@ function parseAclRule(tok) {
     n += 2;
     return bits === 32 ? fmtIp(ip) : `${fmtIp(netOf(ip, bits))}/${bits}`;
   };
-  const src = addr(), dst = src && addr();
-  if (!src || !dst) return null;
+  const src = addr();
+  if (!src) return null;
+  // 來源埠：permit tcp any eq 179 any（回應的封包、或對方主動連過來時的來源埠）
+  let sport = '';
+  if ((tok[n] || '').toLowerCase() === 'eq' && (proto === 'tcp' || proto === 'udp')) {
+    const p = (tok[n + 1] || '').toLowerCase();
+    sport = String(SERVICE_PORT[p] || (p === 'bgp' ? 179 : p));
+    if (!/^\d+$/.test(sport)) return null;
+    n += 2;
+  }
+  const dst = addr();
+  if (!dst) return null;
   let port = '';
   if ((tok[n] || '').toLowerCase() === 'eq') {
     const p = (tok[n + 1] || '').toLowerCase();
     port = String(SERVICE_PORT[p] || p);
     if (!/^\d+$/.test(port)) return null;
   }
-  return { action, proto, src, dst, port: proto === 'tcp' || proto === 'udp' ? port : '' };
+  return { action, proto, src, dst, port: proto === 'tcp' || proto === 'udp' ? port : '', ...(sport ? { sport } : {}) };
 }
 
 const HELP = {
   exec: ['configure terminal    進入設定模式', 'show ...              查看狀態（輸入 show ? 列出全部）', 'ping <IP>             測試連線',
     'write memory          把 running-config 存成 startup-config（沒存檔的設定重新開機後會消失）', 'reload                重新開機，回到 startup-config'],
   config: ['hostname <名稱>', 'interface <介面> | interface range <介面> - <n> | interface vlan <ID>', 'vlan <ID>', 'ip route <網段> <遮罩> <下一站> [距離]',
-    'router ospf 1', 'ip dhcp pool <名稱> / ip dhcp excluded-address <起> <迄>', 'ip nat inside source list 1 interface <介面> overload',
+    'router ospf 1', 'router bgp <AS>', 'route-map / ip prefix-list / ip as-path access-list', 'ip dhcp pool <名稱> / ip dhcp excluded-address <起> <迄>', 'ip nat inside source list 1 interface <介面> overload',
     'ip nat inside source static <內部 IP> <公用 IP>', 'ip access-list extended <名稱>', 'spanning-tree vlan <清單> priority <值>',
     'ip dhcp snooping / ip arp inspection vlan <清單>', 'line vty 0 4', 'ntp server / logging host / snmp-server community', 'cdp run / no cdp run / lldp run / cdp timer / lldp timer', 'class-map / policy-map（QoS）', 'mls qos（Catalyst 2960）', 'do <show 指令>、end、exit'],
   if: ['ip address <IP> <遮罩> | ip address dhcp', 'shutdown / no shutdown', 'switchport mode access|trunk|dynamic auto|dynamic desirable', 'switchport nonegotiate', 'switchport voice vlan <ID>', 'no cdp enable / no lldp transmit / no lldp receive', 'service-policy input | output <政策>', 'mls qos trust dscp | cos | device cisco-phone', 'auto qos voip cisco-phone', 'power inline auto | never', 'switchport access vlan <ID>',
@@ -569,6 +579,19 @@ export function iosSession(getDev, getState, who = null) {
     ['duplex <v>', ([v]) => { const d = ['auto', 'full', 'half'].find((x) => x.startsWith(v.toLowerCase())); return d ? setPhy('duplex', d) : err('duplex 可用的值：auto、full、half'); }],
     ['no duplex', () => setPhy('duplex', 'auto')],
   ];
+  /** router bgp 底下的 neighbor 指令：鄰居要先用 remote-as 建立 */
+  function nb(ip, fn) {
+    const n = dev().bgp.neighbors.find((x) => x.ip === ip);
+    if (!n) return err(`Specify remote-as or peer-group commands first（先下 neighbor ${ip} remote-as <AS>）`);
+    fn(n);
+    return undefined;
+  }
+  function rm(fn) {
+    const e = (dev().routeMaps[S.cur.name] || []).find((x) => x.seq === S.cur.seq);
+    if (!e) return err('找不到目前的 route-map');
+    fn(e);
+    return undefined;
+  }
   /** class-map 裡加一條 match */
   function addMatch(r) {
     const m = dev().classMaps[S.cur];
@@ -737,6 +760,53 @@ export function iosSession(getDev, getState, who = null) {
       return undefined;
     }],
     ['no ipv6 route <prefix> [...]', ([prefix, via]) => { const d = dev(); if (d.routes6) d.routes6 = d.routes6.filter((r) => !(r.dst === prefix && (!via || r.via === via))); }],
+    ['router bgp <asn>', ([asn]) => {
+      const d = dev();
+      if (!d.routing || d.kind !== 'router') return err('這個模擬只有路由器能跑 BGP');
+      if (!(+asn >= 1 && +asn <= 4294967295)) return err('AS 號碼的範圍是 1 – 4294967295');
+      if (d.bgp && d.bgp.asn && +d.bgp.asn !== +asn) return err(`BGP is already running; AS is ${d.bgp.asn}`);
+      d.bgp ||= { asn: +asn, neighbors: [], networks: [] };
+      d.bgp.asn = +asn;
+      enter('bgp', null);
+      return undefined;
+    }],
+    ['no router bgp <asn>', () => { delete dev().bgp; }],
+    ['ip prefix-list <name> <...>', ([name, rest]) => {
+      const t = rest.toLowerCase().split(/\s+/);
+      let k = 0, seq = null;
+      if (t[0] === 'seq') { seq = +t[1]; k = 2; }
+      const action = ['permit', 'deny'].find((x) => x === t[k]);
+      const m = (t[k + 1] || '').match(/^([\d.]+)\/(\d+)$/), ip = m && parseIp(m[1]);
+      if (!action || ip == null || +m[2] > 32) return err('用法：ip prefix-list <名稱> [seq 5] permit | deny <網段/長度> [ge n] [le n]');
+      const e = { action, net: netOf(ip, +m[2]), bits: +m[2] };
+      for (let n = k + 2; n < t.length; n += 2) { if (t[n] === 'ge') e.ge = +t[n + 1]; if (t[n] === 'le') e.le = +t[n + 1]; }
+      const list = ((dev().prefixLists ||= {})[name] ||= []);
+      e.seq = seq ?? (list.reduce((a, x) => Math.max(a, x.seq), 0) + 5);
+      const n2 = list.findIndex((x) => x.seq === e.seq);
+      if (n2 >= 0) list[n2] = e; else list.push(e);
+      return undefined;
+    }],
+    ['no ip prefix-list <name> [...]', ([name]) => { const d = dev(); if (!(d.prefixLists || {})[name]) return err(`prefix-list ${name} 不存在`); delete d.prefixLists[name]; return undefined; }],
+    ['ip as-path access-list <n> <action> <...>', ([n, action, re]) => {
+      const a = ['permit', 'deny'].find((x) => x.startsWith(action.toLowerCase()));
+      if (!/^\d+$/.test(n) || !a) return err('用法：ip as-path access-list <1-500> permit | deny <正規表示式>，例如 ^$');
+      try { new RegExp(re.replace(/_/g, ' ')); } catch { return err('正規表示式的格式不正確'); }
+      ((dev().asPathAcl ||= {})[n] ||= []).push({ action: a, re });
+      return undefined;
+    }],
+    ['no ip as-path access-list <n>', ([n]) => { const d = dev(); if (d.asPathAcl) delete d.asPathAcl[n]; }],
+    ['route-map <name> [...]', ([name, rest]) => {
+      const t = (rest || '').toLowerCase().split(/\s+/).filter(Boolean);
+      const action = ['permit', 'deny'].find((x) => x === t[0]) || 'permit';
+      const seq = +(t[action === t[0] ? 1 : 0] || 10) || 10;
+      const list = ((dev().routeMaps ||= {})[name] ||= []);
+      let e = list.find((x) => x.seq === seq);
+      if (!e) { e = { seq, action, match: {}, set: {} }; list.push(e); list.sort((a, b) => a.seq - b.seq); }
+      e.action = action;
+      enter('rmap', { name, seq });
+      return undefined;
+    }],
+    ['no route-map <name> [...]', ([name]) => { const d = dev(); if (!(d.routeMaps || {})[name]) return err(`route-map ${name} 不存在`); delete d.routeMaps[name]; return undefined; }],
     ['router ospf <pid>', () => { if (!('ospfDefault' in dev())) return err('這台設備不支援 OSPF'); enter('router', null); return undefined; }],
     ['no router ospf <pid>', () => { const d = dev(); for (const i of d.ifaces) i.ospf = false; d.ospfDefault = false; d.ospfNets = []; }],
     ['ip dhcp excluded-address <a> [...]', ([a, b]) => {
@@ -1429,6 +1499,55 @@ export function iosSession(getDev, getState, who = null) {
       ['no lifetime [...]', () => { delete S.cur.life; }],
     ],
     tset: [['mode <m>', () => undefined]],
+    bgp: [
+      ['bgp router-id <ip>', ([ip]) => (parseIp(ip) == null ? err('用法：bgp router-id <A.B.C.D>') : void (dev().bgp.rid = ip))],
+      ['no bgp router-id [...]', () => { delete dev().bgp.rid; }],
+      ['bgp log-neighbor-changes', () => undefined],
+      ['no bgp default ipv4-unicast', () => undefined],
+      ['address-family ipv4 [...]', () => undefined],
+      ['exit-address-family', () => undefined],
+      ['neighbor <ip> activate', () => undefined],
+      ['neighbor <ip> remote-as <asn>', ([ip, asn]) => {
+        if (parseIp(ip) == null) return err('用法：neighbor <IP> remote-as <AS>');
+        if (!(+asn >= 1)) return err('AS 號碼的範圍是 1 – 4294967295');
+        if (+asn === +dev().bgp.asn) return err('這個模擬只做 eBGP：鄰居的 AS 要和自己不一樣（同一個 AS 的 iBGP 沒有模擬）');
+        const b = dev().bgp, cur = b.neighbors.find((n) => n.ip === ip);
+        if (cur) cur.remoteAs = +asn; else b.neighbors.push({ ip, remoteAs: +asn });
+        return undefined;
+      }],
+      ['neighbor <ip> description <...>', ([ip, t]) => nb(ip, (n) => { n.desc = t; })],
+      ['neighbor <ip> route-map <name> <dir>', ([ip, name, dir]) => nb(ip, (n) => { n[dir.toLowerCase().startsWith('i') ? 'rmIn' : 'rmOut'] = name; })],
+      ['neighbor <ip> prefix-list <name> <dir>', ([ip, name, dir]) => nb(ip, (n) => { n[dir.toLowerCase().startsWith('i') ? 'plIn' : 'plOut'] = name; })],
+      ['neighbor <ip> filter-list <num> <dir>', ([ip, num, dir]) => nb(ip, (n) => { n[dir.toLowerCase().startsWith('i') ? 'flIn' : 'flOut'] = num; })],
+      ['neighbor <ip> weight <n>', ([ip, w]) => nb(ip, (n) => { n.weight = +w; })],
+      ['neighbor <ip> default-originate', ([ip]) => nb(ip, (n) => { n.defOrig = true; })],
+      ['neighbor <ip> shutdown', ([ip]) => nb(ip, (n) => { n.shut = true; })],
+      ['no neighbor <ip> shutdown', ([ip]) => nb(ip, (n) => { delete n.shut; })],
+      ['no neighbor <ip> route-map <name> <dir>', ([ip, , dir]) => nb(ip, (n) => { delete n[dir.toLowerCase().startsWith('i') ? 'rmIn' : 'rmOut']; })],
+      ['no neighbor <ip> prefix-list <name> <dir>', ([ip, , dir]) => nb(ip, (n) => { delete n[dir.toLowerCase().startsWith('i') ? 'plIn' : 'plOut']; })],
+      ['no neighbor <ip> filter-list <num> <dir>', ([ip, , dir]) => nb(ip, (n) => { delete n[dir.toLowerCase().startsWith('i') ? 'flIn' : 'flOut']; })],
+      ['no neighbor <ip> [...]', ([ip]) => { const b = dev().bgp; const had = b.neighbors.length; b.neighbors = b.neighbors.filter((n) => n.ip !== ip); return b.neighbors.length < had ? undefined : err(`沒有 ${ip} 這個鄰居`); }],
+      ['network <ip> mask <mask>', ([ip, mask]) => {
+        const n = parseIp(ip), bits = maskBits(mask);
+        if (n == null || bits == null) return err('用法：network <網段> mask <遮罩>');
+        const b = dev().bgp;
+        if (!b.networks.some((x) => x.net === netOf(n, bits) && x.bits === bits)) b.networks.push({ net: netOf(n, bits), bits });
+        const has = (dev().rt.routes || []).some((r) => r.net === netOf(n, bits) && r.bits === bits && r.type !== 'B') || dev().ifaces.some((i) => { const x = staticNet(i); return x && x.net === netOf(n, bits) && x.bits === bits; });
+        return has ? undefined : '（路由表裡還沒有一模一樣的這個網段：BGP 的 network 只會通告路由表裡已經有的網段）';
+      }],
+      ['no network <ip> mask <mask>', ([ip, mask]) => { const n = parseIp(ip), bits = maskBits(mask); const b = dev().bgp; b.networks = b.networks.filter((x) => !(x.net === netOf(n, bits) && x.bits === bits)); }],
+    ],
+    rmap: [
+      ['match ip address prefix-list <name>', ([name]) => rm((e) => { e.match.pl = name; })],
+      ['match as-path <n>', ([n]) => rm((e) => { e.match.fl = n; })],
+      ['no match [...]', () => rm((e) => { e.match = {}; })],
+      ['set local-preference <n>', ([n]) => (+n >= 0 ? rm((e) => { e.set.lp = +n; }) : err('local-preference 是 0 – 4294967295'))],
+      ['set as-path prepend <...>', ([list]) => { const v = list.split(/\s+/).map(Number); return v.every((x) => x >= 1) ? rm((e) => { e.set.prepend = v; }) : err('用法：set as-path prepend <AS> <AS> …'); }],
+      ['set metric <n>', ([n]) => rm((e) => { e.set.med = +n; })],
+      ['set weight <n>', ([n]) => rm((e) => { e.set.weight = +n; })],
+      ['no set [...]', () => rm((e) => { e.set = {}; })],
+      ['description [...]', () => undefined],
+    ],
     qcmap: [
       ['match any', () => addMatch({ t: 'any' })],
       ['match ip dscp <...>', ([l]) => matchDscp(l)],
@@ -1550,6 +1669,15 @@ export function iosSession(getDev, getState, who = null) {
     if (!tok.length || tok[0].startsWith('!')) return done(false);
     const t0 = tok[0].toLowerCase();
     if (S.mode === 'exec') {
+      if (tok[0] === 'clear' && (tok[1] || '') === 'ip' && (tok[2] || '').startsWith('bg') && tok[3]) {
+        // clear ip bgp *：重設所有鄰居（要重新建立）；加上 soft 只重新套用政策
+        if (!(tok.length > 4 && 'soft'.startsWith(tok[4]))) {
+          const st = getState();
+          for (const k of Object.keys((st.dyn && st.dyn.bgp) || {})) if (k.split('|').some((x) => x.startsWith(dev().id + '>') && (tok[3] === '*' || x.endsWith('>' + tok[3])))) delete st.dyn.bgp[k];
+        }
+        recompute(getState());
+        return done(false);
+      }
       if (match(tok, 'clear ip ospf process') || match(tok, 'clear ip ospf <n> process')) {
         out.push('Reset ALL OSPF processes? [no]: ');
         S.pending = { fn: (ans, o2) => { S.pending = null; if (!/^y/i.test(ans.trim())) return { out: o2, changed: false }; clearOspfProcess(getState(), dev()); recompute(getState()); o2.push('（OSPF 程序重新啟動：重新選 Router ID，所有鄰居關係從頭建立）'); return { out: o2, changed: true }; } };
@@ -1913,7 +2041,7 @@ function aclAddr(spec) {
   const bits = m[2] == null ? 32 : +m[2];
   return bits === 32 ? 'host ' + fmtIp(ip) : `${fmtIp(netOf(ip, bits))} ${wild(bits)}`;
 }
-export const aclLine = (r) => `${r.action} ${r.proto || 'ip'} ${aclAddr(r.src)} ${aclAddr(r.dst)}${r.port && r.proto !== 'ip' && r.proto !== 'icmp' ? ' eq ' + r.port : ''}`;
+export const aclLine = (r) => `${r.action} ${r.proto || 'ip'} ${aclAddr(r.src)}${r.sport ? ' eq ' + r.sport : ''} ${aclAddr(r.dst)}${r.port && r.proto !== 'ip' && r.proto !== 'icmp' ? ' eq ' + r.port : ''}`;
 
 /** 產生等效的 running-config */
 export function runningConfig(state, dev) {
@@ -2165,6 +2293,27 @@ export function runningConfig(state, dev) {
     if (dev.ospfDefault) o.push(' default-information originate');
     o.push('!');
   }
+  if (dev.bgp && dev.bgp.asn) {
+    const b = dev.bgp;
+    o.push(`router bgp ${b.asn}`, ...(b.rid ? [` bgp router-id ${b.rid}`] : []), ' bgp log-neighbor-changes');
+    for (const n of b.neighbors) {
+      o.push(` neighbor ${n.ip} remote-as ${n.remoteAs}`);
+      if (n.desc) o.push(` neighbor ${n.ip} description ${n.desc}`);
+      if (n.shut) o.push(` neighbor ${n.ip} shutdown`);
+    }
+    for (const x of b.networks) o.push(` network ${fmtIp(x.net)} mask ${fmtMask(x.bits)}`);
+    for (const n of b.neighbors) {
+      if (n.defOrig) o.push(` neighbor ${n.ip} default-originate`);
+      if (n.weight != null) o.push(` neighbor ${n.ip} weight ${n.weight}`);
+      if (n.plIn) o.push(` neighbor ${n.ip} prefix-list ${n.plIn} in`);
+      if (n.plOut) o.push(` neighbor ${n.ip} prefix-list ${n.plOut} out`);
+      if (n.flIn) o.push(` neighbor ${n.ip} filter-list ${n.flIn} in`);
+      if (n.flOut) o.push(` neighbor ${n.ip} filter-list ${n.flOut} out`);
+      if (n.rmIn) o.push(` neighbor ${n.ip} route-map ${n.rmIn} in`);
+      if (n.rmOut) o.push(` neighbor ${n.ip} route-map ${n.rmOut} out`);
+    }
+    o.push('!');
+  }
   for (const i of dev.ifaces) if (i.mode === 'static' && i.gateway && dev.routing) o.push(`ip route 0.0.0.0 0.0.0.0 ${i.gateway}`);
   for (const r of dev.routes || []) {
     if (!r.dst || !r.via) continue;
@@ -2212,6 +2361,19 @@ export function runningConfig(state, dev) {
     }
     o.push('!', `ip access-list extended ${name}`);
     for (const r of list) o.push(' ' + aclLine(r));
+  }
+  for (const [n, list] of Object.entries(dev.asPathAcl || {})) for (const e of list) o.push(`ip as-path access-list ${n} ${e.action} ${e.re}`);
+  for (const [name, list] of Object.entries(dev.prefixLists || {})) for (const e of list.slice().sort((a, b) => a.seq - b.seq)) o.push(`ip prefix-list ${name} seq ${e.seq} ${e.action} ${fmtIp(e.net)}/${e.bits}${e.ge ? ' ge ' + e.ge : ''}${e.le ? ' le ' + e.le : ''}`);
+  for (const [name, list] of Object.entries(dev.routeMaps || {})) {
+    for (const e of list) {
+      o.push('!', `route-map ${name} ${e.action} ${e.seq}`);
+      if (e.match.pl) o.push(` match ip address prefix-list ${e.match.pl}`);
+      if (e.match.fl) o.push(` match as-path ${e.match.fl}`);
+      if (e.set.lp != null) o.push(` set local-preference ${e.set.lp}`);
+      if (e.set.weight != null) o.push(` set weight ${e.set.weight}`);
+      if (e.set.med != null) o.push(` set metric ${e.set.med}`);
+      if (e.set.prepend) o.push(` set as-path prepend ${e.set.prepend.join(' ')}`);
+    }
   }
   if (dev.radius && dev.radius.ip) o.push('!', 'radius server AAA', ` address ipv4 ${dev.radius.ip} auth-port 1812 acct-port 1813`, ` key 7 ${hex(dev.radius.secret || '')}`);
   if (m) {

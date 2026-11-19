@@ -6,6 +6,7 @@ import { transact, routeRows, isBridgePort, arpRows, clearArp, hitsOf, fmtDur, p
 import { cdpCfg, lldpCfg, cdpOn, lldpTxOn, lldpRxOn, neighbors, ndCounters, cdpCapText, speaksCdp, speaksLldp } from '../engine/disc.js';
 import { dscpName, COS_DSCP_DEFAULT, portTrust, egressOf, classify, QLIMIT } from '../engine/qos.js';
 import { ospfArea, ospfCost, ospfPassive, ospfHello, ospfDead, ospfPrio, ospfNetType, isLoopback } from '../engine/ospf.js';
+import { bgpCfg } from '../engine/bgp.js';
 import { iosClock, deviceTime, ntpInfo, logRows, clearLog, syslogStats, uptimeOf, routerId, longIf, SEVERITY, NTP_POLL, vtyRows, idleLimit } from '../engine/ops.js';
 import { quietLeft } from '../engine/remote.js';
 import { counters, clearCounters, clearedAt, spanDest, debugOf, setDebug, consoleRows } from '../engine/wire.js';
@@ -73,7 +74,7 @@ const SHOW = {
     if (!d.routing) return ['% 這台設備沒有啟用 IP 路由（L2 交換器）'];
     const rows = routeRows(d);
     if (!rows.length) return ['路由表是空的'];
-    const o = ['Codes: L - local, C - connected, S - static, O - OSPF, IA - OSPF inter area', '       E2 - OSPF external type 2, * - candidate default', ''];
+    const o = ['Codes: L - local, C - connected, S - static, O - OSPF, B - BGP, IA - OSPF inter area', '       E2 - OSPF external type 2, * - candidate default', ''];
     // 同一個網段有好幾條等價的路：第一行印網段，其他的路縮排在下面（和真的 IOS 一樣）
     let prev = null;
     for (const r of rows) {
@@ -351,6 +352,37 @@ const SHOW = {
       })];
   },
   'show ip ospf interface': (st, d) => ospfIfLines(st, d, null),
+  'show ip bgp': (st, d) => bgpTable(st, d, null),
+  'show ip bgp summary': (st, d) => {
+    const b = d.rt.bgp;
+    if (!b) return ['% BGP not active'];
+    const o = [`BGP router identifier ${fmtIp(b.rid)}, local AS number ${b.asn}`, `BGP table version is ${10 + b.table.length}, main routing table version ${10 + b.table.length}`,
+      `${new Set(b.table.map((r) => r.net + '/' + r.bits)).size} network entries using ${new Set(b.table.map((r) => r.net + '/' + r.bits)).size * 248} bytes of memory`,
+      `${b.table.length} path entries using ${b.table.length * 136} bytes of memory`, '',
+      pad('Neighbor', 16) + pad('V', 5) + pad('AS', 9) + pad('MsgRcvd', 8) + pad('MsgSent', 8) + pad('TblVer', 9) + pad('InQ', 5) + pad('OutQ', 5) + pad('Up/Down', 9) + 'State/PfxRcd'];
+    const msgs = (p) => Math.max(1, Math.floor(p.up / 60)) + 3;
+    for (const p of b.peers) o.push(pad(p.ip, 16) + pad(4, 5) + pad(p.remoteAs, 9) + pad(p.state === 'Established' ? msgs(p) : 0, 8) + pad(p.state === 'Established' ? msgs(p) + 1 : 0, 8) + pad(10 + b.table.length, 9) + pad(0, 5) + pad(0, 5)
+      + pad(p.state === 'Established' ? hms(p.up) : 'never', 9) + (p.state === 'Established' ? String(p.pfx) : p.state));
+    const bad = b.peers.filter((p) => p.state !== 'Established' && p.why);
+    if (bad.length) o.push('', ...bad.map((p) => `（${p.ip}：${p.why}）`));
+    return o;
+  },
+  'show ip prefix-list': (st, d) => {
+    const all = Object.entries(d.prefixLists || {});
+    if (!all.length) return ['（沒有任何 prefix-list）'];
+    return all.flatMap(([n, l]) => [`ip prefix-list ${n}: ${l.length} entries`, ...l.slice().sort((a, b) => a.seq - b.seq).map((e) => `   seq ${e.seq} ${e.action} ${fmtIp(e.net)}/${e.bits}${e.ge ? ' ge ' + e.ge : ''}${e.le ? ' le ' + e.le : ''}`)]);
+  },
+  'show route-map': (st, d) => {
+    const all = Object.entries(d.routeMaps || {});
+    if (!all.length) return ['（沒有任何 route-map）'];
+    return all.flatMap(([n, l]) => l.flatMap((e) => [`route-map ${n}, ${e.action}, sequence ${e.seq}`, '  Match clauses:', ...(e.match.pl ? [`    ip address prefix-lists: ${e.match.pl} `] : []), ...(e.match.fl ? [`    as-path (as-path filter): ${e.match.fl} `] : []),
+      '  Set clauses:', ...(e.set.lp != null ? [`    local-preference ${e.set.lp}`] : []), ...(e.set.prepend ? [`    as-path prepend ${e.set.prepend.join(' ')}`] : []), ...(e.set.med != null ? [`    metric ${e.set.med}`] : []), ...(e.set.weight != null ? [`    weight ${e.set.weight}`] : []), '  Policy routing matches: 0 packets, 0 bytes']));
+  },
+  'show ip as-path-access-list': (st, d) => {
+    const all = Object.entries(d.asPathAcl || {});
+    if (!all.length) return ['（沒有任何 as-path access-list）'];
+    return all.flatMap(([n, l]) => [`AS path access list ${n}`, ...l.map((e) => `    ${e.action} ${e.re}`)]);
+  },
   'show ip ospf': (st, d) => {
     const o2 = d.rt.ospf;
     if (!o2) return ['%OSPF: Router process 1 is not running, please configure a router-id'];
@@ -630,6 +662,36 @@ function switchportLines(st, d, p) {
     `Trunking VLANs Enabled: ${pc.allowed === 'all' || !pc.allowed ? 'ALL' : pc.allowed}`, 'Pruning VLANs Enabled: 2-1001', 'Capture Mode Disabled', 'Capture VLANs Allowed: ALL', '',
     'Protected: false', 'Unknown unicast blocked: disabled', 'Unknown multicast blocked: disabled', 'Appliance trust: none',
     ...(t.why ? [`（DTP：${t.why}）`] : []), ...(pc.noneg ? ['（nonegotiate：這個埠不送 DTP，對面的 dynamic 埠不會因為它而變成 Trunk）'] : [])];
+}
+
+// ───────────────────────── BGP ─────────────────────────
+/** 有類別的網段（A /8、B /16、C /24）不印長度，其他的才印，和 IOS 一樣 */
+const bgpNet = (r) => { const a = r.net >>> 24, cls = a < 128 ? 8 : a < 192 ? 16 : 24; return r.bits === cls || (r.net === 0 && r.bits === 0) ? fmtIp(r.net) : `${fmtIp(r.net)}/${r.bits}`; };
+/** show ip bgp：只看某個鄰居時，adv = 送給它的（advertised-routes），不然是從它收到的 */
+function bgpTable(st, d, only) {
+  const b = d.rt.bgp;
+  if (!b) return ['% BGP not active'];
+  let rows = b.table;
+  if (only && !only.adv) rows = rows.filter((r) => r.peerIp != null && fmtIp(r.peerIp) === only.ip);
+  if (only && only.adv) {
+    // 送給這個鄰居的：自己最佳路徑裡、不是從它學來的那些（過濾與 prepend 之後的樣子看對方收到的）
+    const o = Object.values(st.devices).find((y) => y.ifaces.some((i) => i.rt && fmtIp(i.rt.ip) === only.ip));
+    const mine = d.ifaces.find((i) => i.rt && i.rt.ip != null && o && o.rt.bgp && o.rt.bgp.table.some((r) => r.peerIp === i.rt.ip));
+    rows = o && o.rt.bgp && mine ? o.rt.bgp.table.filter((r) => r.peerIp === mine.rt.ip).map((r) => ({ ...r, best: true, nh: 0, aspath: r.aspath.slice(1), lp: undefined, weight: 0, adv: true, sentPath: r.aspath })) : [];
+  }
+  const o = [`BGP table version is ${10 + b.table.length}, local router ID is ${fmtIp(b.rid)}`, 'Status codes: s suppressed, d damped, h history, * valid, > best, i - internal,', '              r RIB-failure, S Stale, m multipath, b backup-path, f RT-Filter,',
+    '              x best-external, a additional-path, c RIB-compressed,', 'Origin codes: i - IGP, e - EGP, ? - incomplete', 'RPKI validation codes: V valid, I invalid, N Not found', '',
+    '     ' + pad('Network', 17) + pad('Next Hop', 20) + pad('Metric', 7) + pad('LocPrf', 7) + pad('Weight', 7) + 'Path'];
+  let prev = null;
+  for (const r of rows) {
+    const k = r.net + '/' + r.bits;
+    const net = k === prev ? '' : bgpNet(r);
+    prev = k;
+    o.push(` ${r.best ? '*>' : '* '}  ` + pad(net, 17) + pad(r.local || r.adv ? '0.0.0.0' : fmtIp(r.nh), 20) + pad(r.med != null ? String(r.med).padStart(6) : r.local ? '     0' : '', 7)
+      + pad(r.lp != null && r.lp !== 100 ? String(r.lp).padStart(6) : r.local || r.adv ? '' : '   100', 7) + pad(String(r.weight || 0).padStart(6), 7) + ((r.adv ? r.sentPath : r.aspath).join(' ') + ' ' + (r.origin || 'i')).trim());
+  }
+  o.push('', `Total number of prefixes ${new Set(rows.map((r) => r.net + '/' + r.bits)).size} `);
+  return o;
 }
 
 // ───────────────────────── OSPF ─────────────────────────
@@ -914,6 +976,25 @@ function showOrPing(app, devId, line, print) {
     const lines = policyIfLines(st, d, i);
     (lines.length ? lines : [`（${i.label} 上沒有套用任何 service-policy）`]).forEach((l) => print(l, l.startsWith('（') ? 'hint' : 'pre'));
     return true;
+  }
+  if (tok[0].length >= 2 && 'show'.startsWith(tok[0]) && tok[1] === 'ip' && tok[2] === 'bgp' && tok[3] && tok[3].length >= 3 && 'neighbors'.startsWith(tok[3])) {
+    const b = d.rt.bgp;
+    if (!b) { print('% BGP not active', 'warn'); return true; }
+    const ip = tok[4], what = tok[5] || '';
+    const peer = ip && b.peers.find((x) => x.ip === ip);
+    if (ip && !peer) { print(`% No such neighbor or address family`, 'warn'); return true; }
+    if (!ip || !what) {
+      for (const x of peer ? [peer] : b.peers) {
+        [`BGP neighbor is ${x.ip},  remote AS ${x.remoteAs}, external link`, ...(x.desc ? [` Description: ${x.desc}`] : []), `  BGP version 4, remote router ID ${x.state === 'Established' ? (() => { const o = Object.values(st.devices).find((y) => y.ifaces.some((i) => i.rt && fmtIp(i.rt.ip) === x.ip)); return o && o.rt.bgp ? fmtIp(o.rt.bgp.rid) : '0.0.0.0'; })() : '0.0.0.0'}`,
+          `  BGP state = ${x.state}${x.state === 'Established' ? `, up for ${hms(x.up)}` : ''}`, '  Last read 00:00:12, last write 00:00:21, hold time is 180, keepalive interval is 60 seconds',
+          ...(x.why ? [`  （${x.why}）`] : []), `  Prefixes received ${x.pfx}, advertised ${x.sent}`, ''].forEach((l) => print(l, l.startsWith('  （') ? 'hint' : 'pre'));
+      }
+      return true;
+    }
+    if ('advertised-routes'.startsWith(what) || 'received-routes'.startsWith(what) || 'routes'.startsWith(what)) {
+      bgpTable(st, d, { ip, adv: what.startsWith('a') }).forEach((l) => print(l, 'pre'));
+      return true;
+    }
   }
   if (tok[0].length >= 2 && 'show'.startsWith(tok[0]) && tok[1] === 'ip' && tok[2] && 'ospf'.startsWith(tok[2]) && tok[2].length >= 2 && tok[3] && tok[3].length >= 3 && 'interface'.startsWith(tok[3]) && tok[4] && !'brief'.startsWith(tok[4])) {
     const name = tok.slice(4).join('');

@@ -14,6 +14,7 @@ import * as M from './panel-more.js';
 import * as DG from './panel-diag.js';
 import * as OPS from './panel-ops.js';
 import * as V from './panel-voice.js';
+import { bgpCard } from './panel-bgp.js';
 import { isTftp, isFtp } from '../engine/files.js';
 import { buildCli } from './cli.js';
 import { buildFortiCli } from './forticli.js';
@@ -385,6 +386,8 @@ function routesTab(ctx, body) {
         } })),
       h('p', { class: 'tip', text: 'OSPF 在各介面上個別啟用（或用 CLI 的 network 敘述）。有通往外部的預設路由的那一台勾選「發布預設路由」，其他 OSPF 路由器就會學到 O*E2 的預設路由。' })));
   }
+  const bc = bgpCard(ctx);
+  if (bc) body.append(bc);
   body.append(routeTable(ctx));
   if (ctx.state.v6 && dev.kind === 'router') M.v6Routes(ctx, body);
 }

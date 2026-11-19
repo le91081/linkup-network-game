@@ -258,7 +258,8 @@ console.log('\nCLI 設定指令');
   const type = (s, id, lines) => {
     const sess = iosSession(() => s.devices[id], () => s);
     const errs = [];
-    for (const l of lines) for (const o of sess.exec(l).out) if (o.startsWith('%') && !o.includes('Creating vlan')) errs.push(`${l} → ${o}`);
+    // % OSPF: … 是 IOS 的提醒（設定已經套用），不是錯誤
+    for (const l of lines) for (const o of sess.exec(l).out) if (o.startsWith('%') && !o.includes('Creating vlan') && !o.startsWith('% OSPF:')) errs.push(`${l} → ${o}`);
     return errs;
   };
   // 比對時略過註解與分隔線
@@ -279,6 +280,8 @@ console.log('\nCLI 設定指令');
       recompute(s2);
       const errs = type(s2, d.id, ['configure terminal', ...want, 'end']);
       recompute(s2);
+      // DR 是有狀態的：設備重灌之後不會自己搶回 DR，要像工程師那樣讓大家重新選
+      if (lv.reelect) { for (const x of Object.values(s2.devices).filter((y) => y.rt && y.rt.ospf)) type(s2, x.id, ['clear ip ospf process', 'yes']); recompute(s2); }
       const got = runningConfig(s2, s2.devices[d.id]);
       const a = want.filter(keep), b = got.filter(keep);
       n++;
@@ -1614,6 +1617,40 @@ console.log('\nOSPF 進階：DR / BDR、計時器、MTU、被動介面、多區�
     const def = s.devices.a.rt.routes.find((r) => r.bits === 0);
     ok(def && def.type === 'O' && def.sub === 'E2' && def.metric === 1, 'default-information originate：其他路由器學到 O*E2 0.0.0.0/0，metric 固定是 1');
   }
+}
+
+console.log('\nBGP：鄰居、最佳路徑、local-preference、AS-path prepend、轉運站、hold time');
+{
+  const { iosSession, runningConfig } = await import('../src/engine/ios.js');
+  const sim = await import('../src/engine/sim.js');
+  const ok = (cond, title) => (cond ? console.log('  ✔ ' + title) : fail(title));
+  const ios = (s, id, lines) => { const sess = iosSession(() => s.devices[id], () => s); const out = []; for (const l of lines) out.push(...sess.exec(l).out); return out; };
+  const lv = LEVELS.find((l) => l.id === 'l50');
+  const s = lv.setup(); recompute(s);
+  const peer = (ip) => s.devices.r1.rt.bgp.peers.find((x) => x.ip === ip);
+  const via = (id, ip) => { const r = sim.lookupRoute(s.devices[id], parseIp(ip)); return r ? fmtIpT(r.via) : null; };
+  function fmtIpT(n) { return n == null ? null : [n >>> 24, (n >>> 16) & 255, (n >>> 8) & 255, n & 255].join('.'); }
+  ok(peer('203.0.113.1').state === 'Established' && peer('198.51.100.1').state === 'Idle' && /64510/.test(peer('198.51.100.1').why), 'remote-as 寫錯（64501）：ISP-B 停在 Idle，原因是對方的 AS 是 64510');
+  ios(s, 'r1', ['configure terminal', 'router bgp 65010', 'neighbor 198.51.100.1 remote-as 64510', 'end']);
+  recomputeNow(s);
+  const opening = peer('198.51.100.1').state;
+  recompute(s);
+  ok(opening === 'OpenSent' && peer('198.51.100.1').state === 'Established' && peer('198.51.100.1').pfx > 0, 'AS 改對之後先 OpenSent，大約十秒進到 Established，開始收到路由');
+  ok(via('ispb', '203.0.113.5') === '198.51.100.2' && via('net', '192.0.2.10') === '198.51.100.9', '沒有任何過濾：R1 把 ISP-A 的路由送給了 ISP-B，ISP-B 往 ISP-A 的流量改走公司（轉運站）；進來的流量也剛好選了 ISP-B');
+  lv.solve(s); recompute(s);
+  const r = evaluate(s, lv.objectives);
+  ok(r.every((x) => x.pass) && via('r1', '8.8.8.8') === '203.0.113.1' && via('net', '192.0.2.10') === '203.0.113.9' && via('ispb', '203.0.113.5') === '198.51.100.10',
+    'local-preference 200 讓出去走 ISP-A；送給 ISP-B 的 prepend 三次讓進來也走 ISP-A；prefix-list 只送自己的網段，不再是轉運站');
+  const best = s.devices.net.rt.bgp.table.filter((x) => x.net === parseIp('192.0.2.0'));
+  ok(best.length === 2 && best.find((x) => x.best).aspath.join(' ') === '64500 65010' && best.find((x) => !x.best).aspath.join(' ') === '64510 65010 65010 65010 65010', '網際網路的 BGP 表：經過 ISP-B 的那條 AS path 多了三次 65010，所以選 ISP-A');
+  const rc = runningConfig(s, s.devices.r1);
+  ok(rc.includes('router bgp 65010') && rc.includes(' neighbor 198.51.100.1 route-map TO-B out') && rc.includes('ip prefix-list OWN seq 5 permit 192.0.2.0/24') && rc.includes(' set as-path prepend 65010 65010 65010'), 'BGP、prefix-list、route-map 都會出現在 running-config');
+  // TCP 179 被 ACL 擋掉：已經建立的鄰居要等 hold time (180 秒) 才會斷
+  ios(s, 'r1', ['configure terminal', 'ip access-list extended NO-BGP', 'deny tcp any any eq 179', 'deny tcp any eq 179 any', 'permit ip any any', 'interface gi0/0/1', 'ip access-group NO-BGP out', 'ip access-group NO-BGP in', 'end']);
+  recomputeNow(s);
+  const still = peer('198.51.100.1').state;
+  advance(s, 181); recomputeNow(s);
+  ok(still === 'Established' && peer('198.51.100.1').state === 'Active', 'BGP 的封包被擋住：線路沒斷，鄰居還是 Established，要等 hold time 180 秒過了才斷');
 }
 
 // ── FortiGate 的 CLI ──
