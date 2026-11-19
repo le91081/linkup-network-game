@@ -3,7 +3,8 @@ import { h } from './dom.js';
 import { fmtIp, parseIp } from '../engine/ip.js';
 import { fmtIp6 } from '../engine/ip6.js';
 import { transact, routeRows, isBridgePort, arpRows, clearArp, hitsOf, fmtDur, portfastOn, macRows, clearMac, macAgeOf, sessionRows, clearSessions, saInfo } from '../engine/sim.js';
-import { iosClock, deviceTime, ntpInfo, logRows, clearLog, syslogStats, uptimeOf, routerId, longIf, SEVERITY, NTP_POLL } from '../engine/ops.js';
+import { iosClock, deviceTime, ntpInfo, logRows, clearLog, syslogStats, uptimeOf, routerId, longIf, SEVERITY, NTP_POLL, vtyRows, idleLimit } from '../engine/ops.js';
+import { quietLeft } from '../engine/remote.js';
 import { fmtMask } from '../engine/ip.js';
 import { route6Rows } from '../engine/sim6.js';
 import { CATALOG, MEDIA, peerOf, portOf, linkInfo, phyConfig } from '../engine/model.js';
@@ -271,6 +272,21 @@ const SHOW = {
     const outIf = d.ifaces.filter((i) => i.nat).map((i) => i.label), inIf = d.ifaces.filter((i) => !i.nat && i.rt && i.rt.ip != null).map((i) => i.label);
     return [`Total active translations: ${dyn + stat} (${stat} static, ${dyn} dynamic; ${dyn} extended)`, 'Outside interfaces:', '  ' + (outIf.join(', ') || '(none)'), 'Inside interfaces:', '  ' + (inIf.join(', ') || '(none)')];
   },
+  'show users': (st, d) => {
+    const o = ['    Line       User       Host(s)              Idle       Location', '*  0 con 0                idle                 00:00:00'];
+    vtyRows(st, d).forEach((v, n) => o.push(`   ${String(n + 2).padStart(1)} vty ${n}     ${pad(v.user, 11)}${pad('idle', 21)}${hms(st.clock - v.last)} ${v.ip}`));
+    const lim = idleLimit(d);
+    o.push('', lim > 0 ? `（遠端登入閒置超過 ${fmtDur(lim)}會自動登出：line vty 的 exec-timeout）` : '（exec-timeout 0 0：遠端登入不會因為閒置而登出）');
+    return o;
+  },
+  'show login': (st, d) => {
+    const b = d.mgmt && d.mgmt.block, q = quietLeft(st, d);
+    const fails = ((st.dyn.login || {})[d.id] || { fails: [] }).fails.filter((t) => !b || st.clock - t < b.within).length;
+    if (!b) return ['     No login delay has been applied.', '     No Quiet-Mode access list has been configured.', '', '     Router NOT enabled to watch for login Attacks', '（還沒有設定 login block-for：密碼可以被無限次地嘗試）'];
+    return ['     A default login delay of 1 seconds is applied.', '     No Quiet-Mode access list has been configured.', '', '     Router enabled to watch for login Attacks.',
+      `     If more than ${b.tries} login failures occur in ${b.within} seconds or less,`, `     logins will be disabled for ${b.sec} seconds.`, '',
+      q ? `     Router presently in Quiet-Mode.\n     Will remain in Quiet-Mode for ${q} seconds.` : '     Router presently in Normal-Mode.', `     Present login failure count ${fails}.`].join('\n').split('\n');
+  },
   'show interfaces status': (st, d) => {
     const o = [pad('Port', 14) + pad('Status', 14) + pad('Vlan', 8) + pad('Duplex', 9) + pad('Speed', 9) + 'Type'];
     for (const p of d.ports) {
@@ -323,6 +339,73 @@ const match = (tokens, cmd) => {
   return tokens.length === w.length && tokens.every((t, i) => w[i].startsWith(t));
 };
 
+/** show、clear 與 ping：回傳 false 表示不是這幾種指令 */
+function showOrPing(app, devId, line, print) {
+  const tok = line.trim().toLowerCase().split(/\s+/).filter(Boolean);
+  const st = app.state, d = st.devices[devId];
+  if (!tok.length || !d) return true;
+  if ('ping'.startsWith(tok[0]) && tok[0].length >= 2) {
+    const ip = parseIp(tok[1] || '');
+    if (ip == null) print('% 用法：ping <IPv4 位址>', 'warn');
+    else if (!d.ifaces.some((i) => i.rt && i.rt.ip != null)) print('% 這台設備沒有任何 IP 位址，無法送出封包', 'warn');
+    else {
+      const r = transact(st, d.id, { proto: 'icmp', dst: ip });
+      app.showTrace(`${d.name}# ${line}`, r.log, r.hops, r);
+      print(`Sending 5, 100-byte ICMP Echos to ${fmtIp(ip)}, timeout is 2 seconds:`);
+      print(r.ok ? '!!!!!' : '.....', r.ok ? 'ok' : 'bad');
+      print(`Success rate is ${r.ok ? 100 : 0} percent (${r.ok ? 5 : 0}/5)`);
+      if (!r.ok) print('  ↳ ' + r.reason, 'hint');
+    }
+    return true;
+  }
+  if (tok[tok.length - 1] === '?' && 'show'.startsWith(tok[0])) { CMDS.forEach((c) => print('  ' + c, 'dim')); return true; }
+  if (tok[0] === 'clear' && tok.length > 1) {
+    const rest = tok.slice(1).join(' ');
+    if (rest.startsWith('arp')) clearArp(st, d);
+    else if (/^mac/.test(rest)) clearMac(st, d);
+    else if (/^ip nat tr/.test(rest)) clearSessions(st, d);
+    else if (/^log/.test(rest)) clearLog(st, d);
+    else return false;
+    app.refreshLive();
+    return true;
+  }
+  const cmd = CMDS.find((c) => match(tok, c));
+  if (!cmd) return false;
+  SHOW[cmd](st, d).forEach((l) => print(l, 'pre')); // 表格不折行，太寬時左右捲動
+  return true;
+}
+
+/**
+ * 執行一行 IOS 指令。CLI 分頁和遠端登入 (SSH / Telnet) 共用。
+ * 回傳 { clear：要清空畫面, changed：設定或狀態有變動, renamed：設備改名或重新開機了 }
+ */
+export function iosRun(app, devId, sess, line, print) {
+  const text = line.trim(), low = text.toLowerCase();
+  const booting = (app.state.rt.booting || {})[devId];
+  if (booting > 0) { print(`% 設備還在開機中，還要 ${Math.ceil(booting)} 秒才能下指令`, 'warn'); return {}; }
+  const before = app.state.devices[devId].name;
+  if (text.length > 1 && text.endsWith('?')) {
+    // 指令打到一半加上 ?：列出接下來可以輸入的字
+    const r = sess.complete(text.slice(0, -1), CMDS);
+    print(r.options.length ? '  ' + r.options.join('   ') : '  （沒有符合的指令，或接下來要輸入的是數值 / 位址）', 'dim');
+    return {};
+  }
+  if (low === '?' || low === 'help') {
+    print(sess.mode === 'exec' ? '可用指令（可以縮寫，例如 conf t、sh ip int br）：' : '這個模式可用的指令（可以縮寫；前面加 no 是取消）：', 'dim');
+    sess.help().forEach((c) => print('  ' + c, 'dim'));
+    if (sess.mode !== 'exec') print('  exit 回上一層　end 回到最外層　do show … 在設定模式下查看狀態', 'dim');
+    return {};
+  }
+  if (low === 'cls' || low === 'clear') return { clear: true };
+  const r = sess.exec(text);
+  r.out.forEach((l) => print(l, l.startsWith('%') ? 'warn' : 'dim'));
+  if (r.pass && !showOrPing(app, devId, r.doLine != null ? r.doLine : text, print)) print(`% Invalid input detected：不認識的指令「${text}」，輸入 ? 查看可用指令`, 'warn');
+  const d = app.state.devices[devId];
+  return { changed: !!r.changed, reloaded: !!r.reloaded, renamed: !!r.changed && (!!r.reloaded || !d || d.name !== before) };
+}
+/** Tab 補齊時要一起列出來的 show 指令 */
+export const IOS_CMDS = CMDS;
+
 export function buildCli(ctx, body) {
   const { app, dev } = ctx;
   const sess = ((app.cliSess ||= {})[dev.id] ||= iosSession(() => app.state.devices[dev.id] || dev, () => app.state));
@@ -341,66 +424,12 @@ export function buildCli(ctx, body) {
   };
   const print = (t, c) => logs.push({ t, c });
 
-  /** show 與 ping：回傳 false 表示不是這兩種指令 */
-  const showOrPing = (line) => {
-    const tok = line.trim().toLowerCase().split(/\s+/).filter(Boolean);
-    const st = app.state, d = st.devices[dev.id] || dev;
-    if (!tok.length) return true;
-    if ('ping'.startsWith(tok[0]) && tok[0].length >= 2) {
-      const ip = parseIp(tok[1] || '');
-      if (ip == null) print('% 用法：ping <IPv4 位址>', 'warn');
-      else if (!d.ifaces.some((i) => i.rt && i.rt.ip != null)) print('% 這台設備沒有任何 IP 位址，無法送出封包', 'warn');
-      else {
-        const r = transact(st, d.id, { proto: 'icmp', dst: ip });
-        app.showTrace(`${d.name}# ${line}`, r.log, r.hops, r);
-        print(`Sending 5, 100-byte ICMP Echos to ${fmtIp(ip)}, timeout is 2 seconds:`);
-        print(r.ok ? '!!!!!' : '.....', r.ok ? 'ok' : 'bad');
-        print(`Success rate is ${r.ok ? 100 : 0} percent (${r.ok ? 5 : 0}/5)`);
-        if (!r.ok) print('  ↳ ' + r.reason, 'hint');
-      }
-      return true;
-    }
-    if (tok[tok.length - 1] === '?' && 'show'.startsWith(tok[0])) { CMDS.forEach((c) => print('  ' + c, 'dim')); return true; }
-    if (tok[0] === 'clear' && tok.length > 1) {
-      const rest = tok.slice(1).join(' ');
-      if (rest.startsWith('arp')) clearArp(st, d);
-      else if (/^mac/.test(rest)) clearMac(st, d);
-      else if (/^ip nat tr/.test(rest)) clearSessions(st, d);
-      else if (/^log/.test(rest)) clearLog(st, d);
-      else return false;
-      app.refreshLive();
-      return true;
-    }
-    const cmd = CMDS.find((c) => match(tok, c));
-    if (!cmd) return false;
-    SHOW[cmd](st, d).forEach((l) => print(l, 'pre')); // 表格不折行，太寬時左右捲動
-    return true;
-  };
-
   const run = (line) => {
     print(sess.prompt() + ' ' + line, 'cmd');
-    const text = line.trim(), low = text.toLowerCase();
-    const before = (app.state.devices[dev.id] || dev).name;
-    let renamed = false;
-    if (text.length > 1 && text.endsWith('?')) {
-      // 指令打到一半加上 ?：列出接下來可以輸入的字
-      const r = sess.complete(text.slice(0, -1), CMDS);
-      print(r.options.length ? '  ' + r.options.join('   ') : '  （沒有符合的指令，或接下來要輸入的是數值 / 位址）', 'dim');
-    } else if (low === '?' || low === 'help') {
-      print(sess.mode === 'exec' ? '可用指令（可以縮寫，例如 conf t、sh ip int br）：' : '這個模式可用的指令（可以縮寫；前面加 no 是取消）：', 'dim');
-      sess.help().forEach((c) => print('  ' + c, 'dim'));
-      if (sess.mode !== 'exec') print('  exit 回上一層　end 回到最外層　do show … 在設定模式下查看狀態', 'dim');
-    } else if (low === 'cls' || low === 'clear') logs.length = 0;
-    else {
-      const r = sess.exec(text);
-      r.out.forEach((l) => print(l, l.startsWith('%') ? 'warn' : 'dim'));
-      if (r.pass && !showOrPing(r.doLine != null ? r.doLine : text)) print(`% Invalid input detected：不認識的指令「${text}」，輸入 ? 查看可用指令`, 'warn');
-      if (r.changed) {
-        ctx.commit(false);
-        renamed = r.reloaded || (app.state.devices[dev.id] || dev).name !== before;
-      }
-    }
-    if (renamed) app.renderPanel(); // 設備改名或重新開機了：整個面板要跟著更新
+    const r = iosRun(app, dev.id, sess, line, print);
+    if (r.clear) logs.length = 0;
+    if (r.changed) ctx.commit(false);
+    if (r.renamed) app.renderPanel(); // 設備改名或重新開機了：整個面板要跟著更新
     else draw();
   };
   input.addEventListener('keydown', (e) => {

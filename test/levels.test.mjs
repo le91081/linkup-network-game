@@ -560,7 +560,9 @@ console.log('\nCLI 設定指令');
   say(pc.rt.src === 'apipa', '租約到期還是續不到約：電腦失去位址，退回 APIPA');
   s.down = {};
   recomputeNow(s);
-  say(pc.rt.src === 'dhcp' && pc.rt.ip === ip0, '伺服器回來之後重新要到位址');
+  say(s.rt.booting.rt === 180 && pc.rt.src === 'apipa' && pendingOf(s).some((p) => p.kind === 'boot'), '路由器按下電源後要 180 秒才開完機，這段時間還是要不到位址');
+  advance(s, 180);
+  say(pc.rt.src === 'dhcp' && pc.rt.ip === ip0, '伺服器開完機之後重新要到位址');
   // 過了一半的時間會自動續約
   const exp0 = pc.rt.exp;
   advance(s, 1700);
@@ -604,7 +606,9 @@ console.log('\nCLI 設定指令');
   say(!nb('gw-b', 'gw-a') && !pendingOf(s).length, '40 秒後 GW-B 才把 GW-A 從鄰居清單拿掉');
   s.down = {};
   recomputeNow(s);
-  say(vr('gw-a').state === 'master' && nb('gw-a', 'edge').state === 'forming' && Math.round(nb('gw-a', 'edge').left) === 40, 'GW-A 開機：VRRP 立刻搶回 Master，但 OSPF 鄰居關係要重新建立');
+  say(s.rt.booting['gw-a'] === 180 && vr('gw-b').state === 'master' && net().ok, 'GW-A 按下電源後要 180 秒才開完機，這段時間繼續由 GW-B 當 Master');
+  advance(s, 180);
+  say(vr('gw-a').state === 'master' && nb('gw-a', 'edge').state === 'forming' && Math.round(nb('gw-a', 'edge').left) === 40, 'GW-A 開完機：VRRP 立刻搶回 Master，但 OSPF 鄰居關係要重新建立');
   const r1 = net();
   say(!r1.ok, `GW-A 搶回 Master 時還沒有學到路由，這段時間封包被丟掉（開機後立刻 preempt 的經典問題）：${r1.reason}`);
   advance(s, 40);
@@ -797,9 +801,11 @@ console.log('\n需要時間的狀態：MAC 位址表、連線表、IPsec、NTP�
     ok(stale && !r.ok && /SA 還沒過期/.test(r.reason) && !t.rt.up, '對端關機：通道還顯示 Up、封包照樣加密送出（被丟掉），60 秒後 DPD 才判定失聯');
     delete s.down;
     recomputeNow(s);
+    const booting = s.rt.booting.br === 70 && !t.rt.up;
+    advance(s, 70);
     const renego = !t.rt.up && t.rt.nego > 0;
     recompute(s);
-    ok(renego && t.rt.up && evaluate(s, lv.objectives).every((x) => x.pass), '對端回來之後重新協商，通道恢復');
+    ok(booting && renego && t.rt.up && evaluate(s, lv.objectives).every((x) => x.pass), '對端開完機（70 秒）之後重新協商，通道恢復');
     const log = ops.logRows(s, s.devices.hq).map((x) => x.line);
     ok(log.some((l) => /action="tunnel-down"/.test(l)) && log.some((l) => /action="tunnel-up"/.test(l)) && /^date=2026-01-0\d time=\d\d:\d\d:\d\d devname="HQ-FW"/.test(log[0]),
       'FortiGate 的事件紀錄記下通道中斷與恢復');
@@ -892,10 +898,12 @@ console.log('\n需要時間的狀態：MAC 位址表、連線表、IPsec、NTP�
     delete s.down;
     // reload：記憶體裡的紀錄消失，時鐘從頭開始
     ios(s, 'sw', ['write memory', 'reload', '']);
+    const rebooting = s.rt.booting.sw === 120 && !s.rt.links['sw:Gi0/9'] && ops.logRows(s, sw).length === 0;
+    advance(s, 120);
     const buf = ops.logRows(s, sw).map((x) => x.line);
-    ok(/1993$/.test(ops.iosClock(s, sw)) && /^\*Mar  1 00:00:00\.000: %SYS-5-RESTART: System restarted --$/.test(buf[0]) && buf.some((l) => /%LINK-3-UPDOWN: Interface GigabitEthernet0\/9, changed state to up/.test(l))
+    ok(rebooting && /1993$/.test(ops.iosClock(s, sw)) && /^\*Mar  1 00:00:00\.000: %SYS-5-RESTART: System restarted --$/.test(buf[0]) && buf.some((l) => /%LINK-3-UPDOWN: Interface GigabitEthernet0\/9, changed state to up/.test(l))
       && macRows(s, sw).length <= 1 && ops.uptimeOf(s, sw) === 0, // 重開機後自己馬上去問 NTP 伺服器，所以會學到伺服器那一筆
-    'reload 之後：紀錄緩衝區清空、時鐘回到 1993 年、介面重新上線，MAC 位址表也重新學');
+    'reload：開機的 120 秒內所有埠都沒有燈號；開完機之後紀錄緩衝區是空的、時鐘回到 1993 年、MAC 位址表重新學');
   }
   {
     // ntp master：上游自己的時間是錯的，下游就跟著錯

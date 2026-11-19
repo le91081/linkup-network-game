@@ -520,6 +520,12 @@ export function renderDevicePanel(app, root) {
   const body = h('div', { class: 'p-body' });
   const isDown = !!(app.state.down || {})[dev.id];
   if (isDown) body.append(note('warn', '這台設備目前是關機狀態（故障模擬），所有連接埠都沒有燈號。按右上角的電源鈕可以開機。'));
+  else {
+    body.append(ctx.live(() => {
+      const left = (app.state.rt.booting || {})[dev.id];
+      return left > 0 ? note('warn', `這台設備正在開機，還要 ${Math.ceil(left)} 秒才會開始工作。在那之前所有連接埠都沒有燈號，也不會回應任何封包。`) : null;
+    }));
+  }
   const tabBar = tabs.length > 1 && h('div', { class: 'tabs' + (tabs.length > 8 ? ' many many9' : tabs.length > 7 ? ' many' : '') }, tabs.map(([id, label]) =>
     h('button', { type: 'button', class: 'tab' + (id === cur ? ' on' : ''), onclick: () => { app.panelTab[dev.id] = id; app.renderPanel(); } }, label)));
   root.dataset.view = viewKey;

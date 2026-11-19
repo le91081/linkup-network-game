@@ -62,7 +62,7 @@ const app = {
     Object.assign(app, {
       level: lv, levelIdx: idx, state: st, results: [], running: false, selected: null,
       hintsShown: app.store.hints[lv.id] || 0, panelTab: {}, pinned: {}, adv: new Set(), termLog: {}, termHist: {}, refreshers: [],
-      undoStack: [], redoStack: [], snap: snapOf(st), cliSess: {},
+      undoStack: [], redoStack: [], snap: snapOf(st), cliSess: {}, remote: {}, knownHosts: {},
     });
     app.store.last = lv.id;
     app.runToken = (app.runToken || 0) + 1;
@@ -180,7 +180,9 @@ const app = {
     if (off && isIos(d)) { lost = iosDirty(st, d); restoreStartup(d); app.cliSess = {}; }
     app.changed();
     app.renderPanel();
-    toast(off ? `${d.name} 已關機${lost ? '，沒有存檔的設定已經消失' : ' — 可以測試其他路徑有沒有接手'}` : `${d.name} 已開機${isIos(d) ? '，設定從 startup-config 載入' : ''}`, off ? 'bad' : 'ok', lost ? 5000 : 3200);
+    const wait = !off && (st.rt.booting || {})[id];
+    toast(off ? `${d.name} 已關機${lost ? '，沒有存檔的設定已經消失' : ' — 可以測試其他路徑有沒有接手'}`
+      : `${d.name} 開機中${wait ? `，大約要 ${fmtDur(wait)}` : ''}${isIos(d) ? '；設定會從 startup-config 載入' : ''}`, off ? 'bad' : 'ok', lost ? 5000 : 3200);
     app.scene.pulse(id, off ? RED : GREEN, true);
   },
 

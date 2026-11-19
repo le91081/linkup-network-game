@@ -5,7 +5,7 @@ import { parseIp, fmtIp, parseMask, fmtMask, maskOf, netOf, bcastOf } from './ip
 import { parseCidr6, parseIp6 } from './ip6.js';
 import { newIface, cloneState, CATALOG } from './model.js';
 import { macsBehind, recompute, ospfOn } from './sim.js';
-import { logEvent, markReboot, setClock, deviceTime, SEVERITY } from './ops.js';
+import { logEvent, markReboot, setClock, deviceTime, SEVERITY, bootTime } from './ops.js';
 
 // ───────────────────────── running-config 與 startup-config ─────────────────────────
 // IOS 設備改的是記憶體裡的 running-config；要下 write memory 才會存進 startup-config。
@@ -625,6 +625,28 @@ export function iosSession(getDev, getState) {
       if (d.stdAcls) delete d.stdAcls[N];
       if (d.mgmt && (d.mgmt.aclName || 'MGMT') === N) d.mgmt.allow = '';
     }],
+    // 登入失敗太多次就暫時拒絕所有登入（擋暴力破解）
+    ['login block-for <sec> attempts <n> within <w>', ([sec, n, w]) => {
+      const m = dev().mgmt;
+      if (!m) return err('這台設備不支援');
+      if (![sec, n, w].every((x) => /^\d+$/.test(x)) || +sec < 1 || +sec > 65535 || +n < 1 || +n > 65535 || +w < 1 || +w > 65535) return err('用法：login block-for <封鎖幾秒> attempts <失敗幾次> within <幾秒之內>');
+      m.block = { sec: +sec, tries: +n, within: +w };
+      return undefined;
+    }],
+    ['no login block-for [...]', () => { if (dev().mgmt) delete dev().mgmt.block; }],
+    ['login on-failure log [...]', () => { const m = dev().mgmt; if (m) (m.loginLog ||= {}).fail = true; }],
+    ['login on-success log [...]', () => { const m = dev().mgmt; if (m) (m.loginLog ||= {}).ok = true; }],
+    ['no login on-failure [...]', () => { const m = dev().mgmt; if (m && m.loginLog) { delete m.loginLog.fail; if (!m.loginLog.ok) delete m.loginLog; } }],
+    ['no login on-success [...]', () => { const m = dev().mgmt; if (m && m.loginLog) { delete m.loginLog.ok; if (!m.loginLog.fail) delete m.loginLog; } }],
+    // 登入時顯示的訊息。前後用同一個符號包起來
+    ['banner motd <...>', ([text]) => {
+      const m = dev().mgmt, x = text.trim(), end = x.indexOf(x[0], 1);
+      if (!m) return err('這台設備不支援');
+      if (x.length < 3 || end < 0) return err('用法：banner motd #要顯示的文字#（前後用同一個符號包起來，文字只能一行）');
+      m.banner = x.slice(1, end);
+      return undefined;
+    }],
+    ['no banner motd [...]', () => { if (dev().mgmt) delete dev().mgmt.banner; }],
     ['line vty [...]', () => { if (!dev().mgmt) return err('這台設備不支援'); enter('line', null); return undefined; }],
     ['line console [...]', () => { enter('line', 'console'); return undefined; }],
     ['ip http server', () => void (dev().mgmt && (dev().mgmt.http = true))],
@@ -899,7 +921,16 @@ export function iosSession(getDev, getState) {
       ['no access-class [...]', () => { dev().mgmt.allow = ''; }],
       ['login [...]', () => undefined],
       ['password <...>', () => undefined],
-      ['exec-timeout <...>', () => undefined],
+      // 登入之後閒置多久自動登出。預設 10 分鐘；0 0 代表永遠不會
+      ['exec-timeout <...>', ([rest]) => {
+        const m = dev().mgmt, t = rest.split(/\s+/);
+        if (!m || S.cur === 'console') return undefined;
+        if (t.length > 2 || !t.every((x) => /^\d+$/.test(x)) || +t[0] > 35791 || +(t[1] || 0) > 2147483) return err('用法：exec-timeout <分鐘> [秒]（0 0 代表永遠不會自動登出）');
+        const s = +t[0] * 60 + +(t[1] || 0);
+        if (s === 600) delete m.execTimeout; else m.execTimeout = s;
+        return undefined;
+      }],
+      ['no exec-timeout [...]', () => { const m = dev().mgmt; if (m && S.cur !== 'console') m.execTimeout = 0; }],
     ],
     acl: [
       ['no <seq>', ([seq]) => {
@@ -1000,7 +1031,7 @@ export function iosSession(getDev, getState) {
     restoreStartup(dev());
     markReboot(getState(), dev().id); // 記憶體裡的表（ARP、MAC、紀錄…）全部消失，時鐘也重新開始
     S.mode = 'exec'; S.cur = null; S.pending = null;
-    out.push('', '*** 設備重新開機中 ***', '', `${hostName(dev())} 開機完成，設定已從 startup-config 載入。`);
+    out.push('', '*** 設備重新開機中 ***', '', `${hostName(dev())} 大約 ${bootTime(dev())} 秒後開機完成，設定會從 startup-config 載入。這段時間它和關機沒有兩樣。`);
     return { out, changed: true, reloaded: true };
   };
 
@@ -1361,6 +1392,10 @@ export function runningConfig(state, dev) {
     if (m.ntp) o.push(`ntp server ${m.ntp}`);
     if (m.logTrap != null && m.logTrap !== '' && +m.logTrap !== 6) o.push(`logging trap ${SEVERITY[+m.logTrap]}`);
     if (m.syslog) o.push(`logging host ${m.syslog}`);
+    if (m.block && +m.block.sec > 0) o.push(`login block-for ${m.block.sec} attempts ${m.block.tries} within ${m.block.within}`);
+    if (m.loginLog && m.loginLog.fail) o.push('login on-failure log');
+    if (m.loginLog && m.loginLog.ok) o.push('login on-success log');
+    if (m.banner) { const q = ['#', '^', '$', '%', '~'].find((c) => !m.banner.includes(c)) || '#'; o.push(`banner motd ${q}${m.banner}${q}`); }
     const snmp = m.snmp || 'v2c';
     if (snmp === 'v2c') o.push(`snmp-server community ${m.community || 'public'} RO`);
     else if (snmp === 'v3') o.push('snmp-server group NMS v3 priv'); // SNMPv3 的使用者不會出現在 running-config 裡，真的 IOS 也是如此
@@ -1369,7 +1404,9 @@ export function runningConfig(state, dev) {
     const an = m.aclName || 'MGMT';
     if (allow.length) { o.push(`ip access-list standard ${an}`); for (const c of allow) o.push(c.bits === 32 ? ` permit host ${fmtIp(c.net)}` : ` permit ${fmtIp(netOf(c.net, c.bits))} ${wild(c.bits)}`); }
     const tr = [m.ssh && 'ssh', m.telnet && 'telnet'].filter(Boolean).join(' ') || 'none';
-    o.push('line vty 0 4', ` transport input ${tr}`, ...(allow.length ? [` access-class ${an} in`] : []), ' login local');
+    const et = m.execTimeout == null || m.execTimeout === '' ? null : +m.execTimeout;
+    o.push('line vty 0 4', ` transport input ${tr}`, ...(allow.length ? [` access-class ${an} in`] : []),
+      ...(et != null && et !== 600 ? [` exec-timeout ${Math.floor(et / 60)} ${et % 60}`] : []), ' login local');
   }
   o.push('!', 'end');
   return o;

@@ -3,6 +3,11 @@ import { h } from './dom.js';
 import { fmtIp, fmtMask, parseIp } from '../engine/ip.js';
 import { transact, resolveName, dhcpTrace, arpRows, clearArp, dhcpRelease, dhcpRenew, fmtDur, throughput } from '../engine/sim.js';
 import { plainStamp } from '../engine/ops.js';
+import { remoteOpen, remoteLogin, remoteSend, remoteAlive, remoteClose } from '../engine/remote.js';
+import { iosSession } from '../engine/ios.js';
+import { fortiSession } from '../engine/fortios.js';
+import { iosRun, IOS_CMDS } from './cli.js';
+import { fortiRun } from './forticli.js';
 import { transact6 } from '../engine/sim6.js';
 import { parseIp6, fmtIp6 } from '../engine/ip6.js';
 
@@ -23,6 +28,9 @@ const HELP = [
   '  nslookup <網域>         向 DNS 查詢網域的 IP',
   '  curl <IP 或網域>[:埠]   測試 TCP 連線（預設 443）',
   '  iperf3 -c <IP>          量測到另一台主機的實際傳輸速率（跑 10 秒）',
+  '  ssh <帳號>@<IP>         登入網路設備的命令列（加密）。輸入 exit 登出',
+  '  telnet <IP>             登入網路設備的命令列（明文，帳號密碼在線路上看得到）',
+  '  telnet <IP> <埠>        測試某個 TCP 連接埠通不通',
   '  date                    顯示目前的日期與時間',
   '  cls                     清除畫面',
 ];
@@ -34,9 +42,11 @@ export function buildTerminal(ctx, body) {
   let hi = hist.length;
   const out = h('div', { class: 'term-out' });
   const input = h('input', { class: 'term-input', spellcheck: 'false', autocomplete: 'off', placeholder: 'ping 192.168.1.1' });
+  let drawPrompt = () => {};
   const draw = () => {
     out.replaceChildren(...logs.map((l) => h('div', { class: 'tl ' + (l.c || ''), text: l.t || '\u00a0' })));
     out.scrollTop = out.scrollHeight;
+    drawPrompt();
   };
   const print = (t, c) => logs.push({ t, c });
   const st = () => app.state;
@@ -46,11 +56,134 @@ export function buildTerminal(ctx, body) {
     return resolveName(st(), dev.id, name);
   };
 
+  // ── 遠端登入 (SSH / Telnet)：登入之後，這個終端機打的每一行都送到對方的命令列 ──
+  const remote = () => (app.remote ||= {})[dev.id];
+  const endRemote = (msg, cls, hint) => {
+    delete app.remote[dev.id];
+    if (msg) print(msg, cls);
+    if (hint) print('  ↳ ' + hint, 'hint');
+  };
+  const askPass = (r) => { r.stage = 'pass'; if (r.conn.proto === 'ssh') print(`${r.conn.user}@${r.ip}'s password:`); };
+  const banner = (r) => { const b = (st().devices[r.conn.to].mgmt || {}).banner; if (b) { print(''); print(b); print(''); } };
+
+  const startRemote = (line, proto, target, user) => {
+    const r0 = resolve(target);
+    if (!r0.ok) { print(`${proto}: Could not resolve hostname ${target}: ${r0.reason}`, 'bad'); return; }
+    const ip = fmtIp(r0.ip);
+    const o = remoteOpen(st(), dev.id, proto, r0.ip, user);
+    app.showTrace(`${dev.name}> ${line}`, [...r0.log, ...o.res.log], [...r0.hops, ...o.res.hops], o.res);
+    if (proto === 'telnet') print(`Trying ${ip} ...`);
+    if (!o.ok) {
+      const why = o.refused ? 'Connection refused' : o.res.phase === 'request' && /沒有.*路由|沒有設定預設閘道/.test(o.reason) ? 'No route to host' : /連線被拒絕|沒有開啟|沒有開放|不在.*允許/.test(o.reason) ? 'Connection refused' : 'Connection timed out';
+      print(proto === 'ssh' ? `ssh: connect to host ${ip} port 22: ${why}` : `telnet: Unable to connect to remote host: ${why}`, 'bad');
+      print('  ↳ ' + o.reason, 'hint');
+      return;
+    }
+    const r = (app.remote[dev.id] = { conn: o.conn, kind: o.kind, key: o.key, ip, stage: null, sess: null });
+    if (proto === 'ssh') {
+      // 第一次連到這台主機：先確認它的金鑰指紋。之後同一個 IP 換了一台設備（或有人冒充），用戶端會拒絕連線
+      const known = ((app.knownHosts ||= {})[dev.id] ||= {});
+      if (known[ip] && known[ip] !== o.key) {
+        remoteClose(st(), o.conn);
+        ['@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@', '@    WARNING: REMOTE HOST IDENTIFICATION HAS CHANGED!     @', '@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@',
+          'IT IS POSSIBLE THAT SOMEONE IS DOING SOMETHING NASTY!', `The fingerprint for the RSA key sent by the remote host is ${o.key}.`, 'Host key verification failed.'].forEach((l) => print(l, 'bad'));
+        endRemote(null, null, `${ip} 現在是另一台設備在回應（金鑰和上次不一樣）。確定是設備換過的話，輸入 ssh-keygen -R ${ip} 把舊的紀錄刪掉再連一次。`);
+        return;
+      }
+      if (!known[ip]) {
+        print(`The authenticity of host '${ip} (${ip})' can't be established.`);
+        print(`RSA key fingerprint is ${o.key}.`);
+        print('Are you sure you want to continue connecting (yes/no)?');
+        r.stage = 'key';
+      } else askPass(r);
+    } else {
+      print(`Connected to ${ip}.`);
+      banner(r);
+      print('User Access Verification');
+      r.stage = 'user';
+    }
+  };
+
+  const remoteInput = (line) => {
+    const r = remote(), s = st(), c = r.conn, ip = r.ip;
+    if (r.stage === 'key') {
+      print('(yes/no)? ' + line, 'cmd');
+      if (/^y(es)?$/i.test(line.trim())) {
+        app.knownHosts[dev.id][ip] = r.key;
+        print(`Warning: Permanently added '${ip}' (RSA) to the list of known hosts.`, 'dim');
+        askPass(r);
+      } else { remoteClose(s, c); endRemote('Host key verification failed.', 'bad'); }
+      return;
+    }
+    if (r.stage === 'user') { print('Username: ' + line, 'cmd'); c.user = line.trim(); r.stage = 'pass'; return; }
+    if (r.stage === 'pass') {
+      if (c.proto === 'telnet') print('Password: ', 'cmd'); // 密碼不會顯示在畫面上
+      const a = remoteLogin(s, c, line);
+      ctx.commit(false);
+      if (a.ok) {
+        r.stage = 'shell';
+        r.sess = r.kind === 'ios' ? iosSession(() => st().devices[c.to], st) : fortiSession(() => st().devices[c.to], st);
+        if (c.proto === 'ssh') banner(r);
+        print('');
+      } else if (a.closed) {
+        endRemote(c.proto === 'ssh' ? `${c.user}@${ip}: Permission denied (publickey,password).` : '% Login invalid', 'bad', a.reason);
+        if (c.proto === 'telnet') print('Connection closed by foreign host.', 'dim');
+      } else if (c.proto === 'ssh') { print('Permission denied, please try again.', 'bad'); askPass(r); } else { print('% Login invalid', 'bad'); print(''); r.stage = 'user'; }
+      return;
+    }
+    // 已經登入：這一行送到對方的命令列
+    const ios = r.kind === 'ios';
+    print(r.sess.prompt() + (ios ? ' ' : '') + line, 'cmd');
+    const low = line.trim().toLowerCase();
+    const atTop = ios ? r.sess.mode === 'exec' && !r.sess.pending : !r.sess.depth;
+    if (atTop && ['exit', 'logout', 'quit'].includes(low)) {
+      remoteClose(s, c);
+      ctx.commit(false);
+      endRemote(c.proto === 'ssh' ? `Connection to ${ip} closed.` : 'Connection closed by foreign host.', 'dim');
+      return;
+    }
+    const sent = remoteSend(s, c, line);
+    if (!sent.ok) { lost(r, sent); return; }
+    const out = ios ? iosRun(app, c.to, r.sess, line, print) : fortiRun(app, c.to, r.sess, line, print);
+    if (out.clear) logs.length = 0;
+    if (out.changed) ctx.commit(false);
+    if (out.reloaded) endRemote(`Connection to ${ip} closed by remote host.`, 'warn', '設備重新開機了，所有登入的連線都會中斷。');
+  };
+
+  /** 連線斷了：說明是設備那一端主動結束，還是路上有設備把這條連線忘了 */
+  const lost = (r, why) => {
+    const d = st().devices[r.conn.to], c = r.conn;
+    if (why.by === 'net') {
+      remoteClose(st(), c);
+      endRemote(c.proto === 'ssh' ? `packet_write_wait: Connection to ${r.ip} port 22: Broken pipe` : 'Connection closed by foreign host.', 'bad', '這一行沒有送到對方：' + why.reason);
+    } else {
+      const lim = why.limit;
+      endRemote(c.proto === 'ssh' ? `Connection to ${r.ip} closed by remote host.` : 'Connection closed by foreign host.', 'warn',
+        d && lim > 0 ? `${d.name} 把這條登入連線結束了：閒置超過 ${fmtDur(lim)} 就會自動登出（${r.kind === 'ios' ? 'line vty 的 exec-timeout' : 'config system global 的 admintimeout'}），或是設備重新開機了。` : '設備那一端已經把這條登入連線結束了。');
+    }
+  };
+
   const run = async (line) => {
+    if (remote()) { remoteInput(line); draw(); return; }
     print('C:\\> ' + line, 'cmd');
     const [cmd, ...args] = line.trim().split(/\s+/);
     const c = (cmd || '').toLowerCase();
     if (c === 'help' || c === '?') HELP.forEach((x) => print(x, 'dim'));
+    else if (c === 'ssh' || (c === 'telnet' && args[0] && (args[1] == null || args[1] === '23') && !args[0].includes(':'))) {
+      // ssh admin@10.0.99.1、ssh -l admin 10.0.99.1、telnet 10.0.99.1
+      let user = '', target = '';
+      const rest = args.slice();
+      const l = rest.indexOf('-l');
+      if (l >= 0) { user = rest[l + 1] || ''; rest.splice(l, 2); }
+      target = rest.find((x) => !x.startsWith('-')) || '';
+      if (target.includes('@')) [user, target] = target.split('@');
+      if (!target || (c === 'ssh' && !user)) print(c === 'ssh' ? '用法：ssh <帳號>@<IP>，例如 ssh admin@10.0.99.1' : '用法：telnet <IP>', 'warn');
+      else startRemote(line, c, target, user);
+    } else if (c === 'ssh-keygen') {
+      const ip = args[0] === '-R' ? args[1] : null;
+      if (!ip) print('用法：ssh-keygen -R <IP>（把這個位址的主機金鑰紀錄刪掉）', 'warn');
+      else if (((app.knownHosts || {})[dev.id] || {})[ip]) { delete app.knownHosts[dev.id][ip]; print(`# Host ${ip} found: line 1`); print('known_hosts updated.'); } else print(`Host ${ip} not found in known_hosts`, 'dim');
+    }
     else if (c === 'cls' || c === 'clear') logs.length = 0;
     else if (c === 'date' || c === 'time') { const t = plainStamp(st(), dev); print(`${t.date} ${t.time}（電腦的時間由作業系統自動校正，這裡當作是準的）`); }
     else if (c === 'arp' && /^-d/i.test(args[0] || '')) { clearArp(st(), dev); app.refreshLive(); }
@@ -184,12 +317,20 @@ export function buildTerminal(ctx, body) {
   };
 
   input.addEventListener('keydown', (e) => {
+    const r = remote();
     if (e.key === 'Enter') {
-      const line = input.value.trim();
+      const secret = r && r.stage === 'pass';
+      const line = secret ? input.value : input.value.trim();
       input.value = '';
-      if (!line) return;
-      hist.push(line); hi = hist.length;
+      // 密碼可以是空的；reload 的 [confirm] 也可以直接按 Enter
+      if (!line && !(secret || (r && r.sess && r.sess.pending))) return;
+      if (!secret) { hist.push(line); hi = hist.length; } // 密碼不留在歷史紀錄裡
       run(line);
+    } else if (e.key === 'Tab' && r && r.stage === 'shell') {
+      e.preventDefault();
+      const c = r.kind === 'ios' ? r.sess.complete(input.value, IOS_CMDS) : r.sess.complete(input.value);
+      if (c.line) input.value = c.line;
+      if (c.options.length > 1) { print(r.sess.prompt() + ' ' + input.value, 'cmd'); print('  ' + c.options.join('   '), 'dim'); draw(); }
     } else if (e.key === 'ArrowUp') {
       if (hi > 0) { hi--; input.value = hist[hi]; }
       e.preventDefault();
@@ -200,7 +341,22 @@ export function buildTerminal(ctx, body) {
     }
     e.stopPropagation();
   });
-  const term = h('div', { class: 'term', onclick: () => input.focus() }, out, h('div', { class: 'term-line' }, h('span', { class: 'prompt', text: 'C:\\>' }), input));
+  const promptEl = h('span', { class: 'prompt', text: 'C:\\>' });
+  const term = h('div', { class: 'term', onclick: () => input.focus() }, out, h('div', { class: 'term-line' }, promptEl, input));
+  // 提示字元跟著目前的狀態變：本機、等待輸入密碼，或已經登入對方的命令列
+  drawPrompt = () => {
+    const r = remote();
+    promptEl.textContent = !r ? 'C:\\>' : r.stage === 'key' ? '(yes/no)?' : r.stage === 'user' ? 'Username:' : r.stage === 'pass' ? 'Password:' : r.sess.prompt();
+    input.type = r && r.stage === 'pass' ? 'password' : 'text';
+    input.placeholder = r ? '' : 'ping 192.168.1.1';
+  };
+  // 沒有在打字的時候，設備那一端也可能因為閒置太久而把連線切掉
+  app.refreshers.push(() => {
+    const r = remote();
+    if (!r || r.stage !== 'shell') return;
+    const a = remoteAlive(st(), r.conn);
+    if (!a.ok) { lost(r, a); draw(); }
+  });
   body.append(term, h('div', { class: 'chips' }, ['ipconfig', 'ping 8.8.8.8', 'tracert 8.8.8.8', 'nslookup www.example.com', 'arp -a', 'help'].map((x) =>
     h('button', { class: 'chip btnchip', type: 'button', text: x, onclick: () => { hist.push(x); hi = hist.length; run(x); } }))));
   draw();

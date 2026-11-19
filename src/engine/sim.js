@@ -1274,20 +1274,28 @@ function daiBlock(state, path, srcIf, dstIf) {
 export function recompute(state) {
   if (typeof state.clock !== 'number') state.clock = 0;
   if (!state.dyn) state.dyn = { boot: true }; // 第一次計算：目前的狀態當作已經運作很久
-  for (const k of ['port', 'adj', 'lsa', 'vrrp', 'lease', 'hold', 'arp', 'mac', 'ct', 'sa', 'clk', 'log', 'syslog', 'ev']) state.dyn[k] ||= {};
-  opsBefore(state);
-  let auth = { dot1x: {}, ent: {} };
-  // 802.1X 可能要算好幾輪。前幾輪只是試算，計時的狀態以最後一輪為準，所以每一輪都從同一份起點開始
-  const dyn0 = JSON.stringify(state.dyn);
-  for (let round = 0; round < 3; round++) {
-    if (round) state.dyn = JSON.parse(dyn0);
-    computePass(state, auth);
-    const next = computeAuth(state);
-    if (JSON.stringify(next) === JSON.stringify(auth)) break;
-    auth = next; // 802.1X 的結果改變了連接埠的狀態，要重算一次
+  for (const k of ['port', 'adj', 'lsa', 'vrrp', 'lease', 'hold', 'arp', 'mac', 'ct', 'sa', 'clk', 'log', 'syslog', 'ev', 'vty', 'login']) state.dyn[k] ||= {};
+  // 還在開機的設備：這一次計算把它當成關機（沒有燈號、不轉送、不回應），算完再把 state.down 還原
+  const booting = opsBefore(state), realDown = state.down, ids = Object.keys(booting);
+  if (ids.length) state.down = { ...(realDown || {}), ...Object.fromEntries(ids.map((id) => [id, true])) };
+  try {
+    let auth = { dot1x: {}, ent: {} };
+    // 802.1X 可能要算好幾輪。前幾輪只是試算，計時的狀態以最後一輪為準，所以每一輪都從同一份起點開始
+    const dyn0 = JSON.stringify(state.dyn);
+    for (let round = 0; round < 3; round++) {
+      if (round) state.dyn = JSON.parse(dyn0);
+      computePass(state, auth);
+      const next = computeAuth(state);
+      if (JSON.stringify(next) === JSON.stringify(auth)) break;
+      auth = next; // 802.1X 的結果改變了連接埠的狀態，要重算一次
+    }
+    if (state.v6) recompute6(state);
+    state.rt.booting = booting;
+    for (const id of ids) state.rt.pending.push({ at: state.clock + booting[id], dev: id, kind: 'boot', text: `${state.devices[id].name}：開機中` });
+    opsAfter(state);
+  } finally {
+    if (realDown === undefined) delete state.down; else state.down = realDown;
   }
-  if (state.v6) recompute6(state);
-  opsAfter(state);
   delete state.dyn.boot;
   return state;
 }
@@ -1636,6 +1644,7 @@ function forward(state, ctx, startId, pkt) {
     return { ok: false, dev: dev.id, reason };
   };
   if ((state.down || {})[dev.id]) return drop(`${dev.name} 已經關機`);
+  if (state.rt.booting && state.rt.booting[dev.id] > 0) return drop(`${dev.name} 還在開機中（還要 ${Math.ceil(state.rt.booting[dev.id])} 秒）`);
   if (state.rt.off[dev.id]) return drop(`${dev.name} 沒有電 — 它需要接在有 PoE 供電的連接埠上`);
   for (let n = 0; n < 48; n++) {
     let established = false, dnat = null;
@@ -1693,8 +1702,11 @@ function forward(state, ctx, startId, pkt) {
         tun = null;
       }
     }
+    // 已經建立的連線，半路上的封包來到防火牆時連線表裡卻沒有它（閒置太久被移除了）：FortiGate 不會把它當成新連線
+    const lostSession = () => drop(`${dev.name} 的連線表裡已經沒有這條連線：閒置超過 ${sessionTtl(dev, { proto: 'tcp', st: 'est' })} 秒就會被移除。防火牆不會讓半路出現、不是 SYN 的 TCP 封包通過，直接丟棄 (no session matched)`);
     if (tun) {
       if (!tun.up) return drop(`VPN 通道「${tun.name}」沒有建立：${tun.why}`);
+      if (inIf && !established && ctx.mid && dev.kind === 'firewall') return lostSession();
       if (inIf && !established) {
         const v = filter(dev, inIf, tun.iface, pkt, dnat);
         if (stateful) sess(dev, { act: v.ok ? 'allow' : 'deny', proto: pkt.proto, ...o, rule: v.rule || 0, inIf: inIf.label, outIf: tun.iface.label });
@@ -1730,9 +1742,10 @@ function forward(state, ctx, startId, pkt) {
     const outIf = route.iface;
     const nh = route.via ?? pkt.dst;
 
+    if (inIf && !established && ctx.mid && dev.kind === 'firewall') return lostSession();
     if (inIf && !established) {
       const v = filter(dev, inIf, outIf, pkt, dnat);
-      if (stateful) sess(dev, { act: v.ok ? 'allow' : 'deny', proto: pkt.proto, ...o, rule: v.rule || 0, inIf: inIf.label, outIf: outIf.label });
+      if (stateful && !ctx.mid) sess(dev, { act: v.ok ? 'allow' : 'deny', proto: pkt.proto, ...o, rule: v.rule || 0, inIf: inIf.label, outIf: outIf.label });
       if (!v.ok) { denyLog(state, dev, pkt, o, inIf, outIf, v.rule); return drop(v.reason); }
       if (v.rule) log.push({ dev: dev.id, kind: 'fwd', text: `符合政策 #${v.rule}，放行（${inIf.label} → ${outIf.label}）` });
       if (!pkt.reply) {
@@ -1846,7 +1859,8 @@ function track(state, ctx, dev, e) {
   (ctx.ct[dev.id] ||= []).push(e);
   if (QUIET) return;
   e.t0 = e.t = state.clock;
-  e.st = e.proto === 'tcp' ? 'syn' : 'new';
+  e.st = e.proto === 'tcp' ? (ctx.mid ? 'est' : 'syn') : 'new';
+  if (ctx.cid) e.cid = ctx.cid; // 屬於哪一條長時間保持的連線（SSH / Telnet）
   const tbl = (state.dyn.ct[dev.id] ||= []);
   tbl.push(e);
   if (tbl.length > 200) tbl.shift();
@@ -1956,8 +1970,41 @@ export function transact(state, fromId, spec) {
   try { return transactInner(state, fromId, spec); } finally { QUIET = prev; }
 }
 
+/** 還沒過期的連線（每台設備一份），給「在既有的連線上繼續送資料」用 */
+function liveSessions(state) {
+  const out = {};
+  for (const [id, list] of Object.entries(state.dyn.ct || {})) {
+    const d = state.devices[id];
+    if (d) out[id] = list.filter((e) => state.clock - e.t < sessionTtl(d, e));
+  }
+  return out;
+}
+
+/**
+ * 在一條已經建立的 TCP 連線上再送一次資料並等對方回應（例如在 SSH 裡打了一行指令）。
+ * flow: { cid, to, src, sport, dst, dport }。路上有狀態的設備如果已經把這條連線忘了，封包會被丟掉。
+ */
+export function flowSend(state, fromId, flow) {
+  const ctx = { ct: liveSessions(state), log: [], hops: [], l3: [], mid: true, cid: flow.cid };
+  const done = (r) => ({ ...r, log: ctx.log, hops: ctx.hops, l3: ctx.l3 });
+  const pkt = { proto: 'tcp', src: flow.src, dst: flow.dst, sport: flow.sport, dport: flow.dport, ttl: 64, reply: false, ack: true, data: flow.data || null };
+  const a = forward(state, ctx, fromId, pkt);
+  if (!a.ok) return done({ ok: false, reason: a.reason, failDev: a.dev, phase: 'request' });
+  if (a.dev !== flow.to) return done({ ok: false, reason: `封包被送到 ${state.devices[a.dev].name}，不是原本連線的那一台`, failDev: a.dev, phase: 'request' });
+  const rp = { proto: 'tcp', src: pkt.dst, dst: pkt.src, sport: pkt.dport, dport: pkt.sport, ttl: 64, reply: true, ack: true, data: flow.echo || null };
+  const b = forward(state, ctx, a.dev, rp);
+  if (!b.ok) return done({ ok: false, reason: '回程失敗：' + b.reason, failDev: b.dev, phase: 'reply' });
+  if (b.dev !== fromId) return done({ ok: false, reason: `回應被送到 ${state.devices[b.dev].name}`, failDev: b.dev, phase: 'reply' });
+  return done({ ok: true });
+}
+
+/** 連線結束 (FIN)：連線表裡的項目進入關閉中的狀態，很快就會被清掉 */
+export function closeFlow(state, cid) {
+  for (const list of Object.values((state.dyn && state.dyn.ct) || {})) for (const e of list) if (e.cid === cid) { e.st = 'fin'; e.t = state.clock; }
+}
+
 function transactInner(state, fromId, spec) {
-  const ctx = { ct: {}, log: [], hops: [], l3: [] };
+  const ctx = { ct: {}, log: [], hops: [], l3: [], cid: spec.keep || null };
   const src = state.devices[fromId];
   const done = (r) => ({ ...r, log: ctx.log, hops: ctx.hops, l3: ctx.l3 });
   let srcIp = spec.srcIp;
@@ -2008,8 +2055,9 @@ function transactInner(state, fromId, spec) {
     if (!c.ok) return done({ ok: false, reason: '三向交握的最後一步 (ACK) 沒有送達：' + c.reason, failDev: c.dev, phase: 'ack', responder: a.dev });
     ctx.log.push({ dev: c.dev, kind: 'ok', text: 'TCP 連線建立完成（SYN → SYN-ACK → ACK），可以開始傳送資料' });
     // 測試用的連線建立之後就由用戶端關閉 (FIN)：連線表裡的項目進入關閉中的狀態，很快就會被清掉
-    for (const l of Object.values(ctx.ct)) for (const e of l) if (e.st === 'est') e.st = 'fin';
-    return done({ ok: true, responder: a.dev, srcIp, seenSrc });
+    // 要保持的連線（SSH / Telnet）不關閉，之後每送一次資料，閒置的計時就重新開始
+    if (!spec.keep) for (const l of Object.values(ctx.ct)) for (const e of l) if (e.st === 'est') e.st = 'fin';
+    return done({ ok: true, responder: a.dev, srcIp, seenSrc, sport: 30000 + id });
   }
   ctx.log.push({ dev: fromId, kind: 'ok', text: '收到回應，連線成功' });
   return done({ ok: true, responder: a.dev, srcIp, seenSrc });

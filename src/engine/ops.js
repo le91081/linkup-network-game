@@ -5,7 +5,7 @@
 // state.dyn.syslog[伺服器] = [{ n, t, ip, dev, sev, line }]   Syslog 伺服器收到的訊息
 // state.dyn.ev[設備]    = 上一次看到的狀態，用來比對出「發生了什麼事」
 import { parseIp, fmtIp } from './ip.js';
-import { transact, macsBehind } from './sim.js';
+import { transact, macsBehind, closeFlow } from './sim.js';
 import { isIos } from './ios.js';
 import { linkInfo } from './model.js';
 
@@ -187,8 +187,10 @@ function ntpRound(state, boot, round) {
 export function logEvent(state, d, sev, tag, msg, forti) {
   if (!state.dyn || !state.dyn.log || !d || !d.mgmt || (state.down || {})[d.id]) return;
   let line;
-  if (isIos(d)) line = `${iosStamp(state, d)}: %${tag}: ${msg}`;
-  else if (d.kind === 'firewall' && forti) {
+  if (isIos(d)) {
+    if (!tag) return; // 只有 FortiGate 才有的事件
+    line = `${iosStamp(state, d)}: %${tag}: ${msg}`;
+  } else if (d.kind === 'firewall' && forti) {
     const s = plainStamp(state, d);
     line = `date=${s.date} time=${s.time} devname="${d.name}" ${forti}`;
   } else return;
@@ -234,6 +236,42 @@ export function syslogStats(state, d) {
   return { sent: c.sent || 0, lost: c.lost || 0, why: c.lostWhy || '' };
 }
 
+// ───────────────────────── 登入的連線 (vty) ─────────────────────────
+
+/** 登入之後可以閒置多久（秒）。0 代表不會自動登出。IOS 預設 10 分鐘 (exec-timeout 10 0)，FortiGate 預設 5 分鐘 (admintimeout 5) */
+export function idleLimit(d) {
+  const m = d.mgmt || {};
+  if (isIos(d)) return m.execTimeout == null || m.execTimeout === '' ? 600 : +m.execTimeout;
+  return (+m.adminTimeout > 0 ? +m.adminTimeout : 5) * 60;
+}
+/** 目前登入在這台設備上的遠端連線 */
+export const vtyRows = (state, d) => ((state.dyn && state.dyn.vty && state.dyn.vty[d.id]) || []);
+
+/** 設備這一端：閒置太久的登入連線主動切斷 */
+function pruneVty(state) {
+  const now = state.clock, down = state.down || {};
+  for (const [id, list] of Object.entries(state.dyn.vty || {})) {
+    const d = state.devices[id];
+    if (!d || down[id] || state.rt.off[id]) { delete state.dyn.vty[id]; continue; }
+    const lim = idleLimit(d);
+    state.dyn.vty[id] = list.filter((v) => {
+      if (!(lim > 0) || now - v.last < lim) return true;
+      closeFlow(state, v.cid);
+      logEvent(state, d, 6, '', '', `logid="0100032003" type="event" subtype="system" level="information" vd="root" logdesc="Admin logout successful" user="${v.user}" ui="${v.proto}(${v.ip})" action="logout" status="success" reason="timeout" msg="Administrator ${v.user} timed out on ${v.proto}(${v.ip})"`);
+      return false;
+    });
+  }
+  // login block-for 的安靜期結束
+  for (const [id, L] of Object.entries(state.dyn.login || {})) {
+    const d = state.devices[id];
+    if (!d) { delete state.dyn.login[id]; continue; }
+    if (L.quiet != null && now >= L.quiet) {
+      delete L.quiet; L.fails = [];
+      logEvent(state, d, 5, 'SEC_LOGIN-5-QUIET_MODE_OFF', `Quiet Mode is OFF, because block period timed out at ${iosClock(state, d)}`);
+    }
+  }
+}
+
 // ───────────────────────── 重新開機 ─────────────────────────
 
 /** reload 指令：下一次計算時把這台設備當成剛開機 */
@@ -242,10 +280,17 @@ export function markReboot(state, devId) {
   ((state.dyn.clk ||= {})[devId] ||= {}).reload = true;
 }
 
-/** 記憶體裡的東西全部消失：ARP、MAC 位址表、連線表、VPN 的 SA、紀錄緩衝區；時鐘重新開始，連接埠重新走一次 STP */
-function reboot(state, d) {
+/** 從按下電源（或 reload）到可以開始工作要多久（秒） */
+const BOOT_TIME = {
+  hub4: 2, sw5: 5, sw8: 5, homerouter: 60, ap: 60, erx: 60, c2960: 120, c2960p: 120, isr4321: 180, isr4331: 180, c9300: 240, n93180: 240, n9332: 240,
+  fg60f: 70, fg100f: 90, pc: 30, laptop: 20, phone: 20, printer: 30, wprinter: 30, nas: 90, tower: 90, rack1u: 150,
+};
+export const bootTime = (d) => BOOT_TIME[d.model] ?? 30;
+
+/** 記憶體裡的東西全部消失：ARP、MAC 位址表、連線表、VPN 的 SA、紀錄緩衝區、登入的連線；連接埠要重新走一次 STP */
+function wipe(state, d) {
   const dyn = state.dyn, c = (dyn.clk[d.id] ||= {});
-  for (const k of ['arp', 'mac', 'ct', 'log']) if (dyn[k]) delete dyn[k][d.id];
+  for (const k of ['arp', 'mac', 'ct', 'log', 'vty', 'login']) if (dyn[k]) delete dyn[k][d.id];
   for (const k of Object.keys(dyn.sa || {})) if (k.startsWith(d.id + '/')) delete dyn.sa[k];
   for (const cb of state.cables) {
     if (cb.a.dev !== d.id && cb.b.dev !== d.id) continue;
@@ -255,23 +300,31 @@ function reboot(state, d) {
   // OSPF 的鄰居關係要從頭建立
   for (const k of Object.keys(dyn.adj || {})) if (k.split('~').some((x) => x.startsWith(d.id + '/'))) delete dyn.adj[k];
   delete c.ntp; delete c.set; delete c.reload;
-  c.boot = state.clock;
-  c.restarted = true;
   delete (dyn.ev || {})[d.id];
 }
 
-/** 在每次重新計算之前呼叫：處理 reload，以及「關機之後又開機」 */
+/**
+ * 在每次重新計算之前呼叫：處理 reload，以及「關機之後又開機」。
+ * 開機需要時間：這段期間設備和關機沒有兩樣。回傳 { 設備 id: 還要幾秒 }。
+ */
 export function opsBefore(state) {
-  const dyn = state.dyn, down = state.down || {}, boot = !!dyn.boot;
+  const dyn = state.dyn, down = state.down || {}, first = !!dyn.boot, now = state.clock;
+  const booting = {};
   for (const d of Object.values(state.devices)) {
     const c = (dyn.clk[d.id] ||= {});
-    if (c.boot == null) c.boot = boot ? state.clock - UPTIME0 : state.clock;
+    if (c.boot == null) c.boot = first ? now - UPTIME0 : now;
     const dead = !!down[d.id];
-    if (c.reload && !dead) reboot(state, d);
-    else if (c.off && !dead) reboot(state, d);
+    // 按下 reload，或剛從關機變成開機：記憶體清空，開始計算開機時間
+    if (!dead && (c.reload || c.off)) { wipe(state, d); c.up = now + bootTime(d); }
     c.off = dead || undefined;
+    if (dead) delete c.up;
+    if (c.up != null) {
+      if (now >= c.up) { c.boot = c.up; c.restarted = true; delete c.up; } // 開機完成：時鐘從這一刻重新開始
+      else booting[d.id] = c.up - now;
+    }
     if (d.kind === 'internet') ensureInetNtp(d);
   }
+  return booting;
 }
 
 // ───────────────────────── 事件：比對前後兩次的狀態 ─────────────────────────
@@ -440,5 +493,6 @@ export function opsAfter(state) {
     dyn.ev[d.id] = snap;
   }
   for (const id of Object.keys(dyn.ev)) if (!state.devices[id]) delete dyn.ev[id];
+  pruneVty(state);
   flushSyslog(state);
 }

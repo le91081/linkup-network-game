@@ -3,7 +3,7 @@
 // 所以 show 印出來的內容可以整份貼到另一台 FortiGate 上，得到相同的設定。不依賴瀏覽器，可用 Node 測試。
 import { parseIp, fmtIp, parseMask, fmtMask, netOf } from './ip.js';
 import { SERVICE_NAMES, accessOf, sessionLog, routeRows, sessionRows, clearSessions, saInfo } from './sim.js';
-import { ntpInfo, plainStamp, logRows, clearLog, syslogStats } from './ops.js';
+import { ntpInfo, plainStamp, logRows, clearLog, syslogStats, vtyRows, markReboot, bootTime } from './ops.js';
 
 const ACCESS = ['ping', 'https', 'ssh', 'http', 'telnet'];
 const PROPOSALS = ['aes128-sha1', 'aes128-sha256', 'aes256-sha1', 'aes256-sha256'];
@@ -138,9 +138,16 @@ function parseProposals(toks) {
 
 const SEC = {
   'system global': {
-    single: true, fields: { hostname: 'q' },
-    read: (d) => [{ key: '', f: { hostname: [d.name] } }],
-    write(d, key, f) { if (f.hostname && f.hostname.length) d.name = f.hostname.join(' '); },
+    single: true, fields: { hostname: 'q', admintimeout: 'b' },
+    // admintimeout：管理者登入之後閒置幾分鐘自動登出（預設 5）
+    read: (d) => [{ key: '', f: { hostname: [d.name], ...(d.mgmt && +d.mgmt.adminTimeout > 0 && +d.mgmt.adminTimeout !== 5 ? { admintimeout: [String(d.mgmt.adminTimeout)] } : {}) } }],
+    write(d, key, f) {
+      const a = (f.admintimeout || [])[0];
+      if (a != null && (!/^\d+$/.test(a) || +a < 1 || +a > 480)) return ERR('admintimeout 必須是 1 – 480 分鐘（預設 5）');
+      if (f.hostname && f.hostname.length) d.name = f.hostname.join(' ');
+      if (d.mgmt) { if (a == null || +a === 5) delete d.mgmt.adminTimeout; else d.mgmt.adminTimeout = +a; }
+      return undefined;
+    },
   },
   'system interface': {
     noCreate: true, fields: { type: 'b', mode: 'b', ip: 'b', allowaccess: 'b', username: 'q', password: 'b' },
@@ -668,6 +675,10 @@ function getInfo(state, d, what) {
     return [`Version: FortiGate-${d.model === 'fg100f' ? '100F' : '60F'} v7.4（LinkUp 模擬）`, `Hostname: ${hostOf(d)}`, 'Operation Mode: NAT', 'Current virtual domain: root',
       `System time: ${s.day} ${s.mon} ${String(s.dd).padStart(2)} ${s.time} ${s.yyyy}`];
   }
+  if (what === 'system info admin status') {
+    const rows = vtyRows(state, d);
+    return ['Index  User name        Login type  From', ...rows.map((v, n) => `${String(n).padEnd(7)}${v.user.padEnd(17)}${v.proto.padEnd(12)}${v.ip}`), `logged in users: ${rows.length}`];
+  }
   if (what === 'system interface') {
     return d.ifaces.map((i) => `== [ ${i.id} ]\nname: ${i.id}   mode: ${i.mode}   ip: ${i.rt && i.rt.ip != null ? `${fmtIp(i.rt.ip)} ${fmtMask(i.rt.bits)}` : '0.0.0.0 0.0.0.0'}   status: ${i.rt && i.rt.link ? 'up' : 'down'}   allowaccess: ${accessOf(d, i).join(' ') || '(none)'}`).join('\n').split('\n');
   }
@@ -877,7 +888,7 @@ export function fortiSession(getDev, getState) {
     if (cmd === 'get') {
       if (t && t.t === 'edit') { for (const [k, v] of Object.entries(t.f)) out.push(`${k.padEnd(20)}: ${v.join(' ')}`); return res(); }
       const r = getInfo(st(), d, tok.slice(1).join(' ').toLowerCase());
-      if (!r) return fail([...parseErr(tok[1] || ''), '（可用：get system status、get system interface、get router info routing-table all、get vpn ipsec tunnel summary）']);
+      if (!r) return fail([...parseErr(tok[1] || ''), '（可用：get system status、get system interface、get system info admin status、get router info routing-table all、get vpn ipsec tunnel summary）']);
       out.push(...r);
       return res();
     }
@@ -890,6 +901,12 @@ export function fortiSession(getDev, getState) {
     if (cmd === 'execute' || cmd === 'exec') {
       if ((tok[1] || '').toLowerCase() === 'ping' && parseIp(tok[2] || '') != null) return res({ ping: tok[2] });
       const sub = tok.slice(1).join(' ').toLowerCase();
+      if (sub === 'reboot') {
+        // FortiGate 的設定是即時存檔的，重開機不會遺失設定；但記憶體裡的連線、紀錄都會消失
+        markReboot(st(), d.id);
+        out.push('This operation will reboot the system !', `System is rebooting...（大約 ${bootTime(d)} 秒後恢復）`);
+        return res({ changed: true, reloaded: true });
+      }
       if (sub === 'log display') { out.push(...diagnose(st(), d, 'log display')); return res(); }
       if (sub === 'log delete-all') { clearLog(st(), d); out.push('（紀錄已清除）'); return res(); }
       if (sub === 'date' || sub === 'time') {
@@ -898,7 +915,7 @@ export function fortiSession(getDev, getState) {
           ...(sub === 'time' ? [n.synced ? `last ntp sync: 已和 ${fmtIp(n.server)} 同步` : 'last ntp sync: 尚未同步（時間來自設備自己的硬體時鐘，可能有偏差）'] : []));
         return res();
       }
-      return fail('用法：execute ping <IP>、execute log display、execute date、execute time');
+      return fail('用法：execute ping <IP>、execute log display、execute date、execute time、execute reboot');
     }
     if (cmd === 'exit' || cmd === 'quit') return res();
     return fail([`Unknown action 0`, ...parseErr(tok[0])]);
