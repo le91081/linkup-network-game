@@ -9,7 +9,7 @@ import { cdpCfg, lldpCfg, portNd, setPortNd, speaksCdp, clearNeighbors, CDP_TIME
 import { parseDscp, dscpName, COS_DSCP_DEFAULT } from './qos.js';
 import { clearOspfProcess, ospfArea } from './ospf.js';
 import { transfer, configFile, ensureFlash, flashFree, flashPath, fsName, IMAGES, PLATFORM, PLATFORM_NAME, imageFile, fmtBytes } from './files.js';
-import { macsBehind, recompute, ospfOn } from './sim.js';
+import { macsBehind, recompute, ospfOn, ikeVer } from './sim.js';
 import { logEvent, markReboot, setClock, deviceTime, SEVERITY, bootTime } from './ops.js';
 import { spanDest } from './wire.js';
 import { genKey } from './remote.js';
@@ -79,7 +79,8 @@ const TYPES = { gi: 'gigabitethernet', te: 'tengigabitethernet', fa: 'fastethern
 const PROMPT = {
   exec: '#', config: '(config)#', if: '(config-if)#', vlan: '(config-vlan)#', router: '(config-router)#', dhcp: '(dhcp-config)#',
   line: '(config-line)#', acl: '(config-ext-nacl)#', stdacl: '(config-std-nacl)#', radius: '(config-radius-server)#',
-  isakmp: '(config-isakmp)#', tset: '(cfg-crypto-trans)#', cmap: '(config-crypto-map)#', bgp: '(config-router)#', rmap: '(config-route-map)#', qcmap: '(config-cmap)#', pmap: '(config-pmap)#', pmapc: '(config-pmap-c)#',
+  isakmp: '(config-isakmp)#', tset: '(cfg-crypto-trans)#', cmap: '(config-crypto-map)#',
+  ikev2prop: '(config-ikev2-proposal)#', ikev2pol: '(config-ikev2-policy)#', ikev2kr: '(config-ikev2-keyring)#', ikev2peer: '(config-ikev2-keyring-peer)#', ikev2prof: '(config-ikev2-profile)#', bgp: '(config-router)#', rmap: '(config-route-map)#', qcmap: '(config-cmap)#', pmap: '(config-pmap)#', pmapc: '(config-pmap-c)#',
 };
 const SERVICE_PORT = { www: 80, http: 80, https: 443, domain: 53, dns: 53, ssh: 22, telnet: 23, ftp: 21, smtp: 25, ntp: 123, snmp: 161, tftp: 69, bgp: 179 };
 
@@ -159,11 +160,40 @@ function isakmpOf(d) {
   if (d.isakmp && d.isakmp.length) return d.isakmp;
   const out = [];
   for (const t of d.vpns || []) {
+    if (ikeVer(d, t) === 2) continue; // IKEv2 的提案在 crypto ikev2 proposal
     const p = { enc: t.enc || 'aes128', hash: t.hash || 'sha1', dh: String(t.dh || '2') };
     if (!out.some((x) => x.enc === p.enc && x.hash === p.hash && x.dh === p.dh)) out.push({ n: (out.length + 1) * 10, ...p });
   }
   return out;
 }
+// ── IKEv2 ──
+const ENC_V2 = { 'aes-cbc-128': 'aes128', 'aes-cbc-256': 'aes256' }, ENC_V2_IOS = { aes128: 'aes-cbc-128', aes256: 'aes-cbc-256' };
+const HASH_V2 = { sha1: 'sha1', sha256: 'sha256' };
+const v2tag = (t) => String(t.name || 'VPN').replace(/[^\w.-]+/g, '_').toUpperCase();
+/**
+ * running-config 要印的 IKEv2 物件：CLI 建的照原樣，圖形介面設成 IKEv2 的通道（沒有 profile）換算成同樣格式的物件，
+ * 名稱固定，所以把設定貼回去之後會得到一模一樣的 running-config
+ */
+function ikev2Objects(d) {
+  const x = d.ikev2 || {};
+  const v = { props: { ...(x.props || {}) }, pols: { ...(x.pols || {}) }, krs: {}, profs: { ...(x.profs || {}) } };
+  for (const [k, kr] of Object.entries(x.krs || {})) v.krs[k] = { peers: { ...kr.peers } };
+  const prof = {};
+  for (const t of d.vpns || []) {
+    if (+t.ike !== 2 || t.ikev2) continue;
+    const enc = t.enc || 'aes128', hash = t.hash || 'sha1', dh = String(t.dh || '2');
+    const pn = `PROP-${enc.toUpperCase()}-${hash.toUpperCase()}-G${dh}`;
+    v.props[pn] ||= { encs: [enc], hashes: [hash], dhs: [dh] };
+    const pol = (v.pols['IKEV2-POLICY'] ||= { props: [] });
+    if (!pol.props.includes(pn)) v.pols['IKEV2-POLICY'] = { props: [...pol.props, pn] };
+    const kr = (v.krs['IKEV2-KEYS'] ||= { peers: {} });
+    kr.peers['PEER-' + v2tag(t)] = t.pskRemote ? { address: t.peer, pskLocal: t.psk, pskRemote: t.pskRemote } : { address: t.peer, psk: t.psk };
+    v.profs['PROF-' + v2tag(t)] = { remote: t.peer, keyring: 'IKEV2-KEYS' };
+    prof[t.name] = 'PROF-' + v2tag(t);
+  }
+  return { v, prof };
+}
+
 /** ACL 改了之後，把它套回引用這份 ACL 的通道 */
 function syncVpnAcl(d, name) {
   const rules = ((d.aclDefs || {})[name] || []).filter((r) => r.action === 'permit');
@@ -375,10 +405,15 @@ const HELP = {
   radius: ['address ipv4 <IP>', 'key <共用密鑰>'],
   isakmp: ['encryption aes | aes 256', 'hash sha | sha256', 'group 2 | 5 | 14 | 19', 'authentication pre-share'],
   tset: ['mode tunnel'],
+  ikev2prop: ['encryption aes-cbc-128 | aes-cbc-256', 'integrity sha1 | sha256', 'group 2 | 5 | 14 | 19'],
+  ikev2pol: ['proposal <名稱>'],
+  ikev2kr: ['peer <名稱>'],
+  ikev2peer: ['address <對端 IP>', 'pre-shared-key <金鑰>', 'pre-shared-key local <金鑰> / pre-shared-key remote <金鑰>'],
+  ikev2prof: ['match identity remote address <對端 IP> 255.255.255.255', 'authentication remote pre-share', 'authentication local pre-share', 'keyring local <名稱>'],
   qcmap: ['match dscp ef | af41 | cs3 | <0-63>', 'match access-group name <ACL>', 'match protocol rtp | sip', 'match cos <0-7>', 'match any'],
   pmap: ['class <class-map 名稱> | class class-default'],
   pmapc: ['priority percent <n> | priority <kbps>（LLQ：語音用）', 'bandwidth percent <n> | bandwidth remaining percent <n>', 'set dscp <值>', 'police cir <bps>', 'shape average <bps>', 'service-policy <子政策>（parent 做 shape、child 排隊）', 'fair-queue', 'queue-limit <n> packets'],
-  cmap: ['set peer <對端 IP>', 'set transform-set <名稱>', 'set pfs group14', 'match address <ACL 名稱>', 'description <通道名稱>'],
+  cmap: ['set peer <對端 IP>', 'set transform-set <名稱>', 'set pfs group14', 'set ikev2-profile <名稱>（改用 IKEv2）', 'match address <ACL 名稱>', 'description <通道名稱>'],
 };
 
 /**
@@ -1408,7 +1443,21 @@ export function iosSession(getDev, getState, who = null) {
       if (!d.vpns.some((v) => cmapOf(v) === name)) for (const i of d.ifaces) if (i.cmap === name) i.cmap = '';
       return undefined;
     }],
-    ['crypto <...>', () => err('這個模擬支援的 VPN 指令：crypto isakmp policy、crypto isakmp key、crypto ipsec transform-set、crypto map')],
+    ['crypto ikev2 proposal <name>', ([n]) => { const v = v2of(); if (!v) return err('這台設備不支援 IPsec VPN'); v.props[n] ||= { encs: [], hashes: [], dhs: [] }; enter('ikev2prop', n); return undefined; }],
+    ['no crypto ikev2 proposal <name>', ([n]) => { const v = v2of(); if (v) { delete v.props[n]; for (const x of Object.values(v.pols)) x.props = x.props.filter((y) => y !== n); } }],
+    ['crypto ikev2 policy <name>', ([n]) => { const v = v2of(); if (!v) return err('這台設備不支援 IPsec VPN'); v.pols[n] ||= { props: [] }; enter('ikev2pol', n); return undefined; }],
+    ['no crypto ikev2 policy <name>', ([n]) => { const v = v2of(); if (v) delete v.pols[n]; }],
+    ['crypto ikev2 keyring <name>', ([n]) => { const v = v2of(); if (!v) return err('這台設備不支援 IPsec VPN'); v.krs[n] ||= { peers: {} }; enter('ikev2kr', n); return undefined; }],
+    ['no crypto ikev2 keyring <name>', ([n]) => { const v = v2of(); if (v) delete v.krs[n]; }],
+    ['crypto ikev2 profile <name>', ([n]) => { const v = v2of(); if (!v) return err('這台設備不支援 IPsec VPN'); v.profs[n] ||= {}; enter('ikev2prof', n); return undefined; }],
+    ['no crypto ikev2 profile <name>', ([n]) => {
+      const v = v2of();
+      if (!v) return undefined;
+      if ((dev().vpns || []).some((t) => t.ikev2 === n)) return err(`IKEv2 profile ${n} 正被 crypto map 使用，先 no set ikev2-profile`);
+      delete v.profs[n];
+      return undefined;
+    }],
+    ['crypto <...>', () => err('這個模擬支援的 VPN 指令：crypto isakmp policy、crypto isakmp key、crypto ipsec transform-set、crypto ikev2 proposal / policy / keyring / profile、crypto map')],
   ];
 
   function setRsvMac(text) {
@@ -1417,6 +1466,15 @@ export function iosSession(getDev, getState, who = null) {
     if (p.iface) return err('這個位址池已經是一個網段，保留位址請另外建一個位址池');
     if (p.rsv) p.rsv.mac = mac; else { p.mac = mac; attachPools(dev()); }
     return undefined;
+  }
+
+  /** 整台的 IKEv2 物件（第一次用到時建立） */
+  function v2of() {
+    const d = dev();
+    if (!d.vpns || d.kind !== 'router') return null;
+    const v = (d.ikev2 ||= {});
+    for (const k of ['props', 'pols', 'krs', 'profs']) v[k] ||= {};
+    return v;
   }
 
   function cmapEnter([name, seq]) {
@@ -1703,6 +1761,62 @@ export function iosSession(getDev, getState, who = null) {
       ['no lifetime [...]', () => { delete S.cur.life; }],
     ],
     tset: [['mode <m>', () => undefined]],
+    ikev2prop: [
+      ['encryption <...>', ([list]) => {
+        const w = list.toLowerCase().split(/\s+/), v = w.map((x) => ENC_V2[x]);
+        if (v.some((x) => !x)) return err('這個模擬支援 encryption aes-cbc-128 與 aes-cbc-256（可以列好幾個）');
+        dev().ikev2.props[S.cur].encs = [...new Set(v)];
+        return undefined;
+      }],
+      ['integrity <...>', ([list]) => {
+        const w = list.toLowerCase().split(/\s+/), v = w.map((x) => HASH_V2[x]);
+        if (v.some((x) => !x)) return err('這個模擬支援 integrity sha1 與 sha256（可以列好幾個）');
+        dev().ikev2.props[S.cur].hashes = [...new Set(v)];
+        return undefined;
+      }],
+      ['group <...>', ([list]) => {
+        const w = list.split(/\s+/);
+        if (!w.every((g) => ['2', '5', '14', '19'].includes(g))) return err('DH 群組支援 2、5、14、19（可以列好幾個）');
+        dev().ikev2.props[S.cur].dhs = [...new Set(w)];
+        return undefined;
+      }],
+      ['prf <...>', () => undefined],
+    ],
+    ikev2pol: [
+      ['proposal <name>', ([n]) => {
+        const v = dev().ikev2;
+        if (!v.props[n]) return err(`% Proposal ${n} does not exist（先用 crypto ikev2 proposal 定義）`);
+        const pol = v.pols[S.cur];
+        if (!pol.props.includes(n)) pol.props.push(n);
+        return undefined;
+      }],
+      ['no proposal <name>', ([n]) => { const pol = dev().ikev2.pols[S.cur]; pol.props = pol.props.filter((x) => x !== n); }],
+      ['match <...>', () => undefined],
+    ],
+    ikev2kr: [
+      ['peer <name>', ([n]) => { dev().ikev2.krs[S.cur].peers[n] ||= {}; enter('ikev2peer', { kr: S.cur, peer: n }); return undefined; }],
+      ['no peer <name>', ([n]) => { delete dev().ikev2.krs[S.cur].peers[n]; }],
+    ],
+    ikev2peer: [
+      ['address <ip> [...]', ([ip]) => { if (parseIp(ip) == null) return err('用法：address <對端 IP>'); dev().ikev2.krs[S.cur.kr].peers[S.cur.peer].address = ip; return undefined; }],
+      ['pre-shared-key local <...>', ([k]) => { const x = dev().ikev2.krs[S.cur.kr].peers[S.cur.peer]; x.pskLocal = readSecret(k.split(/\s+/)); delete x.psk; }],
+      ['pre-shared-key remote <...>', ([k]) => { const x = dev().ikev2.krs[S.cur.kr].peers[S.cur.peer]; x.pskRemote = readSecret(k.split(/\s+/)); delete x.psk; }],
+      ['pre-shared-key <...>', ([k]) => { const x = dev().ikev2.krs[S.cur.kr].peers[S.cur.peer]; x.psk = readSecret(k.split(/\s+/)); delete x.pskLocal; delete x.pskRemote; }],
+      ['no pre-shared-key [...]', () => { const x = dev().ikev2.krs[S.cur.kr].peers[S.cur.peer]; delete x.psk; delete x.pskLocal; delete x.pskRemote; }],
+      ['description <...>', () => undefined],
+      // 在 peer 底下直接輸入下一個 peer：和 IOS 一樣回到 keyring 那一層
+      ['peer <name>', ([n]) => { const kr = S.cur.kr; dev().ikev2.krs[kr].peers[n] ||= {}; S.cur = { kr, peer: n }; return undefined; }],
+    ],
+    ikev2prof: [
+      ['match identity remote address <ip> [...]', ([ip]) => { if (parseIp(ip) == null) return err('用法：match identity remote address <對端 IP> 255.255.255.255'); dev().ikev2.profs[S.cur].remote = ip; return undefined; }],
+      ['no match identity remote [...]', () => { delete dev().ikev2.profs[S.cur].remote; }],
+      ['authentication <dir> pre-share', () => undefined],
+      ['authentication <...>', () => err('這個模擬只支援預先共用金鑰：authentication remote pre-share、authentication local pre-share')],
+      ['keyring local <name>', ([n]) => { if (!dev().ikev2.krs[n]) return err(`% Keyring ${n} does not exist（先用 crypto ikev2 keyring 定義）`); dev().ikev2.profs[S.cur].keyring = n; return undefined; }],
+      ['no keyring [...]', () => { delete dev().ikev2.profs[S.cur].keyring; }],
+      ['lifetime <n>', ([n]) => (/^\d+$/.test(n) && +n >= 120 && +n <= 86400 ? void (dev().ikev2.profs[S.cur].life = +n === 86400 ? undefined : +n) : err('lifetime 的範圍是 120 – 86400 秒'))],
+      ['dpd <...>', () => undefined],
+    ],
     bgp: [
       ['bgp router-id <ip>', ([ip]) => (parseIp(ip) == null ? err('用法：bgp router-id <A.B.C.D>') : void (dev().bgp.rid = ip))],
       ['no bgp router-id [...]', () => { delete dev().bgp.rid; }],
@@ -1804,6 +1918,7 @@ export function iosSession(getDev, getState, who = null) {
         const d = dev(), t = S.cur;
         t.peer = ip;
         if (d.ikeKeys && d.ikeKeys[ip]) t.psk = d.ikeKeys[ip];
+        if (t.ikev2) return undefined; // IKEv2 的金鑰在 keyring
         return t.psk ? undefined : `（還沒有給 ${ip} 的預先共用金鑰：crypto isakmp key <金鑰> address ${ip}）`;
       }],
       ['set transform-set <name>', ([name]) => {
@@ -1812,6 +1927,14 @@ export function iosSession(getDev, getState, who = null) {
         Object.assign(S.cur, { tset: name }, set);
         return undefined;
       }],
+      ['set ikev2-profile <name>', ([n]) => {
+        const v = (dev().ikev2 || {}).profs || {};
+        if (!v[n]) return err(`% IKEv2 profile ${n} does not exist（先用 crypto ikev2 profile 定義）`);
+        S.cur.ikev2 = n;
+        delete S.cur.ike;
+        return undefined;
+      }],
+      ['no set ikev2-profile [...]', () => { delete S.cur.ikev2; }],
       ['set pfs <g>', ([g]) => { const m = g.toLowerCase().match(/^group(2|5|14|19)$/); if (!m) return err('用法：set pfs group14（支援 group2、group5、group14、group19）'); S.cur.pfs = m[1]; return undefined; }],
       ['no set pfs', () => { S.cur.pfs = ''; }],
       ['set security-association lifetime seconds <n>', ([n]) => {
@@ -1937,6 +2060,7 @@ export function iosSession(getDev, getState, who = null) {
     };
     if (match(tok, 'end') || t0 === '^z') { S.mode = 'exec'; S.cur = null; return leave(); }
     if (match(tok, 'exit') && S.mode === 'pmapc') { S.mode = 'pmap'; S.cur = { pm: S.cur.pm }; return done(false); }
+    if (match(tok, 'exit') && S.mode === 'ikev2peer') { S.mode = 'ikev2kr'; S.cur = S.cur.kr; return done(false); }
     if (match(tok, 'exit')) {
       const top = S.mode === 'config';
       S.mode = top ? 'exec' : 'config'; S.cur = null;
@@ -2368,9 +2492,21 @@ export function runningConfig(state, dev) {
     const i = T.cfg && !T.cfg.cmap && T.localIp != null && dev.ifaces.find((x) => x.rt && x.rt.ip === T.localIp);
     if (i) cmIf.set(i, cmapOf(T.cfg));
   }
+  const v2 = ikev2Objects(dev);
+  {
+    const V = v2.v;
+    for (const [n, x] of Object.entries(V.props)) o.push(`crypto ikev2 proposal ${n}`, ...(x.encs.length ? [` encryption ${x.encs.map((e) => ENC_V2_IOS[e]).join(' ')}`] : []), ...(x.hashes.length ? [` integrity ${x.hashes.join(' ')}`] : []), ...(x.dhs.length ? [` group ${x.dhs.join(' ')}`] : []), '!');
+    for (const [n, x] of Object.entries(V.pols)) o.push(`crypto ikev2 policy ${n}`, ...x.props.map((y) => ` proposal ${y}`), '!');
+    for (const [n, x] of Object.entries(V.krs)) {
+      o.push(`crypto ikev2 keyring ${n}`);
+      for (const [pn, pe] of Object.entries(x.peers)) o.push(` peer ${pn}`, ...(pe.address ? [`  address ${pe.address}`] : []), ...(pe.psk ? [`  pre-shared-key ${pe.psk}`] : []), ...(pe.pskLocal ? [`  pre-shared-key local ${pe.pskLocal}`] : []), ...(pe.pskRemote ? [`  pre-shared-key remote ${pe.pskRemote}`] : []), ' !');
+      o.push('!');
+    }
+    for (const [n, x] of Object.entries(V.profs)) o.push(`crypto ikev2 profile ${n}`, ...(x.remote ? [` match identity remote address ${x.remote} 255.255.255.255`] : []), ' authentication remote pre-share', ' authentication local pre-share', ...(x.keyring ? [` keyring local ${x.keyring}`] : []), ...(+x.life > 0 ? [` lifetime ${x.life}`] : []), '!');
+  }
   if (vp.length || (dev.isakmp && dev.isakmp.length)) {
     for (const p of isakmpOf(dev)) o.push(`crypto isakmp policy ${p.n}`, ` encryption ${ENC_IOS[p.enc] || 'aes'}`, ` hash ${HASH_IOS[p.hash] || 'sha'}`, ' authentication pre-share', ` group ${p.dh}`, ...(+p.life > 0 && +p.life !== 86400 ? [` lifetime ${+p.life}`] : []));
-    for (const t of vp) if (t.psk && t.peer) o.push(`crypto isakmp key ${t.psk} address ${t.peer}`);
+    for (const t of vp) if (t.psk && t.peer && ikeVer(dev, t) === 1) o.push(`crypto isakmp key ${t.psk} address ${t.peer}`);
     if (dev.ikeKeepalive && +dev.ikeKeepalive.sec > 0) o.push(`crypto isakmp keepalive ${dev.ikeKeepalive.sec} ${dev.ikeKeepalive.retry || 2}`);
     if (+dev.ipsecLife > 0 && +dev.ipsecLife !== 3600) o.push(`crypto ipsec security-association lifetime seconds ${+dev.ipsecLife}`);
     o.push('!');
@@ -2383,6 +2519,7 @@ export function runningConfig(state, dev) {
       if (t.name && t.name !== `${cmapOf(t)}-${seqOf(dev, t)}`) o.push(` description ${t.name}`);
       if (t.peer) o.push(` set peer ${t.peer}`);
       o.push(` set transform-set ${tsetOf(t)}`);
+      if (t.ikev2 || v2.prof[t.name]) o.push(` set ikev2-profile ${t.ikev2 || v2.prof[t.name]}`);
       if (t.pfs) o.push(` set pfs group${t.pfs}`);
       if (+t.life2 > 0) o.push(` set security-association lifetime seconds ${+t.life2}`);
       o.push(` match address ${vpnAclOf(t)}`);
@@ -2571,10 +2708,6 @@ export function runningConfig(state, dev) {
     if (+nt[keys[0]] > 0) o.push(`ip nat translation ${name} ${+nt[keys[0]]}`);
   }
   if (out.some((i) => natList(i) === '1') && !(dev.aclDefs || {})['1']) o.push('access-list 1 permit any');
-  for (const i of out) {
-    if (i.natAcl || !splitList(i.natSkip).length) continue;
-    o.push('!', `ip access-list extended ${natList(i)}`, ...splitList(i.natSkip).map((n) => ' ' + aclLine({ action: 'deny', proto: 'ip', src: 'any', dst: n, port: '' })), ' permit ip any any');
-  }
   for (const i of dev.ifaces) {
     for (const [key, dir] of [['aclIn', 'in'], ['aclOut', 'out']]) {
       if (!i[key] || !i[key].length) continue;
@@ -2587,6 +2720,11 @@ export function runningConfig(state, dev) {
     if (!rules.length) continue;
     o.push('!', `ip access-list extended ${vpnAclOf(t)}`);
     for (const r of rules) o.push(' ' + aclLine(r));
+  }
+  // 圖形介面填的 NAT 例外：轉成一份 ACL。貼回去之後它是一般的具名 ACL，所以排在 VPN 的 ACL 後面
+  for (const i of out) {
+    if (i.natAcl || !splitList(i.natSkip).length) continue;
+    o.push('!', `ip access-list extended ${natList(i)}`, ...splitList(i.natSkip).map((n) => ' ' + aclLine({ action: 'deny', proto: 'ip', src: 'any', dst: n, port: '' })), ' permit ip any any');
   }
   for (const [name, list] of Object.entries(dev.aclDefs || {})) {
     if (!list.length || vp.some((t) => vpnAclOf(t) === name)) continue;

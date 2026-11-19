@@ -1759,6 +1759,55 @@ console.log('\nIPv6：DHCPv6 的旗標、OSPFv3、IPv6 ACL 與鄰居探索');
   }
 }
 
+console.log('\nIKEv2 與 Hub-and-Spoke：版本、IOS 的 ikev2 profile、PFS 要到重新協商才失敗、非對稱金鑰、分公司之間經過總公司');
+{
+  const { iosSession, runningConfig } = await import('../src/engine/ios.js');
+  const { iosRun } = await import('../src/ui/cli.js');
+  const { fortiSession } = await import('../src/engine/fortios.js');
+  const sim = await import('../src/engine/sim.js');
+  const ok = (cond, title) => (cond ? console.log('  ✔ ' + title) : fail(title));
+  const sessions = new WeakMap();
+  const sessOf = (s, id) => { const m = sessions.get(s) || new Map(); sessions.set(s, m); if (!m.has(id)) m.set(id, iosSession(() => s.devices[id], () => s)); return m.get(id); };
+  const run = (s, id, ...lines) => { const out = []; for (const line of lines) { const r = iosRun({ state: s }, id, sessOf(s, id), line, (l) => out.push(l)); if (r.changed) recompute(s); } return out; };
+  const forti = (s, id, ...lines) => { const sess = fortiSession(() => s.devices[id], () => s); const out = []; for (const l of lines) out.push(...sess.exec(l).out); recompute(s); return out; };
+  const s = LEVELS.find((l) => l.id === 'l54').setup(); recompute(s);
+  const tun = (id, name) => s.devices[id].vpns.find((x) => x.name === name);
+  const erp = () => sim.transact(s, 'kh-pc', { proto: 'tcp', dst: parseIp('10.1.0.10'), dport: 443 });
+  ok(/IKE 版本不一致/.test(tun('kh', 'HQ').rt.why) && tun('tc', 'HQ').rt.up && tun('tc', 'HQ').rt.ver === 1, '總公司往高雄是 IKEv2、高雄還是 IKEv1：IKE 版本不一致；台中的舊通道 (IKEv1) 照常運作');
+  run(s, 'kh', 'configure terminal', 'crypto ikev2 proposal P-AES256', 'encryption aes-cbc-256', 'integrity sha256', 'group 14', 'crypto ikev2 policy POL', 'proposal P-AES256',
+    'crypto ikev2 keyring KR', 'peer HQ', 'address 203.0.113.18', 'pre-shared-key Hub&Spoke#2026', 'exit', 'exit',
+    'crypto ikev2 profile PROF-HQ', 'match identity remote address 203.0.113.18 255.255.255.255', 'authentication remote pre-share', 'authentication local pre-share', 'keyring local KR',
+    'crypto map VPN 10', 'set ikev2-profile PROF-HQ', 'end');
+  const t = () => tun('kh', 'HQ').rt;
+  ok(t().up && t().ver === 2 && /PFS/.test(t().pfsBad) && erp().ok, 'IOS 用 crypto ikev2 profile 建好 IKEv2：總公司開了 PFS、高雄沒有，第一個 CHILD_SA 不做 DH，照樣建得起來（但有警告）');
+  ok(run(s, 'kh', 'show crypto ikev2 sa').some((l) => /^1 +192\.0\.2\.66\/500 +203\.0\.113\.18\/500 .*READY$/.test(l)) && run(s, 'kh', 'show crypto isakmp sa').some((l) => /show crypto ikev2 sa/.test(l)), 'show crypto ikev2 sa 是 READY；show crypto isakmp sa 只列 IKEv1 的 SA');
+  const rc = [].concat(runningConfig(s, s.devices.kh)).join('\n');
+  ok(rc.includes('crypto ikev2 keyring KR\n peer HQ\n  address 203.0.113.18\n  pre-shared-key Hub&Spoke#2026') && rc.includes(' set ikev2-profile PROF-HQ') && !rc.includes('crypto isakmp key'), 'IKEv2 的 keyring、profile 出現在 running-config，不再有 crypto isakmp key');
+  advance(s, 3601); recomputeNow(s);
+  ok(!t().up && /CHILD_SA 重新協商失敗/.test(t().why) && !erp().ok, '一小時後第一次重新協商 CHILD_SA（要交換 DH）：PFS 不一致，通道斷了');
+  run(s, 'kh', 'configure terminal', 'crypto map VPN 10', 'set pfs group14', 'end');
+  ok(t().up && !t().pfsBad, '高雄補上 set pfs group14 之後重新協商成功，通道恢復');
+  run(s, 'kh', 'configure terminal', 'crypto ikev2 keyring KR', 'peer HQ', 'pre-shared-key local KH-to-HQ!', 'pre-shared-key remote HQ-to-KH!', 'end');
+  ok(/AUTHENTICATION_FAILED/.test(t().why), '高雄改成兩把不同的金鑰，總公司還是同一把：IKEv2 驗證失敗 (AUTHENTICATION_FAILED)');
+  forti(s, 'hq', 'config vpn ipsec phase1-interface', 'edit "Kaohsiung"', 'set psksecret HQ-to-KH!', 'set psksecret-remote KH-to-HQ!', 'next', 'end');
+  ok(t().up, 'FortiGate 用 psksecret / psksecret-remote 對上：IKEv2 兩個方向各用一把金鑰，驗證通過');
+  ok(forti(s, 'hq', 'config vpn ipsec phase1-interface', 'edit "Taichung"', 'set psksecret-remote X', 'next', 'end').some((l) => /psksecret-remote 只有 IKEv2/.test(l)), 'IKEv1 的通道不能設 psksecret-remote');
+  // Hub-and-Spoke：分公司之間要經過總公司
+  const lv = LEVELS.find((l) => l.id === 'l54');
+  const s2 = lv.setup(); recompute(s2); lv.solve(s2); recompute(s2);
+  const ping = (x) => sim.transact(x, 'tc-pc', { proto: 'icmp', dst: parseIp('10.3.0.50') });
+  const r1 = ping(s2);
+  const dec = new Set(r1.log.filter((l) => l.kind === 'vpn' && /^解密/.test(l.text)).map((l) => l.dev));
+  ok(r1.ok && dec.has('hq') && dec.has('kh') && dec.has('tc'), '台中 → 高雄：在總公司解密、比對政策、再加密送往高雄（回程也一樣經過總公司）');
+  const hq = s2.devices.hq;
+  hq.policies = hq.policies.filter((x) => !(x.srcIf === 'vpn:Taichung' && x.dstIf === 'vpn:Kaohsiung'));
+  recompute(s2);
+  ok(!ping(s2).ok && /沒有符合的政策（VPN Taichung → VPN Kaohsiung）/.test(ping(s2).reason), '總公司少了 VPN → VPN 的政策：台中到高雄被擋，原因指出是哪兩個介面');
+  const s3 = lv.setup(); recompute(s3); lv.solve(s3); s3.devices.kh.ifaces[0].natSkip = '10.1.0.0/24'; recompute(s3);
+  const back = sim.transact(s3, 'kh-pc', { proto: 'icmp', dst: parseIp('10.2.0.50') });
+  ok(!back.ok && back.log.some((l) => /先做 NAT 再檢查 VPN/.test(l.text)), '高雄的 NAT 例外沒有加上台中：路由器先 NAT 再加密，往台中的流量沒有進通道');
+}
+
 // ── FortiGate 的 CLI ──
 console.log('\nFortiGate CLI');
 {

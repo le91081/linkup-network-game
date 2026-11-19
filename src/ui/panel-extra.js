@@ -507,7 +507,9 @@ export function vpnTab(ctx, body) {
         del(() => { dev.vpns.splice(n, 1); ctx.commit(true); })),
       grid2(
         field('對端公用 IP', inp(ctx, ...bind(t, 'peer'), { ph: '例如 203.0.113.18', check: isIp })),
-        field('預先共用金鑰 (PSK)', inp(ctx, ...bind(t, 'psk'), { ph: '兩端必須相同' })),
+        t.ikev2 ? null : field('預先共用金鑰 (PSK)', inp(ctx, ...bind(t, 'psk'), { ph: +t.ike === 2 ? '這一端用來簽的金鑰' : '兩端必須相同' })),
+        t.ikev2 ? null : field('IKE 版本', sel(ctx, () => String(+t.ike === 2 ? 2 : 1), (v) => { if (v === '2') t.ike = 2; else { delete t.ike; delete t.pskRemote; } }, [['1', 'IKEv1（Main Mode + Quick Mode）'], ['2', 'IKEv2（IKE_SA_INIT + IKE_AUTH）']], { rerender: true })),
+        !t.ikev2 && +t.ike === 2 ? field('對端的金鑰（選填）', inp(ctx, () => t.pskRemote || '', (v) => { if (v) t.pskRemote = v; else delete t.pskRemote; }, { ph: '留空＝和上面同一把；IKEv2 兩個方向可以不同' })) : null,
         field('本地網段', inp(ctx, ...bind(t, 'local'), { ph: '例如 10.2.0.0/24', check: isCidrList })),
         field('遠端網段', inp(ctx, ...bind(t, 'remote'), { ph: '例如 10.1.0.0/24', check: isCidrList })),
         !(dev.isakmp && dev.isakmp.length) && field('第一階段 (IKE) 加密', sel(ctx, () => t.enc || 'aes128', (v) => { t.enc = v; }, [['aes128', 'AES128'], ['aes256', 'AES256']])),
@@ -516,7 +518,8 @@ export function vpnTab(ctx, body) {
         field('第二階段 (IPsec) 加密', sel(ctx, () => t.enc2 || '', (v) => { t.enc2 = v; }, [['', '和第一階段相同'], ['aes128', 'AES128'], ['aes256', 'AES256']])),
         field('第二階段雜湊', sel(ctx, () => t.hash2 || '', (v) => { t.hash2 = v; }, [['', '和第一階段相同'], ['sha1', 'SHA1'], ['sha256', 'SHA256']])),
         field('PFS（第二階段再做一次 DH）', sel(ctx, () => t.pfs || '', (v) => { t.pfs = v; }, [['', '不使用'], ...DH_GROUPS]))),
-      dev.isakmp && dev.isakmp.length > 0 && note('muted', `第一階段的提案由 CLI 的 crypto isakmp policy 管理，整台設備共用：${dev.isakmp.map((p) => `#${p.n} ${P1(p)}`).join('；')}`),
+      t.ikev2 ? note('muted', `這個通道用 IKEv2：金鑰、提案與對端身分由 CLI 的 crypto ikev2 profile「${t.ikev2}」決定（keyring、policy、proposal）。`)
+        : +t.ike !== 2 && dev.isakmp && dev.isakmp.length > 0 && note('muted', `第一階段的提案由 CLI 的 crypto isakmp policy 管理，整台設備共用：${dev.isakmp.map((p) => `#${p.n} ${P1(p)}`).join('；')}`),
       grid2(
         !(dev.isakmp && dev.isakmp.length) && field('第一階段金鑰壽命（秒）', inp(ctx, () => t.life1 || '', (v) => { t.life1 = +v > 0 ? +v : undefined; }, { ph: '預設 86400', check: isNum(120, 172800) })),
         field('第二階段金鑰壽命（秒）', inp(ctx, () => t.life2 || '', (v) => { t.life2 = +v > 0 ? +v : undefined; }, { ph: dev.kind === 'firewall' ? '預設 43200' : '預設 3600', check: isNum(120, 172800) })),
@@ -524,12 +527,12 @@ export function vpnTab(ctx, body) {
           [['on-demand', '開啟：每 20 秒探測，三次沒回應就拆掉通道'], ['disable', '關閉：要等金鑰到期才會發現']]))),
       ctx.live(() => {
         const r = t.rt || {}, sa = saInfo(state, dev.id, t.name || 'VPN');
-        if (r.nego) return note('warn', `正在協商 (IKE)，大約再 ${Math.ceil(r.nego)} 秒建立。`);
+        if (r.nego) return note('warn', `正在協商 (${r.ver === 2 ? 'IKEv2' : 'IKE'})，大約再 ${Math.ceil(r.nego)} 秒建立。`);
         if (r.up && r.stale) {
           return note('warn', `這一端的通道看起來還是 Up，但對端已經沒有回應（${r.staleWhy}）。再 ${fmtDur(r.stale - state.clock)} 才會判定失聯${dev.kind === 'firewall' || dev.ikeKeepalive ? '' : '：沒有設定 keepalive，只能等金鑰到期'}，這段時間往對端的封包都會被丟掉。`);
         }
         if (!r.up) return note('warn', '通道未建立：' + (r.why || '設定中'));
-        return [note('ok', '通道已建立 (Up)'), sa && h('div', { class: 'kv ok' },
+        return [note('ok', `通道已建立 (Up) · IKEv${r.ver || 1}`), r.pfsBad && note('warn', `${r.pfsBad}。IKEv2 的第一個 CHILD_SA 是在 IKE_AUTH 裡建立的，不做 PFS，所以現在通；${fmtDur(Math.max(0, r.rekeyFail - state.clock))}後第一次重新協商時會失敗，通道就斷了。`), sa && h('div', { class: 'kv ok' },
           kv('第一階段金鑰', `剩 ${fmtDur(sa.left1)}`), kv('第二階段金鑰', `剩 ${fmtDur(sa.left2)}${sa.rekey2 ? `（已更新 ${sa.rekey2} 次）` : ''}`),
           kv('加密 / 解密的封包', `${sa.tx} / ${sa.rx}`))];
       }),

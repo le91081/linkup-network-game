@@ -27,7 +27,7 @@ export const LEVEL_TOPIC = {
   l40: 'ops', l41: 'ops', l42: 'ops', l43: 'ops',
   l44: 'switching', l45: 'ops', l46: 'security',
   l47: 'routing', l48: 'routing', l49: 'routing', l50: 'routing',
-  l51: 'ipv6', l52: 'ipv6', l53: 'ipv6',
+  l51: 'ipv6', l52: 'ipv6', l53: 'ipv6', l54: 'vpn',
 };
 
 export const QUESTIONS = {
@@ -156,6 +156,10 @@ export const QUESTIONS = {
     { q: '一台完全沒有 IPv4 位址的路由器啟用 OSPFv3，出現 %OSPFv3-4-NORTRID。該怎麼辦？', a: ['重新設定 IPv6 位址', '在 ipv6 router ospf 底下手動設定 router-id（OSPFv3 的 Router ID 仍然是 32 位元）', '建立一個 IPv6 的 Loopback', '把 area 改成 0'], c: 1, e: 'OSPFv3 的 Router ID 和 OSPFv2 一樣是 IPv4 格式的 32 位元數字，只能從 IPv4 位址自動挑選。純 IPv6 的路由器一定要手動設定。', r: 'Network+ 2.1' },
     { q: '一份 IPv6 ACL 只有 permit tcp any host 2001:db8:10::10 eq 80 和 deny ipv6 any any 兩條，套到訪客介面的 in 方向之後，訪客整個 IPv6 都斷了。為什麼？', a: ['方向應該是 out', '自己寫的 deny ipv6 any any 排在隱含的 permit icmp nd-ns / nd-na 前面，鄰居探索被擋掉，連閘道都找不到', 'IPv6 不支援具名 ACL', '要用 ip access-group 套用'], c: 1, e: '每份 IPv6 ACL 結尾隱含允許 nd-na、nd-ns，再拒絕全部。自己在最後寫了 deny ipv6 any any，就要在它前面明確 permit icmp any any nd-ns 與 nd-na。', r: 'CCNA 5.6' },
     { q: '雙協定的網路，介面上已經用 IPv4 ACL 擋掉訪客 SSH 到伺服器。訪客改用 IPv6 呢？', a: ['一樣被擋', '不受影響：IPv4 的 ACL 完全管不到 IPv6，要另外寫 IPv6 ACL 並用 ipv6 traffic-filter 套用', '只擋得到一半', '看 ACL 的序號'], c: 1, e: 'IPv4 與 IPv6 是兩套各自獨立的位址、路由表與過濾規則。導入 IPv6 時，每一條 IPv4 的防護都要再寫一次。', r: 'CCNA 5.6' },
+    { q: '五個分公司都要和總公司、也要彼此互通。用 Hub-and-Spoke 和全網狀 (full mesh) 各需要幾條通道？', a: ['5 條與 10 條', '5 條與 15 條', '6 條與 30 條', '10 條與 5 條'], c: 1, e: '六個據點：Hub-and-Spoke 只要分公司各一條連總公司，共 5 條；全網狀每兩個據點一條，6 × 5 ÷ 2 = 15 條。代價是 Hub-and-Spoke 的分公司之間要繞經總公司。', r: 'CCNA 5.5' },
+    { q: 'Hub-and-Spoke 的 VPN，台中 PC ping 高雄 PC 時封包在總公司防火牆上經過了什麼？', a: ['直接轉送，不用解密', '從台中的通道解密、比對防火牆政策（VPN → VPN）、再加密送進高雄的通道', '交給網際網路轉送', '只要路由正確就好，不需要政策'], c: 1, e: '總公司要有一條從台中的 VPN 介面到高雄的 VPN 介面的政策；兩條通道的加密範圍也都要包含對方分公司的網段。', r: 'CCNA 5.5' },
+    { q: '總公司的防火牆改用 IKEv2，分公司還是 IKEv1。會發生什麼事？', a: ['自動降回 IKEv1', '協商失敗：IKEv1 的一端聽不懂 IKE_SA_INIT', '可以通，但比較慢', '只有第二階段會失敗'], c: 1, e: '兩端的 IKE 版本必須一致。IKEv2 用 IKE_SA_INIT + IKE_AUTH 四個訊息建立 IKE SA 與第一個 CHILD_SA；IKEv1 是 Main Mode（或 Aggressive Mode）加 Quick Mode。', r: 'CCNA 5.5' },
+    { q: 'IKEv2 通道一端開了 PFS (DH 14)、另一端沒開。通道會怎樣？', a: ['完全建不起來', '一開始通，到第一次重新協商 CHILD_SA 時失敗，通道就斷了', '永遠正常', '只有 IKE SA 會斷'], c: 1, e: '第一個 CHILD_SA 是在 IKE_AUTH 裡順便建立的，不做 DH 交換，所以 PFS 不一致也建得起來；重新協商 (CREATE_CHILD_SA) 時才要交換 DH，這時才失敗。IOS 的 IPsec SA 預設一小時重新協商一次。', r: 'Security+ 3.2' },
     { q: '控制器式網路中，「南向介面 (southbound API)」連接的是什麼？', a: ['控制器與應用程式', '控制器與網路設備', '兩台控制器之間', '使用者與網頁介面'], c: 1, e: '南向介面讓控制器下達指令給設備（例如 NETCONF、OpenFlow）；北向介面則提供給上層的應用程式與自動化工具呼叫。', r: 'CCNA 6.3' },
   ],
 };

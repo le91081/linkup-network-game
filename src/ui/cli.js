@@ -10,6 +10,7 @@ import { cdpCfg, lldpCfg, cdpOn, lldpTxOn, lldpRxOn, neighbors, ndCounters, cdpC
 import { dscpName, COS_DSCP_DEFAULT, portTrust, egressOf, classify, QLIMIT } from '../engine/qos.js';
 import { ospfArea, ospfCost, ospfPassive, ospfHello, ospfDead, ospfPrio, ospfNetType, isLoopback } from '../engine/ospf.js';
 import { bgpCfg } from '../engine/bgp.js';
+import { ikeVer } from '../engine/sim.js';
 import { iosClock, deviceTime, ntpInfo, logRows, clearLog, syslogStats, uptimeOf, routerId, longIf, SEVERITY, NTP_POLL, vtyRows, idleLimit } from '../engine/ops.js';
 import { quietLeft } from '../engine/remote.js';
 import { counters, clearCounters, clearedAt, spanDest, debugOf, setDebug, consoleRows } from '../engine/wire.js';
@@ -245,13 +246,33 @@ const SHOW = {
   },
   'show crypto isakmp sa': (st, d) => {
     const o = ['IPv4 Crypto ISAKMP SA', pad('dst', 16) + pad('src', 16) + pad('state', 15) + pad('conn-id', 8) + 'status'];
-    cryptoTunnels(d).forEach(({ t }, n) => {
+    cryptoTunnels(d).filter(({ t }) => ikeVer(d, t.cfg) === 1).forEach(({ t }, n) => {
       const sa = saInfo(st, d.id, t.name);
       if (sa) o.push(pad(fmtIp(t.peerIp), 16) + pad(fmtIp(t.localIp), 16) + pad('QM_IDLE', 15) + pad(1001 + n, 8) + 'ACTIVE' + (t.stale ? '   （對端已經沒有回應，這筆 SA 還沒過期）' : ''));
       else if (t.nego) o.push(pad(fmtIp(t.peerIp), 16) + pad(fmtIp(t.localIp), 16) + pad('MM_KEY_EXCH', 15) + pad(0, 8) + 'ACTIVE');
     });
-    if (o.length === 2) o.push('', '（沒有任何 IKE SA' + (cryptoTunnels(d).length ? '：' + cryptoTunnels(d).map(({ t }) => `${t.name} — ${t.why || '尚未建立'}`).join('；') : '') + '）');
+    const v1 = cryptoTunnels(d).filter(({ t }) => ikeVer(d, t.cfg) === 1);
+    if (o.length === 2) o.push('', '（沒有任何 IKEv1 的 SA' + (v1.length ? '：' + v1.map(({ t }) => `${t.name} — ${t.why || '尚未建立'}`).join('；') : '') + (cryptoTunnels(d).length > v1.length ? '。IKEv2 的通道請用 show crypto ikev2 sa' : '') + '）');
     return o;
+  },
+  'show crypto ikev2 sa': (st, d) => {
+    const list = cryptoTunnels(d).filter(({ t }) => ikeVer(d, t.cfg) === 2);
+    const o = [' IPv4 Crypto IKEv2  SA ', '', pad('Tunnel-id', 10) + pad('Local', 22) + pad('Remote', 22) + pad('fvrf/ivrf', 21) + 'Status'];
+    list.forEach(({ t }, n) => {
+      const sa = saInfo(st, d.id, t.name);
+      if (!sa && !t.nego) return;
+      o.push(pad(n + 1, 10) + pad(`${fmtIp(t.localIp)}/500`, 22) + pad(`${fmtIp(t.peerIp)}/500`, 22) + pad('none/none', 21) + (sa ? 'READY' : 'IN-NEG'));
+      if (sa) o.push(`      Encr: AES-CBC, keysize: ${(t.cfg.enc || 'aes128') === 'aes256' ? 256 : 128}, PRF: ${(t.cfg.hash || 'sha1').toUpperCase()}, Hash: ${(t.cfg.hash || 'sha1').toUpperCase()}96, DH Grp:${t.cfg.dh || 2}, Auth sign: PSK, Auth verify: PSK`,
+        `      Life/Active Time: ${sa.life1}/${sa.life1 - sa.left1} sec`, ...(t.pfsBad ? [`      （注意：${t.pfsBad}。第一次重新協商 CHILD_SA 時會失敗，還有 ${Math.max(0, Math.ceil(t.rekeyFail - st.clock))} 秒）`] : []));
+    });
+    if (o.length === 3) o.push('', '（沒有任何 IKEv2 SA' + (list.length ? '：' + list.map(({ t }) => `${t.name} — ${t.why || '尚未建立'}`).join('；') : '：crypto map 要 set ikev2-profile 才會用 IKEv2') + '）');
+    return o;
+  },
+  'show crypto ikev2 profile': (st, d) => {
+    const profs = Object.entries((d.ikev2 || {}).profs || {});
+    if (!profs.length) return ['（沒有任何 IKEv2 profile）'];
+    return profs.flatMap(([n, x]) => [`IKEv2 profile: ${n}`, ' Ref Count: ' + (d.vpns || []).filter((t) => t.ikev2 === n).length, ' Match criteria:', '  Fvrf: global', '  Local address/interface: none', '  Identities:', `   address ${x.remote || '(none)'} 255.255.255.255`,
+      ' Local identity: none', ' Remote identity: none', ' Local authentication method: pre-share', ' Remote authentication method(s): pre-share', ` Keyring: ${x.keyring || '(none)'}`, ` Lifetime: ${+x.life || 86400} seconds`, '']);
   },
   'show crypto ipsec sa': (st, d) => {
     const list = cryptoTunnels(d);

@@ -475,14 +475,14 @@ const SEC = {
   },
   'vpn ipsec phase1-interface': {
     only: (d) => !!d.vpns,
-    fields: { type: 'b', interface: 'q', 'ike-version': 'b', peertype: 'b', 'net-device': 'b', proposal: 'b', dhgrp: 'b', 'remote-gw': 'b', psksecret: 'b', comments: 'q', keylife: 'b', dpd: 'b', 'dpd-retrycount': 'b', 'dpd-retryinterval': 'b', nattraversal: 'b' },
+    fields: { type: 'b', interface: 'q', 'ike-version': 'b', peertype: 'b', 'net-device': 'b', proposal: 'b', dhgrp: 'b', 'remote-gw': 'b', psksecret: 'b', 'psksecret-remote': 'b', comments: 'q', keylife: 'b', dpd: 'b', 'dpd-retrycount': 'b', 'dpd-retryinterval': 'b', nattraversal: 'b' },
     read: (d) => tunnels(d).map((t) => ({
       key: t.name,
       f: {
-        interface: [wanOf(d, t)], peertype: ['any'], 'net-device': ['disable'],
+        interface: [wanOf(d, t)], ...(+t.ike === 2 ? { 'ike-version': ['2'] } : {}), peertype: ['any'], 'net-device': ['disable'],
         proposal: t.props && t.props.length ? t.props : [`${t.enc || 'aes128'}-${t.hash || 'sha1'}`],
         dhgrp: t.dhs && t.dhs.length ? t.dhs : [String(t.dh || '2')],
-        ...(t.peer ? { 'remote-gw': [t.peer] } : {}), ...(t.psk ? { psksecret: [t.psk] } : {}),
+        ...(t.peer ? { 'remote-gw': [t.peer] } : {}), ...(t.psk ? { psksecret: [t.psk] } : {}), ...(+t.ike === 2 && t.pskRemote ? { 'psksecret-remote': [t.pskRemote] } : {}),
         // 只有改過的才會出現在設定裡：金鑰壽命預設 86400 秒，DPD 預設 on-demand、每 20 秒一次、重試 3 次
         ...(+t.life1 > 0 ? { keylife: [String(t.life1)] } : {}), ...(t.dpd ? { dpd: [t.dpd] } : {}),
         ...(+t.dpdRetry > 0 ? { 'dpd-retrycount': [String(t.dpdRetry)] } : {}), ...(+t.dpdInterval > 0 ? { 'dpd-retryinterval': [String(t.dpdInterval)] } : {}),
@@ -490,7 +490,9 @@ const SEC = {
     })),
     write(d, key, f, sub, st, isNew) {
       if ((f.type || ['static'])[0] !== 'static') return ERR('這個模擬的 IPsec 只支援站對站（type static）。使用者撥入請用 SSL-VPN：config vpn ssl settings');
-      if ((f['ike-version'] || ['1'])[0] !== '1') return ERR('這個模擬只有 IKEv1');
+      const ike = (f['ike-version'] || ['1'])[0];
+      if (!['1', '2'].includes(ike)) return ERR('ike-version 可用的值：1、2');
+      if (f['psksecret-remote'] && ike !== '2') return ERR('psksecret-remote 只有 IKEv2 才能用（set ike-version 2）');
       if (!f.interface || !d.ifaces.some((i) => i.id === f.interface[0])) return notFound('要指定通道從哪個介面出去：set interface "wan1"');
       const props = f.proposal ? parseProposals(f.proposal) : isNew ? P1_DEFAULT : null;
       if (!props) return ERR(`proposal 可用的值：${PROPOSALS.join(' ')}（可以列好幾組）`);
@@ -508,7 +510,8 @@ const SEC = {
       let t = tunnels(d).find((x) => x.name === key);
       if (!t) { t = { name: key, peer: '', psk: '', local: '', remote: '', manualRoute: true, routes: [] }; d.vpns.push(t); }
       const [enc, hash] = props[0].split('-');
-      Object.assign(t, { wan: f.interface[0], peer: gw, psk: (f.psksecret || []).join(' '), enc, hash, dh: dhs[0], props: props.length > 1 ? props : undefined, dhs: dhs.length > 1 ? dhs : undefined });
+      Object.assign(t, { wan: f.interface[0], peer: gw, psk: (f.psksecret || []).join(' '), enc, hash, dh: dhs[0], props: props.length > 1 ? props : undefined, dhs: dhs.length > 1 ? dhs : undefined,
+        ike: ike === '2' ? 2 : undefined, pskRemote: ike === '2' && f['psksecret-remote'] ? f['psksecret-remote'].join(' ') : undefined });
       Object.assign(t, {
         life1: life && life !== 86400 ? life : undefined, dpd: dpd === 'on-demand' ? undefined : dpd,
         dpdRetry: dr && dr !== 3 ? dr : undefined, dpdInterval: di && di !== 20 ? di : undefined,
@@ -766,7 +769,7 @@ function diagnose(state, d, what, raw = what) {
     return ['list all ipsec tunnel in vd 0', ...ts.flatMap((t) => {
       const sa = saInfo(state, d.id, t.name), dpd = t.dpd || 'on-demand';
       return ['------------------------------------------------------',
-        `name=${t.name} ver=1 ${wanOf(d, t)} -> ${t.peer || '0.0.0.0'}`,
+        `name=${t.name} ver=${+t.ike === 2 ? 2 : 1} ${wanOf(d, t)} -> ${t.peer || '0.0.0.0'}`,
         `status=${t.rt && t.rt.up ? 'up' : 'down'}${t.rt && !t.rt.up && t.rt.why ? `  (${t.rt.why})` : ''}${t.rt && t.rt.stale ? `  (對端已經沒有回應，DPD 探測中，再 ${Math.ceil(t.rt.stale - state.clock)} 秒判定失聯)` : ''}`,
         `stat: rxp=${sa ? sa.rx : 0} txp=${sa ? sa.tx : 0}`,
         `dpd: mode=${dpd} on=${dpd === 'disable' ? 0 : 1} idle=${(+t.dpdInterval || 20) * 1000}ms retry=${+t.dpdRetry || 3}`,
@@ -779,9 +782,10 @@ function diagnose(state, d, what, raw = what) {
     if (!ts.length) return ['沒有任何 IPsec 通道'];
     return ts.flatMap((t) => {
       const sa = saInfo(state, d.id, t.name);
-      return ['', 'vd: root/0', `name: ${t.name}`, 'version: 1', `interface: ${wanOf(d, t)}`, `addr: ${wanOf(d, t)}:500 -> ${t.peer || '0.0.0.0'}:500`,
+      return ['', 'vd: root/0', `name: ${t.name}`, `version: ${+t.ike === 2 ? 2 : 1}`, `interface: ${wanOf(d, t)}`, `addr: ${wanOf(d, t)}:500 -> ${t.peer || '0.0.0.0'}:500`,
         ...(sa ? [`created: ${sa.age}s ago`, 'IKE SA: created 1/1  established 1/1', 'IPsec SA: created 1/1  established 1/1', '  status: established',
-          `  proposal: ${t.enc || 'aes128'}-${t.hash || 'sha1'}`, `  lifetime/rekey: ${sa.life1}/${sa.left1}`]
+          `  proposal: ${t.enc || 'aes128'}-${t.hash || 'sha1'}`, `  lifetime/rekey: ${sa.life1}/${sa.left1}`,
+          ...(t.rt && t.rt.pfsBad ? [`  （注意：${t.rt.pfsBad}。IKEv2 的第一個 CHILD_SA 不做 PFS，現在通，${Math.max(0, Math.ceil(t.rt.rekeyFail - state.clock))} 秒後第一次重新協商時會失敗）`] : [])]
           : [`  status: ${t.rt && t.rt.nego ? 'connecting' : 'not established'}${t.rt && t.rt.why ? `（${t.rt.why}）` : ''}`])];
     });
   }
