@@ -1528,6 +1528,94 @@ console.log('\n語音與 QoS：PoE、語音 VLAN、註冊、LLQ、整形、信�
   }
 }
 
+console.log('\nOSPF 進階：DR / BDR、計時器、MTU、被動介面、多區域、等價多路徑');
+{
+  const { iosSession, runningConfig } = await import('../src/engine/ios.js');
+  const { makeState, makeDevice } = await import('../src/engine/model.js');
+  const sim = await import('../src/engine/sim.js');
+  const ok = (cond, title) => (cond ? console.log('  ✔ ' + title) : fail(title));
+  const ios = (s, id, lines) => { const sess = iosSession(() => s.devices[id], () => s); const out = []; for (const l of lines) out.push(...sess.exec(l).out); return out; };
+  const nb = (s, a, b) => (s.devices[a].rt.nbrs || []).find((n) => n.dev === b);
+  // 四台路由器接在同一台交換器上（廣播網段 10.0.0.0/24），R1 另外用點對點的線接 R5（area 1）
+  const mk = () => {
+    const s = makeState([makeDevice('c2960', 'sw', { name: 'SW' }), ...[1, 2, 3, 4, 5].map((n) => makeDevice('isr4331', 'r' + n, { name: 'R' + n }))],
+      [['r1:Gi0/0/0', 'sw:Gi0/1'], ['r2:Gi0/0/0', 'sw:Gi0/2'], ['r3:Gi0/0/0', 'sw:Gi0/3'], ['r4:Gi0/0/0', 'sw:Gi0/4'], ['r1:Gi0/0/1', 'r5:Gi0/0/1']]);
+    s.devices.sw.sw.stp.portfastDefault = true;
+    for (const n of [1, 2, 3, 4]) ios(s, 'r' + n, ['configure terminal', 'interface lo0', `ip address ${n}.${n}.${n}.${n} 255.255.255.255`, 'interface gi0/0/0', `ip address 10.0.0.${n} 255.255.255.0`, 'no shutdown', 'router ospf 1', 'network 10.0.0.0 0.0.0.255 area 0', `network ${n}.${n}.${n}.${n} 0.0.0.0 area 0`, 'end']);
+    ios(s, 'r1', ['configure terminal', 'interface gi0/0/1', 'ip address 10.1.15.1 255.255.255.252', 'ip ospf network point-to-point', 'no shutdown', 'router ospf 1', 'network 10.1.15.0 0.0.0.3 area 1', 'end']);
+    ios(s, 'r5', ['configure terminal', 'interface lo0', 'ip address 10.1.5.5 255.255.255.0', 'interface lo1', 'ip address 10.1.6.5 255.255.255.0', 'interface gi0/0/1', 'ip address 10.1.15.2 255.255.255.252', 'ip ospf network point-to-point', 'no shutdown',
+      'router ospf 1', 'network 10.1.0.0 0.0.255.255 area 1', 'end']);
+    settle(s);
+    return s;
+  };
+  {
+    const s = mk();
+    const roles = [1, 2, 3, 4].map((n) => s.devices['r' + n].rt.ospf.ifs['Gi0/0/0'].state).join(',');
+    ok(roles === 'DROTHER,DROTHER,BDR,DR' && nb(s, 'r1', 'r2').state === '2way' && nb(s, 'r1', 'r4').state === 'full' && nb(s, 'r1', 'r4').role === 'DR',
+      `DR 選舉：priority 一樣時 Router ID 最大的 R4 當 DR、R3 當 BDR；兩台 DROTHER 之間只到 2WAY（${roles}）`);
+    ok(s.devices.r1.rt.ospf.rid === 0x01010101 && s.devices.r2.rt.routes.some((r) => r.net === 0x0a010505 && r.bits === 32) && s.devices.r2.rt.routes.some((r) => r.net === 0x04040404 && r.bits === 32 && r.type === 'O'),
+      'Router ID 用 Loopback；Loopback 不管遮罩，一律以 /32 通告');
+    const r5 = s.devices.r2.rt.routes.filter((r) => r.type === 'O' && r.sub === 'IA').map((r) => `${r.net >>> 0}/${r.bits}`);
+    ok(r5.length >= 3 && s.devices.r1.rt.ospf.abr && s.devices.r5.rt.routes.some((r) => r.sub === 'IA' && r.net === 0x04040404),
+      `多區域：R1 是 ABR，R2 從 area 1 學到 O IA 路由（${r5.length} 筆），R5 也學到骨幹的網段`);
+    ios(s, 'r1', ['configure terminal', 'router ospf 1', 'area 1 range 10.1.0.0 255.255.0.0', 'end']); settle(s);
+    const ia = s.devices.r2.rt.routes.filter((r) => r.sub === 'IA');
+    ok(ia.length === 1 && ia[0].bits === 16, 'area 1 range：ABR 把 area 1 的網段彙總成一筆 10.1.0.0/16 送進骨幹');
+    // 後來加入、priority 最高的路由器不會搶走 DR
+    const late = makeState([]); void late;
+    ios(s, 'r2', ['configure terminal', 'interface gi0/0/0', 'ip ospf priority 255', 'end']); settle(s);
+    ok(s.devices.r4.rt.ospf.ifs['Gi0/0/0'].state === 'DR' && s.devices.r2.rt.ospf.ifs['Gi0/0/0'].state === 'DROTHER', 'DR 選出來之後不會被搶走：R2 把 priority 改成 255 也不會馬上變成 DR');
+    s.down = { r4: true }; recomputeNow(s); advance(s, 41); settle(s);
+    ok(s.devices.r3.rt.ospf.ifs['Gi0/0/0'].state === 'DR' && s.devices.r2.rt.ospf.ifs['Gi0/0/0'].state === 'BDR', 'DR 斷電：BDR (R3) 接手當 DR，再補選 BDR（priority 255 的 R2）');
+    delete s.down;
+    ios(s, 'r1', ['configure terminal', 'interface gi0/0/0', 'ip ospf priority 0', 'end']); settle(s);
+    ok(s.devices.r1.rt.ospf.ifs['Gi0/0/0'].state === 'DROTHER' && runningConfig(s, s.devices.r1).includes(' ip ospf priority 0'), 'priority 0：永遠不當 DR / BDR');
+  }
+  {
+    const s = mk();
+    ios(s, 'r2', ['configure terminal', 'interface gi0/0/0', 'ip ospf hello-interval 5', 'end']); settle(s);
+    const why = s.devices.r2.rt.ospf.ifs['Gi0/0/0'].why.join(' ');
+    ok(!nb(s, 'r2', 'r1') && /Hello \/ Dead 計時器不一致/.test(why), 'Hello 計時器不一致：成為不了鄰居，show ip ospf interface 會說原因');
+    ios(s, 'r2', ['configure terminal', 'interface gi0/0/0', 'no ip ospf hello-interval', 'ip mtu 1400', 'end']); settle(s);
+    ok(nb(s, 'r2', 'r4') && nb(s, 'r2', 'r4').state === 'exstart' && /MTU/.test(nb(s, 'r2', 'r4').note), 'MTU 不一致：鄰居卡在 EXSTART');
+    ios(s, 'r2', ['configure terminal', 'interface gi0/0/0', 'ip ospf mtu-ignore', 'end']); settle(s);
+    ok(nb(s, 'r2', 'r4').state === 'full', 'ip ospf mtu-ignore：不檢查 MTU，鄰居進到 FULL');
+    ios(s, 'r3', ['configure terminal', 'router ospf 1', 'passive-interface gi0/0/0', 'end']); settle(s);
+    ok(!nb(s, 'r3', 'r4') && s.devices.r4.rt.routes.some((r) => r.net === 0x03030303) === false && s.devices.r3.rt.ospf.ifs['Gi0/0/0'].state === 'PASSIVE',
+      '被動介面：不送 Hello，R3 和大家都不是鄰居了（它的 Loopback 也就傳不出去）');
+    ios(s, 'r1', ['configure terminal', 'interface gi0/0/0', 'ip ospf authentication message-digest', 'ip ospf message-digest-key 1 md5 S3cret', 'end']); settle(s);
+    ok(!nb(s, 'r1', 'r4') && /驗證方式不一致/.test(s.devices.r1.rt.ospf.ifs['Gi0/0/0'].why.join()), '驗證：一端開了 MD5、另一端沒開，鄰居就斷了');
+    ios(s, 'r1', ['configure terminal', 'router ospf 1', 'router-id 9.9.9.9', 'end']);
+    const before = s.devices.r1.rt.ospf.rid;
+    const msg = ios(s, 'r1', ['configure terminal', 'router ospf 1', 'router-id 9.9.9.9', 'end']);
+    recomputeNow(s);
+    ios(s, 'r1', ['clear ip ospf process', 'yes']); recomputeNow(s);
+    ok(before === 0x01010101 && msg.some((l) => /clear ip ospf process/.test(l)) && s.devices.r1.rt.ospf.rid === 0x09090909, '改了 router-id：要 clear ip ospf process 才會換成新的 Router ID');
+  }
+  {
+    // 等價多路徑：R1 到 R4 的 Loopback 有兩條 cost 一樣的路
+    const s = makeState(['a', 'b', 'c', 'd'].map((x) => makeDevice('isr4331', x, { name: x.toUpperCase() })).concat([makeDevice('pc', 'h1', { ip: '10.9.1.11', gw: '10.9.1.1' }), makeDevice('pc', 'h2', { ip: '10.9.1.12', gw: '10.9.1.1' }), makeDevice('sw8', 'u')]),
+      [['a:Gi0/0/0', 'b:Gi0/0/0'], ['a:Gi0/0/1', 'c:Gi0/0/0'], ['b:Gi0/0/1', 'd:Gi0/0/0'], ['c:Gi0/0/1', 'd:Gi0/0/1'], ['a:Gi0/0/2', 'u:1'], ['h1:eth0', 'u:2'], ['h2:eth0', 'u:3']]);
+    const p2p = (id, port, ip) => ['interface ' + port, `ip address ${ip} 255.255.255.252`, 'ip ospf network point-to-point', 'no shutdown'];
+    ios(s, 'a', ['configure terminal', ...p2p('a', 'gi0/0/0', '10.0.1.1'), ...p2p('a', 'gi0/0/1', '10.0.2.1'), 'interface gi0/0/2', 'ip address 10.9.1.1 255.255.255.0', 'no shutdown', 'router ospf 1', 'network 10.0.0.0 0.255.255.255 area 0', 'passive-interface gi0/0/2', 'end']);
+    ios(s, 'b', ['configure terminal', ...p2p('b', 'gi0/0/0', '10.0.1.2'), ...p2p('b', 'gi0/0/1', '10.0.3.1'), 'router ospf 1', 'network 10.0.0.0 0.255.255.255 area 0', 'end']);
+    ios(s, 'c', ['configure terminal', ...p2p('c', 'gi0/0/0', '10.0.2.2'), ...p2p('c', 'gi0/0/1', '10.0.4.1'), 'router ospf 1', 'network 10.0.0.0 0.255.255.255 area 0', 'end']);
+    ios(s, 'd', ['configure terminal', ...p2p('d', 'gi0/0/0', '10.0.3.2'), ...p2p('d', 'gi0/0/1', '10.0.4.2'), 'interface lo0', 'ip address 10.255.0.4 255.255.255.255', 'router ospf 1', 'network 10.0.0.0 0.255.255.255 area 0', 'end']);
+    settle(s);
+    const rs = s.devices.a.rt.routes.filter((r) => r.net === 0x0aff0004);
+    const via = (h) => { const r = transact(s, h, { proto: 'icmp', dst: parseIp('10.255.0.4') }); return r.ok && r.hops.find((x) => x.from === 'a' && !x.reply && x.to !== 'u'); };
+    const v1 = via('h1'), v2 = via('h2');
+    ok(rs.length === 2 && rs[0].metric === rs[1].metric && v1 && v2 && v1.to !== v2.to, `等價多路徑：A 到 D 的 Loopback 有兩條 cost ${rs[0] && rs[0].metric} 的路，兩台主機被雜湊到不同的路（${v1 && v1.to} / ${v2 && v2.to}）`);
+    ios(s, 'a', ['configure terminal', 'router ospf 1', 'maximum-paths 1', 'end']); settle(s);
+    ok(s.devices.a.rt.routes.filter((r) => r.net === 0x0aff0004).length === 1, 'maximum-paths 1：只放一條');
+    // E2 預設路由
+    s.devices.d.routes.push({ dst: '0.0.0.0', mask: '0.0.0.0', via: '10.0.3.1', ad: '254' }); // 隨便一條預設路由，只是讓 D 有東西可以發布
+    ios(s, 'd', ['configure terminal', 'router ospf 1', 'default-information originate', 'end']); settle(s);
+    const def = s.devices.a.rt.routes.find((r) => r.bits === 0);
+    ok(def && def.type === 'O' && def.sub === 'E2' && def.metric === 1, 'default-information originate：其他路由器學到 O*E2 0.0.0.0/0，metric 固定是 1');
+  }
+}
+
 // ── FortiGate 的 CLI ──
 console.log('\nFortiGate CLI');
 {

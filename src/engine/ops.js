@@ -307,7 +307,7 @@ export const bootTime = (d) => BOOT_TIME[d.model] ?? 30;
 /** 記憶體裡的東西全部消失：ARP、MAC 位址表、連線表、VPN 的 SA、紀錄緩衝區、登入的連線；連接埠要重新走一次 STP */
 function wipe(state, d) {
   const dyn = state.dyn, c = (dyn.clk[d.id] ||= {});
-  for (const k of ['arp', 'mac', 'ct', 'log', 'vty', 'login', 'ifc', 'dbg', 'sniff', 'dflow', 'con', 'cap']) if (dyn[k]) delete dyn[k][d.id];
+  for (const k of ['arp', 'mac', 'ct', 'log', 'vty', 'login', 'ifc', 'dbg', 'sniff', 'dflow', 'con', 'cap', 'rid', 'nb', 'ndTx']) if (dyn[k]) delete dyn[k][d.id];
   for (const k of Object.keys(dyn.sa || {})) if (k.startsWith(d.id + '/')) delete dyn.sa[k];
   for (const cb of state.cables) {
     if (cb.a.dev !== d.id && cb.b.dev !== d.id) continue;
@@ -373,8 +373,9 @@ export function opsBefore(state) {
 /** Gi0/1 → GigabitEthernet0/1 */
 export const longIf = (s) => String(s).replace(/^Gi(?=\d)/, 'GigabitEthernet').replace(/^Te(?=\d)/, 'TenGigabitEthernet').replace(/^Fa(?=\d)/, 'FastEthernet')
   .replace(/^Eth(?=\d)/, 'Ethernet').replace(/^Po(?=\d)/, 'Port-channel');
-/** OSPF 的 Router ID：手動指定的，不然就是介面上最大的 IP */
+/** OSPF 的 Router ID：程序啟動時選定的那一個；還沒跑 OSPF 就照規則推算（router-id > Loopback > 最大的介面 IP） */
 export function routerId(d) {
+  if (d.rt && d.rt.ospf && d.rt.ospf.rid != null) return d.rt.ospf.rid;
   const set = parseIp(d.ospfRid || '');
   if (set != null) return set;
   let best = null;
@@ -393,7 +394,7 @@ function snapshot(state, d) {
     const a = pc && pc.dot1x && state.rt.auth && state.rt.auth.dot1x[d.id + ':' + p.id];
     if (a && state.rt.links[d.id + ':' + p.id]) s.auth[p.id] = a.ok ? 'ok' : 'fail';
   }
-  for (const n of d.rt.nbrs || []) if (n.state !== 'forming') s.nbr[n.dev + '|' + n.iface] = { st: n.state, rid: routerId(state.devices[n.dev]) ?? n.ip };
+  for (const n of d.rt.nbrs || []) if (n.state === 'full' || n.state === 'dying') s.nbr[n.dev + '|' + n.iface] = { st: n.state, rid: routerId(state.devices[n.dev]) ?? n.ip };
   for (const i of d.ifaces) {
     if (i.vrrp && i.vrrp.on && i.rt.vrrp) s.vrrp[i.id] = i.rt.vrrp.state;
     if (i.rt.conflict) s.dupIp[i.id] = i.rt.ip;

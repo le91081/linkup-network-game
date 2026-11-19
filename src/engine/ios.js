@@ -6,6 +6,7 @@ import { parseCidr6, parseIp6 } from './ip6.js';
 import { newIface, cloneState, CATALOG, makeDevice, defaultPortMode } from './model.js';
 import { cdpCfg, lldpCfg, portNd, setPortNd, speaksCdp, clearNeighbors, CDP_TIMER, CDP_HOLD, LLDP_TIMER, LLDP_HOLD } from './disc.js';
 import { parseDscp, dscpName, COS_DSCP_DEFAULT } from './qos.js';
+import { clearOspfProcess, ospfArea } from './ospf.js';
 import { transfer, configFile, ensureFlash, flashFree, flashPath, fsName, IMAGES, PLATFORM, PLATFORM_NAME, imageFile, fmtBytes } from './files.js';
 import { macsBehind, recompute, ospfOn } from './sim.js';
 import { logEvent, markReboot, setClock, deviceTime, SEVERITY, bootTime } from './ops.js';
@@ -175,6 +176,14 @@ export function portByName(dev, text) {
 /** 把輸入的介面名稱（可以縮寫，例如 gi0/1、g0/0/0.10、vlan 10）對應到設備上的埠或 L3 介面 */
 function resolveIf(dev, text) {
   const s = text.toLowerCase().replace(/\s+/g, '');
+  const lo = s.match(/^lo[a-z]*(\d+)$/);
+  if (lo) {
+    if (!dev.routing) return err('這台設備沒有 Loopback 介面（L2 交換器沒有路由功能）');
+    const n = +lo[1], id = 'Lo' + n;
+    let i = dev.ifaces.find((x) => x.bind.t === 'loop' && x.bind.n === n);
+    if (!i) { i = newIface(id, 'Loopback' + n, { t: 'loop', n }); dev.ifaces.push(i); }
+    return { name: 'Loopback' + n, iface: i, loop: true };
+  }
   const vl = s.match(/^vl[a-z]*(\d+)$/);
   if (vl) {
     const v = +vl[1];
@@ -372,8 +381,33 @@ export function iosSession(getDev, getState, who = null) {
     ['no ip helper-address [...]', () => onL3((i) => { i.helper = ''; })],
     ['ip ospf cost <n>', ([n]) => (+n >= 1 && +n <= 65535 ? onL3((i) => { i.ospfCost = String(+n); }) : err('cost 必須是 1 – 65535'))],
     ['no ip ospf cost', () => onL3((i) => { i.ospfCost = ''; })],
-    ['ip ospf <pid> area <a>', () => onL3((i) => { i.ospf = true; })],
-    ['no ip ospf <pid> area <a>', () => onL3((i) => { i.ospf = false; })],
+    ['ip ospf <pid> area <a>', ([, a]) => (/^\d+$/.test(a) ? onL3((i) => { i.ospf = true; i.ospfArea = +a; }) : err('區域請寫數字，例如 area 0'))],
+    ['no ip ospf <pid> area <a>', () => onL3((i) => { i.ospf = false; delete i.ospfArea; })],
+    ['ip ospf priority <n>', ([n]) => (+n >= 0 && +n <= 255 && /^\d+$/.test(n) ? onL3((i) => { if (+n === 1) delete i.ospfPrio; else i.ospfPrio = +n; }) : err('priority 的範圍是 0 – 255（0 表示永遠不當 DR / BDR）'))],
+    ['no ip ospf priority [...]', () => onL3((i) => { delete i.ospfPrio; })],
+    ['ip ospf hello-interval <n>', ([n]) => (+n >= 1 && +n <= 65535 ? onL3((i) => { if (+n === 10) delete i.ospfHello; else i.ospfHello = +n; }) : err('hello-interval 的範圍是 1 – 65535 秒'))],
+    ['no ip ospf hello-interval [...]', () => onL3((i) => { delete i.ospfHello; })],
+    ['ip ospf dead-interval <n>', ([n]) => (+n >= 1 && +n <= 65535 ? onL3((i) => { i.ospfDead = +n; }) : err('dead-interval 的範圍是 1 – 65535 秒'))],
+    ['no ip ospf dead-interval [...]', () => onL3((i) => { delete i.ospfDead; })],
+    ['ip ospf network <t>', ([t]) => {
+      const v = ['point-to-point', 'broadcast'].find((x) => x.startsWith(t.toLowerCase()));
+      return v ? onL3((i) => { if (v === 'broadcast') delete i.ospfNet; else i.ospfNet = 'p2p'; }) : err('用法：ip ospf network point-to-point | broadcast');
+    }],
+    ['no ip ospf network [...]', () => onL3((i) => { delete i.ospfNet; })],
+    ['ip ospf authentication message-digest', () => onL3((i) => { i.ospfAuth = 'md5'; })],
+    ['ip ospf authentication null', () => onL3((i) => { i.ospfAuth = 'null'; })],
+    ['ip ospf authentication', () => onL3((i) => { i.ospfAuth = 'plain'; })],
+    ['no ip ospf authentication [...]', () => onL3((i) => { delete i.ospfAuth; })],
+    ['ip ospf authentication-key <...>', ([k]) => onL3((i) => { i.ospfKey = { id: '', key: readSecret(k.split(/\s+/)) }; })],
+    ['ip ospf message-digest-key <id> md5 <...>', ([id, k]) => (/^\d+$/.test(id) ? onL3((i) => { i.ospfKey = { id: +id, key: readSecret(k.split(/\s+/)) }; }) : err('用法：ip ospf message-digest-key 1 md5 <金鑰>'))],
+    ['no ip ospf message-digest-key [...]', () => onL3((i) => { delete i.ospfKey; })],
+    ['no ip ospf authentication-key [...]', () => onL3((i) => { delete i.ospfKey; })],
+    ['ip ospf mtu-ignore', () => onL3((i) => { i.ospfMtuIgnore = true; })],
+    ['no ip ospf mtu-ignore', () => onL3((i) => { delete i.ospfMtuIgnore; })],
+    ['ip mtu <n>', ([n]) => (+n >= 68 && +n <= 9216 ? onL3((i) => { if (+n === 1500) delete i.mtu; else i.mtu = +n; }) : err('ip mtu 的範圍是 68 – 9216'))],
+    ['no ip mtu', () => onL3((i) => { delete i.mtu; })],
+    ['bandwidth <kbps>', ([k]) => (+k >= 1 && +k <= 100000000 ? onL3((i) => { i.bandwidth = +k; }) : err('bandwidth 的單位是 kbps，例如 bandwidth 20000'))],
+    ['no bandwidth', () => onL3((i) => { delete i.bandwidth; })],
     ['ip access-group <name> <dir>', ([name, dir]) => (['in', 'out'].includes(dir.toLowerCase()) ? onL3((i) => bindAcl(i, name.toUpperCase(), dir.toLowerCase())) : err('方向必須是 in 或 out'))],
     ['no ip access-group <name> <dir>', ([, dir]) => onL3((i) => { i[dir.toLowerCase() === 'in' ? 'aclIn' : 'aclOut'] = []; if (i.aclNames) delete i.aclNames[dir.toLowerCase()]; })],
     ['vrrp <g> ip <vip>', ([, vip]) => (parseIp(vip) == null ? err('IP 位址的格式不正確') : onL3((i) => { Object.assign((i.vrrp ||= { on: false, vip: '', prio: '100' }), { on: true, vip }); }))],
@@ -645,7 +679,9 @@ export function iosSession(getDev, getState, who = null) {
         const m = s.match(/^([a-z]+)([\d/]+)\.(\d+)$/), p = m && findPort(d, m[1], m[2]);
         if (p) d.ifaces = d.ifaces.filter((i) => !(i.bind.t === 'sub' && i.id === `${p.id}.${+m[3]}`));
       }
-      return d.ifaces.length < before ? undefined : err('只能刪除子介面或 VLAN 介面，而且它必須存在');
+      const lo = s.match(/^lo[a-z]*(\d+)$/);
+      if (lo) d.ifaces = d.ifaces.filter((i) => !(i.bind.t === 'loop' && i.bind.n === +lo[1]));
+      return d.ifaces.length < before ? undefined : err('只能刪除子介面、VLAN 介面或 Loopback，而且它必須存在');
     }],
     ['vlan <id>', ([id]) => {
       const e = needSw(); if (e) return e;
@@ -1194,11 +1230,14 @@ export function iosSession(getDev, getState, who = null) {
     if: IF,
     vlan: [['name <...>', ([name]) => { S.cur.name = name; }]],
     router: [
-      ['network <ip> <wild> area <a>', ([ip, wild]) => {
+      ['network <ip> <wild> area <a>', ([ip, wild, a]) => {
         const net = parseIp(ip), bits = wildBits(wild);
         if (net == null || bits == null) return err('用法：network <網段> <萬用遮罩> area 0，例如 network 10.0.0.0 0.0.0.255 area 0');
-        const d = dev(), stmt = { net: netOf(net, bits), bits };
-        addUnique((d.ospfNets ||= []), stmt);
+        const d = dev(), area = +(a || 0);
+        if (!/^\d+$/.test(String(a))) return err('區域請寫數字，例如 area 0（這個模擬不支援 0.0.0.1 這種寫法）');
+        const stmt = { net: netOf(net, bits), bits, area };
+        d.ospfNets = (d.ospfNets || []).filter((n) => !(n.net === stmt.net && n.bits === stmt.bits));
+        d.ospfNets.push(stmt);
         const hit = d.ifaces.filter((i) => {
           const n = staticNet(i), a = n ? n.ip : i.rt && i.rt.ip;
           return a != null && netOf(a, bits) === stmt.net;
@@ -1217,9 +1256,35 @@ export function iosSession(getDev, getState, who = null) {
       }],
       ['default-information originate [...]', () => { dev().ospfDefault = true; }],
       ['no default-information originate', () => { dev().ospfDefault = false; }],
-      ['router-id <id>', ([id]) => { if (parseIp(id) == null) return err('用法：router-id <A.B.C.D>'); dev().ospfRid = id; return undefined; }],
+      ['router-id <id>', ([id]) => {
+        if (parseIp(id) == null) return err('用法：router-id <A.B.C.D>');
+        const d = dev(), cur = ((getState().dyn || {}).rid || {})[d.id];
+        d.ospfRid = id;
+        // 程序已經在跑了：新的 Router ID 要重新啟動程序才會生效
+        return cur && cur.rid !== parseIp(id) ? '% OSPF: Reload or use "clear ip ospf process" command, for this to take effect' : undefined;
+      }],
+      ['passive-interface default', () => { const d = dev(); d.ospfPassiveDefault = true; d.ospfNoPassive = []; }],
+      ['no passive-interface default', () => { const d = dev(); delete d.ospfPassiveDefault; delete d.ospfNoPassive; }],
+      ['passive-interface <...>', ([t]) => { const i = ifByName(t); if (isErr(i)) return i; const d = dev(); if (d.ospfPassiveDefault) d.ospfNoPassive = (d.ospfNoPassive || []).filter((x) => x !== i.id); else if (!(d.ospfPassive ||= []).includes(i.id)) d.ospfPassive.push(i.id); return undefined; }],
+      ['no passive-interface <...>', ([t]) => { const i = ifByName(t); if (isErr(i)) return i; const d = dev(); if (d.ospfPassiveDefault) { if (!(d.ospfNoPassive ||= []).includes(i.id)) d.ospfNoPassive.push(i.id); } else d.ospfPassive = (d.ospfPassive || []).filter((x) => x !== i.id); return undefined; }],
+      ['auto-cost reference-bandwidth <n>', ([n]) => (+n >= 1 && +n <= 4294967 ? void (dev().ospfRefBw = +n === 100 ? undefined : +n) || '% OSPF: Reference bandwidth is changed.\n        Please ensure reference bandwidth is consistent across all routers.' : err('reference-bandwidth 的單位是 Mbps，範圍 1 – 4294967'))],
+      ['no auto-cost reference-bandwidth [...]', () => { delete dev().ospfRefBw; }],
+      ['maximum-paths <n>', ([n]) => (+n >= 1 && +n <= 32 ? void (dev().ospfMaxPaths = +n === 4 ? undefined : +n) : err('maximum-paths 的範圍是 1 – 32'))],
+      ['no maximum-paths [...]', () => { delete dev().ospfMaxPaths; }],
+      ['area <a> range <ip> <mask> [...]', ([a, ip, mask]) => {
+        const n = parseIp(ip), bits = maskBits(mask);
+        if (!/^\d+$/.test(a) || n == null || bits == null) return err('用法：area 1 range 10.1.0.0 255.255.0.0');
+        const d = dev();
+        d.ospfRanges = (d.ospfRanges || []).filter((r) => !(+r.area === +a && r.net === netOf(n, bits) && r.bits === bits));
+        d.ospfRanges.push({ area: +a, net: netOf(n, bits), bits });
+        return undefined;
+      }],
+      ['no area <a> range <ip> <mask> [...]', ([a, ip, mask]) => { const n = parseIp(ip), bits = maskBits(mask); const d = dev(); d.ospfRanges = (d.ospfRanges || []).filter((r) => !(+r.area === +a && r.net === netOf(n, bits) && r.bits === bits)); }],
+      ['area <a> authentication message-digest', ([a]) => { (dev().ospfAreaAuth ||= {})[+a] = 'md5'; }],
+      ['area <a> authentication', ([a]) => { (dev().ospfAreaAuth ||= {})[+a] = 'plain'; }],
+      ['no area <a> authentication [...]', ([a]) => { const d = dev(); if (d.ospfAreaAuth) delete d.ospfAreaAuth[+a]; }],
+      ['log-adjacency-changes [...]', () => undefined],
       ['no router-id [...]', () => { delete dev().ospfRid; }],
-      ['passive-interface <...>', () => '（這個模擬沒有 passive-interface，要關閉某個介面的 OSPF 請用 no network）'],
     ],
     dhcp: [
       ['network <net> <mask>', ([net, mask]) => {
@@ -1485,6 +1550,11 @@ export function iosSession(getDev, getState, who = null) {
     if (!tok.length || tok[0].startsWith('!')) return done(false);
     const t0 = tok[0].toLowerCase();
     if (S.mode === 'exec') {
+      if (match(tok, 'clear ip ospf process') || match(tok, 'clear ip ospf <n> process')) {
+        out.push('Reset ALL OSPF processes? [no]: ');
+        S.pending = { fn: (ans, o2) => { S.pending = null; if (!/^y/i.test(ans.trim())) return { out: o2, changed: false }; clearOspfProcess(getState(), dev()); recompute(getState()); o2.push('（OSPF 程序重新啟動：重新選 Router ID，所有鄰居關係從頭建立）'); return { out: o2, changed: true }; } };
+        return done(false);
+      }
       if (match(tok, 'clear cdp table')) { clearNeighbors(getState(), dev(), 'cdp'); return done(false); }
       if (match(tok, 'clear lldp table')) { clearNeighbors(getState(), dev(), 'lldp'); return done(false); }
       if (match(tok, 'clear cdp counters') || match(tok, 'clear lldp counters')) { const c = ((getState().dyn.ndCnt ||= {})[dev().id] ||= {}); const k = tok[1].toLowerCase().startsWith('c') ? 'cdp' : 'lldp'; c[k + 'Out'] = 0; c[k + 'In'] = 0; return done(false); }
@@ -1990,6 +2060,16 @@ export function runningConfig(state, dev) {
     else l.push(' no ip address');
     if (anyNat) l.push(natOut(i) ? ' ip nat outside' : i.ip || i.mode !== 'static' ? ' ip nat inside' : null);
     if (i.helper) l.push(` ip helper-address ${i.helper}`);
+    if (+i.bandwidth > 0) l.push(` bandwidth ${i.bandwidth}`);
+    if (i.mtu) l.push(` ip mtu ${i.mtu}`);
+    if (i.ospfAuth) l.push(i.ospfAuth === 'md5' ? ' ip ospf authentication message-digest' : i.ospfAuth === 'null' ? ' ip ospf authentication null' : ' ip ospf authentication');
+    if (i.ospfKey && i.ospfKey.id !== '' && i.ospfKey.id != null) l.push(` ip ospf message-digest-key ${i.ospfKey.id} md5 7 ${hex(i.ospfKey.key || '')}`);
+    else if (i.ospfKey) l.push(` ip ospf authentication-key 7 ${hex(i.ospfKey.key || '')}`);
+    if (i.ospfNet === 'p2p') l.push(' ip ospf network point-to-point');
+    if (i.ospfPrio != null && i.ospfPrio !== '') l.push(` ip ospf priority ${i.ospfPrio}`);
+    if (i.ospfHello) l.push(` ip ospf hello-interval ${i.ospfHello}`);
+    if (i.ospfDead) l.push(` ip ospf dead-interval ${i.ospfDead}`);
+    if (i.ospfMtuIgnore) l.push(' ip ospf mtu-ignore');
     if (ospfOn(dev, i) && i.ospfCost) l.push(` ip ospf cost ${i.ospfCost}`);
     if (i.aclIn && i.aclIn.length) l.push(` ip access-group ${aclName(i, 'in')} in`);
     if (i.aclOut && i.aclOut.length) l.push(` ip access-group ${aclName(i, 'out')} out`);
@@ -2001,6 +2081,7 @@ export function runningConfig(state, dev) {
     if (i.qosOut) l.push(` service-policy output ${i.qosOut}`);
     return l.filter(Boolean);
   };
+  for (const i of dev.ifaces.filter((x) => x.bind.t === 'loop').sort((a, b) => a.bind.n - b.bind.n)) o.push(`interface Loopback${i.bind.n}`, ...l3lines(i).filter((x) => !/ip nat (inside|outside)/.test(x)), ...(i.shut ? [' shutdown'] : []), '!');
   for (const p of dev.ports) {
     const peer = state.cables.find((c) => (c.a.dev === dev.id && c.a.port === p.id) || (c.b.dev === dev.id && c.b.port === p.id));
     const other = peer && state.devices[peer.a.dev === dev.id ? peer.b.dev : peer.a.dev];
@@ -2072,8 +2153,15 @@ export function runningConfig(state, dev) {
   if (os.length || stmts.length) {
     o.push('router ospf 1');
     if (dev.ospfRid) o.push(` router-id ${dev.ospfRid}`);
-    for (const n of stmts) o.push(` network ${fmtIp(n.net)} ${wild(n.bits)} area 0`);
-    for (const i of os) o.push(` network ${fmtIp(netOf(i.rt.ip, i.rt.bits))} ${wild(i.rt.bits)} area 0`);
+    if (dev.ospfRefBw) o.push(` auto-cost reference-bandwidth ${dev.ospfRefBw}`);
+    for (const [a, t] of Object.entries(dev.ospfAreaAuth || {})) o.push(` area ${a} authentication${t === 'md5' ? ' message-digest' : ''}`);
+    for (const r of dev.ospfRanges || []) o.push(` area ${r.area} range ${fmtIp(r.net)} ${fmtMask(r.bits)}`);
+    const ifl = (id) => (dev.ifaces.find((x) => x.id === id) || { label: id }).label;
+    if (dev.ospfPassiveDefault) { o.push(' passive-interface default'); for (const id of dev.ospfNoPassive || []) o.push(` no passive-interface ${ifl(id)}`); }
+    else for (const id of dev.ospfPassive || []) o.push(` passive-interface ${ifl(id)}`);
+    for (const n of stmts) o.push(` network ${fmtIp(n.net)} ${wild(n.bits)} area ${+(n.area || 0)}`);
+    for (const i of os) o.push(i.bind.t === 'loop' ? ` network ${fmtIp(i.rt.ip)} 0.0.0.0 area ${+(i.ospfArea || 0)}` : ` network ${fmtIp(netOf(i.rt.ip, i.rt.bits))} ${wild(i.rt.bits)} area ${+(i.ospfArea || 0)}`);
+    if (dev.ospfMaxPaths) o.push(` maximum-paths ${dev.ospfMaxPaths}`);
     if (dev.ospfDefault) o.push(' default-information originate');
     o.push('!');
   }

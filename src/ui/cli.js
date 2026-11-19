@@ -5,6 +5,7 @@ import { fmtIp6 } from '../engine/ip6.js';
 import { transact, routeRows, isBridgePort, arpRows, clearArp, hitsOf, fmtDur, portfastOn, macRows, clearMac, macAgeOf, sessionRows, clearSessions, saInfo, isTrunk, dtpSpeaker } from '../engine/sim.js';
 import { cdpCfg, lldpCfg, cdpOn, lldpTxOn, lldpRxOn, neighbors, ndCounters, cdpCapText, speaksCdp, speaksLldp } from '../engine/disc.js';
 import { dscpName, COS_DSCP_DEFAULT, portTrust, egressOf, classify, QLIMIT } from '../engine/qos.js';
+import { ospfArea, ospfCost, ospfPassive, ospfHello, ospfDead, ospfPrio, ospfNetType, isLoopback } from '../engine/ospf.js';
 import { iosClock, deviceTime, ntpInfo, logRows, clearLog, syslogStats, uptimeOf, routerId, longIf, SEVERITY, NTP_POLL, vtyRows, idleLimit } from '../engine/ops.js';
 import { quietLeft } from '../engine/remote.js';
 import { counters, clearCounters, clearedAt, spanDest, debugOf, setDebug, consoleRows } from '../engine/wire.js';
@@ -72,11 +73,17 @@ const SHOW = {
     if (!d.routing) return ['% 這台設備沒有啟用 IP 路由（L2 交換器）'];
     const rows = routeRows(d);
     if (!rows.length) return ['路由表是空的'];
-    const o = ['Codes: C - connected, S - static, O - OSPF, * - candidate default', ''];
+    const o = ['Codes: L - local, C - connected, S - static, O - OSPF, IA - OSPF inter area', '       E2 - OSPF external type 2, * - candidate default', ''];
+    // 同一個網段有好幾條等價的路：第一行印網段，其他的路縮排在下面（和真的 IOS 一樣）
+    let prev = null;
     for (const r of rows) {
-      const code = (r.type === 'D' ? 'S' : r.type) + (r.dst.startsWith('0.0.0.0') ? '*' : ' ');
+      const code = ((r.type === 'D' ? 'S' : r.type) + (r.dst.startsWith('0.0.0.0') ? '*' : ' ') + (r.sub || '')).padEnd(5);
       const dst = r.dst.replace('（預設）', '');
-      o.push(r.via === '直連' ? `${code}    ${dst} is directly connected, ${r.iface}` : `${code}    ${dst} [${r.ad}/${r.metric}] via ${r.via}, ${r.iface}${r.bad ? '   (inactive)' : ''}`);
+      if (r.via === '直連') { o.push(`${code}   ${dst} is directly connected, ${r.iface}`); prev = null; continue; }
+      const tail = `[${r.ad}/${r.metric}] via ${r.via}, ${r.iface}${r.bad ? '   (inactive)' : ''}`;
+      if (prev && prev.dst === dst && prev.type === r.type && prev.metric === r.metric) o.push(' '.repeat(9 + dst.length) + tail);
+      else o.push(`${code}   ${dst} ${tail}`);
+      prev = r;
     }
     return o;
   },
@@ -218,10 +225,13 @@ const SHOW = {
     const n = d.rt.nbrs || [];
     if (!n.length) return ['沒有 OSPF 鄰居'];
     const two = (v) => String(Math.max(0, Math.ceil(v))).padStart(2, '0');
-    const rid = (x) => { const r = routerId(st.devices[x.dev]); return fmtIp(r ?? x.ip); };
-    return [pad('Neighbor ID', 18) + pad('State', 14) + pad('Dead Time', 11) + pad('Address', 17) + 'Interface',
-      ...n.map((x) => pad(rid(x), 18) + pad(x.state === 'forming' ? '2WAY/DROTHER' : 'FULL/ -', 14)
-        + pad('00:00:' + two(x.state === 'dying' ? x.left : x.state === 'forming' ? 40 - ((40 - x.left) % 10) : x.dead), 11) + pad(fmtIp(x.ip), 17) + (d.ifaces.find((i) => i.id === x.iface) || {}).label)];
+    const rid = (x) => fmtIp(x.rid ?? routerId(st.devices[x.dev]) ?? x.ip);
+    const ST = { full: 'FULL', '2way': '2WAY', exstart: 'EXSTART', forming: 'INIT', dying: 'FULL' };
+    const role = (x) => (x.role === 'P2P' ? ' -' : x.role === 'WAITING' ? 'DROTHER' : x.role || 'DROTHER');
+    const lines = n.map((x) => pad(rid(x), 17) + pad(x.prio ?? 1, 5) + pad(`${ST[x.state] || 'INIT'}/${role(x)}`, 16)
+      + pad('00:00:' + two(x.state === 'dying' ? x.left : x.dead), 11) + pad(fmtIp(x.ip), 17) + (d.ifaces.find((i) => i.id === x.iface) || {}).label);
+    const notes = n.filter((x) => x.note).map((x) => `（${(st.devices[x.dev] || {}).name}：${x.note}）`);
+    return [pad('Neighbor ID', 17) + pad('Pri', 5) + pad('State', 16) + pad('Dead Time', 11) + pad('Address', 17) + 'Interface', ...lines, ...notes];
   },
   'show ip dhcp binding': (st, d) => {
     const o = [pad('IP address', 18) + pad('Client', 22) + pad('Lease expiration', 20) + 'Type'];
@@ -321,25 +331,68 @@ const SHOW = {
     if (!stmts.length && !on.length) return ['（沒有啟用任何動態路由協定，路由表只有直連與靜態路由）'];
     const rid = routerId(d), wild = (b) => fmtIp(b === 0 ? 0xffffffff : ((1 << (32 - b)) - 1) >>> 0);
     return ['*** IP Routing is NSF aware ***', '', 'Routing Protocol is "ospf 1"', '  Outgoing update filter list for all interfaces is not set', '  Incoming update filter list for all interfaces is not set',
-      `  Router ID ${rid != null ? fmtIp(rid) : '0.0.0.0'}`, '  Number of areas in this router is 1. 1 normal 0 stub 0 nssa', '  Maximum path: 4', '  Routing for Networks:',
-      ...stmts.map((n) => `    ${fmtIp(n.net)} ${wild(n.bits)} area 0`),
+      `  Router ID ${rid != null ? fmtIp(rid) : '0.0.0.0'}`, `  Number of areas in this router is ${((d.rt.ospf || {}).areas || [0]).length}. ${((d.rt.ospf || {}).areas || [0]).length} normal 0 stub 0 nssa`, `  Maximum path: ${+d.ospfMaxPaths || 4}`, '  Routing for Networks:',
+      ...stmts.map((n) => `    ${fmtIp(n.net)} ${wild(n.bits)} area ${+(n.area || 0)}`),
+      ...(d.ifaces.some((i) => ospfPassive(d, i) && !isLoopback(i) && ospfArea(d, i) != null) ? ['  Passive Interface(s):', ...d.ifaces.filter((i) => ospfPassive(d, i) && !isLoopback(i) && ospfArea(d, i) != null).map((i) => '    ' + longIf(i.label))] : []),
       ...on.filter((i) => !stmts.some((n) => (i.rt.ip >>> (32 - n.bits || 0)) === (n.net >>> (32 - n.bits || 0)))).map((i) => `    ${longIf(i.label)}`),
       '  Routing Information Sources:', '    Gateway         Distance      Last Update',
       ...(d.rt.nbrs || []).filter((n) => n.state === 'full').map((n) => `    ${pad(fmtIp(routerId(st.devices[n.dev]) ?? n.ip), 16)}${pad(110, 14)}${hms(Math.min(st.clock, 3600))}`),
       '  Distance: (default is 110)'];
   },
   'show ip ospf interface brief': (st, d) => {
-    const on = d.ifaces.filter((i) => i.rt && i.rt.ip != null && i.ospf !== undefined && (i.ospf || (d.ospfNets || []).some((n) => ((i.rt.ip >>> (32 - n.bits)) << (32 - n.bits)) >>> 0 === n.net)));
+    const ifs = (d.rt.ospf && d.rt.ospf.ifs) || {};
+    const on = d.ifaces.filter((i) => ifs[i.id]);
     if (!on.length) return ['（沒有任何介面啟用 OSPF）'];
-    const rid = (x) => routerId(x) ?? 0;
+    const SHORT = { DROTHER: 'DROTH', WAITING: 'WAIT', P2P: 'P2P', LOOP: 'LOOP', PASSIVE: 'DR' };
     return [pad('Interface', 12) + pad('PID', 6) + pad('Area', 16) + pad('IP Address/Mask', 20) + pad('Cost', 6) + pad('State', 6) + 'Nbrs F/C',
       ...on.map((i) => {
-        const nb = (d.rt.nbrs || []).filter((n) => n.iface === i.id), full = nb.filter((n) => n.state === 'full');
-        // DR 選舉：同一個網段裡 Router ID 最大的當 DR，第二大的當 BDR（這裡不模擬「先上線的不讓位」）
-        const all = [d, ...full.map((n) => st.devices[n.dev])].sort((a, b) => rid(b) - rid(a));
-        const role = !nb.length ? 'DR' : all[0] === d ? 'DR' : all[1] === d ? 'BDR' : 'DROTH';
-        return pad(i.label, 12) + pad(1, 6) + pad(0, 16) + pad(`${fmtIp(i.rt.ip)}/${i.rt.bits}`, 20) + pad(Math.max(1, +i.ospfCost || 1), 6) + pad(nb.length && full.length < nb.length ? 'WAIT' : role, 6) + `${full.length}/${nb.length}`;
+        const f = ifs[i.id], nb = (d.rt.nbrs || []).filter((n) => n.iface === i.id), full = nb.filter((n) => n.state === 'full');
+        return pad(i.label.replace('Loopback', 'Lo'), 12) + pad(1, 6) + pad(f.area, 16) + pad(`${fmtIp(i.rt.ip)}/${i.rt.bits}`, 20) + pad(f.cost, 6) + pad(SHORT[f.state] || f.state, 6) + `${full.length}/${nb.length}`;
       })];
+  },
+  'show ip ospf interface': (st, d) => ospfIfLines(st, d, null),
+  'show ip ospf': (st, d) => {
+    const o2 = d.rt.ospf;
+    if (!o2) return ['%OSPF: Router process 1 is not running, please configure a router-id'];
+    const areas = o2.areas || [];
+    return [` Routing Process "ospf 1" with ID ${o2.rid != null ? fmtIp(o2.rid) : '0.0.0.0'}`, ' Start time: 00:00:12.345, Time elapsed: ' + hms(st.clock + 273600),
+      ...(o2.pending ? [` （設定了新的 router-id ${d.ospfRid}，但要 clear ip ospf process 才會生效）`] : []),
+      ' Supports only single TOS(TOS0) routes', ' Supports opaque LSA', ' Supports Link-local Signaling (LLS)',
+      ...(o2.abr ? [' It is an area border router'] : []), ...(o2.asbr ? [' It is an autonomous system boundary router'] : []),
+      ` Router is not originating router-LSAs with maximum metric`, ' Initial SPF schedule delay 5000 msecs', ' Number of external LSA ' + (st.rt.ospf ? st.rt.ospf.asbrs.length : 0),
+      ` Number of areas in this router is ${areas.length}. ${areas.length} normal 0 stub 0 nssa`, ` Reference bandwidth unit is ${+d.ospfRefBw || 100} mbps`,
+      ...areas.flatMap((a) => {
+        const n = Object.values(o2.ifs).filter((x) => x.area === a).length;
+        return [`    Area ${a === 0 ? 'BACKBONE(0)' : a}`, `        Number of interfaces in this area is ${n}`,
+          `        Area has ${(d.ospfAreaAuth || {})[a] === 'md5' ? 'message digest authentication' : (d.ospfAreaAuth || {})[a] === 'plain' ? 'simple password authentication' : 'no authentication'}`,
+          ...(d.ospfRanges || []).filter((r) => +r.area === a).map((r) => `        Area ranges are\n           ${fmtIp(r.net)}/${r.bits} Active Advertise`).join('\n').split('\n').filter(Boolean)];
+      })];
+  },
+  'show ip ospf database': (st, d) => {
+    const o2 = d.rt.ospf, db = st.rt.ospf;
+    if (!o2 || !db) return ['%OSPF: Router process 1 is not running'];
+    const age = (x) => String(((x * 7 + st.clock) % 1800) | 0).padStart(4);
+    const seq = (x) => '0x800000' + (((x >>> 0) % 200) + 16).toString(16).toUpperCase().padStart(2, '0');
+    const o = [`            OSPF Router with ID (${fmtIp(o2.rid)}) (Process ID 1)`];
+    for (const a of o2.areas || []) {
+      // 這個區域裡的路由器：每一台送一筆 Router LSA (Type 1)
+      const rs = Object.entries(db.stubs).filter(([, l]) => l.some((x) => x.area === a)).map(([id]) => id);
+      o.push('', `\t\tRouter Link States (Area ${a})`, '', 'Link ID         ADV Router      Age         Seq#       Checksum Link count');
+      for (const id of rs) { const r = db.rid[id] ?? (st.dyn.rid[id] || {}).rid; if (r == null) continue; o.push(pad(fmtIp(r), 16) + pad(fmtIp(r), 16) + pad(age(r), 12) + pad(seq(r), 11) + pad('0x00' + (r % 0xffff).toString(16).padStart(4, '0').toUpperCase(), 9) + db.stubs[id].filter((x) => x.area === a).length); }
+      // 有 DR 的廣播網段：DR 送一筆 Network LSA (Type 2)
+      const nets = [];
+      for (const x of Object.values(st.devices)) for (const i of x.ifaces) { const f = x.rt && x.rt.ospf && x.rt.ospf.ifs[i.id]; if (f && f.area === a && f.state === 'DR' && f.full) nets.push({ ip: i.rt.ip, rid: x.rt.ospf.rid }); }
+      if (nets.length) { o.push('', `\t\tNet Link States (Area ${a})`, '', 'Link ID         ADV Router      Age         Seq#       Checksum'); for (const n of nets) o.push(pad(fmtIp(n.ip), 16) + pad(fmtIp(n.rid), 16) + pad(age(n.ip), 12) + pad(seq(n.ip), 11) + '0x00' + (n.ip % 0xffff).toString(16).padStart(4, '0').toUpperCase()); }
+      // ABR 送進這個區域的 Summary LSA (Type 3)
+      const sums = [];
+      for (const b of db.abrs) {
+        const list = a === 0 ? Object.values(db.sumInto0[b] || {}) : Object.values(((db.sumOut[b] || {})[a]) || {});
+        for (const x of list) sums.push({ ...x, rid: db.rid[b] });
+      }
+      if (sums.length) { o.push('', `\t\tSummary Net Link States (Area ${a})`, '', 'Link ID         ADV Router      Age         Seq#       Checksum'); for (const x of sums) o.push(pad(fmtIp(x.net), 16) + pad(fmtIp(x.rid), 16) + pad(age(x.net), 12) + pad(seq(x.net), 11) + '0x00' + (x.net % 0xffff).toString(16).padStart(4, '0').toUpperCase()); }
+    }
+    if (db.asbrs.length) { o.push('', '\t\tType-5 AS External Link States', '', 'Link ID         ADV Router      Age         Seq#       Checksum Tag'); for (const id of db.asbrs) o.push(pad('0.0.0.0', 16) + pad(fmtIp(db.rid[id]), 16) + pad(age(1), 12) + pad(seq(1), 11) + pad('0x00A1B2', 9) + '1'); }
+    return o;
   },
   'show snmp': (st, d) => {
     const m = d.mgmt || {};
@@ -577,6 +630,34 @@ function switchportLines(st, d, p) {
     `Trunking VLANs Enabled: ${pc.allowed === 'all' || !pc.allowed ? 'ALL' : pc.allowed}`, 'Pruning VLANs Enabled: 2-1001', 'Capture Mode Disabled', 'Capture VLANs Allowed: ALL', '',
     'Protected: false', 'Unknown unicast blocked: disabled', 'Unknown multicast blocked: disabled', 'Appliance trust: none',
     ...(t.why ? [`（DTP：${t.why}）`] : []), ...(pc.noneg ? ['（nonegotiate：這個埠不送 DTP，對面的 dynamic 埠不會因為它而變成 Trunk）'] : [])];
+}
+
+// ───────────────────────── OSPF ─────────────────────────
+/** show ip ospf interface [介面] */
+function ospfIfLines(st, d, only) {
+  const ifs = (d.rt.ospf && d.rt.ospf.ifs) || {}, rid = d.rt.ospf ? d.rt.ospf.rid : null;
+  const list = d.ifaces.filter((i) => ifs[i.id] && (!only || i === only));
+  if (!list.length) return [only ? `%OSPF: OSPF not enabled on ${only.label}` : '（沒有任何介面啟用 OSPF）'];
+  const who = (k) => { if (!k) return null; const [id, iid] = k.split('/'); const x = st.devices[id]; const i = x && x.ifaces.find((y) => y.id === iid); return x && i ? { rid: x.rt.ospf ? x.rt.ospf.rid : null, ip: i.rt.ip } : null; };
+  const o = [];
+  for (const i of list) {
+    const f = ifs[i.id], nb = (d.rt.nbrs || []).filter((n) => n.iface === i.id), full = nb.filter((n) => n.state === 'full');
+    const dr = who(f.dr), bdr = who(f.bdr);
+    o.push(`${longIf(i.label)} is up, line protocol is up`, `  Internet Address ${fmtIp(i.rt.ip)}/${i.rt.bits}, Area ${f.area}, Attached via Network Statement`,
+      `  Process ID 1, Router ID ${rid != null ? fmtIp(rid) : '0.0.0.0'}, Network Type ${f.type === 'point-to-point' ? 'POINT_TO_POINT' : f.type === 'loopback' ? 'LOOPBACK' : 'BROADCAST'}, Cost: ${f.cost}`);
+    if (f.type === 'loopback') { o.push('  Loopback interface is treated as a stub Host', ''); continue; }
+    o.push(`  Transmit Delay is 1 sec, State ${f.state === 'P2P' ? 'POINT_TO_POINT' : f.state === 'PASSIVE' ? 'DR' : f.state}${f.type === 'broadcast' ? `, Priority ${f.prio}` : ''}`);
+    if (f.type === 'broadcast' && dr) o.push(`  Designated Router (ID) ${fmtIp(dr.rid)}, Interface address ${fmtIp(dr.ip)}`);
+    if (f.type === 'broadcast' && bdr) o.push(`  Backup Designated router (ID) ${fmtIp(bdr.rid)}, Interface address ${fmtIp(bdr.ip)}`);
+    o.push(`  Timer intervals configured, Hello ${f.hello}, Dead ${f.dead}, Wait ${f.dead}, Retransmit 5`);
+    if (f.passive) o.push('    No Hellos (Passive interface)');
+    else o.push(`    Hello due in 00:00:0${(st.clock % f.hello) | 0}`);
+    o.push(`  Neighbor Count is ${nb.length}, Adjacent neighbor count is ${full.length}`,
+      ...full.map((n) => `    Adjacent with neighbor ${fmtIp(n.rid ?? n.ip)}${n.role === 'DR' ? '  (Designated Router)' : n.role === 'BDR' ? '  (Backup Designated Router)' : ''}`),
+      ...(i.mtu ? [`  （ip mtu ${i.mtu}：兩端的 MTU 要一樣，不然資料庫交換會卡在 EXSTART）`] : []),
+      ...f.why.map((w) => `  （沒有成為鄰居：${w}）`), '');
+  }
+  return o;
 }
 
 // ───────────────────────── QoS ─────────────────────────
@@ -832,6 +913,14 @@ function showOrPing(app, devId, line, print) {
     if (!i) { print(`% 找不到介面「${tok.slice(3).join(' ')}」`, 'warn'); return true; }
     const lines = policyIfLines(st, d, i);
     (lines.length ? lines : [`（${i.label} 上沒有套用任何 service-policy）`]).forEach((l) => print(l, l.startsWith('（') ? 'hint' : 'pre'));
+    return true;
+  }
+  if (tok[0].length >= 2 && 'show'.startsWith(tok[0]) && tok[1] === 'ip' && tok[2] && 'ospf'.startsWith(tok[2]) && tok[2].length >= 2 && tok[3] && tok[3].length >= 3 && 'interface'.startsWith(tok[3]) && tok[4] && !'brief'.startsWith(tok[4])) {
+    const name = tok.slice(4).join('');
+    const lo = name.match(/^lo[a-z]*(\d+)$/);
+    const i = lo ? d.ifaces.find((x) => isLoopback(x) && x.bind.n === +lo[1]) : (() => { const p = portByName(d, name.replace(/\.\d+$/, '')); const sub = name.match(/\.(\d+)$/); return p && d.ifaces.find((x) => x.bind.port === p.id && (sub ? x.bind.t === 'sub' && x.bind.vlan === +sub[1] : x.bind.t === 'port')); })();
+    if (!i) { print(`% 找不到介面「${tok.slice(4).join(' ')}」`, 'warn'); return true; }
+    ospfIfLines(st, d, i).forEach((l) => print(l, l.startsWith('（') ? 'hint' : 'pre'));
     return true;
   }
   if (tok[0].length >= 2 && 'show'.startsWith(tok[0]) && tok[1] === 'mls' && tok[2] && 'qos'.startsWith(tok[2]) && tok[3] && 'interface'.startsWith(tok[3]) && tok[4]) {

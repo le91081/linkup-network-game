@@ -6,6 +6,7 @@ import { cloneState, primaryIface, CATALOG, CABLES, cableKind, cableDist, linkIn
 import { cdpOn, lldpTxOn, lldpRxOn, speaksCdp } from './disc.js';
 import { egressOf, markAlong, classify, setCdpCheck } from './qos.js';
 import { callsTick, phoneTick, phoneState, PHONE_TEXT, callQuality, mosText } from './voice.js';
+import { computeOspf, ospfArea } from './ospf.js';
 setCdpCheck((d, pid, x, xp) => cdpOn(d, pid) && cdpOn(x, xp));
 import { recompute6, transact6, globalIp6 } from './sim6.js';
 import { parseIp6 } from './ip6.js';
@@ -1025,13 +1026,25 @@ function buildRoutes(d) {
   d.rt.routes = r;
 }
 
-export function lookupRoute(d, ip) {
+/**
+ * 最長相符，再比管理距離、metric。好幾條一樣好的路（等價多路徑）：依來源與目的位址雜湊挑一條，
+ * 同一對位址永遠走同一條（CEF 的 per-destination load sharing），不同的主機會分散到不同的路
+ */
+export function lookupRoute(d, ip, src) {
   let best = null;
+  const ties = [];
   for (const r of d.rt.routes) {
     if (r.bad || netOf(ip, r.bits) !== r.net) continue;
-    if (!best || r.bits > best.bits || (r.bits === best.bits && (r.ad < best.ad || (r.ad === best.ad && r.metric < best.metric)))) best = r;
+    if (!best || r.bits > best.bits || (r.bits === best.bits && (r.ad < best.ad || (r.ad === best.ad && r.metric < best.metric)))) { best = r; ties.length = 0; ties.push(r); }
+    else if (r.bits === best.bits && r.ad === best.ad && r.metric === best.metric && r.via !== best.via) ties.push(r);
   }
+  if (ties.length > 1 && src != null) return ties[hash(fmtIp(src) + '>' + fmtIp(ip)) % ties.length];
   return best;
+}
+/** 某個目的地所有等價的路（給 show ip route 與 traceroute 用） */
+export function routesTo(d, ip) {
+  const best = lookupRoute(d, ip);
+  return best ? d.rt.routes.filter((r) => !r.bad && r.net === best.net && r.bits === best.bits && r.ad === best.ad && r.metric === best.metric) : [];
 }
 
 /**
@@ -1040,8 +1053,7 @@ export function lookupRoute(d, ip) {
  */
 export function ospfOn(d, i) {
   if (i.ospf) return true;
-  const ip = i.rt && i.rt.ip != null ? i.rt.ip : parseIp(i.ip || '');
-  return ip != null && (d.ospfNets || []).some((n) => netOf(ip, n.bits) === n.net);
+  return ospfArea(d, i) != null;
 }
 /** 圖形介面的開關：關閉時連同涵蓋它的 network 敘述一起移除（其他被同一條敘述涵蓋的介面維持啟用） */
 export function setOspf(d, i, on) {
@@ -1053,100 +1065,9 @@ export function setOspf(d, i, on) {
   i.ospf = false;
 }
 
-const OSPF_WAIT = 40; // 乙太網路上要先等 DR / BDR 選舉（Wait timer 和 Dead interval 一樣長），鄰居才會進到 FULL
-const OSPF_DEAD = 40; // 四個 Hello 間隔沒聽到對方，才判定鄰居失聯
-
-function computeOspf(state) {
-  const dyn = state.dyn, now = state.clock, devs = state.devices;
-  const running = (d, i) => !!i && ospfOn(d, i) && i.rt.ip != null && i.rt.link;
-  const nodes = Object.values(devs).filter((d) => d.ifaces.some((i) => running(d, i)));
-  const isNode = new Set(nodes.map((d) => d.id));
-  const adj = {}, nets = {}, seen = new Set();
-  for (const d of nodes) {
-    adj[d.id] = []; nets[d.id] = []; d.rt.nbrs = [];
-    for (const i of d.ifaces) {
-      if (!running(d, i)) continue;
-      nets[d.id].push({ net: netOf(i.rt.ip, i.rt.bits), bits: i.rt.bits });
-      const cost = Math.max(1, +i.ospfCost || 1);
-      for (const e of l2Explore(state, d.id, i)) {
-        const j = e.iface;
-        if (!ospfOn(devs[e.dev], j) || j.rt.ip == null || j.rt.bits !== i.rt.bits || !sameNet(j.rt.ip, i.rt.ip, i.rt.bits)) continue;
-        const me = d.id + '/' + i.id, other = e.dev + '/' + j.id, key = me < other ? me + '~' + other : other + '~' + me;
-        let rec = dyn.adj[key];
-        if (!rec) rec = dyn.adj[key] = { since: dyn.boot ? -1e9 : now };
-        if (rec.gone) { rec.since = now; delete rec.gone; } // 中斷過又聽到對方：鄰居關係要從頭建立
-        rec.last = now;
-        rec[me] = { ip: i.rt.ip, cost }; // 記下這一端的資訊，對方失聯之後還用得到
-        seen.add(key);
-        const left = rec.since + OSPF_WAIT - now;
-        if (left > 0) {
-          d.rt.nbrs.push({ dev: e.dev, iface: i.id, ip: j.rt.ip, cost, state: 'forming', left });
-          state.rt.pending.push({ at: rec.since + OSPF_WAIT, dev: d.id, kind: 'ospf', text: `${d.name} ↔ ${devs[e.dev].name}：OSPF 鄰居關係建立中` });
-          continue;
-        }
-        adj[d.id].push({ to: e.dev, iface: i, via: j.rt.ip, cost });
-        d.rt.nbrs.push({ dev: e.dev, iface: i.id, ip: j.rt.ip, cost, state: 'full', dead: OSPF_DEAD - ((now - Math.max(rec.since, 0)) % 10) });
-      }
-    }
-    if (d.ospfDefault && d.rt.routes.some((r) => r.bits === 0 && !r.bad && r.type !== 'O')) nets[d.id].push({ net: 0, bits: 0 });
-    dyn.lsa[d.id] = nets[d.id];
-  }
-  // 這一次沒聽到的鄰居：介面還亮著的那一端，要等 Dead timer 到期才會把它從資料庫拿掉。
-  // 在那之前路由還指向已經不在的鄰居，封包會被送進黑洞。
-  const ghosts = new Set();
-  for (const [key, rec] of Object.entries(dyn.adj)) {
-    if (seen.has(key)) continue;
-    if (now - rec.last >= OSPF_DEAD || rec.since + OSPF_WAIT > rec.last) { delete dyn.adj[key]; continue; }
-    rec.gone = true;
-    const sides = key.split('~').map((s) => ({ s, dev: s.slice(0, s.indexOf('/')), iface: s.slice(s.indexOf('/') + 1) }));
-    for (const [a, b] of [[sides[0], sides[1]], [sides[1], sides[0]]]) {
-      const d = devs[a.dev], other = devs[b.dev];
-      if (!d || !other || !rec[b.s]) continue;
-      const i = d.ifaces.find((x) => x.id === a.iface);
-      const believes = isNode.has(d.id) && running(d, i);
-      if (!believes && isNode.has(d.id)) continue; // 自己的介面也斷了：立刻知道鄰居不見了
-      if (!isNode.has(d.id)) ghosts.add(d.id); // 已經失聯的那一台：它發過的 LSA 還留在別人的資料庫裡
-      (adj[d.id] ||= []).push({ to: b.dev, iface: i, via: rec[b.s].ip, cost: rec[a.s] ? rec[a.s].cost : 1, stale: true });
-      if (!believes) continue;
-      const left = rec.last + OSPF_DEAD - now;
-      d.rt.nbrs.push({ dev: b.dev, iface: a.iface, ip: rec[b.s].ip, cost: rec[a.s] ? rec[a.s].cost : 1, state: 'dying', left });
-      state.rt.pending.push({ at: rec.last + OSPF_DEAD, dev: d.id, kind: 'ospf', text: `${d.name} 還沒發現 ${other.name} 已經失聯（OSPF Dead timer）` });
-    }
-  }
-  for (const id of ghosts) nets[id] = dyn.lsa[id] || [];
-  for (const id of Object.keys(dyn.lsa)) if (!isNode.has(id) && !ghosts.has(id)) delete dyn.lsa[id];
-  const everyone = [...nodes.map((d) => d.id), ...ghosts];
-  for (const d of nodes) {
-    const dist = { [d.id]: 0 }, first = {}, done = new Set();
-    for (;;) {
-      let u = null;
-      for (const k of Object.keys(dist)) if (!done.has(k) && (u == null || dist[k] < dist[u])) u = k;
-      if (u == null) break;
-      done.add(u);
-      for (const e of adj[u] || []) {
-        const nd = dist[u] + e.cost;
-        if (dist[e.to] == null || nd < dist[e.to]) { dist[e.to] = nd; first[e.to] = u === d.id ? e : first[u]; }
-      }
-    }
-    for (const oid of everyone) {
-      if (oid === d.id || dist[oid] == null) continue;
-      for (const n of nets[oid]) {
-        if (d.rt.routes.some((r) => r.type === 'C' && r.net === n.net && r.bits === n.bits)) continue;
-        const metric = dist[oid] + 1;
-        const ex = d.rt.routes.findIndex((r) => r.type === 'O' && r.net === n.net && r.bits === n.bits);
-        if (ex >= 0) {
-          if (d.rt.routes[ex].metric <= metric) continue;
-          d.rt.routes.splice(ex, 1);
-        }
-        d.rt.routes.push({ net: n.net, bits: n.bits, via: first[oid].via, iface: first[oid].iface, type: 'O', ad: 110, metric });
-      }
-    }
-  }
-}
-
 function routesAll(state) {
   for (const d of Object.values(state.devices)) buildRoutes(d);
-  computeOspf(state);
+  computeOspf(state, ospfOn);
 }
 
 // ───────────────────────────── VPN 通道 ─────────────────────────────
@@ -1456,6 +1377,7 @@ function computePass(state, auth) {
       if (dead) i.rt.link = false;
       else if (b.t === 'port' || b.t === 'sub') i.rt.link = !!state.rt.links[d.id + ':' + b.port];
       else if (b.t === 'wlan') i.rt.link = !!i.rt.assoc;
+      else if (b.t === 'loop') i.rt.link = !i.shut;
       if (!i.rt.active || i.mode !== 'static') continue;
       const ip = parseIp(i.ip), bits = parseMask(i.mask);
       if (ip == null || bits == null) continue;
@@ -1906,7 +1828,7 @@ function forward(state, ctx, startId, pkt) {
       return drop(`${fmtIp(pkt.dst)} 是私有 IP，在網際網路上無法路由（上一台路由器把它交給了預設路由 — 是不是少了通往這個網段的路由或 VPN？）`);
     }
 
-    const route = lookupRoute(dev, pkt.dst);
+    const route = lookupRoute(dev, pkt.dst, pkt.src);
     if (!route) {
       D('packet', `IP: s=${fmtIp(pkt.src)} (${inIf ? longIf(inIf.label) : 'local'}), d=${fmtIp(pkt.dst)}, len ${ipLen(pkt)}, unroutable`);
       return drop(noRouteReason(state, dev, pkt.dst));
@@ -2613,7 +2535,7 @@ export function routeRows(dev) {
     .slice()
     .sort((a, b) => a.ad - b.ad || a.net - b.net)
     .map((r) => ({
-      type: r.type, typeName: name[r.type],
+      type: r.type, typeName: name[r.type], sub: r.sub || '',
       dst: r.bits === 0 ? '0.0.0.0/0（預設）' : `${fmtIp(r.net)}/${r.bits}`,
       via: r.via == null ? '直連' : fmtIp(r.via),
       iface: r.iface ? r.iface.label : '—',

@@ -7,6 +7,7 @@ import {
 import { CATALOG, MEDIA, peerOf, newIface, defaultPortMode } from '../engine/model.js';
 import { parseIp, fmtIp } from '../engine/ip.js';
 import { routeRows, SERVICE_NAMES, hitsOf, ospfOn, setOspf, fmtDur } from '../engine/sim.js';
+import { ospfArea, ospfCost, ospfPassive, isLoopback } from '../engine/ospf.js';
 import { buildTerminal } from './terminal.js';
 import * as X from './panel-extra.js';
 import * as M from './panel-more.js';
@@ -17,6 +18,39 @@ import { isTftp, isFtp } from '../engine/files.js';
 import { buildCli } from './cli.js';
 import { buildFortiCli } from './forticli.js';
 import { isIos, iosDirty, saveStartup } from '../engine/ios.js';
+
+/** 介面上的 OSPF 參數：區域、cost、priority、網路類型、被動介面、計時器、驗證 */
+function ospfIfBlock(ctx, i) {
+  const d = ctx.dev;
+  const area = ospfArea(d, i);
+  const fromStmt = !i.ospf; // 由 router ospf 的 network 敘述啟用的：區域跟著敘述走
+  const setPassive = (on) => {
+    if (d.ospfPassiveDefault) { d.ospfNoPassive = (d.ospfNoPassive || []).filter((x) => x !== i.id); if (!on) d.ospfNoPassive.push(i.id); }
+    else { d.ospfPassive = (d.ospfPassive || []).filter((x) => x !== i.id); if (on) d.ospfPassive.push(i.id); }
+  };
+  return h('div', { class: 'sub' },
+    grid2(
+      field('OSPF 區域', fromStmt ? h('span', { class: 'mono', text: `area ${area}（由 network 敘述決定）` }) : inp(ctx, () => String(i.ospfArea || 0), (v) => { i.ospfArea = +v || 0; }, { check: isNum(0, 4294967295) })),
+      field('Cost', inp(ctx, ...bind(i, 'ospfCost'), { ph: `自動：${ospfCost(ctx.state, d, i)}（參考頻寬 ${+d.ospfRefBw || 100} Mbps ÷ 介面頻寬）`, check: isNum(1, 65535) })),
+      !isLoopback(i) && field('Priority（DR 選舉）', inp(ctx, () => (i.ospfPrio == null ? '' : String(i.ospfPrio)), (v) => { if (v === '') delete i.ospfPrio; else i.ospfPrio = +v; }, { ph: '預設 1；0 表示不當 DR / BDR', check: isNum(0, 255) })),
+      !isLoopback(i) && field('網路類型', sel(ctx, () => i.ospfNet || '', (v) => { if (v) i.ospfNet = v; else delete i.ospfNet; }, [['', 'broadcast（要選 DR / BDR）'], ['p2p', 'point-to-point（兩台直連，不選 DR）']])),
+      !isLoopback(i) && field('Hello / Dead（秒）', inp(ctx, () => (i.ospfHello || i.ospfDead ? `${i.ospfHello || 10}/${i.ospfDead || 4 * (i.ospfHello || 10)}` : ''), (v) => {
+        const m = String(v).match(/^(\d+)\s*\/\s*(\d+)$/);
+        if (!m) { delete i.ospfHello; delete i.ospfDead; return; }
+        if (+m[1] === 10) delete i.ospfHello; else i.ospfHello = +m[1];
+        if (+m[2] === 4 * (+m[1])) delete i.ospfDead; else i.ospfDead = +m[2];
+      }, { ph: '10/40（兩端要一樣）' })),
+      !isLoopback(i) && field('驗證', sel(ctx, () => i.ospfAuth || '', (v) => { if (v) i.ospfAuth = v; else delete i.ospfAuth; if (v === 'md5' && !(i.ospfKey && i.ospfKey.id)) i.ospfKey = { id: 1, key: (i.ospfKey || {}).key || '' }; }, [['', '跟著區域的設定（預設不驗證）'], ['md5', 'MD5 (message-digest)'], ['plain', '明文密碼'], ['null', '不驗證 (null)']], { rerender: true })),
+      i.ospfAuth && i.ospfAuth !== 'null' && field('驗證金鑰', inp(ctx, () => (i.ospfKey || {}).key || '', (v) => { i.ospfKey = { id: i.ospfAuth === 'md5' ? (i.ospfKey || {}).id || 1 : '', key: v }; }, { ph: '兩端要一樣' }))),
+    !isLoopback(i) && h('div', { class: 'toggles' }, toggle(ctx, () => ospfPassive(d, i), setPassive, '被動介面 (passive-interface)：通告這個網段，但不送 Hello、不建立鄰居（接使用者的介面建議打開）')),
+    isLoopback(i) && note('muted', 'Loopback 一律以 /32 主機路由通告；它永遠是 up 的，很適合拿來當 Router ID。'),
+    ctx.live(() => {
+      const f = d.rt.ospf && d.rt.ospf.ifs[i.id];
+      if (!f) return null;
+      const st = { DR: 'DR（指定路由器）', BDR: 'BDR（備援指定路由器）', DROTHER: 'DROTHER', WAITING: '等 Wait timer，還沒選 DR', P2P: '點對點', PASSIVE: '被動介面', LOOP: 'Loopback' }[f.state] || f.state;
+      return [note('muted', `OSPF 狀態：${st} · cost ${f.cost} · 鄰居 ${f.full}/${f.nbrs} FULL`), ...f.why.map((w) => note('warn', '沒有成為鄰居：' + w))];
+    }));
+}
 
 function dhcpBlock(ctx, i) {
   const d = i.dhcp;
@@ -81,11 +115,8 @@ function ifaceCard(ctx, i, o = {}) {
       : field('NAT 例外（往這些網段不轉換位址）', inp(ctx, ...bind(i, 'natSkip'), { ph: '例如站對站 VPN 的遠端網段 10.1.0.0/24', check: isCidrList }),
         '路由器會先做 NAT 再判斷要不要走 VPN。往對端內網的流量如果被 NAT，就不會進加密通道。'));
   }
-  if ((o.ospf && ospfOn(ctx.dev, i)) || o.helper) {
-    parts.push(grid2(
-      o.ospf && ospfOn(ctx.dev, i) && field('OSPF Cost', inp(ctx, ...bind(i, 'ospfCost'), { ph: '預設 1，越小越優先', check: isNum(1, 65535) })),
-      o.helper && field('DHCP Relay', inp(ctx, ...bind(i, 'helper'), { ph: '遠端 DHCP 伺服器 IP（選填）', check: isIp }))));
-  }
+  if (o.ospf && ospfOn(ctx.dev, i)) parts.push(ospfIfBlock(ctx, i));
+  if (o.helper) parts.push(grid2(field('DHCP Relay', inp(ctx, ...bind(i, 'helper'), { ph: '遠端 DHCP 伺服器 IP（選填）', check: isIp }))));
   if (o.phy) parts.push(X.phyFields(ctx, i), X.phyNote(ctx, o.port));
   if (o.access) parts.push(X.accessRow(ctx, i));
   parts.push(ifaceNote(ctx, i));
@@ -291,6 +322,26 @@ function rtIfaces(ctx, body) {
     body.append(h('div', { class: 'addrow nested' }, h('span', { class: 'muted', text: `在 ${p.label} 新增子介面` }), vidInp,
       button('新增', { ic: 'plus', small: true, onclick: add })));
   }
+  loopbackCards(ctx, body);
+}
+
+/** Loopback：不靠任何實體線路、永遠是 up 的虛擬介面，常拿來當 Router ID 與管理位址 */
+function loopbackCards(ctx, body) {
+  const { dev } = ctx;
+  const loops = dev.ifaces.filter((x) => x.bind.t === 'loop').sort((a, b) => a.bind.n - b.bind.n);
+  for (const l of loops) {
+    body.append(ifaceCard(ctx, l, {
+      title: l.label, ospf: true, badge: h('span', { class: 'chip tiny', text: '虛擬介面' }),
+      onDelete: () => { dev.ifaces = dev.ifaces.filter((x) => x !== l); ctx.commit(true); },
+    }));
+  }
+  body.append(h('div', { class: 'addrow' }, h('span', { class: 'muted', text: 'Loopback 介面不會斷線，適合當 Router ID 與管理位址' }),
+    button('新增 Loopback', { ic: 'plus', small: true, onclick: () => {
+      let n = 0;
+      while (loops.some((x) => x.bind.n === n)) n++;
+      dev.ifaces.push(newIface('Lo' + n, 'Loopback' + n, { t: 'loop', n }, { mask: '255.255.255.255' }));
+      ctx.commit(true);
+    } })));
 }
 
 function routesTab(ctx, body) {
@@ -310,9 +361,29 @@ function routesTab(ctx, body) {
     h('span', { class: 'muted', text: '預設路由：0.0.0.0 / 0.0.0.0。距離越小越優先。' })));
   body.append(card);
   if (dev.kind === 'l3switch' || dev.kind === 'router') {
+    const rangeDraft = (ctx.app.rangeDraft ||= {});
     body.append(h('div', { class: 'card' }, cardHead('OSPF'),
-      h('div', { class: 'toggles' }, toggle(ctx, ...bind(dev, 'ospfDefault'), '向 OSPF 發布預設路由（default-information originate）')),
-      h('p', { class: 'tip', text: 'OSPF 在各介面上個別啟用。有通往外部的預設路由的那一台勾選這個選項，其他 OSPF 路由器就會自動學到「往外走要找它」。' })));
+      grid2(
+        field('Router ID', inp(ctx, ...bind(dev, 'ospfRid'), { ph: '留空＝最大的 Loopback，再來是最大的介面 IP', check: isIp })),
+        field('參考頻寬 (Mbps)', inp(ctx, () => (dev.ospfRefBw ? String(dev.ospfRefBw) : ''), (v) => { if (+v > 0 && +v !== 100) dev.ospfRefBw = +v; else delete dev.ospfRefBw; }, { ph: '預設 100：1G 和 10G 的 cost 都是 1', check: isNum(1, 4294967) })),
+        field('最多幾條等價路徑', inp(ctx, () => (dev.ospfMaxPaths ? String(dev.ospfMaxPaths) : ''), (v) => { if (+v > 0 && +v !== 4) dev.ospfMaxPaths = +v; else delete dev.ospfMaxPaths; }, { ph: '預設 4', check: isNum(1, 32) }))),
+      ctx.live(() => (dev.rt.ospf && dev.rt.ospf.pending ? note('warn', `Router ID 改了，但 OSPF 程序還在用 ${fmtIp(dev.rt.ospf.rid)}：要 clear ip ospf process（CLI）才會換。`) : dev.rt.ospf && dev.rt.ospf.rid != null ? note('muted', `目前的 Router ID：${fmtIp(dev.rt.ospf.rid)}${dev.rt.ospf.abr ? ' · 這台是 ABR（連著骨幹與其他區域）' : ''}${dev.rt.ospf.asbr ? ' · 這台是 ASBR' : ''}`) : null)),
+      h('div', { class: 'toggles' },
+        toggle(ctx, ...bind(dev, 'ospfDefault'), '向 OSPF 發布預設路由（default-information originate）'),
+        toggle(ctx, () => !!dev.ospfPassiveDefault, (v) => { if (v) { dev.ospfPassiveDefault = true; dev.ospfNoPassive = []; } else { delete dev.ospfPassiveDefault; delete dev.ospfNoPassive; } }, '所有介面預設都是被動的 (passive-interface default)，要建立鄰居的介面再個別取消')),
+      h('div', { class: 'acl-h' }, h('span', { text: '區域彙總 (area range)' }), h('em', { text: 'ABR 把某個區域的網段合併成一筆送進骨幹' })),
+      (dev.ospfRanges || []).map((r, n) => h('div', { class: 'line' }, h('b', { class: 'mono', text: `area ${r.area}` }), h('span', { class: 'mono', text: `${fmtIp(r.net)}/${r.bits}` }), del(() => { dev.ospfRanges.splice(n, 1); ctx.commit(true); }))),
+      h('div', { class: 'addrow' },
+        inp({ commit() {} }, ...bind(rangeDraft, 'area'), { ph: '區域', w: '5em', check: isNum(1, 4294967295) }),
+        inp({ commit() {} }, ...bind(rangeDraft, 'cidr'), { ph: '例如 10.1.0.0/16', check: (v) => /^[\d.]+\/\d+$/.test(v) }),
+        button('新增', { small: true, onclick: () => {
+          const m = String(rangeDraft.cidr || '').match(/^([\d.]+)\/(\d+)$/), ip = m && parseIp(m[1]);
+          if (!(+rangeDraft.area > 0) || ip == null || !(+m[2] <= 32)) return toast('區域請填非 0 的數字，網段寫成 10.1.0.0/16', 'bad');
+          (dev.ospfRanges ||= []).push({ area: +rangeDraft.area, net: (ip >>> (32 - +m[2])) << (32 - +m[2]) >>> 0, bits: +m[2] });
+          rangeDraft.cidr = '';
+          ctx.commit(true);
+        } })),
+      h('p', { class: 'tip', text: 'OSPF 在各介面上個別啟用（或用 CLI 的 network 敘述）。有通往外部的預設路由的那一台勾選「發布預設路由」，其他 OSPF 路由器就會學到 O*E2 的預設路由。' })));
   }
   body.append(routeTable(ctx));
   if (ctx.state.v6 && dev.kind === 'router') M.v6Routes(ctx, body);
@@ -324,7 +395,7 @@ function routeTable(ctx) {
     if (!rows.length) return note('muted', '路由表是空的 — 還沒有任何介面取得 IP。');
     return h('div', { class: 'rtable' }, rows.map((r) =>
       h('div', { class: 'rrow t-' + r.type + (r.bad ? ' bad' : '') },
-        h('span', { class: 'tag', text: r.typeName }), h('b', { class: 'mono', text: r.dst }),
+        h('span', { class: 'tag', text: r.typeName + (r.sub ? ' ' + r.sub : '') }), h('b', { class: 'mono', text: r.dst }),
         h('span', { class: 'mono', text: '→ ' + r.via }), h('span', { class: 'mono muted', text: `${r.iface} [${r.ad}${r.type === 'O' ? '/' + r.metric : ''}]` }),
         r.bad && h('em', { text: '無效：' + r.bad }))));
   }));
@@ -339,7 +410,7 @@ function statusTab(ctx, body) {
       const n = dev.rt.nbrs || [];
       if (!n.length) return note('muted', '沒有 OSPF 鄰居。兩端的介面都要有同網段的 IP 並勾選 OSPF。');
       return n.map((x) => h('div', { class: 'line' }, h('b', { text: state.devices[x.dev].name }),
-        h('span', { class: 'mono muted', text: `${fmtIp(x.ip)} · 經由 ${dev.ifaces.find((i) => i.id === x.iface)?.label} · cost ${x.cost}` }),
+        h('span', { class: 'mono muted', text: `${fmtIp(x.ip)} · 經由 ${dev.ifaces.find((i) => i.id === x.iface)?.label} · cost ${x.cost}${x.role && x.role !== 'P2P' && x.role !== 'WAITING' ? ' · 對方是 ' + x.role : ''}${x.note ? ' · ' + x.note : ''}` }),
         X.nbrBadge(x)));
     })));
   }
@@ -474,7 +545,7 @@ function inetInfo(ctx, body) {
 
 const T = {
   net: ['net', '網路設定', hostNet], term: ['term', '終端機', buildTerminal], ports: ['ports', '連接埠', plainPorts],
-  swports: ['ports', '連接埠', swPorts], vlan: ['vlan', 'VLAN', swVlans], l3: ['l3', 'L3 介面', swL3], route: ['route', '路由', routesTab],
+  swports: ['ports', '連接埠', swPorts], vlan: ['vlan', 'VLAN', swVlans], l3: ['l3', 'L3 介面', (ctx, body) => { swL3(ctx, body); loopbackCards(ctx, body); }], route: ['route', '路由', routesTab],
   status: ['status', '狀態', statusTab], sec: ['sec', '安全', X.secTab], mgmt: ['mgmt', '管理', X.mgmtTab], acl: ['acl', 'ACL', X.aclTab],
   vpn: ['vpn', 'VPN', X.vpnTab], ifs: ['if', '介面', rtIfaces], nat: ['nat', 'NAT / 轉發', forwardsTab],
 };

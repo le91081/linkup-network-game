@@ -84,6 +84,8 @@ export const dtpLine = (ctx, p, pc) => ctx.live(() => {
 export function nbrBadge(x) {
   if (x.state === 'forming') return badge('warn', `建立中 · 再 ${Math.ceil(x.left)} 秒`);
   if (x.state === 'dying') return badge('warn', `沒有回應 · ${Math.ceil(x.left)} 秒後移除`);
+  if (x.state === 'exstart') return badge('warn', 'EXSTART（卡住了）');
+  if (x.state === '2way') return badge('on', '2WAY（兩台都不是 DR / BDR）');
   return badge('on', 'FULL');
 }
 
