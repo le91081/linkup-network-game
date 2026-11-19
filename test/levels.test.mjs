@@ -2044,6 +2044,59 @@ console.log('\n自動化：YAML、RESTCONF、Ansible');
     'Gathering Facts、loop 的 item、debug var、when、register 與 assert');
 }
 
+console.log('\n雲端：VPC、IGW 與 EIP、NAT 閘道、安全群組、網路 ACL、站對站 VPN');
+{
+  const { naclCheck, vpnConfig, reservedWhy } = await import('../src/engine/cloud.js');
+  const { runningConfig } = await import('../src/engine/ios.js');
+  const ok = (cond, title) => (cond ? console.log('  ✔ ' + title) : fail(title));
+  const solvedCloud = (id) => { const lv = LEVELS.find((l) => l.id === id); const s = lv.setup(); recompute(s); lv.solve(s); recompute(s); return s; };
+  const ip = parseIp;
+  const s = solvedCloud('l60'), v = s.devices.aws.vpc;
+  const tcp = (from, dst, port, srcIp) => transact(s, from, { proto: 'tcp', dst: ip(dst), dport: port, ...(srcIp ? { srcIp: ip(srcIp) } : {}) });
+  const web = tcp('inet', '54.199.20.10', 443);
+  ok(web.ok && web.log.some((l) => /一對一 NAT/.test(l.text)) && web.log.some((l) => /來源 10\.50\.1\.10 換成 EIP 54\.199\.20\.10/.test(l.text)), 'IGW 的一對一 NAT：進來 EIP → 私有 IP，回應的來源換回 EIP');
+  const ping = transact(s, 'inet', { proto: 'icmp', dst: ip('54.199.20.10') });
+  ok(!ping.ok && /ICMP/.test(ping.reason) && /安全群組/.test(ping.reason), 'ping 不通：安全群組沒有允許 ICMP（HTTPS 卻可以）');
+  v.instances[0].eip = '';
+  recompute(s);
+  const noEip = tcp('aws', '93.184.216.34', 443, '10.50.1.10');
+  ok(!noEip.ok && /沒有公用 IP/.test(noEip.reason), '沒有彈性 IP 的執行個體從 IGW 出不去');
+  v.instances[0].eip = '54.199.20.10';
+  v.rts[0].routes = [];
+  recompute(s);
+  const asym = tcp('inet', '54.199.20.10', 443);
+  ok(!asym.ok && asym.phase === 'reply' && /路由表/.test(asym.reason), '路由表沒有 0.0.0.0/0 → igw：封包進得來，回應卻出不去（回程失敗）');
+  ok(reservedWhy(ip('10.50.1.1'), v.subnets[0]).includes('VPC 路由器') && reservedWhy(ip('10.50.1.255'), v.subnets[0]) && !reservedWhy(ip('10.50.1.4'), v.subnets[0]), 'AWS 保留每個子網路的前四個與最後一個位址');
+  const acl = { in: [{ n: 200, act: 'allow', proto: 'tcp', port: '443', cidr: '0.0.0.0/0' }, { n: 100, act: 'deny', proto: 'tcp', port: '443', cidr: '198.51.100.0/24' }] };
+  ok(naclCheck(acl, 'in', { proto: 'tcp' }, ip('198.51.100.77'), 443) === '規則 #100 拒絕' && naclCheck(acl, 'in', { proto: 'tcp' }, ip('8.8.8.8'), 443) === null && /\*/.test(naclCheck(acl, 'in', { proto: 'udp' }, ip('8.8.8.8'), 53)), '網路 ACL 依規則編號比對（不是依清單順序），最後是 * 拒絕');
+
+  const p = solvedCloud('l61'), pv = p.devices.aws.vpc;
+  const pt = (from, dst, port, srcIp) => transact(p, from, { proto: 'tcp', dst: ip(dst), dport: port, ...(srcIp ? { srcIp: ip(srcIp) } : {}) });
+  const upd = pt('aws', '93.184.216.34', 443, '10.50.2.20');
+  ok(upd.ok && upd.log.some((l) => /NAT 閘道 .*來源 10\.50\.2\.20 換成 54\.199\.20\.11/.test(l.text)), 'db-1 經由 NAT 閘道連外：來源換成 NAT 閘道的 EIP');
+  ok(!transact(p, 'inet', { proto: 'tcp', dst: ip('54.199.20.11'), dport: 3306 }).ok, '外面主動連 NAT 閘道的 EIP：一律丟棄');
+  const vpn = pt('pc', '10.50.2.20', 3306);
+  ok(vpn.ok && vpn.log.some((l) => /加密/.test(l.text)) && vpn.log.some((l) => /VPN：送達 db-1/.test(l.text)), '公司 PC 經由 IKEv2 通道連到私有子網路的 db-1');
+  ok(runningConfig(p, p.devices.rt).includes('crypto map AWS-MAP 10 ipsec-isakmp') && /crypto ikev2 keyring AWS-KR/.test(runningConfig(p, p.devices.rt).join('\n')), '「下載設定檔」的 IOS 設定可以直接貼到 ISR（通道建立）');
+  const saved = JSON.stringify(pv.nacls);
+  pv.nacls.find((a) => a.name === 'acl-private').out = [{ n: 100, act: 'allow', proto: 'tcp', port: '3306', cidr: '10.50.0.0/16' }];
+  recompute(p);
+  const back = pt('aws', '10.50.2.20', 3306, '10.50.1.10');
+  ok(!back.ok && back.phase === 'reply' && /無狀態/.test(back.reason), '網路 ACL 的輸出只允許 3306：web-1 的請求到了，db-1 的回應（臨時連接埠）被擋');
+  pv.nacls = JSON.parse(saved);
+  pv.rts.find((r) => r.name === 'rtb-private').prop = false;
+  recompute(p);
+  const noProp = pt('pc', '10.50.2.20', 3306);
+  ok(!noProp.ok && noProp.phase === 'reply', '關掉路由傳播：VPN 的請求進得來，db-1 的回應找不到往 10.20.0.0/24 的路');
+  pv.rts.find((r) => r.name === 'rtb-private').prop = true;
+  pv.natgws[0].subnet = 'subnet-0prv1a';
+  recompute(p);
+  const badNat = pt('aws', '93.184.216.34', 443, '10.50.2.20');
+  ok(!badNat.ok && /公有/.test(badNat.reason), 'NAT 閘道放在私有子網路：自己也出不去');
+  const fg = vpnConfig(p.devices.aws, p.devices.aws.vpns[0], 'forti');
+  ok(fg.includes('set remote-gw 54.199.20.2') && fg.includes('set ike-version 2'), 'FortiGate 版本的設定檔');
+}
+
 // ── 題庫與證照對照表的資料檢查 ──
 {
   const { QUESTIONS, TOPICS, LEVEL_TOPIC } = await import('../src/data/quiz.js');

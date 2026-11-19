@@ -1,5 +1,6 @@
 // 設備設定面板：依設備類別產生對應的管理頁面
 import * as AUTO from './panel-auto.js';
+import * as CL from './panel-cloud.js';
 import * as W from './panel-wlc.js';
 import { h, icon, button, faceplate, toast } from './dom.js';
 import {
@@ -578,6 +579,7 @@ function baseTabs(dev) {
       ['cap', '封包擷取', DG.captureTab], T.term].filter(Boolean);
     case 'hub': case 'switch': return [T.ports];
     case 'ap': return dev.lwap ? [['lwap', 'AP', W.lwapTab]] : [['ssid', '無線網路', X.ssidTab], ['radio', '無線電', X.radioTab], T.ports];
+    case 'cloud': return [['vpc', 'VPC', CL.vpcTab], ['sub', '子網路', CL.subnetTab], ['rtb', '路由表', CL.rtTab], ['ec2', 'EC2', CL.ec2Tab], ['sg', '安全群組', CL.sgTab], ['nacl', '網路 ACL', CL.naclTab], ['nat', 'NAT 閘道', CL.natTab], ['cvpn', 'VPN', CL.cloudVpnTab]];
     case 'wlc': return [['wlan', 'WLAN', W.wlanTab], ['aps', 'AP', W.apsTab], ['wcl', '用戶端', W.wlcClientsTab], ['wmi', '管理介面', W.wmiTab], T.swports];
     case 'mswitch': return [T.swports, T.vlan, T.sec, T.mgmt, T.status];
     case 'l3switch': return [T.swports, T.vlan, T.l3, T.route, T.sec, ['qos', 'QoS', V.qosTab], T.mgmt, T.status];
@@ -590,7 +592,7 @@ function baseTabs(dev) {
 
 const KIND_NAME = {
   host: '終端設備', hub: '集線器', switch: '交換器', mswitch: '網管型交換器', l3switch: 'L3 交換器',
-  router: '路由器', homerouter: '家用路由器', firewall: '防火牆', ap: '無線基地台', wlc: '無線控制器', internet: 'ISP',
+  router: '路由器', homerouter: '家用路由器', firewall: '防火牆', ap: '無線基地台', wlc: '無線控制器', internet: 'ISP', cloud: '公有雲',
 };
 
 /** 把選取的設備畫到面板上；回傳 false 表示沒有選取設備 */

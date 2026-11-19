@@ -15,6 +15,7 @@ import { opsBefore, opsAfter, logEvent, debugLog, longIf, UPTIME0 } from './ops.
 import { onHop, BCAST, spanDest, background, flowTraceStart, debugOf, countBytes } from './wire.js';
 import { agentOn } from './snmp.js';
 import { remoteOpen, remoteLogin, remoteClose } from './remote.js';
+import { cloudStep, prepCloud, cloudOwns } from './cloud.js';
 
 const DROP = Symbol('drop');
 const isVlanSw = (d) => !!d.sw && d.sw.mode === 'vlan';
@@ -1405,7 +1406,7 @@ function prepTunnels(state) {
       };
       d.rt.tunnels.push(T);
       all.push(T);
-      if (t.off) T.why = '通道已停用';
+      if (t.off) T.why = t.offWhy || '通道已停用';
       else if (T.peerIp == null) T.why = '尚未設定對端的公用 IP';
       else if (!T.local.length || !T.remote.length) T.why = '尚未設定本地 / 遠端網段';
       else if (t.ikev2 && !v2obj(d, t)) T.why = `crypto map 指定的 ikev2 profile「${t.ikev2}」不存在`;
@@ -1648,6 +1649,7 @@ function computePass(state, auth) {
       if (i) i.rt.vips.push(pub); // 讓這個介面替靜態 NAT 的公用 IP 回應 ARP
     }
   }
+  prepCloud(state); // 雲端：彈性 IP 掛到網際網路閘道上
   const old = state.leases || {};
   state.leases = {};
   // 伺服器手上還沒到期的租約：就算用戶端現在不在線上，那個位址也不會發給別人
@@ -1793,6 +1795,7 @@ function pktDesc(p) {
 function isLocal(dev, ip) {
   if (dev.ifaces.some((i) => i.rt.ip === ip || i.rt.vips.includes(ip))) return true;
   if (dev.rt.tunnels.some((t) => t.vip === ip)) return true;
+  if (dev.kind === 'cloud') return cloudOwns(dev, ip);
   return dev.kind === 'internet' && dev.inet.hosts.some((h) => parseIp(h.ip) === ip);
 }
 
@@ -1839,7 +1842,12 @@ function arpFail(state, dev, outIf, nh, viaGw, eps) {
   const who = viaGw ? `下一站（閘道）${fmtIp(nh)}` : fmtIp(nh);
   if (eps.dot1x) return `ARP 沒有回應：連接埠還沒有通過 802.1X 驗證（${eps.dot1x}）`;
   if (eps.ps) return `ARP 沒有回應：${dev.name} 的訊框被 ${eps.ps} 的 Port Security 擋下（不是允許的 MAC 位址）`;
-  if (!owner) return `ARP 沒有回應：找不到 ${who}，沒有任何設備使用這個 IP`;
+  if (!owner) {
+    // 雲端業者配置給你的彈性 IP：還沒有關聯到執行個體，或 VPC 沒有連接網際網路閘道，業者就不會替它回應
+    const cl = Object.values(state.devices).find((d) => d.kind === 'cloud' && d.vpc && d.vpc.eips.includes(fmtIp(nh)));
+    if (cl) return `${fmtIp(nh)} 是 ${cl.name} 的彈性 IP，但${cl.vpc.igw ? '還沒有關聯到任何執行個體或 NAT 閘道' : ' VPC 沒有連接網際網路閘道 (IGW)'}，雲端業者不會替它收封包`;
+    return `ARP 沒有回應：找不到 ${who}，沒有任何設備使用這個 IP`;
+  }
   if (eps.span) return `ARP 沒有回應：${state.devices[eps.span.dev].name} 的 ${eps.span.pid} 是 SPAN（連接埠鏡像）的目的埠。交換器只會從這個埠送出複製的訊框，接在上面的設備送進來的封包一律不轉送`;
   if (eps.stp) {
     const s = eps.stp;
@@ -1977,7 +1985,15 @@ function forward(state, ctx, startId, pkt) {
     // IOS 的 debug ip packet / debug ip icmp
     const dbg = !QUIET ? debugOf(state, dev.id) : null;
     const D = (what, text) => { if (dbg && dbg[what]) debugLog(state, dev, text); };
-    if (inIf) {
+    // 雲端的 VPC：子網路的路由表、網際網路閘道 / NAT 閘道、安全群組與網路 ACL 由 cloud.js 處理
+    let cloud = null;
+    if (dev.kind === 'cloud') {
+      const c = cloudStep(state, ctx, dev, inIf, pkt, { findTunnel, track });
+      if (c.drop) return drop(c.drop);
+      if (c.done) return { ok: true, dev: dev.id };
+      if (!c.pass) cloud = c;
+    }
+    if (inIf && !cloud) {
       if (tr) {
         const n = PROTO_NUM[pkt.proto] || 0, dp = pkt.proto === 'icmp' ? (pkt.reply ? 0 : 2048) : pkt.dport;
         const extra = pkt.proto === 'icmp' ? ` type=${pkt.reply ? 0 : 8}, code=0, id=${pkt.reply ? pkt.dport : pkt.sport}, seq=1.`
@@ -2032,12 +2048,12 @@ function forward(state, ctx, startId, pkt) {
       if (!dev.routing) return drop(`${dev.name} 收到不是給自己的封包（目的 ${fmtIp(pkt.dst)}），它不是路由器所以直接丟棄`);
       if (--pkt.ttl <= 0) return drop('TTL 歸零，封包被丟棄（可能有路由迴圈）');
       if (!pkt.reply && !pkt.ack && pkt.proto !== 'esp') ctx.l3.push({ dev: dev.id, ip: inIf.rt.ip });
-    } else if (isLocal(dev, pkt.dst)) {
+    } else if (!cloud && isLocal(dev, pkt.dst)) {
       return { ok: true, dev: dev.id };
     }
 
     // VPN：符合通道的本地 / 遠端網段就加密後送給對端
-    let tun = pkt.proto !== 'esp' && findTunnel(dev, pkt);
+    let tun = cloud ? cloud.tunnel || null : pkt.proto !== 'esp' && findTunnel(dev, pkt);
     if (tun && dev.kind === 'router' && inIf && !pkt.reply && tun.up) {
       // 路由器的處理順序是「先 NAT，再比對要不要加密」。來源位址一旦被換掉，就不再符合 VPN 的加密範圍
       const wan = lookupRoute(dev, tun.peerIp);
@@ -2087,7 +2103,7 @@ function forward(state, ctx, startId, pkt) {
       return drop(`${fmtIp(pkt.dst)} 是私有 IP，在網際網路上無法路由（上一台路由器把它交給了預設路由 — 是不是少了通往這個網段的路由或 VPN？）`);
     }
 
-    const route = lookupRoute(dev, pkt.dst, pkt.src);
+    const route = cloud ? cloud.out : lookupRoute(dev, pkt.dst, pkt.src);
     if (!route) {
       D('packet', `IP: s=${fmtIp(pkt.src)} (${inIf ? longIf(inIf.label) : 'local'}), d=${fmtIp(pkt.dst)}, len ${ipLen(pkt)}, unroutable`);
       return drop(noRouteReason(state, dev, pkt.dst));

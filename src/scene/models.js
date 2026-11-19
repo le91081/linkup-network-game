@@ -11,7 +11,7 @@ export const PALETTE = {
 
 export const ACCENT = {
   host: PALETTE.blue, hub: PALETTE.mid, switch: PALETTE.teal, mswitch: PALETTE.teal, l3switch: PALETTE.teal,
-  router: PALETTE.violet, homerouter: PALETTE.violet, firewall: PALETTE.orange, internet: PALETTE.sky,
+  router: PALETTE.violet, homerouter: PALETTE.violet, firewall: PALETTE.orange, internet: PALETTE.sky, cloud: PALETTE.amber,
 };
 
 const matCache = new Map();
@@ -301,6 +301,33 @@ const BUILDERS = {
     // ISP 線路從底座正面接出來
     jacks(g, u, dev, 0, 0.3, 0.1, 0.9, 0, 1);
     u.rect = [-0.95, 0.95, -0.95, 0.95];
+  },
+  /** 公有雲的 VPC：底座上浮著一朵雲 */
+  cloud(g, dev, u) {
+    Object.assign(u, { w: 3.0, h: 2.5, d: 2.4 });
+    const base = new THREE.Mesh(new THREE.CylinderGeometry(1.1, 1.2, 0.14, 40), mat(PALETTE.dark, { metal: 0.4 }));
+    base.position.y = 0.07;
+    g.add(base);
+    const ring = new THREE.Mesh(new THREE.TorusGeometry(0.95, 0.03, 8, 48), glow(PALETTE.amber, 1.4));
+    ring.rotation.x = Math.PI / 2;
+    ring.position.y = 0.16;
+    g.add(ring);
+    const puff = new THREE.Group();
+    puff.position.y = 1.35;
+    g.add(puff);
+    const m = new THREE.MeshStandardMaterial({ color: 0xeef3fb, emissive: 0x4a6a9c, emissiveIntensity: 0.32, roughness: 0.65 });
+    for (const [x, y, z, r] of [[-0.75, -0.05, 0, 0.55], [0, 0.22, 0, 0.78], [0.78, -0.02, 0, 0.56], [-0.32, -0.2, 0.38, 0.46], [0.36, -0.18, 0.38, 0.5], [0.05, -0.12, -0.4, 0.52]]) {
+      const s = new THREE.Mesh(new THREE.SphereGeometry(r, 28, 18), m);
+      s.position.set(x, y, z);
+      puff.add(s);
+    }
+    // 底下一圈琥珀色的光：VPC 的邊界
+    const halo = new THREE.Mesh(new THREE.TorusGeometry(1.25, 0.018, 6, 64), glow(PALETTE.amber, 1.1));
+    halo.rotation.x = Math.PI / 2;
+    halo.position.y = 0.72;
+    g.add(halo);
+    jacks(g, u, dev, 0, 0.3, 0.1, 1.05, 0, 1);
+    u.rect = [-1.2, 1.2, -1.2, 1.2];
   },
 };
 

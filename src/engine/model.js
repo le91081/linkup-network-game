@@ -1,5 +1,6 @@
 // 設備型錄（以現實世界的機型為藍本）與設備物件工廠
 import { parseIp } from './ip.js';
+import { newVpc, CLOUD_REGION } from './cloud.js';
 
 const rj = (id, label = id, extra) => ({ id, label, media: 'rj45', ...extra });
 const sfp = (id, label = id) => ({ id, label, media: 'sfp' });
@@ -166,6 +167,10 @@ export const CATALOG = {
     kind: 'ap', shape: 'ap', vendor: 'Cisco', title: 'Cisco Catalyst 9120AXI',
     tagline: '輕量型基地台 · 要由無線控制器管理 · 802.3at PoE', ports: [rj('Gi0', 'Gi0 / PoE')], needsPoe: true, poe: { cls: 4, watts: 20.9 }, lwap: true,
   },
+  vpc: {
+    kind: 'cloud', shape: 'cloud', vendor: 'AWS', title: 'Amazon VPC',
+    tagline: `公有雲的虛擬私有雲 · ${CLOUD_REGION}（東京）`, ports: [rj('inet', '網際網路')],
+  },
   internet: {
     kind: 'internet', shape: 'globe', vendor: 'ISP', title: '網際網路 (ISP)',
     tagline: '電信業者線路', ports: [rj('line1', '線路 1')],
@@ -270,6 +275,11 @@ export function makeDevice(model, id, o = {}) {
       if (m.bridge.length) d.ifaces.push(iface('internal', 'internal', { t: 'bridge' }));
       d.routing = true; d.policies = []; d.portForwards = []; d.vpns = []; d.mgmt = mgmt();
       d.vpnServer = { on: false, start: '', end: '', subnets: '', users: [] };
+      break;
+    case 'cloud':
+      // 雲端業者那一端：「網際網路閘道」介面接 ISP，VPC 裡的東西都在 d.vpc；站對站 VPN 沿用 d.vpns
+      d.ifaces = [iface('igw', '網際網路閘道', { t: 'port', port: 'inet' }, { ping: false })];
+      d.routing = true; d.vpns = []; d.vpc = newVpc();
       break;
     case 'internet':
       d.routing = true; d.locked = true;
