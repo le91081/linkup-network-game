@@ -957,6 +957,210 @@ console.log('\n需要時間的狀態：MAC 位址表、連線表、IPsec、NTP�
   }
 }
 
+// ── 階段 2：遠端登入、介面計數器、封包擷取與 SPAN、debug ──
+console.log('\n排除故障的工具：遠端登入、計數器、擷取、SPAN、debug');
+{
+  const ops = await import('../src/engine/ops.js');
+  const rem = await import('../src/engine/remote.js');
+  const wire = await import('../src/engine/wire.js');
+  const { iosSession, runningConfig } = await import('../src/engine/ios.js');
+  const { fortiSession, fortiConfig } = await import('../src/engine/fortios.js');
+  const { makeState, makeDevice, addCable, removeCable } = await import('../src/engine/model.js');
+  const ok = (cond, title) => (cond ? console.log('  ✔ ' + title) : fail(title));
+  const fresh = (id) => { const lv = LEVELS.find((l) => l.id === id); const s = lv.setup(); lv.solve(s); recompute(s); return { s, lv }; };
+  const ipOf = (s, id) => s.devices[id].ifaces.find((x) => x.rt && x.rt.ip != null).rt.ip;
+  const ios = (s, id, lines) => { const sess = iosSession(() => s.devices[id], () => s); const out = []; for (const l of lines) out.push(...sess.exec(l).out); recomputeNow(s); return out; };
+  const forti = (s, id, lines) => { const sess = fortiSession(() => s.devices[id], () => s); const out = []; for (const l of lines) out.push(...sess.exec(l).out); recomputeNow(s); return out; };
+  const ping = (s, from, to) => transact(s, from, { proto: 'icmp', dst: typeof to === 'number' ? to : ipOf(s, to) });
+  const frames = (s, id) => (wire.captureOf(s, id) || { frames: [] }).frames;
+
+  // ── 遠端登入 ──
+  {
+    const { s } = fresh('l19');
+    const sw = parseIp('10.0.99.2');
+    const no = rem.remoteOpen(s, 'usr', 'ssh', sw, 'admin');
+    const o = rem.remoteOpen(s, 'adm', 'ssh', sw, 'admin');
+    ok(!no.ok && /不在 Switch 允許管理的位址範圍內/.test(no.reason) && o.ok && o.kind === 'ios' && /^SHA256:/.test(o.key), 'SSH：使用者網段被 access-class 擋下，管理員可以連上交換器');
+    const bad = rem.remoteLogin(s, o.conn, 'admin'), good = rem.remoteLogin(s, o.conn, 'Net0ps-Admin-2026');
+    recomputeNow(s);
+    ok(!bad.ok && !bad.closed && good.ok && ops.vtyRows(s, s.devices.sw).length === 1, '密碼錯了可以再試；登入成功後 show users 看得到這條連線');
+    advance(s, 599);
+    const alive = rem.remoteSend(s, o.conn, 'show clock').ok;
+    advance(s, 601);
+    const gone = rem.remoteSend(s, o.conn, 'show clock');
+    ok(alive && !gone.ok && gone.by === 'device' && ops.vtyRows(s, s.devices.sw).length === 0, '閒置超過 10 分鐘 (exec-timeout 預設值) 設備自動登出；有在打字就不會');
+    ios(s, 'sw', ['conf t', 'login block-for 120 attempts 2 within 60', 'login on-failure log', 'banner motd #Authorized access only#', 'line vty 0 4', 'exec-timeout 1 30', 'end']);
+    const cfg = runningConfig(s, s.devices.sw);
+    ok(['login block-for 120 attempts 2 within 60', 'login on-failure log', 'banner motd #Authorized access only#', ' exec-timeout 1 30'].every((l) => cfg.includes(l)) && ops.idleLimit(s.devices.sw) === 90,
+      'login block-for、login on-failure log、banner motd、exec-timeout 都會出現在 running-config');
+    const c = rem.remoteOpen(s, 'adm', 'ssh', sw, 'admin').conn;
+    rem.remoteLogin(s, c, 'x');
+    const locked = rem.remoteLogin(s, c, 'y');
+    recomputeNow(s);
+    const during = rem.remoteOpen(s, 'adm', 'ssh', sw, 'admin');
+    advance(s, 121);
+    const after = rem.remoteOpen(s, 'adm', 'ssh', sw, 'admin');
+    const log = ops.logRows(s, s.devices.sw).map((x) => x.line);
+    ok(locked.closed && locked.locked === 120 && !during.ok && after.ok && log.some((l) => /%SEC_LOGIN-4-LOGIN_FAILED: Login failed \[user: admin\] \[Source: 10\.0\.99\.10\]/.test(l))
+      && log.some((l) => /%SEC_LOGIN-1-QUIET_MODE_ON/.test(l)) && log.some((l) => /%SEC_LOGIN-5-QUIET_MODE_OFF/.test(l)),
+    'login block-for：60 秒內失敗 2 次就拒絕所有登入 120 秒，並留下紀錄');
+  }
+  {
+    // 經過防火牆的 SSH：防火牆的連線表先把閒置的連線忘了
+    const { s } = fresh('l20');
+    const o = rem.remoteOpen(s, 'hq-pc', 'ssh', parseIp('10.2.0.1'), 'admin');
+    const login = o.ok && rem.remoteLogin(s, o.conn, 'admin');
+    forti(s, 'br', ['config system global', 'set admintimeout 480', 'end']);
+    forti(s, 'hq', ['config system session-ttl', 'set default 300', 'end']);
+    advance(s, 200);
+    const still = rem.remoteSend(s, o.conn, 'get system status').ok;
+    advance(s, 301);
+    const r = rem.remoteSend(s, o.conn, 'get system status');
+    ok(login && login.ok && still && !r.ok && r.by === 'net' && /HQ-FW 的連線表裡已經沒有這條連線/.test(r.reason) && fortiConfig(s, s.devices.br).join('\n').includes('set admintimeout 480'),
+      'SSH 穿過防火牆：閒置超過防火牆的 session-ttl，連線被防火牆丟掉 (no session matched)，設備那端其實還在等');
+  }
+
+  // ── 開機時間 ──
+  {
+    const { s } = fresh('l09');
+    const out = forti(s, 'fw', ['execute reboot']);
+    const booting = s.rt.booting.fw === 70 && !ping(s, 'pc-1', parseIp('8.8.8.8')).ok;
+    advance(s, 70);
+    ok(out.some((l) => /rebooting/.test(l)) && booting && ping(s, 'pc-1', parseIp('8.8.8.8')).ok && ops.logRows(s, s.devices.fw).some((x) => /Fortigate started/.test(x.line)),
+      'FortiGate execute reboot：70 秒內不通，開完機之後恢復，並記下 System restarted');
+  }
+
+  // ── 介面計數器 ──
+  {
+    const { s } = fresh('l06');
+    const c0 = wire.counters(s, 'sw', 'Gi0/1');
+    ok(c0.op > 100000 && c0.omc === c0.op && c0.ip === 0, '設備已經開機三天：計數器裡累積了大量 STP BPDU（每 2 秒一個，多點傳送）');
+    wire.clearCounters(s, 'sw');
+    ping(s, 'pc-s1', 'pc-s2');
+    const c1 = wire.counters(s, 'sw', 'Gi0/1');
+    advance(s, 10);
+    const c2 = wire.counters(s, 'sw', 'Gi0/1');
+    ok(c1.ip === 2 && c1.op === 2 && c1.ibc === 1 && c2.op === c1.op + 5 && wire.clearedAt(s, 'sw', 'Gi0/1') != null,
+      'clear counters 歸零之後：一次 ping 收 2 個（ARP 廣播 + ICMP）、送 2 個；10 秒後多了 5 個 BPDU');
+  }
+  {
+    const lv = LEVELS.find((l) => l.id === 'l39');
+    const s = lv.setup(); recompute(s);
+    wire.clearCounters(s, 'core'); wire.clearCounters(s, 'acc');
+    for (let k = 0; k < 9; k++) ping(s, 'pc-1', parseIp('192.168.1.10'));
+    const full = wire.counters(s, 'core', 'Gi0/9'), half = wire.counters(s, 'acc', 'Gi0/9');
+    ok(full.crc > 0 && full.runts > 0 && half.late > 0 && half.coll > 0 && !half.crc && !full.late,
+      'duplex mismatch：全雙工那一端收到 CRC 錯誤與 runt，半雙工那一端出現 late collision');
+    lv.solve(s); recompute(s);
+    wire.clearCounters(s, 'core'); wire.clearCounters(s, 'acc');
+    for (let k = 0; k < 9; k++) ping(s, 'pc-1', parseIp('192.168.1.10'));
+    const ok2 = wire.counters(s, 'core', 'Gi0/9');
+    ok(ok2.ip > 0 && !ok2.crc && !wire.counters(s, 'acc', 'Gi0/9').late, '雙工修好之後，錯誤就不再增加');
+  }
+
+  // ── 封包擷取：交換器、Hub、SPAN ──
+  {
+    const { s } = fresh('l02');
+    wire.setCapture(s, 'pc-3', true);
+    ping(s, 'pc-1', 'pc-2');
+    const f = frames(s, 'pc-3');
+    ok(f.length === 1 && f[0].proto === 'arp' && f[0].dmac === wire.BCAST, '接在交換器上：別人的 ping 只看得到 ARP 廣播，看不到 ICMP');
+  }
+  {
+    const link = (st, a, b) => { const [ad, ap] = a.split(':'), [bd, bp] = b.split(':'); const e = addCable(st, ad, ap, bd, bp); if (e) throw new Error(e); };
+    const s = makeState([makeDevice('hub4', 'hub', { name: 'Hub', pos: [0, 0] }), ...['a', 'b', 'c'].map((x, n) => makeDevice('pc', 'pc-' + x, { name: 'PC-' + x.toUpperCase(), pos: [n * 4 - 4, 3], ip: `192.168.1.${10 * (n + 1)}` }))]);
+    link(s, 'pc-a:eth0', 'hub:1'); link(s, 'pc-b:eth0', 'hub:2'); link(s, 'pc-c:eth0', 'hub:3');
+    recompute(s);
+    wire.setCapture(s, 'pc-c', true);
+    ping(s, 'pc-a', 'pc-b');
+    const f = frames(s, 'pc-c');
+    ok(f.filter((x) => x.proto === 'icmp' && x.how === 'promisc').length === 2, '接在 Hub 上：別人之間的 ICMP 請求與回應全部看得到');
+  }
+  {
+    const { s } = fresh('l06');
+    const out = ios(s, 'sw', ['conf t', 'monitor session 1 source interface gi0/1', 'monitor session 1 destination interface gi0/4', 'end']);
+    wire.setCapture(s, 'pc-r2', true);
+    ping(s, 'pc-s1', 'pc-s2');
+    const f = frames(s, 'pc-r2');
+    const cut = ping(s, 'pc-r2', 'pc-r1');
+    const cfg = runningConfig(s, s.devices.sw);
+    ok(out.some((l) => /目的埠/.test(l)) && f.some((x) => x.proto === 'icmp' && !x.reply && x.how === 'span') && f.some((x) => x.proto === 'icmp' && x.reply)
+      && cfg.includes('monitor session 1 source interface Gi0/1') && cfg.includes('monitor session 1 destination interface Gi0/4'),
+    'SPAN：把 Gi0/1 鏡像到 Gi0/4，接在 Gi0/4 的電腦看得到另一個 VLAN 的 ping');
+    ios(s, 'sw', ['conf t', 'no monitor session 1', 'end']);
+    ok(!cut.ok && /SPAN（連接埠鏡像）的目的埠/.test(cut.reason) && ping(s, 'pc-r2', 'pc-r1').ok, 'SPAN 的目的埠不轉送一般流量，拿掉之後恢復');
+  }
+  {
+    // Telnet 的帳號密碼在線路上是明文；SSH 看不到
+    const { s } = fresh('l19');
+    ios(s, 'sw', ['conf t', 'line vty 0 4', 'transport input ssh telnet', 'monitor session 1 source interface gi0/1', 'monitor session 1 destination interface gi0/3', 'end']);
+    wire.setCapture(s, 'nms', true);
+    const pass = 'Net0ps-Admin-2026';
+    const t = rem.remoteOpen(s, 'adm', 'telnet', parseIp('10.0.99.2'), 'admin');
+    rem.remoteLogin(s, t.conn, pass);
+    const tel = frames(s, 'nms').filter((x) => wire.protoName(x) === 'TELNET');
+    wire.setCapture(s, 'nms', true);
+    const h = rem.remoteOpen(s, 'adm', 'ssh', parseIp('10.0.99.2'), 'admin');
+    rem.remoteLogin(s, h.conn, pass);
+    const ssh = frames(s, 'nms');
+    ok(t.ok && tel.some((x) => x.data && x.data.pass === pass && wire.infoOf(x).includes(pass)) && ssh.some((x) => wire.protoName(x) === 'SSHv2') && !JSON.stringify(ssh).includes(pass),
+      '用 SPAN 側錄：Telnet 的帳號密碼直接看得到，SSH 只看得到加密的封包');
+  }
+  {
+    // Wireshark 的顯示篩選
+    const f = { proto: 'icmp', src: parseIp('10.0.0.1'), dst: parseIp('10.0.0.2'), sport: 1, dport: 0, smac: 'a', dmac: 'b' };
+    const m = (x) => wire.displayFilter(x).fn;
+    ok(m('ip.addr == 10.0.0.2 && icmp')(f) && !m('tcp.port == 22')(f) && m('!arp')(f) && m('ip.src == 10.0.0.0/24')(f) && !!wire.displayFilter('ip.addr = 1').error,
+      '顯示篩選：ip.addr、ip.src（可以是網段）、tcp.port、協定名稱、&& 與 !，寫錯會提示');
+  }
+
+  // ── IOS debug ──
+  {
+    const { s } = fresh('l08');
+    wire.setDebug(s, 'rt', 'packet', true); wire.setDebug(s, 'rt', 'icmp', true);
+    ping(s, 'pc-s', 'rt');
+    ping(s, 'pc-s', 'pc-r');
+    ping(s, 'pc-s', parseIp('172.31.0.9'));
+    const log = ops.logRows(s, s.devices.rt).filter((x) => x.sev === 7).map((x) => x.line);
+    ok(log.some((l) => /IP: s=192\.168\.10\.100 \(GigabitEthernet0\/0\/1\.10\), d=192\.168\.10\.1 \(GigabitEthernet0\/0\/1\.10\), len 60, rcvd 3$/.test(l))
+      && log.some((l) => /ICMP: echo reply sent, src 192\.168\.10\.1, dst 192\.168\.10\.100/.test(l)) && log.some((l) => /d=172\.31\.0\.9, len 60, unroutable$/.test(l))
+      && !log.some((l) => /d=192\.168\.20\./.test(l)),
+    'debug ip packet / icmp：看得到給路由器自己的封包與丟掉的封包；跨 VLAN 轉送的封包由 CEF 處理，不會出現');
+    wire.setDebug(s, 'rt', 'all', false);
+    const n = ops.logRows(s, s.devices.rt).length;
+    ping(s, 'pc-s', 'rt');
+    ok(ops.logRows(s, s.devices.rt).length === n, 'undebug all 之後就不再產生 debug 訊息');
+  }
+
+  // ── FortiGate：debug flow 與 sniffer ──
+  {
+    const { s } = fresh('l09');
+    forti(s, 'fw', ['diagnose debug flow filter addr 8.8.8.8', 'diagnose debug flow show function-name enable', 'diagnose debug flow trace start 4', 'diagnose debug enable']);
+    ping(s, 'pc-1', parseIp('8.8.8.8'));
+    const allow = wire.consoleRows(s, 'fw').map((x) => x.line);
+    ok(allow.some((l) => /received a packet\(proto=1, 192\.168\.1\.100:\d+->8\.8\.8\.8:2048\) tun_id=0\.0\.0\.0 from internal/.test(l)) && allow.some((l) => /find a route: flag=04000000 gw-203\.0\.113\.17 via wan1/.test(l))
+      && allow.some((l) => /msg="Allowed by Policy-1: SNAT"/.test(l)) && allow.some((l) => /SNAT 192\.168\.1\.100->203\.0\.113\.18/.test(l)) && allow.some((l) => /Find an existing session, id-[0-9a-f]{8}, reply direction/.test(l)),
+    'debug flow：收到封包 → 找路由 → 符合政策 1 並做 SNAT → 回程比對到既有的連線');
+    s.devices.fw.policies = [];
+    recompute(s);
+    forti(s, 'fw', ['diagnose debug flow trace start 1']);
+    ping(s, 'pc-1', parseIp('8.8.8.8'));
+    ok(wire.consoleRows(s, 'fw').some((x) => /msg="Denied by forward policy check \(policy 0\)"/.test(x.line)), '沒有政策時：Denied by forward policy check (policy 0)');
+  }
+  {
+    const { s } = fresh('l09');
+    const start = forti(s, 'fw', ["diagnose sniffer packet any 'icmp' 4 3"]);
+    ping(s, 'pc-1', parseIp('8.8.8.8'));
+    const lines = wire.consoleRows(s, 'fw').map((x) => x.line);
+    const nic = forti(s, 'fw', ['diagnose hardware deviceinfo nic wan1']);
+    ok(start.includes('filters=[icmp]') && lines.some((l) => /^\d+\.\d{6} internal in 192\.168\.1\.100 -> 8\.8\.8\.8: icmp: echo request$/.test(l)) && lines.some((l) => /wan1 out 203\.0\.113\.18 -> 8\.8\.8\.8: icmp: echo request/.test(l))
+      && lines.includes('3 packets received by filter') && !wire.sniffing(s, 'fw') && nic.some((l) => /^Rx_Packets:\s+[1-9]/.test(l)),
+    'sniffer：看得到封包從 internal 進來、NAT 之後從 wan1 出去；抓滿 3 個自動停止；hardware deviceinfo nic 看得到計數器');
+    const tr = fortiSession(() => s.devices.fw, () => s).exec('execute traceroute 8.8.8.8');
+    ok(tr.trace === '8.8.8.8', 'execute traceroute 交給畫面去追蹤路徑');
+  }
+}
+
 // ── FortiGate 的 CLI ──
 console.log('\nFortiGate CLI');
 {

@@ -30,7 +30,8 @@ export function quietLeft(state, d) {
   return L && L.quiet != null && L.quiet > state.clock ? Math.ceil(L.quiet - state.clock) : 0;
 }
 
-const flowOf = (c, data) => ({ cid: c.cid, to: c.to, src: c.src, sport: c.sport, dst: c.ip, dport: c.dport, data });
+// SSH 送出去的內容全部加密，線路上只看得到「一個加密的封包」；Telnet 是明文
+const flowOf = (c, data) => ({ cid: c.cid, to: c.to, src: c.src, sport: c.sport, dst: c.ip, dport: c.dport, data: c.proto === 'ssh' ? { kind: 'enc' } : data, echo: { kind: 'out' } });
 const ui = (c) => `${c.proto}(${c.seen})`;
 
 /**

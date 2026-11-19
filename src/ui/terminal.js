@@ -6,7 +6,8 @@ import { plainStamp } from '../engine/ops.js';
 import { remoteOpen, remoteLogin, remoteSend, remoteAlive, remoteClose } from '../engine/remote.js';
 import { iosSession } from '../engine/ios.js';
 import { fortiSession } from '../engine/fortios.js';
-import { iosRun, IOS_CMDS } from './cli.js';
+import { iosRun, IOS_CMDS, consoleFollow } from './cli.js';
+import { counters, onBulk } from '../engine/wire.js';
 import { fortiRun } from './forticli.js';
 import { transact6 } from '../engine/sim6.js';
 import { parseIp6, fmtIp6 } from '../engine/ip6.js';
@@ -31,6 +32,7 @@ const HELP = [
   '  ssh <帳號>@<IP>         登入網路設備的命令列（加密）。輸入 exit 登出',
   '  telnet <IP>             登入網路設備的命令列（明文，帳號密碼在線路上看得到）',
   '  telnet <IP> <埠>        測試某個 TCP 連接埠通不通',
+  '  netstat -e              網路卡收送了多少封包、有沒有錯誤',
   '  date                    顯示目前的日期與時間',
   '  cls                     清除畫面',
 ];
@@ -124,6 +126,7 @@ export function buildTerminal(ctx, body) {
         r.stage = 'shell';
         r.sess = r.kind === 'ios' ? iosSession(() => st().devices[c.to], st) : fortiSession(() => st().devices[c.to], st);
         if (c.proto === 'ssh') banner(r);
+        consoleFollow(app, c.to, 'vty:' + c.cid, () => {}); // 從現在開始看：以前的紀錄不會倒出來
         print('');
       } else if (a.closed) {
         endRemote(c.proto === 'ssh' ? `${c.user}@${ip}: Permission denied (publickey,password).` : '% Login invalid', 'bad', a.reason);
@@ -144,9 +147,13 @@ export function buildTerminal(ctx, body) {
     }
     const sent = remoteSend(s, c, line);
     if (!sent.ok) { lost(r, sent); return; }
+    // terminal monitor：用 SSH / Telnet 登入時，紀錄與 debug 的訊息預設只會出現在 console 上，要自己打開才看得到
+    if (ios && /^term(i(n(a(l)?)?)?)?\s+mon/i.test(low)) r.monitor = true;
+    if (ios && /^term(i(n(a(l)?)?)?)?\s+no\s+mon/i.test(low)) r.monitor = false;
     const out = ios ? iosRun(app, c.to, r.sess, line, print) : fortiRun(app, c.to, r.sess, line, print);
     if (out.clear) logs.length = 0;
     if (out.changed) ctx.commit(false);
+    if (!ios || r.monitor) consoleFollow(app, c.to, 'vty:' + c.cid, print); else consoleFollow(app, c.to, 'vty:' + c.cid, () => {});
     if (out.reloaded) endRemote(`Connection to ${ip} closed by remote host.`, 'warn', '設備重新開機了，所有登入的連線都會中斷。');
   };
 
@@ -185,6 +192,24 @@ export function buildTerminal(ctx, body) {
       else if (((app.knownHosts || {})[dev.id] || {})[ip]) { delete app.knownHosts[dev.id][ip]; print(`# Host ${ip} found: line 1`); print('known_hosts updated.'); } else print(`Host ${ip} not found in known_hosts`, 'dim');
     }
     else if (c === 'cls' || c === 'clear') logs.length = 0;
+    else if (c === 'netstat') {
+      const p = dev.ports[0];
+      if (!/^-e$/i.test(args[0] || '')) print('用法：netstat -e（網路卡收送了多少封包、有沒有錯誤）', 'warn');
+      else if (!p) print('這台設備沒有有線網路卡。', 'dim');
+      else {
+        const x = counters(st(), dev.id, p.id), w = (a, b) => `${String(a).padStart(18)}${String(b).padStart(18)}`;
+        print('介面統計資料');
+        print('');
+        print(`${''.padEnd(16)}${'已接收'.padStart(15)}${'已傳送'.padStart(15)}`, 'pre');
+        print('');
+        print(`${'位元組'.padEnd(14)}${w(x.ib, x.ob)}`, 'pre');
+        print(`${'單點傳送封包'.padEnd(10)}${w(x.ip - x.ibc - x.imc, x.op - x.obc - x.omc)}`, 'pre');
+        print(`${'非單點傳送封包'.padEnd(9)}${w(x.ibc + x.imc, x.obc + x.omc)}`, 'pre');
+        print(`${'捨棄'.padEnd(14)}${w(0, 0)}`, 'pre');
+        print(`${'錯誤'.padEnd(14)}${w(x.crc + x.runts, x.late)}`, x.crc + x.runts + x.late ? 'bad' : 'pre');
+        if (x.imc) print(`  ↳ 收到的非單點傳送封包大多是交換器的 STP BPDU（每 2 秒一個）`, 'hint');
+      }
+    }
     else if (c === 'date' || c === 'time') { const t = plainStamp(st(), dev); print(`${t.date} ${t.time}（電腦的時間由作業系統自動校正，這裡當作是準的）`); }
     else if (c === 'arp' && /^-d/i.test(args[0] || '')) { clearArp(st(), dev); app.refreshLive(); }
     else if (c === 'arp') {
@@ -300,6 +325,7 @@ export function buildTerminal(ctx, body) {
         if (!res.ok) { print(`iperf3: error - unable to connect to server: ${res.phase === 'reply' ? 'Connection timed out' : 'No route to host'}`, 'bad'); print('  ↳ ' + res.reason, 'hint'); }
         else {
           const m = throughput(st(), res.hops);
+          onBulk(st(), res.hops, m.mbps, 10, m.retr); // 10 秒內實際送了多少資料：計數器跟著增加
           const amt = (mbps) => { const mb = (mbps * 10) / 8; return mb >= 1000 ? (mb / 1000).toFixed(2) + ' GBytes' : mb >= 1 ? mb.toFixed(1) + ' MBytes' : (mb * 1000).toFixed(0) + ' KBytes'; };
           const rate = (mbps) => (mbps >= 1 ? `${mbps} Mbits/sec` : `${Math.round(mbps * 1000)} Kbits/sec`);
           print(`Connecting to host ${fmtIp(ip)}, port 5201`);
@@ -355,7 +381,8 @@ export function buildTerminal(ctx, body) {
     const r = remote();
     if (!r || r.stage !== 'shell') return;
     const a = remoteAlive(st(), r.conn);
-    if (!a.ok) { lost(r, a); draw(); }
+    if (!a.ok) { lost(r, a); draw(); return; }
+    if ((r.kind !== 'ios' || r.monitor) && consoleFollow(app, r.conn.to, 'vty:' + r.conn.cid, print)) draw();
   });
   body.append(term, h('div', { class: 'chips' }, ['ipconfig', 'ping 8.8.8.8', 'tracert 8.8.8.8', 'nslookup www.example.com', 'arp -a', 'help'].map((x) =>
     h('button', { class: 'chip btnchip', type: 'button', text: x, onclick: () => { hist.push(x); hi = hist.length; run(x); } }))));

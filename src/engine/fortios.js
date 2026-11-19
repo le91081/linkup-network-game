@@ -4,6 +4,8 @@
 import { parseIp, fmtIp, parseMask, fmtMask, netOf } from './ip.js';
 import { SERVICE_NAMES, accessOf, sessionLog, routeRows, sessionRows, clearSessions, saInfo } from './sim.js';
 import { ntpInfo, plainStamp, logRows, clearLog, syslogStats, vtyRows, markReboot, bootTime } from './ops.js';
+import { counters, startSniff, bpf, dflowOf, fgIfName } from './wire.js';
+import { linkInfo } from './model.js';
 
 const ACCESS = ['ping', 'https', 'ssh', 'http', 'telnet'];
 const PROPOSALS = ['aes128-sha1', 'aes128-sha256', 'aes256-sha1', 'aes256-sha256'];
@@ -700,7 +702,7 @@ function getInfo(state, d, what) {
   }
   return null;
 }
-function diagnose(state, d, what) {
+function diagnose(state, d, what, raw = what) {
   if (what === 'vpn tunnel list') {
     const ts = tunnels(d);
     if (!ts.length) return ['list all ipsec tunnel in vd 0', '沒有任何 IPsec 通道'];
@@ -745,6 +747,51 @@ function diagnose(state, d, what) {
     return o;
   }
   if (what === 'sys session clear') { clearSessions(state, d); return ['（連線表已清空）']; }
+  // diagnose sniffer packet <介面> '<篩選條件>' [詳細程度] [數量]
+  const sn = raw.match(/^sniffer\s+packet\s+(\S+)(?:\s+(?:'([^']*)'|"([^"]*)"|(none)))?(?:\s+(\d))?(?:\s+(\d+))?(?:\s+\S+)?\s*$/i);
+  if (/^sniffer/.test(what)) {
+    if (!sn) return ["用法：diagnose sniffer packet <介面|any> '<篩選條件>' [詳細程度 1-6] [數量]", "例如：diagnose sniffer packet any 'host 10.1.0.50 and icmp' 4 10"];
+    const intf = sn[1].toLowerCase(), filter = (sn[2] ?? sn[3] ?? '').trim(), level = +(sn[5] || 1), count = +(sn[6] || 0);
+    if (intf !== 'any' && !d.ifaces.some((i) => i.id === intf)) return [`interface ${intf} is not found`];
+    const f = bpf(filter);
+    if (f.error) return [f.error];
+    startSniff(state, d.id, intf, filter, level, count);
+    return [`interfaces=[${intf}]`, `filters=[${filter || 'none'}]`, `（開始擷取${count ? `，抓到 ${count} 個封包就停止` : '；輸入任何指令就會停止，相當於 Ctrl-C'}。符合條件的封包會即時出現在這裡）`];
+  }
+  // diagnose debug flow …：追蹤封包在防火牆裡的每一步（政策、路由、NAT）
+  if (/^debug/.test(what)) {
+    const x = dflowOf(state, d.id);
+    let m;
+    if (what === 'debug enable') { x.on = true; return x.left > 0 ? [] : ['（debug 已開啟。還要用 diagnose debug flow trace start <數量> 指定要追蹤幾個封包）']; }
+    if (what === 'debug disable') { x.on = false; return []; }
+    if (what === 'debug reset') { Object.assign(x, { on: false, left: 0, filter: {} }); return []; }
+    if (/^debug flow show (function-name|iprope)/.test(what)) { x.fn = !/disable$/.test(what); return [`show ${what.split(' ')[3]} ${x.fn ? 'enabled' : 'disabled'}`]; }
+    if (what === 'debug flow filter clear') { x.filter = {}; return []; }
+    if ((m = what.match(/^debug flow filter addr (\S+)$/))) { if (parseIp(m[1]) == null) return ['用法：diagnose debug flow filter addr <IP>']; x.filter.addr = parseIp(m[1]); return []; }
+    if ((m = what.match(/^debug flow filter proto (\d+)$/))) { x.filter.proto = +m[1]; return []; }
+    if ((m = what.match(/^debug flow filter port (\d+)$/))) { x.filter.port = +m[1]; return []; }
+    if ((m = what.match(/^debug flow trace start (\d+)$/))) { x.left = +m[1]; return x.on ? [] : ['（還要 diagnose debug enable，輸出才會出現在畫面上）']; }
+    if (what === 'debug flow trace stop') { x.left = 0; return []; }
+    if (what === 'debug info') {
+      const f = x.filter;
+      return [`debug output:           ${x.on ? 'enable' : 'disable'}`, `flow trace left:        ${x.left}`,
+        `filter: addr=${f.addr != null ? fmtIp(f.addr) : 'any'} proto=${f.proto ?? 'any'} port=${f.port ?? 'any'}`];
+    }
+    return ['用法：diagnose debug flow filter addr <IP> / proto <編號> / port <埠> / clear', '      diagnose debug flow trace start <數量>', '      diagnose debug enable / disable / reset / info'];
+  }
+  // diagnose hardware deviceinfo nic <埠>：網路卡的計數器
+  const nic = what.match(/^hardware deviceinfo nic(?:\s+(\S+))?$/);
+  if (nic) {
+    const names = d.ports.map((p) => (d.ifaces.some((i) => i.bind.t === 'port' && i.bind.port === p.id) ? fgIfName(d, p.id) : 'internal' + p.id));
+    if (!nic[1]) return ['用法：diagnose hardware deviceinfo nic <埠>', '可以看的埠：' + names.join(' ')];
+    const k = names.indexOf(nic[1]);
+    const p = k >= 0 ? d.ports[k] : d.ports.find((x) => x.id === nic[1]);
+    if (!p) return [`Network interface ${nic[1]} is not found`, '可以看的埠：' + names.join(' ')];
+    const c = counters(state, d.id, p.id), up = !!state.rt.links[d.id + ':' + p.id], li = up && linkInfo(state, d.id, p.id);
+    return [`Name:            ${names[d.ports.indexOf(p)]}`, `Link:            ${up ? 'up' : 'down'}`, `Speed:           ${li ? li.speed + 'Mbps' : '0'}`, `Duplex:          ${li ? (li.duplex === 'half' ? 'Half' : 'Full') : 'Half'}`,
+      `Rx_Packets:      ${c.ip}`, `Tx_Packets:      ${c.op}`, `Rx_Bytes:        ${c.ib}`, `Tx_Bytes:        ${c.ob}`,
+      `Rx_CRC_Errors:   ${c.crc}`, `Rx_Errors:       ${c.crc + c.runts}`, `Tx_Errors:       ${c.late}`, `Collisions:      ${c.coll}`, `Rx_Multicast:    ${c.imc}`];
+  }
   if (what === 'sys ntp status') {
     const n = ntpInfo(state, d);
     if (n.server == null) return ['synchronized: no, ntpsync: disabled, server-mode: disabled', '（還沒有設定 NTP 伺服器：config system ntp）'];
@@ -893,13 +940,14 @@ export function fortiSession(getDev, getState) {
       return res();
     }
     if (cmd === 'diagnose' || cmd === 'diag') {
-      const r = diagnose(st(), d, tok.slice(1).join(' ').toLowerCase());
+      const r = diagnose(st(), d, tok.slice(1).join(' ').toLowerCase(), line.trim().replace(/^diag(nose)?\s+/i, ''));
       if (!r) return fail([...parseErr(tok[1] || ''), '（可用：diagnose vpn tunnel list、diagnose vpn ike gateway list、diagnose sys session list、diagnose sys session clear、diagnose sys ntp status）']);
       out.push(...r);
       return res();
     }
     if (cmd === 'execute' || cmd === 'exec') {
       if ((tok[1] || '').toLowerCase() === 'ping' && parseIp(tok[2] || '') != null) return res({ ping: tok[2] });
+      if ((tok[1] || '').toLowerCase() === 'traceroute' && parseIp(tok[2] || '') != null) return res({ trace: tok[2] });
       const sub = tok.slice(1).join(' ').toLowerCase();
       if (sub === 'reboot') {
         // FortiGate 的設定是即時存檔的，重開機不會遺失設定；但記憶體裡的連線、紀錄都會消失
@@ -915,7 +963,7 @@ export function fortiSession(getDev, getState) {
           ...(sub === 'time' ? [n.synced ? `last ntp sync: 已和 ${fmtIp(n.server)} 同步` : 'last ntp sync: 尚未同步（時間來自設備自己的硬體時鐘，可能有偏差）'] : []));
         return res();
       }
-      return fail('用法：execute ping <IP>、execute log display、execute date、execute time、execute reboot');
+      return fail('用法：execute ping <IP>、execute traceroute <IP>、execute log display、execute date、execute time、execute reboot');
     }
     if (cmd === 'exit' || cmd === 'quit') return res();
     return fail([`Unknown action 0`, ...parseErr(tok[0])]);

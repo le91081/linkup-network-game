@@ -11,7 +11,7 @@ import { linkInfo } from './model.js';
 
 export const SIM_EPOCH = Date.UTC(2026, 0, 5, 1, 0, 0); // 模擬世界開始的那一刻：2026-01-05 09:00（UTC+8）
 const FACTORY = Date.UTC(1993, 2, 1, 0, 0, 0); // 沒有硬體時鐘的 IOS 交換器，每次開機都從這一刻算起
-const UPTIME0 = 273600; // 關卡開始時，設備已經開機 3 天 4 小時
+export const UPTIME0 = 273600; // 關卡開始時，設備已經開機 3 天 4 小時
 export const INET_NTP = '216.239.35.0'; // time.google.com
 export const NTP_POLL = 64; // 兩次輪詢的間隔（秒）
 const NO_RTC = new Set(['c2960', 'c2960p']); // 這些機型沒有電池供電的時鐘
@@ -224,6 +224,18 @@ function flushSyslog(state) {
   }
 }
 
+/** IOS 的 debug 輸出：沒有 %設施-嚴重度-代碼，嚴重度是 7 (debugging)。會進紀錄緩衝區，也會出現在 console */
+export function debugLog(state, d, text) {
+  if (!state.dyn || !state.dyn.log || !d || !isIos(d)) return;
+  const n = (state.dyn.logSeq = (state.dyn.logSeq || 0) + 1);
+  const buf = (state.dyn.log[d.id] ||= []);
+  const line = `${iosStamp(state, d)}: ${text}`;
+  buf.push({ n, t: state.clock, sev: 7, line });
+  if (buf.length > LOG_MAX) buf.shift();
+  const srv = d.mgmt && parseIp(d.mgmt.syslog || ''), trap = d.mgmt && d.mgmt.logTrap != null && d.mgmt.logTrap !== '' ? +d.mgmt.logTrap : 6;
+  if (srv != null && trap >= 7) (state.dyn.outbox ||= []).push({ dev: d.id, srv, n, sev: 7, line });
+}
+
 export const logRows = (state, d) => ((state.dyn && state.dyn.log && state.dyn.log[d.id]) || []);
 export const syslogRows = (state, d) => ((state.dyn && state.dyn.syslog && state.dyn.syslog[d.id]) || []);
 export function clearLog(state, d) { if (state.dyn && state.dyn.log) delete state.dyn.log[d.id]; }
@@ -290,7 +302,7 @@ export const bootTime = (d) => BOOT_TIME[d.model] ?? 30;
 /** 記憶體裡的東西全部消失：ARP、MAC 位址表、連線表、VPN 的 SA、紀錄緩衝區、登入的連線；連接埠要重新走一次 STP */
 function wipe(state, d) {
   const dyn = state.dyn, c = (dyn.clk[d.id] ||= {});
-  for (const k of ['arp', 'mac', 'ct', 'log', 'vty', 'login']) if (dyn[k]) delete dyn[k][d.id];
+  for (const k of ['arp', 'mac', 'ct', 'log', 'vty', 'login', 'ifc', 'dbg', 'sniff', 'dflow', 'con', 'cap']) if (dyn[k]) delete dyn[k][d.id];
   for (const k of Object.keys(dyn.sa || {})) if (k.startsWith(d.id + '/')) delete dyn.sa[k];
   for (const cb of state.cables) {
     if (cb.a.dev !== d.id && cb.b.dev !== d.id) continue;

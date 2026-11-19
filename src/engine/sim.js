@@ -5,7 +5,8 @@ import { parseIp, fmtIp, parseMask, netOf, sameNet, isPrivate, parseCidr, parseV
 import { cloneState, primaryIface, CATALOG, CABLES, cableKind, cableDist, linkInfo } from './model.js';
 import { recompute6, transact6, globalIp6 } from './sim6.js';
 import { parseIp6 } from './ip6.js';
-import { opsBefore, opsAfter, logEvent } from './ops.js';
+import { opsBefore, opsAfter, logEvent, debugLog, longIf, UPTIME0 } from './ops.js';
+import { onHop, BCAST, spanDest, background, flowTraceStart, debugOf } from './wire.js';
 
 const DROP = Symbol('drop');
 const isVlanSw = (d) => !!d.sw && d.sw.mode === 'vlan';
@@ -55,6 +56,7 @@ const psAllowed = (pc, mac) => macList(pc.ps.macs).includes(mac);
 
 function portUsable(d, pid) {
   if (d.sw.ports[pid].shut || (d.rt.err && d.rt.err[pid])) return false;
+  if (d.sw.span && spanDest(d, pid)) return false; // SPAN 的目的埠只送出鏡像的訊框，不轉送一般流量
   if (d.rt.wait && d.rt.wait[pid] > 0) return false; // 還在 STP 的 listening / learning，不轉送資料
   if (d.rt.unauth && d.rt.unauth[pid]) return false; // 802.1X 尚未通過驗證
   const l = d.rt.lag && d.rt.lag[pid];
@@ -67,6 +69,7 @@ function ingressKey(dev, pid, tag, mac, notes) {
   const sw = dev.sw, pc = sw.ports[pid];
   if (dev.rt.unauth && dev.rt.unauth[pid]) { notes.dot1x = `${dev.name} 的 ${pid}：${dev.rt.unauth[pid]}`; return DROP; }
   if (dev.rt.wait && dev.rt.wait[pid] > 0) { notes.stp ||= { dev: dev.id, pid, left: dev.rt.wait[pid] }; return DROP; }
+  if (sw.span && spanDest(dev, pid)) { notes.span ||= { dev: dev.id, pid }; return DROP; }
   if (!portUsable(dev, pid)) return DROP;
   if (sw.mode !== 'vlan') return tag == null ? 'u' : tag;
   if (pc.ps && pc.ps.on && mac && !psAllowed(pc, mac)) { notes.ps = `${dev.name} 的 ${pid}`; return DROP; }
@@ -557,7 +560,7 @@ function prepStpTimers(state) {
     if (!isVlanSw(d) || (d.sw.stp && d.sw.stp.on === false) || (state.down || {})[d.id]) continue;
     for (const [pid, pc] of Object.entries(d.sw.ports)) {
       const l = rt.links[d.id + ':' + pid];
-      if (!l || pc.mode === 'routed') continue;
+      if (!l || pc.mode === 'routed' || (d.sw.span && spanDest(d, pid))) continue; // SPAN 的目的埠不跑 STP
       const key = d.id + ':' + pid;
       live.add(key);
       // 連線剛建立，或這個埠換了 VLAN / 模式：STP 要重新走一次
@@ -805,6 +808,7 @@ function acquire(state, old, d, i) {
         : eps.some((x) => x.iface.line && x.iface.line.type === 'pppoe') ? 'DHCP 沒有回應：這條 ISP 線路要用 PPPoE 撥接'
           : eps.some((x) => x.iface.line && x.iface.line.type === 'static') ? 'DHCP 沒有回應：這條 ISP 線路是固定 IP，需要手動設定'
             : eps.stp ? `DHCP 還沒有回應：${state.devices[eps.stp.dev].name} 的 ${eps.stp.pid} 還在 STP 的 listening / learning 狀態，再 ${Math.ceil(eps.stp.left)} 秒才會開始轉送`
+              : eps.span ? `DHCP 沒有回應：${state.devices[eps.span.dev].name} 的 ${eps.span.pid} 是 SPAN（連接埠鏡像）的目的埠，交換器只會從這個埠送出複製的訊框，不轉送一般流量`
               : 'DHCP 沒有回應：這個網段上找不到 DHCP 伺服器';
   }
   return false;
@@ -1275,6 +1279,9 @@ export function recompute(state) {
   if (typeof state.clock !== 'number') state.clock = 0;
   if (!state.dyn) state.dyn = { boot: true }; // 第一次計算：目前的狀態當作已經運作很久
   for (const k of ['port', 'adj', 'lsa', 'vrrp', 'lease', 'hold', 'arp', 'mac', 'ct', 'sa', 'clk', 'log', 'syslog', 'ev', 'vty', 'login']) state.dyn[k] ||= {};
+  // 擷取到的封包、命令列上的輸出可能很多，而且和這次計算無關：先拿出來，算完再放回去
+  const side = {};
+  for (const k of ['cap', 'con']) if (state.dyn[k]) { side[k] = state.dyn[k]; delete state.dyn[k]; }
   // 還在開機的設備：這一次計算把它當成關機（沒有燈號、不轉送、不回應），算完再把 state.down 還原
   const booting = opsBefore(state), realDown = state.down, ids = Object.keys(booting);
   if (ids.length) state.down = { ...(realDown || {}), ...Object.fromEntries(ids.map((id) => [id, true])) };
@@ -1292,7 +1299,9 @@ export function recompute(state) {
     if (state.v6) recompute6(state);
     state.rt.booting = booting;
     for (const id of ids) state.rt.pending.push({ at: state.clock + booting[id], dev: id, kind: 'boot', text: `${state.devices[id].name}：開機中` });
+    Object.assign(state.dyn, side);
     opsAfter(state);
+    background(state, { isBridge: isBridgePort, ospfOn, uptime0: UPTIME0 });
   } finally {
     if (realDown === undefined) delete state.down; else state.down = realDown;
   }
@@ -1534,6 +1543,7 @@ function arpFail(state, dev, outIf, nh, viaGw, eps) {
   if (eps.dot1x) return `ARP 沒有回應：連接埠還沒有通過 802.1X 驗證（${eps.dot1x}）`;
   if (eps.ps) return `ARP 沒有回應：${dev.name} 的訊框被 ${eps.ps} 的 Port Security 擋下（不是允許的 MAC 位址）`;
   if (!owner) return `ARP 沒有回應：找不到 ${who}，沒有任何設備使用這個 IP`;
+  if (eps.span) return `ARP 沒有回應：${state.devices[eps.span.dev].name} 的 ${eps.span.pid} 是 SPAN（連接埠鏡像）的目的埠。交換器只會從這個埠送出複製的訊框，接在上面的設備送進來的封包一律不轉送`;
   if (eps.stp) {
     const s = eps.stp;
     return `${state.devices[s.dev].name} 的 ${s.pid} 剛連上，還在 STP 的${s.left > 15 ? ' listening ' : s.left > 2 ? ' learning ' : '協商'}狀態，再 ${Math.ceil(s.left)} 秒才會開始轉送資料${s.left > 2 ? '（接電腦或伺服器的埠可以啟用 PortFast，跳過這段等待）' : ''}`;
@@ -1650,19 +1660,37 @@ function forward(state, ctx, startId, pkt) {
     let established = false, dnat = null;
     const o = { src: pkt.src, sport: pkt.sport, dst: pkt.dst, dport: pkt.dport };
     const stateful = dev.kind === 'firewall' || dev.kind === 'homerouter';
+    // FortiGate 的 diagnose debug flow：記下這個封包在防火牆裡的每一步
+    const tr = !QUIET && inIf ? flowTraceStart(state, dev, pkt) : null;
+    const T = (fn, msg) => { if (tr) tr(fn, msg); };
+    // IOS 的 debug ip packet / debug ip icmp
+    const dbg = !QUIET ? debugOf(state, dev.id) : null;
+    const D = (what, text) => { if (dbg && dbg[what]) debugLog(state, dev, text); };
     if (inIf) {
+      if (tr) {
+        const n = PROTO_NUM[pkt.proto] || 0, dp = pkt.proto === 'icmp' ? (pkt.reply ? 0 : 2048) : pkt.dport;
+        const extra = pkt.proto === 'icmp' ? ` type=${pkt.reply ? 0 : 8}, code=0, id=${pkt.reply ? pkt.dport : pkt.sport}, seq=1.`
+          : pkt.proto === 'tcp' ? ` flag [${pkt.data ? 'P.' : pkt.ack ? '.' : pkt.reply ? 'S.' : 'S'}], seq 1, ack ${pkt.ack || pkt.reply ? 1 : 0}, win 64240` : '';
+        T('print_pkt_detail', `vd-root:0 received a packet(proto=${n}, ${fmtIp(pkt.src)}:${pkt.sport}->${fmtIp(pkt.dst)}:${dp}) tun_id=0.0.0.0 from ${inIf.id.replace(/^vpn:/, '')}.${extra}`);
+      }
       const deny = aclCheck(inIf.aclIn, pkt);
-      if (deny) return drop(`${dev.name} 的 ${inIf.label}（進入方向）：${deny}`);
+      if (deny) {
+        D('packet', `IP: s=${fmtIp(pkt.src)} (${longIf(inIf.label)}), d=${fmtIp(pkt.dst)}, len ${ipLen(pkt)}, access denied`);
+        return drop(`${dev.name} 的 ${inIf.label}（進入方向）：${deny}`);
+      }
       const ct = ctx.ct[dev.id];
       const e = ct && ct.find((x) => x.proto === pkt.proto && x.nDst === pkt.src && x.nSrc === pkt.dst && x.nDport === pkt.sport && x.nSport === pkt.dport);
       // 同一條連線後續的封包（三向交握的 ACK）：有連線紀錄的設備直接比對紀錄，套用同樣的位址轉換，不再重新比對政策
       const flow = !pkt.reply && pkt.ack && ct && ct.find((x) => x.proto === pkt.proto && x.src === pkt.src && x.sport === pkt.sport && x.dst === pkt.dst && x.dport === pkt.dport);
       if (flow) {
         established = true;
+        T('resolve_ip_tuple_fast', `Find an existing session, id-${sessId(flow)}, original direction`);
         flow.t = state.clock; flow.st = 'est';
         pkt.src = flow.nSrc; pkt.sport = flow.nSport; pkt.dst = flow.nDst; pkt.dport = flow.nDport;
       } else if (e && pkt.reply) {
         established = true;
+        T('resolve_ip_tuple_fast', `Find an existing session, id-${sessId(e)}, reply direction`);
+        if (e.nSrc !== e.src) T('__ip_session_run_tuple', `DNAT ${fmtIp(pkt.dst)}:${pkt.dport}->${fmtIp(e.src)}:${e.sport}`);
         e.t = state.clock; // 有封包經過，閒置的計時重新開始
         if (e.src !== pkt.dst || e.dst !== pkt.src) {
           log.push({ dev: dev.id, kind: 'nat', text: `NAT 還原：${fmtIp(pkt.src)} → ${fmtIp(pkt.dst)}　改回　${fmtIp(e.dst)} → ${fmtIp(e.src)}` });
@@ -1681,8 +1709,13 @@ function forward(state, ctx, startId, pkt) {
         return drop(`來源 ${fmtIp(pkt.src)} 是私有 IP，ISP 直接丟棄 — 出口路由器沒有做 NAT`);
       }
       if (isLocal(dev, pkt.dst)) {
+        T('vf_ip_route_input_common', `find a route: flag=84000000 gw-${fmtIp(pkt.dst)} via root`);
         const r = deliver(dev, inIf, pkt);
-        if (!r.ok) log.push({ dev: dev.id, kind: 'drop', text: r.reason });
+        if (!r.ok) { log.push({ dev: dev.id, kind: 'drop', text: r.reason }); T('fw_local_in_handler', 'iprope_in_check() check failed on policy 0, drop'); }
+        else if (pkt.proto !== 'esp') {
+          D('packet', `IP: s=${fmtIp(pkt.src)} (${longIf(inIf.label)}), d=${fmtIp(pkt.dst)} (${longIf(inIf.label)}), len ${ipLen(pkt)}, rcvd 3`);
+          if (pkt.proto === 'icmp') D('icmp', pkt.reply ? `ICMP: echo reply rcvd, src ${fmtIp(pkt.src)}, dst ${fmtIp(pkt.dst)}, topology BASE, dscp 0 topoid 0` : `ICMP: echo reply sent, src ${fmtIp(pkt.dst)}, dst ${fmtIp(pkt.src)}, topology BASE, dscp 0 topoid 0`);
+        }
         return r;
       }
       if (!dev.routing) return drop(`${dev.name} 收到不是給自己的封包（目的 ${fmtIp(pkt.dst)}），它不是路由器所以直接丟棄`);
@@ -1703,20 +1736,26 @@ function forward(state, ctx, startId, pkt) {
       }
     }
     // 已經建立的連線，半路上的封包來到防火牆時連線表裡卻沒有它（閒置太久被移除了）：FortiGate 不會把它當成新連線
-    const lostSession = () => drop(`${dev.name} 的連線表裡已經沒有這條連線：閒置超過 ${sessionTtl(dev, { proto: 'tcp', st: 'est' })} 秒就會被移除。防火牆不會讓半路出現、不是 SYN 的 TCP 封包通過，直接丟棄 (no session matched)`);
+    if (tr && !established && !pkt.reply && !ctx.mid) T('init_ip_session_common', `allocate a new session-${sessId({ proto: pkt.proto, ...o })}, tun_id=0.0.0.0`);
+    const lostSession = () => (T('ip_session_handler', 'no session matched'), drop(`${dev.name} 的連線表裡已經沒有這條連線：閒置超過 ${sessionTtl(dev, { proto: 'tcp', st: 'est' })} 秒就會被移除。防火牆不會讓半路出現、不是 SYN 的 TCP 封包通過，直接丟棄 (no session matched)`));
     if (tun) {
       if (!tun.up) return drop(`VPN 通道「${tun.name}」沒有建立：${tun.why}`);
       if (inIf && !established && ctx.mid && dev.kind === 'firewall') return lostSession();
+      T('vf_ip_route_input_common', `find a route: flag=04000000 gw-${fmtIp(tun.peerIp)} via ${tun.name}`);
       if (inIf && !established) {
         const v = filter(dev, inIf, tun.iface, pkt, dnat);
+        T('fw_forward_handler', v.ok ? `Allowed by Policy-${v.rule || 0}:` : `Denied by forward policy check (policy ${v.rule || 0})`);
         if (stateful) sess(dev, { act: v.ok ? 'allow' : 'deny', proto: pkt.proto, ...o, rule: v.rule || 0, inIf: inIf.label, outIf: tun.iface.label });
         if (!v.ok) { denyLog(state, dev, pkt, o, inIf, tun.iface, v.rule); return drop(v.reason); }
         if (v.rule) log.push({ dev: dev.id, kind: 'fwd', text: `符合政策 #${v.rule}，放行（${inIf.label} → ${tun.iface.label}）` });
         if (!pkt.reply && stateful) track(state, ctx, dev, { proto: pkt.proto, ...o, nSrc: pkt.src, nSport: pkt.sport, nDst: pkt.dst, nDport: pkt.dport, inIf: inIf.label, outIf: tun.iface.label, rule: v.rule || 0 });
       }
       const ssl = !tun.cfg; // 遠端存取是 SSL-VPN（包在 TLS 裡），站對站是 IPsec（包在 ESP 裡）
+      T('ipsecdev_hard_start_xmit', `enter IPsec interface-${tun.name}`);
+      T('esp_output4', `IPsec encrypt/auth`);
+      T('ipsec_output_finish', `send to ${fmtIp(tun.peerIp)} via intf-${tun.cfg && tun.cfg.wan ? tun.cfg.wan : 'wan1'}`);
       log.push({ dev: dev.id, kind: 'vpn', text: `加密：整個封包包進 ${ssl ? 'TLS（SSL-VPN 的 TCP 連線）' : 'ESP'}，外層位址 ${fmtIp(tun.localIp)} → ${fmtIp(tun.peerIp)}` });
-      const r = forward(state, ctx, dev.id, { proto: 'esp', src: tun.localIp, dst: tun.peerIp, sport: 0, dport: 0, ttl: 64, reply: pkt.reply, ssl });
+      const r = forward(state, ctx, dev.id, { proto: 'esp', src: tun.localIp, dst: tun.peerIp, sport: 0, dport: 0, ttl: 64, reply: pkt.reply, ssl, spi: hash(dev.id + '/' + tun.name) });
       if (!r.ok) {
         if (!tun.stale) return r;
         return drop(`VPN 通道「${tun.name}」在 ${dev.name} 上看起來還是 Up（SA 還沒過期），封包照樣加密送了出去，但對端已經失聯：${tun.stale.why}。${dev.name} 還要 ${fmtDur(tun.stale.until - state.clock)} 才會發現${tun.stale.dpd ? '（DPD 探測中）' : '（沒有設定 keepalive，只能等 SA 到期）'}`);
@@ -1738,13 +1777,21 @@ function forward(state, ctx, startId, pkt) {
     }
 
     const route = lookupRoute(dev, pkt.dst);
-    if (!route) return drop(noRouteReason(state, dev, pkt.dst));
+    if (!route) {
+      D('packet', `IP: s=${fmtIp(pkt.src)} (${inIf ? longIf(inIf.label) : 'local'}), d=${fmtIp(pkt.dst)}, len ${ipLen(pkt)}, unroutable`);
+      return drop(noRouteReason(state, dev, pkt.dst));
+    }
     const outIf = route.iface;
     const nh = route.via ?? pkt.dst;
+    // 路由器自己送出的封包才會出現在 debug ip packet；經過它轉送的封包由 CEF 處理，不會出現
+    if (!inIf) D('packet', `IP: s=${fmtIp(pkt.src)} (local), d=${fmtIp(pkt.dst)} (${longIf(outIf.label)}), len ${ipLen(pkt)}, sending`);
+
 
     if (inIf && !established && ctx.mid && dev.kind === 'firewall') return lostSession();
+    T('vf_ip_route_input_common', `find a route: flag=04000000 gw-${fmtIp(nh)} via ${outIf.id}`);
     if (inIf && !established) {
       const v = filter(dev, inIf, outIf, pkt, dnat);
+      T('fw_forward_handler', v.ok ? `Allowed by Policy-${v.rule || 0}:${v.nat ? ' SNAT' : ''}` : `Denied by forward policy check (policy ${v.rule || 0})`);
       if (stateful && !ctx.mid) sess(dev, { act: v.ok ? 'allow' : 'deny', proto: pkt.proto, ...o, rule: v.rule || 0, inIf: inIf.label, outIf: outIf.label });
       if (!v.ok) { denyLog(state, dev, pkt, o, inIf, outIf, v.rule); return drop(v.reason); }
       if (v.rule) log.push({ dev: dev.id, kind: 'fwd', text: `符合政策 #${v.rule}，放行（${inIf.label} → ${outIf.label}）` });
@@ -1757,6 +1804,7 @@ function forward(state, ctx, startId, pkt) {
           track(state, ctx, dev, { proto: pkt.proto, ...o, nSrc, nSport: pkt.sport, nDst: pkt.dst, nDport: pkt.dport, inIf: inIf.label, outIf: outIf.label, rule: v.rule || 0 });
         }
         if (nSrc !== pkt.src) {
+          T('__ip_session_run_tuple', `SNAT ${fmtIp(pkt.src)}->${fmtIp(nSrc)}:${pkt.sport}`);
           sess(dev, { act: 'snat', proto: pkt.proto, src: pkt.src, sport: pkt.sport, nsrc: nSrc, dst: pkt.dst, dport: pkt.dport });
           log.push({ dev: dev.id, kind: 'nat', text: `NAT：來源位址 ${fmtIp(pkt.src)} 換成 ${fmtIp(nSrc)}（${outIf.label}）` });
           pkt.src = nSrc;
@@ -1787,6 +1835,10 @@ function forward(state, ctx, startId, pkt) {
       const wave = buildWave(eps);
       if (wave.length) hops.push({ wave, proto: 'arp' });
       for (const e of eps) learnPath(state, e.path, outIf.rt.mac); // 廣播經過的每一台交換器都學到發問者的 MAC
+      if (!QUIET) {
+        const req = { proto: 'arp', smac: outIf.rt.mac, dmac: BCAST, arp: { op: 1, sip: outIf.rt.ip, tip: nh, sha: outIf.rt.mac } };
+        for (const lvl of wave) for (const x of lvl) onHop(state, x, req, null);
+      }
     }
     if (!tgt) return drop(dai || arpFail(state, dev, outIf, nh, route.via != null, eps));
     const tmac = answerMac(tgt, nh);
@@ -1797,6 +1849,10 @@ function forward(state, ctx, startId, pkt) {
       log.push({ dev: tgt.dev, kind: 'arp', text: `ARP 回覆：${fmtIp(nh)} 的 MAC 位址是 ${tmac}${tmac === VRRP_MAC ? '（VRRP 的虛擬 MAC）' : ''}（${dev.name} 記入 ARP 快取）` });
       for (const h of [...tgt.path].reverse()) hops.push({ cable: h.cable, wifi: h.wifi, from: h.to, to: h.from, tag: h.tag, reply: true, proto: 'arp' });
       learnPath(state, reversed(tgt.path), tmac); // ARP 回覆是單點傳送：沿路的交換器學到回覆者的 MAC
+      if (!QUIET) {
+        const rep = { proto: 'arp', smac: tmac, dmac: outIf.rt.mac, arp: { op: 2, sip: nh, tip: outIf.rt.ip, sha: tmac } };
+        for (const x of reversed(tgt.path)) onHop(state, x, rep, null);
+      }
     }
     if (cands.length > 1 && !dai) {
       log.push({ dev: dev.id, kind: 'info', text: `注意：這個網段上有 ${cands.length} 台設備都聲稱自己是 ${fmtIp(nh)}（IP 衝突或 ARP 欺騙），封包被送往最先回應的 ${state.devices[tgt.dev].name}` });
@@ -1830,6 +1886,12 @@ function forward(state, ctx, startId, pkt) {
         log.push({ dev: h.from, kind: 'info', text: `${state.devices[h.from].name} 是 Hub：訊框被複製到其他所有連接埠，${leak.map((x) => state.devices[x.to].name).join('、')} 也收到了，發現不是給自己的就丟棄` });
       }
       hops.push({ ...h, reply: pkt.reply, proto: pkt.proto, ssl: !!pkt.ssl, leak });
+      if (!QUIET) {
+        onHop(state, h, {
+          proto: pkt.proto, smac: outIf.rt.mac, dmac: tmac, src: pkt.src, dst: pkt.dst, sport: pkt.sport, dport: pkt.dport, ttl: pkt.ttl,
+          reply: !!pkt.reply, ack: !!pkt.ack, ssl: !!pkt.ssl, data: pkt.data || null, spi: pkt.spi,
+        }, leak);
+      }
     });
     dev = state.devices[tgt.dev];
     inIf = tgt.iface;
@@ -1875,7 +1937,11 @@ export function sessionRows(state, dev) {
 /** clear ip nat translation * / diagnose sys session clear */
 export function clearSessions(state, dev) { if (state.dyn && state.dyn.ct) delete state.dyn.ct[dev.id]; }
 
-const PROTO_NUM = { icmp: 1, tcp: 6, udp: 17 };
+const PROTO_NUM = { icmp: 1, tcp: 6, udp: 17, esp: 50 };
+/** IP 封包的長度（debug ip packet 的 len） */
+const ipLen = (p) => (p.proto === 'icmp' ? 60 : p.proto === 'tcp' ? (p.data ? 96 : p.ack ? 40 : 44) : p.proto === 'udp' ? 68 : 120);
+/** FortiGate 連線的編號（同一條連線固定） */
+const sessId = (e) => hash(`${e.proto}|${e.src}|${e.sport}|${e.dst}|${e.dport}`).toString(16).padStart(8, '0');
 /** 防火牆拒絕連線時留下的流量紀錄（會送到 Syslog 伺服器） */
 function denyLog(state, dev, pkt, o, inIf, outIf, rule) {
   if (QUIET || dev.kind !== 'firewall') return;
@@ -1907,7 +1973,7 @@ function buildWave(eps) {
       const k = (h.cable || 'air:' + h.from + ':' + h.to) + '>' + h.to;
       if (seen.has(k)) return;
       seen.add(k);
-      (levels[n] ||= []).push({ cable: h.cable, wifi: h.wifi, from: h.from, to: h.to, tag: h.tag });
+      (levels[n] ||= []).push({ cable: h.cable, wifi: h.wifi, from: h.from, fromPort: h.fromPort, to: h.to, toPort: h.toPort, tag: h.tag });
     });
   }
   return levels.filter(Boolean);
@@ -1939,6 +2005,10 @@ export function dhcpTrace(state, devId) {
   const wave = buildWave(eps);
   log.push({ dev: d.id, kind: 'dhcp', text: 'DHCP Discover（廣播）：我需要一個 IP，有 DHCP 伺服器嗎？' });
   if (wave.length) hops.push({ wave, proto: 'dhcp' });
+  // 線路上真正的 DHCP 訊框（計數器、封包擷取）
+  const xid = hash(d.id + '/' + i.id + '@' + Math.floor(state.clock)).toString(16).padStart(8, '0');
+  const bcast = (type) => ({ proto: 'dhcp', smac: i.rt.mac, dmac: BCAST, src: 0, dst: 0xffffffff, sport: 68, dport: 67, dhcp: { type, xid } });
+  for (const lvl of wave) for (const x of lvl) onHop(state, x, bcast('discover'), null);
   if (i.rt.src !== 'dhcp') {
     const reason = i.rt.note || 'DHCP 沒有回應';
     log.push({ dev: d.id, kind: 'drop', text: reason });
@@ -1951,10 +2021,14 @@ export function dhcpTrace(state, devId) {
   if (i.rt.relay) log.push({ dev: via.id, kind: 'dhcp', text: `DHCP Relay：${via.name} 把廣播改成單點傳送，轉交給 ${sd.name}` });
   log.push({ dev: sd.id, kind: 'dhcp', text: `DHCP Offer：${sd.name} 提供 ${fmtIp(i.rt.ip)}` });
   hops.push(...back);
+  const uni = (type) => ({ proto: 'dhcp', smac: e ? e.iface.rt.mac : '', dmac: i.rt.mac, src: e ? e.iface.rt.ip : 0, dst: i.rt.ip, sport: 67, dport: 68, dhcp: { type, xid, ip: i.rt.ip } });
+  if (e) for (const x of reversed(e.path)) onHop(state, x, uni('offer'), null);
   log.push({ dev: d.id, kind: 'dhcp', text: `DHCP Request（廣播）：我要使用 ${fmtIp(i.rt.ip)}` });
   if (wave.length) hops.push({ wave, proto: 'dhcp' });
+  for (const lvl of wave) for (const x of lvl) onHop(state, x, bcast('request'), null);
   log.push({ dev: sd.id, kind: 'ok', text: `DHCP Ack：租約成立 — ${fmtIp(i.rt.ip)}/${i.rt.bits}、閘道 ${i.rt.gw != null ? fmtIp(i.rt.gw) : '無'}、DNS ${i.rt.dns.map(fmtIp).join(', ') || '無'}` });
   hops.push(...back);
+  if (e) for (const x of reversed(e.path)) onHop(state, x, uni('ack'), null);
   return { ok: true, log, hops, iface: i };
 }
 

@@ -6,6 +6,7 @@ import { parseCidr6, parseIp6 } from './ip6.js';
 import { newIface, cloneState, CATALOG } from './model.js';
 import { macsBehind, recompute, ospfOn } from './sim.js';
 import { logEvent, markReboot, setClock, deviceTime, SEVERITY, bootTime } from './ops.js';
+import { spanDest } from './wire.js';
 
 // ───────────────────────── running-config 與 startup-config ─────────────────────────
 // IOS 設備改的是記憶體裡的 running-config；要下 write memory 才會存進 startup-config。
@@ -125,6 +126,13 @@ function findPort(dev, type, path) {
     const m = x.label.toLowerCase().match(/^([a-z]+)([\d/]+)$/);
     return !!m && m[2] === path && ((TYPES[m[1]] || m[1]).startsWith(type) || m[1] === type);
   });
+}
+
+/** 介面名稱（可以縮寫：gi0/1、GigabitEthernet0/1、g0/0/0）→ 設備上的實體埠，找不到就回傳 null */
+export function portByName(dev, text) {
+  const s = String(text || '').toLowerCase().replace(/\s+/g, '');
+  const m = s.match(/^([a-z]+)([\d/]+)$/);
+  return (m && findPort(dev, m[1], m[2])) || dev.ports.find((p) => p.id.toLowerCase() === s || p.label.toLowerCase() === s) || null;
 }
 
 /** 把輸入的介面名稱（可以縮寫，例如 gi0/1、g0/0/0.10、vlan 10）對應到設備上的埠或 L3 介面 */
@@ -647,6 +655,52 @@ export function iosSession(getDev, getState) {
       return undefined;
     }],
     ['no banner motd [...]', () => { if (dev().mgmt) delete dev().mgmt.banner; }],
+    // ── 連接埠鏡像 (SPAN)：把來源埠進出的訊框複製一份到目的埠，接上電腦就能用 Wireshark 看 ──
+    ['monitor session <n> source interface <...>', ([n, rest]) => {
+      const e = needSw();
+      if (e) return e;
+      if (!/^\d+$/.test(n) || +n < 1 || +n > 66) return err('session 編號是 1 – 66');
+      const t = rest.trim().split(/\s+/), last = t[t.length - 1].toLowerCase();
+      const dir = ['rx', 'tx', 'both'].includes(last) ? (t.pop(), last) : 'both';
+      const r = resolveRange(dev(), t.join(' '));
+      if (isErr(r)) return r;
+      const sw = dev().sw, s = ((sw.span ||= {})[n] ||= { src: {}, dst: '' });
+      for (const x of r) {
+        if (!x.port) return err(`${x.name} 不是實體連接埠`);
+        if (s.dst === x.port.id) return err(`% ${x.port.label} 已經是這個 session 的目的埠，不能同時當來源`);
+        s.src[x.port.id] = dir;
+      }
+      return undefined;
+    }],
+    ['monitor session <n> destination interface <...>', ([n, rest]) => {
+      const e = needSw();
+      if (e) return e;
+      if (!/^\d+$/.test(n) || +n < 1 || +n > 66) return err('session 編號是 1 – 66');
+      const t = resolveIf(dev(), rest.trim().split(/\s+/)[0]);
+      if (isErr(t)) return t;
+      if (!t.port) return err(`${t.name} 不是實體連接埠`);
+      const sw = dev().sw, s = ((sw.span ||= {})[n] ||= { src: {}, dst: '' });
+      if (s.src[t.port.id]) return err(`% ${t.port.label} 已經是這個 session 的來源埠，不能同時當目的埠`);
+      const other = Object.entries(sw.span).find(([k, x]) => k !== n && x.dst === t.port.id);
+      if (other) return err(`% ${t.port.label} 已經是 session ${other[0]} 的目的埠`);
+      s.dst = t.port.id;
+      return `（${t.port.label} 現在是 SPAN 的目的埠：交換器只會從這裡送出複製的訊框，接在上面的設備不能再用它上網）`;
+    }],
+    ['no monitor session <n> source interface <...>', ([n, rest]) => {
+      const s = ((dev().sw || {}).span || {})[n];
+      if (!s) return err(`沒有 session ${n}`);
+      const r = resolveRange(dev(), rest.trim().split(/\s+/).filter((x) => !['rx', 'tx', 'both'].includes(x.toLowerCase())).join(' '));
+      if (isErr(r)) return r;
+      for (const x of r) if (x.port) delete s.src[x.port.id];
+      return undefined;
+    }],
+    ['no monitor session <n> [...]', ([n]) => {
+      const sw = dev().sw;
+      if (!sw || !sw.span) return undefined;
+      if (n.toLowerCase() === 'all' || n.toLowerCase() === 'local') delete sw.span; else delete sw.span[n];
+      if (sw.span && !Object.keys(sw.span).length) delete sw.span;
+      return undefined;
+    }],
     ['line vty [...]', () => { if (!dev().mgmt) return err('這台設備不支援'); enter('line', null); return undefined; }],
     ['line console [...]', () => { enter('line', 'console'); return undefined; }],
     ['ip http server', () => void (dev().mgmt && (dev().mgmt.http = true))],
@@ -1189,6 +1243,11 @@ export function runningConfig(state, dev) {
     else if (stp.prio != null && stp.prio !== '' && +stp.prio !== 32768) o.push(`spanning-tree vlan 1-4094 priority ${+stp.prio}`);
     if (stp.portfastDefault) o.push('spanning-tree portfast default');
     if (+sw.macAge > 0 && +sw.macAge !== 300) o.push(`mac address-table aging-time ${+sw.macAge}`);
+    for (const [n, s] of Object.entries(sw.span || {})) {
+      const lab = (pid) => (dev.ports.find((p) => p.id === pid) || {}).label || pid;
+      for (const [pid, dir] of Object.entries(s.src || {})) o.push(`monitor session ${n} source interface ${lab(pid)}${dir === 'both' ? '' : ' ' + dir}`);
+      if (s.dst) o.push(`monitor session ${n} destination interface ${lab(s.dst)}`);
+    }
     const vl = sw.vlans.map((v) => v.id).sort((a, b) => a - b).join(',');
     if (sw.snoop && sw.snoop.on) o.push('ip dhcp snooping', `ip dhcp snooping vlan ${vl}`);
     if (sw.dai && sw.dai.on) o.push(`ip arp inspection vlan ${vl}`);

@@ -5,6 +5,9 @@ import { fmtIp6 } from '../engine/ip6.js';
 import { transact, routeRows, isBridgePort, arpRows, clearArp, hitsOf, fmtDur, portfastOn, macRows, clearMac, macAgeOf, sessionRows, clearSessions, saInfo } from '../engine/sim.js';
 import { iosClock, deviceTime, ntpInfo, logRows, clearLog, syslogStats, uptimeOf, routerId, longIf, SEVERITY, NTP_POLL, vtyRows, idleLimit } from '../engine/ops.js';
 import { quietLeft } from '../engine/remote.js';
+import { counters, clearCounters, clearedAt, spanDest, debugOf, setDebug, consoleRows } from '../engine/wire.js';
+import { portByName } from '../engine/ios.js';
+import { isIos } from '../engine/ios.js';
 import { fmtMask } from '../engine/ip.js';
 import { route6Rows } from '../engine/sim6.js';
 import { CATALOG, MEDIA, peerOf, portOf, linkInfo, phyConfig } from '../engine/model.js';
@@ -272,6 +275,47 @@ const SHOW = {
     const outIf = d.ifaces.filter((i) => i.nat).map((i) => i.label), inIf = d.ifaces.filter((i) => !i.nat && i.rt && i.rt.ip != null).map((i) => i.label);
     return [`Total active translations: ${dyn + stat} (${stat} static, ${dyn} dynamic; ${dyn} extended)`, 'Outside interfaces:', '  ' + (outIf.join(', ') || '(none)'), 'Inside interfaces:', '  ' + (inIf.join(', ') || '(none)')];
   },
+  'show interfaces counters errors': (st, d) => {
+    const ports = d.ports.filter((p) => st.rt.links[d.id + ':' + p.id] || ((st.dyn.ifc || {})[d.id] || {})[p.id]);
+    const n = (v) => String(v).padStart(11);
+    return [pad('Port', 10) + ['Align-Err', 'FCS-Err', 'Xmit-Err', 'Rcv-Err', 'UnderSize', 'OutDiscards'].map((x) => x.padStart(11)).join(''),
+      ...ports.map((p) => { const c = counters(st, d.id, p.id); return pad(p.label, 10) + n(0) + n(c.crc) + n(0) + n(c.crc + c.runts) + n(c.runts) + n(0); }), '',
+      pad('Port', 10) + ['Single-Col', 'Multi-Col', 'Late-Col', 'Excess-Col', 'Carri-Sen', 'Runts'].map((x) => x.padStart(11)).join(''),
+      ...ports.map((p) => { const c = counters(st, d.id, p.id); const coll = Math.max(0, c.coll - c.late); return pad(p.label, 10) + n(Math.ceil(coll * 0.7)) + n(Math.floor(coll * 0.3)) + n(c.late) + n(0) + n(0) + n(c.runts); })];
+  },
+  'show monitor': (st, d) => monitorLines(d, null),
+  'show debugging': (st, d) => {
+    const x = debugOf(st, d.id);
+    if (!x) return ['（目前沒有開啟任何 debug）'];
+    return ['IP:', ...(x.packet ? ['  IP packet debugging is on'] : []), ...(x.icmp ? ['  ICMP packet debugging is on'] : []),
+      '', '（debug 的輸出會出現在 console 上，也會進紀錄緩衝區 (show logging)。用 SSH 登入的話，要先輸入 terminal monitor 才看得到）'];
+  },
+  'show ip protocols': (st, d) => {
+    if (!d.routing) return ['% 這台設備沒有啟用 IP 路由'];
+    const stmts = d.ospfNets || [], on = d.ifaces.filter((i) => i.ospf && i.rt && i.rt.ip != null);
+    if (!stmts.length && !on.length) return ['（沒有啟用任何動態路由協定，路由表只有直連與靜態路由）'];
+    const rid = routerId(d), wild = (b) => fmtIp(b === 0 ? 0xffffffff : ((1 << (32 - b)) - 1) >>> 0);
+    return ['*** IP Routing is NSF aware ***', '', 'Routing Protocol is "ospf 1"', '  Outgoing update filter list for all interfaces is not set', '  Incoming update filter list for all interfaces is not set',
+      `  Router ID ${rid != null ? fmtIp(rid) : '0.0.0.0'}`, '  Number of areas in this router is 1. 1 normal 0 stub 0 nssa', '  Maximum path: 4', '  Routing for Networks:',
+      ...stmts.map((n) => `    ${fmtIp(n.net)} ${wild(n.bits)} area 0`),
+      ...on.filter((i) => !stmts.some((n) => (i.rt.ip >>> (32 - n.bits || 0)) === (n.net >>> (32 - n.bits || 0)))).map((i) => `    ${longIf(i.label)}`),
+      '  Routing Information Sources:', '    Gateway         Distance      Last Update',
+      ...(d.rt.nbrs || []).filter((n) => n.state === 'full').map((n) => `    ${pad(fmtIp(routerId(st.devices[n.dev]) ?? n.ip), 16)}${pad(110, 14)}${hms(Math.min(st.clock, 3600))}`),
+      '  Distance: (default is 110)'];
+  },
+  'show ip ospf interface brief': (st, d) => {
+    const on = d.ifaces.filter((i) => i.rt && i.rt.ip != null && i.ospf !== undefined && (i.ospf || (d.ospfNets || []).some((n) => ((i.rt.ip >>> (32 - n.bits)) << (32 - n.bits)) >>> 0 === n.net)));
+    if (!on.length) return ['（沒有任何介面啟用 OSPF）'];
+    const rid = (x) => routerId(x) ?? 0;
+    return [pad('Interface', 12) + pad('PID', 6) + pad('Area', 16) + pad('IP Address/Mask', 20) + pad('Cost', 6) + pad('State', 6) + 'Nbrs F/C',
+      ...on.map((i) => {
+        const nb = (d.rt.nbrs || []).filter((n) => n.iface === i.id), full = nb.filter((n) => n.state === 'full');
+        // DR 選舉：同一個網段裡 Router ID 最大的當 DR，第二大的當 BDR（這裡不模擬「先上線的不讓位」）
+        const all = [d, ...full.map((n) => st.devices[n.dev])].sort((a, b) => rid(b) - rid(a));
+        const role = !nb.length ? 'DR' : all[0] === d ? 'DR' : all[1] === d ? 'BDR' : 'DROTH';
+        return pad(i.label, 12) + pad(1, 6) + pad(0, 16) + pad(`${fmtIp(i.rt.ip)}/${i.rt.bits}`, 20) + pad(Math.max(1, +i.ospfCost || 1), 6) + pad(nb.length && full.length < nb.length ? 'WAIT' : role, 6) + `${full.length}/${nb.length}`;
+      })];
+  },
   'show users': (st, d) => {
     const o = ['    Line       User       Host(s)              Idle       Location', '*  0 con 0                idle                 00:00:00'];
     vtyRows(st, d).forEach((v, n) => o.push(`   ${String(n + 2).padStart(1)} vty ${n}     ${pad(v.user, 11)}${pad('idle', 21)}${hms(st.clock - v.last)} ${v.ip}`));
@@ -293,7 +337,7 @@ const SHOW = {
       const pc = d.sw && d.sw.ports[p.id];
       const up = !!st.rt.links[d.id + ':' + p.id];
       const li = up && linkInfo(st, d.id, p.id);
-      const status = pc && pc.shut ? 'disabled' : d.rt.err[p.id] ? 'err-disabled' : up ? 'connected' : 'notconnect';
+      const status = pc && pc.shut ? 'disabled' : d.rt.err[p.id] ? 'err-disabled' : d.sw && spanDest(d, p.id) ? 'monitoring' : up ? 'connected' : 'notconnect';
       const vlan = !pc || pc.mode === 'routed' ? 'routed' : pc.mode === 'trunk' ? 'trunk' : pc.vlan;
       // 前面有 a- 的是自動協商出來的結果，沒有的是手動寫死的設定
       const cfg = phyConfig(d, p.id);
@@ -310,6 +354,91 @@ const SHOW = {
         + (i.rt.vrrp && i.rt.vrrp.wait > 0 ? `   (Master down，${Math.ceil(i.rt.vrrp.wait)} 秒後接手)` : ''))];
   },
 };
+/** show monitor [session n] */
+function monitorLines(d, only) {
+  const span = (d.sw && d.sw.span) || {};
+  const lab = (pid) => (d.ports.find((p) => p.id === pid) || {}).label || pid;
+  const ids = Object.keys(span).filter((k) => only == null || k === String(only));
+  if (!ids.length) return [only == null ? '（沒有設定任何 SPAN session）' : `% Session ${only} does not exist`];
+  const o = [];
+  for (const k of ids) {
+    const s = span[k], src = Object.entries(s.src || {});
+    const list = (dir) => src.filter(([, v]) => v === dir).map(([p]) => lab(p)).join(',');
+    o.push(`Session ${k}`, '---------', 'Type                   : Local Session', 'Source Ports           :',
+      ...(['both', 'rx', 'tx'].filter((x) => list(x)).map((x) => `    ${pad({ both: 'Both', rx: 'RX Only', tx: 'TX Only' }[x], 19)}: ${list(x)}`)),
+      `Destination Ports      : ${s.dst ? lab(s.dst) : ''}`, '    Encapsulation      : Native', '          Ingress      : Disabled', '');
+  }
+  return o;
+}
+
+/** show interfaces <名稱>：一個連接埠的完整狀態與計數器 */
+function ifaceDetail(st, d, p) {
+  const pc = d.sw && d.sw.ports[p.id], i = d.ifaces.find((x) => x.bind.t === 'port' && x.bind.port === p.id);
+  const up = !!st.rt.links[d.id + ':' + p.id], err = d.rt.err && d.rt.err[p.id];
+  const admin = (pc && pc.shut) || (i && i.shut);
+  const L = longIf(p.label);
+  const state = admin ? 'is administratively down, line protocol is down (disabled)' : err ? 'is down, line protocol is down (err-disabled)'
+    : d.sw && spanDest(d, p.id) ? `is up, line protocol is down (monitoring)` : up ? `is up, line protocol is up${pc ? ' (connected)' : ''}` : `is down, line protocol is down${pc ? ' (notconnect)' : ''}`;
+  const mac = (i && i.rt && i.rt.mac) || (d.ifaces.find((x) => x.rt && x.rt.mac) || { rt: {} }).rt.mac || '0000.0000.0000';
+  const li = up && linkInfo(st, d.id, p.id), cfg = phyConfig(d, p.id);
+  const c = counters(st, d.id, p.id), clr = clearedAt(st, d.id, p.id);
+  const ago = (t) => (t == null ? 'never' : hms(st.clock - t));
+  const speed = li ? li.speed : cfg.speed || (p.media === 'rj45' ? 1000 : 10000);
+  const dup = li ? (li.duplex === 'half' ? 'Half-duplex' : 'Full-duplex') : cfg.duplex === 'half' ? 'Half-duplex' : 'Auto-duplex';
+  const load = (bps) => Math.max(1, Math.min(255, Math.round((bps / (speed * 1e6)) * 255)));
+  const inErr = c.crc + c.runts;
+  return [`${L} ${state}`,
+    `  Hardware is ${p.media === 'rj45' ? 'Gigabit Ethernet' : 'Ten Gigabit Ethernet'}, address is ${dotMac(mac)} (bia ${dotMac(mac)})`,
+    ...(i && i.rt && i.rt.ip != null ? [`  Internet address is ${fmtIp(i.rt.ip)}/${i.rt.bits}`] : []),
+    `  MTU 1500 bytes, BW ${speed * 1000} Kbit/sec, DLY 10 usec,`,
+    `     reliability ${inErr && c.ip ? Math.max(1, Math.round(255 * (1 - Math.min(1, inErr / Math.max(1, c.ip + inErr))))) : 255}/255, txload ${load(c.outRate)}/255, rxload ${load(c.inRate)}/255`,
+    '  Encapsulation ARPA, loopback not set', '  Keepalive set (10 sec)',
+    `  ${dup}, ${speed >= 1000 ? speed / 1000 + '000' : speed}Mb/s, media type is ${p.media === 'rj45' ? '10/100/1000BaseTX' : 'SFP'}`,
+    `  Last input ${ago(c.lastIn)}, output ${ago(c.lastOut)}, output hang never`,
+    `  Last clearing of "show interface" counters ${clr == null ? 'never' : hms(st.clock - clr)}`,
+    '  Input queue: 0/75/0/0 (size/max/drops/flushes); Total output drops: 0', '  Queueing strategy: fifo', '  Output queue: 0/40 (size/max)',
+    `  5 minute input rate ${c.inRate} bits/sec, ${c.inPps} packets/sec`, `  5 minute output rate ${c.outRate} bits/sec, ${c.outPps} packets/sec`,
+    `     ${c.ip} packets input, ${c.ib} bytes, 0 no buffer`, `     Received ${c.ibc + c.imc} broadcasts (${c.imc} multicasts)`,
+    `     ${c.runts} runts, 0 giants, 0 throttles`, `     ${inErr} input errors, ${c.crc} CRC, 0 frame, 0 overrun, 0 ignored`,
+    `     0 watchdog, ${c.imc} multicast, 0 pause input`, '     0 input packets with dribble condition detected',
+    `     ${c.op} packets output, ${c.ob} bytes, 0 underruns`, `     ${c.late} output errors, ${c.coll} collisions, 1 interface resets`,
+    '     0 unknown protocol drops', `     0 babbles, ${c.late} late collision, 0 deferred`, '     0 lost carrier, 0 no carrier, 0 pause output', '     0 output buffer failures, 0 output buffers swapped out',
+    ...(c.crc || c.late ? ['', `（${c.crc ? 'CRC 錯誤與 runts 代表收到的訊框是壞的' : ''}${c.crc && c.late ? '；' : ''}${c.late ? 'late collision 代表這一端是半雙工，卻在訊框送到一半之後才撞到' : ''} — 典型的 duplex mismatch 或線路品質問題）`] : [])];
+}
+
+/** IOS 的 traceroute：每一站的路由器回應一次 */
+function traceLines(app, d, ip, print, line) {
+  const st = app.state, r = transact(st, d.id, { proto: 'icmp', dst: ip });
+  app.showTrace(`${d.name}# ${line}`, r.log, r.hops, r);
+  print('Type escape sequence to abort.');
+  print(`Tracing the route to ${fmtIp(ip)}`);
+  print('VRF info: (vrf in name/id, vrf out name/id)');
+  const ms = (n) => `${n} msec ${Math.max(0, n - 1)} msec ${n} msec`;
+  r.l3.forEach((x, n) => print(`  ${n + 1} ${x.ip == null ? '*' : fmtIp(x.ip)} ${ms(n + 1)}`, 'pre'));
+  if (r.ok) print(`  ${r.l3.length + 1} ${fmtIp(ip)} ${ms(r.l3.length + 2)}`, 'ok');
+  else {
+    for (let k = 1; k <= 3; k++) print(`  ${r.l3.length + k}  *  *  * `, 'bad');
+    print('  ↳ ' + r.reason, 'hint');
+  }
+}
+
+/**
+ * 命令列上的即時輸出：IOS 的紀錄（console logging，包含 debug）、FortiGate 的 sniffer 與 debug flow。
+ * key 代表是哪一個畫面在看（CLI 分頁、某一條 SSH 連線），各自記得看到哪裡。回傳印了幾行
+ */
+export function consoleFollow(app, devId, key, print) {
+  const st = app.state, d = st.devices[devId];
+  if (!d || !st.dyn) return 0;
+  const rows = d.kind === 'firewall' ? consoleRows(st, devId) : isIos(d) ? logRows(st, d) : [];
+  const seen = (app.conSeen ||= {});
+  const last = rows.length ? rows[rows.length - 1].n : 0;
+  if (seen[key] == null) { seen[key] = last; return 0; } // 第一次打開：不把以前的紀錄全部倒出來
+  let k = 0;
+  for (const r of rows) if (r.n > seen[key]) { print(r.line, d.kind === 'firewall' ? 'pre' : 'con'); k++; }
+  seen[key] = Math.max(seen[key], last);
+  return k;
+}
+
 /** NAT 轉換表：動態的項目閒置太久會被移除，靜態的一直都在 */
 function natTable(st, d, verbose) {
   const W = 22;
@@ -359,12 +488,53 @@ function showOrPing(app, devId, line, print) {
     return true;
   }
   if (tok[tok.length - 1] === '?' && 'show'.startsWith(tok[0])) { CMDS.forEach((c) => print('  ' + c, 'dim')); return true; }
+  // traceroute <IP>
+  if (tok[0].length >= 4 && 'traceroute'.startsWith(tok[0])) {
+    const ip = parseIp(tok[1] || '');
+    if (ip == null) print('% 用法：traceroute <IPv4 位址>', 'warn');
+    else if (!d.ifaces.some((i) => i.rt && i.rt.ip != null)) print('% 這台設備沒有任何 IP 位址，無法送出封包', 'warn');
+    else traceLines(app, d, ip, print, line);
+    return true;
+  }
+  // debug / undebug：只是執行期的開關，不會寫進設定
+  const isUndebug = (tok[0].length >= 1 && 'undebug'.startsWith(tok[0]) && tok[0] !== 'u' ? true : tok[0] === 'u' || tok[0] === 'un') || (tok[0] === 'no' && (tok[1] || '').length >= 2 && 'debug'.startsWith(tok[1]));
+  if (isUndebug || (tok[0].length >= 3 && 'debug'.startsWith(tok[0]))) {
+    const rest = tok.slice(isUndebug && tok[0] === 'no' ? 2 : 1);
+    const what = rest[0] === 'all' ? 'all' : rest[0] === 'ip' && (rest[1] || '').startsWith('pa') ? 'packet' : rest[0] === 'ip' && (rest[1] || '').startsWith('ic') ? 'icmp' : null;
+    if (!what) { print('% 這個模擬支援：debug ip packet、debug ip icmp、undebug all', 'warn'); return true; }
+    if (what === 'all' && !isUndebug) { print('% debug all 會把設備塞爆，真的設備上請不要這樣做。這個模擬只支援 debug ip packet、debug ip icmp', 'warn'); return true; }
+    setDebug(st, d.id, what, !isUndebug);
+    if (what === 'all') print('All possible debugging has been turned off');
+    else print(`${what === 'packet' ? 'IP packet' : 'ICMP packet'} debugging is ${isUndebug ? 'off' : 'on'}`);
+    if (!isUndebug && what === 'packet') print('（只看得到給這台路由器自己、或它自己送出的封包，以及它丟掉的封包；經過它轉送的封包由 CEF 處理，不會出現在這裡）', 'hint');
+    return true;
+  }
+  // show interfaces [名稱]、show monitor session <n>
+  if (tok[0].length >= 2 && 'show'.startsWith(tok[0]) && tok[1] && tok[1].length >= 3 && 'interfaces'.startsWith(tok[1]) && !(tok[2] && ['status', 'trunk', 'counters'].some((w) => tok[2].length >= 2 && w.startsWith(tok[2])))) {
+    const name = tok.slice(2).join('');
+    const ports = name ? [portByName(d, name)] : d.ports.filter((p) => st.rt.links[d.id + ':' + p.id] || (d.sw && d.sw.ports[p.id] && d.sw.ports[p.id].shut));
+    if (name && !ports[0]) { print(`% 找不到介面「${tok.slice(2).join(' ')}」`, 'warn'); return true; }
+    for (const p of ports) ifaceDetail(st, d, p).forEach((l) => print(l, l.startsWith('（') ? 'hint' : 'pre'));
+    return true;
+  }
+  if (tok[0].length >= 2 && 'show'.startsWith(tok[0]) && (tok[1] || '').length >= 3 && 'monitor'.startsWith(tok[1]) && tok[2] && 'session'.startsWith(tok[2]) && tok[3]) {
+    monitorLines(d, tok[3]).forEach((l) => print(l, 'pre'));
+    return true;
+  }
   if (tok[0] === 'clear' && tok.length > 1) {
     const rest = tok.slice(1).join(' ');
     if (rest.startsWith('arp')) clearArp(st, d);
     else if (/^mac/.test(rest)) clearMac(st, d);
     else if (/^ip nat tr/.test(rest)) clearSessions(st, d);
     else if (/^log/.test(rest)) clearLog(st, d);
+    else if (/^cou/.test(rest)) {
+      // clear counters [介面]
+      const name = tok.slice(2).join('');
+      const p = name ? portByName(d, name) : null;
+      if (name && !p) { print(`% 找不到介面「${name}」`, 'warn'); return true; }
+      print(`Clear "show interface" counters on ${p ? 'this interface' : 'all interfaces'} [confirm]`);
+      clearCounters(st, d.id, p ? p.id : undefined);
+    }
     else return false;
     app.refreshLive();
     return true;
@@ -424,14 +594,19 @@ export function buildCli(ctx, body) {
   };
   const print = (t, c) => logs.push({ t, c });
 
+  const follow = () => consoleFollow(app, dev.id, 'cli:' + dev.id, print);
+  follow(); // 上次離開這個分頁之後，console 上出現過的訊息
   const run = (line) => {
     print(sess.prompt() + ' ' + line, 'cmd');
     const r = iosRun(app, dev.id, sess, line, print);
     if (r.clear) logs.length = 0;
     if (r.changed) ctx.commit(false);
+    follow();
     if (r.renamed) app.renderPanel(); // 設備改名或重新開機了：整個面板要跟著更新
     else draw();
   };
+  // 在別的地方發生的事（介面斷線、debug 的輸出）也會出現在 console 上
+  app.refreshers.push(() => { if (follow()) draw(); });
   input.addEventListener('keydown', (e) => {
     if (e.key === 'Enter') {
       const line = input.value.trim();

@@ -62,7 +62,7 @@ const app = {
     Object.assign(app, {
       level: lv, levelIdx: idx, state: st, results: [], running: false, selected: null,
       hintsShown: app.store.hints[lv.id] || 0, panelTab: {}, pinned: {}, adv: new Set(), termLog: {}, termHist: {}, refreshers: [],
-      undoStack: [], redoStack: [], snap: snapOf(st), cliSess: {}, remote: {}, knownHosts: {},
+      undoStack: [], redoStack: [], snap: snapOf(st), cliSess: {}, remote: {}, knownHosts: {}, conSeen: {}, capUi: {},
     });
     app.store.last = lv.id;
     app.runToken = (app.runToken || 0) + 1;
@@ -349,6 +349,7 @@ function saveOf(st) {
   const s = cloneState(st), d = s.dyn;
   if (d) {
     delete d.mac; delete d.ct; delete d.outbox;
+    for (const k of ['cap', 'con', 'sniff', 'dflow', 'dbg', 'vty', 'bgAcc', 'ifcAcc']) delete d[k];
     for (const k of Object.keys(d.log || {})) d.log[k] = d.log[k].slice(-15);
     for (const k of Object.keys(d.syslog || {})) d.syslog[k] = d.syslog[k].slice(-40);
   }

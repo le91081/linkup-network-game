@@ -3,13 +3,15 @@ import { h } from './dom.js';
 import { parseIp, fmtIp } from '../engine/ip.js';
 import { transact } from '../engine/sim.js';
 import { fortiSession } from '../engine/fortios.js';
+import { sniffing, stopSniff } from '../engine/wire.js';
+import { consoleFollow } from './cli.js';
 
 const HELP = {
   config: '進入一個設定區段，例如 config firewall policy',
   show: '顯示設定；在最外層可以接區段名稱，例如 show firewall policy',
   get: 'get system status / get system interface / get router info routing-table all / get vpn ipsec tunnel summary / get system info admin status',
-  diagnose: 'diagnose vpn tunnel list / diagnose vpn ike gateway list / diagnose sys session list / diagnose sys session clear / diagnose sys ntp status',
-  execute: 'execute ping <IP> / execute log display / execute date / execute time / execute reboot',
+  diagnose: "diagnose sniffer packet any 'host <IP>' 4 / diagnose debug flow … / diagnose sys session list / diagnose vpn tunnel list / diagnose hardware deviceinfo nic <埠> / diagnose sys ntp status",
+  execute: 'execute ping <IP> / execute traceroute <IP> / execute log display / execute date / execute time / execute reboot',
   edit: '編輯或新增一筆，例如 edit 1、edit "HQ"；edit 0 會自動用下一個編號',
   delete: '刪除一筆',
   move: 'move <政策編號> before|after <政策編號>（政策由上往下比對）',
@@ -29,6 +31,8 @@ export function fortiRun(app, devId, sess, line, print) {
   const text = line.trim(), low = text.toLowerCase();
   const booting = (app.state.rt.booting || {})[devId];
   if (booting > 0) { print(`設備還在開機中，還要 ${Math.ceil(booting)} 秒才能下指令`, 'warn'); return {}; }
+  // sniffer 執行中：輸入任何東西都等於按了 Ctrl-C
+  if (sniffing(app.state, devId)) stopSniff(app.state, devId);
   const before = app.state.devices[devId].name;
   if (text.endsWith('?')) {
     const r = sess.complete(text.slice(0, -1));
@@ -53,6 +57,16 @@ export function fortiRun(app, devId, sess, line, print) {
       if (!res.ok) print('  ↳ ' + res.reason, 'hint');
     }
   }
+  if (r.trace) {
+    const st = app.state, d = st.devices[devId], ip = parseIp(r.trace);
+    const res = transact(st, d.id, { proto: 'icmp', dst: ip });
+    app.showTrace(`${d.name} # ${text}`, res.log, res.hops, res);
+    print(`traceroute to ${fmtIp(ip)} (${fmtIp(ip)}), 32 hops max, 3 probe packets per hop, 84 byte packets`);
+    const t = (n) => `${(n * 0.41).toFixed(3)} ms  ${(n * 0.39).toFixed(3)} ms  ${(n * 0.4).toFixed(3)} ms`;
+    res.l3.forEach((x, n) => print(` ${n + 1}  ${x.ip == null ? '*' : fmtIp(x.ip)}  ${t(n + 1)}`, 'pre'));
+    if (res.ok) print(` ${res.l3.length + 1}  ${fmtIp(ip)}  ${t(res.l3.length + 2)}`, 'ok');
+    else { for (let k = 1; k <= 3; k++) print(` ${res.l3.length + k}  * * *`, 'bad'); print('  ↳ ' + res.reason, 'hint'); }
+  }
   const d = app.state.devices[devId];
   return { changed: !!r.changed, reloaded: !!r.reloaded, renamed: !!r.changed && (!!r.reloaded || !d || d.name !== before) };
 }
@@ -75,14 +89,19 @@ export function buildFortiCli(ctx, body) {
   };
   const print = (t, c) => logs.push({ t, c });
 
+  const follow = () => consoleFollow(app, dev.id, 'cli:' + dev.id, print);
+  follow();
   const run = (line) => {
     print(sess.prompt() + line, 'cmd');
     const r = fortiRun(app, dev.id, sess, line, print);
     if (r.clear) logs.length = 0;
     if (r.changed) ctx.commit(false);
+    follow();
     if (r.renamed) app.renderPanel();
     else draw();
   };
+  // sniffer 與 debug flow 的輸出：在別的地方產生流量時，也會即時出現在這裡
+  app.refreshers.push(() => { if (follow()) draw(); });
   input.addEventListener('keydown', (e) => {
     if (e.key === 'Enter') {
       const line = input.value.trim();

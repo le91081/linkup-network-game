@@ -570,3 +570,40 @@ h3.sec { font-size: 11.5px; letter-spacing: 0.08em; color: var(--faint); text-tr
 .logbox .ll .lt { display: block; color: var(--faint); font-size: 10.5px; }
 .logbox .ll.s0, .logbox .ll.s1, .logbox .ll.s2, .logbox .ll.s3 { color: #ffb0b8; }
 .logbox .ll.s4 { color: #ffd995; }
+
+/* ───────── 介面計數器 ───────── */
+.ctr-list { display: flex; flex-direction: column; gap: 3px; }
+.ctr-row { display: grid; grid-template-columns: 64px 1fr; gap: 1px 8px; padding: 5px 8px; border-radius: 8px; background: rgba(6, 10, 22, 0.35); font-size: 12px; }
+.ctr-row > span:last-child { grid-column: 2; font-size: 11.5px; }
+.ctr-row.warn > span:last-child { color: var(--warn); }
+.ctr-row.bad { background: rgba(255, 93, 108, 0.1); }
+.ctr-row.bad > span:last-child { color: #ffb0b8; }
+
+/* ───────── 封包擷取 ───────── */
+.cap-sum { font-size: 11.5px; }
+.cap-list { display: flex; flex-direction: column; gap: 2px; max-height: 360px; overflow-y: auto; }
+.cap-row { display: flex; flex-direction: column; gap: 1px; text-align: left; padding: 5px 8px; border-radius: 7px; border: 1px solid transparent; background: rgba(6, 10, 22, 0.35); color: var(--text); cursor: pointer; font: inherit; }
+.cap-row:hover { border-color: var(--line-2); }
+.cap-row.sel { border-color: var(--accent); background: rgba(79, 216, 196, 0.1); }
+.cap-row.promisc, .cap-row.span { background: rgba(165, 139, 255, 0.08); }
+.cap-top { display: flex; align-items: center; gap: 8px; font-size: 11px; color: var(--muted); }
+.cap-top i { font-style: normal; }
+.cap-top i:first-child { min-width: 26px; }
+.cap-addr { font-size: 11.5px; }
+.cap-info { font-size: 11.5px; color: var(--muted); overflow-wrap: anywhere; }
+.ptag { font-style: normal; font: 600 10px var(--mono); padding: 0 5px; border-radius: 4px; background: rgba(150, 170, 225, 0.18); color: #cfd8f2; }
+.ptag.p-arp { background: rgba(255, 159, 90, 0.2); color: #ffc79c; }
+.ptag.p-icmp { background: rgba(125, 243, 255, 0.16); color: #a8f3ff; }
+.ptag.p-dhcp { background: rgba(255, 143, 208, 0.18); color: #ffc0e4; }
+.ptag.p-stp { background: rgba(245, 181, 71, 0.18); color: #ffd995; }
+.ptag.p-tcp { background: rgba(91, 157, 255, 0.2); color: #b6d2ff; }
+.ptag.p-esp { background: rgba(255, 200, 87, 0.18); color: #ffe2a6; }
+.ptag.p-bad { background: rgba(255, 93, 108, 0.22); color: #ffb0b8; }
+.cap-detail { display: flex; flex-direction: column; gap: 6px; }
+.cap-layer { display: flex; flex-direction: column; gap: 3px; padding: 7px 9px; border-radius: 8px; background: rgba(6, 10, 22, 0.45); border-left: 3px solid var(--line-2); font-size: 12px; }
+.cap-layer.bad { border-left-color: var(--bad, #ff5d6c); }
+.cap-layer.warn { border-left-color: var(--warn); }
+.cap-kv { display: grid; grid-template-columns: 92px 1fr; gap: 8px; }
+.cap-kv span { color: var(--muted); }
+.cap-kv code { font: 11.5px var(--mono); overflow-wrap: anywhere; }
+.tl.con { color: #9fe7c8; }
