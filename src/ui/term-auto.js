@@ -26,7 +26,7 @@ export function shellWords(s) {
 }
 
 /** 這一行 curl 要不要當成 API 呼叫（有 -X、-u、-H、-d 這類參數，或網址是 /restconf） */
-export const isApiCurl = (line) => /(^|\s)(-[XuHdkiv]+|--(request|user|header|data|data-raw|insecure|include|verbose))(\s|$)/.test(line) || /\/restconf\b/.test(line);
+export const isApiCurl = (line) => /(^|\s)(-[XuHdkiv]+|--(request|user|header|data|data-raw|insecure|include|verbose))(\s|$)/.test(line) || /\/(restconf|dna)\b/.test(line);
 
 const b64 = (s) => (typeof btoa === 'function' ? btoa(unescape(encodeURIComponent(s))) : Buffer.from(s).toString('base64'));
 
@@ -34,7 +34,7 @@ export function curlApi(app, dev, line, print) {
   const sw = shellWords(line);
   if (sw.err) { print(`curl: ${sw.err}`, 'bad'); return; }
   const w = sw.words.slice(1);
-  const r = { method: '', url: '', user: '', pass: '', ctype: '', accept: '', body: '', verify: true };
+  const r = { method: '', url: '', user: '', pass: '', ctype: '', accept: '', body: '', verify: true, extra: '' };
   let include = false, verbose = false, data = null;
   for (let i = 0; i < w.length; i++) {
     const a = w[i];
@@ -45,7 +45,7 @@ export function curlApi(app, dev, line, print) {
       else if (a === '-H' || a === '--header') {
         const v = next(), m = v.match(/^([\w-]+)\s*:\s*(.*)$/);
         if (!m) { print(`curl: 標頭的格式是「名稱: 值」，例如 -H 'Accept: application/yang-data+json'（收到的是 ${v}）`, 'warn'); continue; }
-        if (/^accept$/i.test(m[1])) r.accept = m[2]; else if (/^content-type$/i.test(m[1])) r.ctype = m[2];
+        if (/^accept$/i.test(m[1])) r.accept = m[2]; else if (/^content-type$/i.test(m[1])) r.ctype = m[2]; else r.extra += `${m[1]}: ${m[2]}\n`;
       } else if (a === '-d' || a === '--data' || a === '--data-raw' || a === '--data-binary') data = (data == null ? '' : data + '&') + next();
       else if (a === '-k' || a === '--insecure') r.verify = false;
       else if (a === '-i' || a === '--include') include = true;

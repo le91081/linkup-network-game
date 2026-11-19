@@ -30,7 +30,7 @@ export const LEVEL_TOPIC = {
   l47: 'routing', l48: 'routing', l49: 'routing', l50: 'routing',
   l51: 'ipv6', l52: 'ipv6', l53: 'ipv6', l54: 'vpn',
   l55: 'wireless', l56: 'wireless', l57: 'wireless',
-  l58: 'auto', l59: 'auto', l60: 'auto', l61: 'auto',
+  l58: 'auto', l59: 'auto', l60: 'auto', l61: 'auto', l62: 'auto',
 };
 
 export const QUESTIONS = {
@@ -189,6 +189,8 @@ export const QUESTIONS = {
     { q: '公司的電腦經過 NAT 上網。雲端上的安全群組要只允許公司 SSH 進來，來源應該填什麼？', a: ['公司內部的 10.20.0.0/24', '公司 NAT 之後的公用 IP，例如 203.0.113.34/32', '0.0.0.0/0', 'VPC 的 CIDR'], c: 1, e: '雲端看到的是封包到達時的來源位址，也就是公司路由器 NAT 之後的公用 IP。走站對站 VPN（不做 NAT）時，看到的才是內部位址。', r: 'Network+ 1.3' },
     { q: '用站對站 VPN 把公司和 VPC 連成混合雲。通道已經 UP，公司卻還是連不到 VPC 裡的主機。雲端那一端最可能少了什麼？', a: ['再建一條 VPN', '子網路的路由表沒有往公司網段 → vgw 的路由（或沒開路由傳播）', '換一個預先共用金鑰', '把 IGW 拿掉'], c: 1, e: 'VPN 通了只代表加密通道建好了；VPC 裡的回應要靠路由表才會送進 VGW。公司那一端也要注意：往 VPC 的流量不能先被 NAT 轉換掉。', r: 'Network+ 1.3' },
     { q: '雲端的「彈性 (elasticity)」指的是什麼？', a: ['線路可以彎曲', '依照負載自動增加或減少資源，用多少付多少', '資料一定不會遺失', '可以使用任何 IP'], c: 1, e: '例如流量高峰時自動多開幾台虛擬機器，離峰時關掉。擴充性 (scalability) 指能長到多大；彈性強調可以隨需求自動伸縮。', r: 'Network+ 1.3' },
+    { q: '呼叫 Catalyst Center 的意圖 API（例如 GET /dna/intent/api/v1/network-device）之前要先做什麼？', a: ['用 SSH 登入控制器', '用帳號密碼 POST /dna/system/api/v1/auth/token 換一個 Token，之後的請求在標頭帶 X-Auth-Token', '在 URL 裡寫上密碼', '什麼都不用，API 是公開的'], c: 1, e: 'Token 驗證讓之後的請求不必一直送密碼；Token 有期限（一小時），過期要重新取得。RESTCONF 則是每個請求都用 HTTP Basic。', r: 'CCNA 6.5' },
+    { q: '控制器式網路裡，overlay 與 underlay 指的是什麼？', a: ['兩種網路線', 'underlay 是實體網路與它的路由；overlay 是在 underlay 上用通道（例如 VXLAN）建立的邏輯網路', 'overlay 是無線、underlay 是有線', '兩者是同一件事'], c: 1, e: '例如 SD-Access：underlay 用 IS-IS 讓所有交換器互通，overlay 用 VXLAN 把使用者放進邏輯的虛擬網路；兩者合起來叫 fabric。', r: 'CCNA 6.3' },
     { q: 'AI / 機器學習在網路維運上最常見的用途是什麼？', a: ['取代所有網路工程師', '學習每個網路的正常基準 (baseline)，自動找出異常、預測問題並建議處置', '自動產生 IP 位址', '加快光纖的速度'], c: 1, e: '例如 AI 分析發現「某台 AP 的用戶端連線失敗率比平常同時段高很多」，在使用者抱怨之前就提出來。判斷與修改仍然要由人確認。', r: 'CCNA 6.4' },
   ],
 };

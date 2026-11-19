@@ -3,6 +3,7 @@ import { makeDevice as D, makeState, setLine, newIface } from '../engine/model.j
 import { iosSession } from '../engine/ios.js';
 import { restconf } from '../engine/restconf.js';
 import { runPlaybook } from '../engine/automation.js';
+import { inventory, issues } from '../engine/dnac.js';
 import { recompute } from '../engine/sim.js';
 import { dev } from './util.js';
 
@@ -24,6 +25,10 @@ const apiLog = (s, from, devId) => ((s.dyn && s.dyn.api) || []).filter((x) => x.
 const RC = { user: 'netauto', pass: 'Aut0mate!26' };
 const R1_LAN = '10.20.0.1';
 const BASE = `https://${R1_LAN}/restconf/data`;
+
+// ═══════════════════════════ 15-3 Catalyst Center ═══════════════════════════
+const DNAC = { user: 'netops', pass: 'C@talyst-2026' };
+const DNAC_IP = '10.1.98.50';
 
 // ═══════════════════════════ 15-2 Ansible ═══════════════════════════
 const ANS = { user: 'netadmin', pass: 'Ans1ble!Net' };
@@ -323,5 +328,111 @@ export const LEVELS11 = [
       runPlaybook(s, 'ctl', { inventory: ctl.ansible.inventory, playbook: ctl.ansible.playbook, file: 'vlan50.yml' });
     },
     recap: ['Ansible 用 SSH 登入設備替你下 CLI 指令：inventory 決定管哪些設備、怎麼登入，playbook 用 YAML 描述要的結果。', '資源模組是宣告式、冪等的：設定對了就是 ok；不冪等的做法（例如每次都送 add 的 ios_config）會讓每次執行都顯示 changed。'],
+  },
+
+  // ════════════════════════ 15-3 ════════════════════════
+  {
+    id: 'l62', chapter: 15, title: '控制器說哪裡有問題', subtitle: 'Catalyst Center、北向 API、AI 驅動的 Assurance', tags: ['控制器式網路', 'SDN', 'Catalyst Center', 'Token', 'AI'],
+    brief: '公司導入了 Cisco Catalyst Center，四台交換器都交給它管理。早上服務台接到三通電話：倉儲的電腦連不上網、業務說存檔慢得不得了、還有一台交換器在控制器上一直是紅色的。請用控制器的 REST API 查出設備清單與問題清單（不要一台一台登入找），把問題修好，最後讓控制器上沒有任何待處理的問題。',
+    given: [
+      ['Catalyst Center', `${DNAC_IP}（VLAN 98）· API 帳號 ${DNAC.user} / ${DNAC.pass}`], ['NetOps 工作站', '10.1.98.60 ·「API」分頁或終端機的 curl'],
+      ['取得 Token', 'POST /dna/system/api/v1/auth/token（HTTP Basic）'], ['意圖 API', '/dna/intent/api/v1/network-device、/dna/intent/api/v1/issues'],
+      ['交換器管理位址（VLAN 99）', 'Core 10.1.99.1 · SW-1 .11 · SW-2 .12 · SW-3 .13'], ['DHCP 與檔案伺服器', '10.1.98.10'],
+    ],
+    learn: [
+      { t: '傳統網路與控制器式網路', d: '傳統做法是逐台登入設定，每台設備自己算路、自己管自己。控制器式網路把管理與控制集中在控制器：管理者描述「要什麼」（意圖），控制器把設定推到所有設備，並持續比對實際狀態。轉送封包（資料平面）仍然在每台設備上。' },
+      { t: 'SDN 架構與南北向介面', d: '南向介面是控制器管理設備的方式（SNMP、SSH / CLI、NETCONF、RESTCONF、OpenFlow）；北向介面是給應用程式與自動化工具呼叫的 REST API。控制器管理的實體網路叫 underlay，在上面用通道建立的邏輯網路叫 overlay，兩者合起來就是 fabric。' },
+      { t: 'Token 驗證', d: '很多北向 API 先用帳號密碼（HTTP Basic）換一個 Token，之後每個請求都在標頭帶上 X-Auth-Token，不必每次都送密碼。Token 有期限（Catalyst Center 是一小時），過期就要重新取得。' },
+      { t: 'AI / 機器學習的 Assurance', d: '控制器長期收集遙測資料，學出每個網路自己的「正常基準」，偏離基準時主動開問題：例如某個 VLAN 的 DHCP 成功率從 99.6% 掉到 0%、某個介面突然只剩 100 Mbps。它也會建議可能的原因與處置，但判斷與修改仍然要由人確認。' },
+    ],
+    setup() {
+      const svi = (d, v, helper) => d.ifaces.push(newIface('vlan' + v, 'Vlan' + v, { t: 'svi', vlan: v }, { ip: `10.1.${v}.1`, mask: '255.255.255.0', ...(helper ? { helper } : {}) }));
+      const access = (id, name, pos, vlan, ip, init) => D('c2960', id, {
+        name, pos,
+        init(d) {
+          d.sw.vlans.push({ id: 10, name: 'SALES' }, { id: 20, name: 'DESIGN' }, { id: 30, name: 'WAREHOUSE' }, { id: 99, name: 'MGMT' });
+          Object.assign(d.sw.ports['Gi0/9'], { mode: 'trunk', allowed: 'all' });
+          Object.assign(d.sw.ports['Gi0/1'], { mode: 'access', vlan });
+          mgmtIp(d, 99, ip, '10.1.99.1');
+          if (init) init(d);
+        },
+      });
+      return makeState([
+        D('c9300', 'core', {
+          name: 'Core', pos: [0, -4],
+          init(d) {
+            d.sw.vlans.push({ id: 10, name: 'SALES' }, { id: 20, name: 'DESIGN' }, { id: 30, name: 'WAREHOUSE' }, { id: 98, name: 'DATACENTER' }, { id: 99, name: 'MGMT' });
+            for (const p of ['Gi1/0/1', 'Gi1/0/2', 'Gi1/0/3']) Object.assign(d.sw.ports[p], { mode: 'trunk', allowed: 'all' });
+            for (const p of ['Gi1/0/10', 'Gi1/0/12', 'Te1/1/1']) Object.assign(d.sw.ports[p], { mode: 'access', vlan: 98 });
+            svi(d, 10, '10.1.98.10'); svi(d, 20, '10.1.98.10');
+            svi(d, 30); // 上週新增 VLAN 30 的時候忘了 helper-address
+            svi(d, 98); svi(d, 99);
+          },
+        }),
+        // SW-1 的 Gi0/1 被人寫死成 100 Mbps 全雙工（電腦是自動協商，會退回半雙工）
+        access('sw1', 'SW-1', [-11.5, 1], 10, '10.1.99.11', (d) => Object.assign(d.sw.ports['Gi0/1'], { speed: '100', duplex: 'full' })),
+        access('sw2', 'SW-2', [0, 1.5], 20, '10.1.99.12'),
+        // SW-3 是新上架的：管理 IP 設了，預設閘道沒設
+        access('sw3', 'SW-3', [11.5, 1], 30, '10.1.99.13', (d) => { d.ifaces.find((x) => x.id === 'mgmt').gateway = ''; }),
+        D('tower', 'srv', {
+          name: 'DHCP 與檔案伺服器', pos: [-11, -9.5], ip: '10.1.98.10', gw: '10.1.98.1', services: [{ proto: 'tcp', port: 445, name: 'SMB 檔案分享' }],
+          init(d) { d.dhcpScopes = [10, 20, 30].map((v) => ({ start: `10.1.${v}.100`, end: `10.1.${v}.199`, gw: '', dns: '10.1.98.10' })); },
+        }),
+        D('rack1u', 'dnac', {
+          name: 'Catalyst Center', pos: [0, -11.5], ip: DNAC_IP, gw: '10.1.98.1', services: [{ proto: 'tcp', port: 443, name: 'HTTPS（Catalyst Center）' }],
+          init(d) { d.dnac = { user: DNAC.user, pass: DNAC.pass, managed: [['core', '10.1.99.1'], ['sw1', '10.1.99.11'], ['sw2', '10.1.99.12'], ['sw3', '10.1.99.13']].map(([id, ip]) => ({ id, ip })) }; },
+        }),
+        D('laptop', 'ops', { name: 'NetOps 工作站', pos: [11, -9.5], ip: '10.1.98.60', gw: '10.1.98.1', dns: '10.1.98.10', init(d) { d.apps = ['api']; } }),
+        D('pc', 'pc-a', { name: '業務 PC', pos: [-12.5, 7], dhcp: true }),
+        D('pc', 'pc-b', { name: '設計 PC', pos: [-1, 7.5], dhcp: true }),
+        D('pc', 'pc-c', { name: '倉儲 PC', pos: [10.5, 7], dhcp: true }),
+      ], [
+        ['core:Gi1/0/1', 'sw1:Gi0/9'], ['core:Gi1/0/2', 'sw2:Gi0/9'], ['core:Gi1/0/3', 'sw3:Gi0/9'],
+        ['srv:eth0', 'core:Gi1/0/10'], ['dnac:eth0', 'core:Te1/1/1'], ['ops:eth0', 'core:Gi1/0/12'],
+        ['pc-a:eth0', 'sw1:Gi0/1'], ['pc-b:eth0', 'sw2:Gi0/1'], ['pc-c:eth0', 'sw3:Gi0/1'],
+      ]);
+    },
+    objectives: [
+      {
+        type: 'check', label: '用北向 API 取得 Token，查詢設備清單與問題清單',
+        test(s) {
+          const log = apiLog(s, 'ops', 'dnac').filter((x) => x.status === 200);
+          if (!log.some((x) => x.method === 'POST' && x.path === '/dna/system/api/v1/auth/token')) return '還沒有用 POST /dna/system/api/v1/auth/token 取得 Token';
+          if (!log.some((x) => x.path === '/dna/intent/api/v1/network-device')) return '還沒有查詢設備清單（GET /dna/intent/api/v1/network-device，標頭帶 X-Auth-Token）';
+          return log.some((x) => x.path === '/dna/intent/api/v1/issues') || '還沒有查詢問題清單（GET /dna/intent/api/v1/issues）';
+        },
+      },
+      {
+        type: 'check', label: 'Catalyst Center 的設備清單：四台都是 Reachable',
+        test(s) {
+          const bad = inventory(s, dev(s, 'dnac')).find((x) => x.json.reachabilityStatus !== 'Reachable');
+          return !bad || `${bad.json.hostname}（${bad.json.managementIpAddress}）是 Unreachable：${bad.json.reachabilityFailureReason} — ${bad.why}`;
+        },
+      },
+      { type: 'dhcp', dev: 'pc-c', subnet: '10.1.30.0/24', label: '倉儲 PC 拿到 10.1.30.x' },
+      { type: 'speed', from: 'pc-a', to: 'srv', min: 500, label: '業務 PC 到檔案伺服器至少 500 Mbps' },
+      {
+        type: 'check', label: 'Assurance 沒有待處理的問題',
+        test(s) { const l = issues(s, dev(s, 'dnac')); return !l.length || `還有 ${l.length} 個問題，例如：${l[0].name}`; },
+      },
+    ],
+    hints: [
+      `NetOps 工作站 →「API」分頁 → 範本「Catalyst Center：取得 Token」，帳號 ${DNAC.user}、密碼 ${DNAC.pass}，取消「驗證 SSL 憑證」後送出。回應裡的 Token 會自動帶到另外兩個範本的 X-Auth-Token。`,
+      '設備清單裡 SW-3 是 Unreachable (SNMP Timeouts)：它的管理位址在 VLAN 99，控制器在 VLAN 98。L2 交換器沒有預設閘道就回不了別的網段：SW-3 的 CLI 輸入 ip default-gateway 10.1.99.1。',
+      '問題清單裡 AI 抓到 VLAN 30 的 DHCP 失敗率異常：Core 的 Vlan30 少了 ip helper-address 10.1.98.10（「L3 介面」的 DHCP Relay 欄位）。',
+      'SW-1 的 Gi0/1 雙工不一致：交換器寫死 100 Mbps 全雙工，電腦自動協商只好退回半雙工。兩端都改回自動（speed auto、duplex auto）。',
+      '修好之後再查一次問題清單，應該是空的（response: []）。',
+    ],
+    solve(s) {
+      recompute(s);
+      typeIn(s, 'sw3', ['configure terminal', 'ip default-gateway 10.1.99.1', 'end']);
+      typeIn(s, 'core', ['configure terminal', 'interface vlan 30', 'ip helper-address 10.1.98.10', 'end']);
+      typeIn(s, 'sw1', ['configure terminal', 'interface gi0/1', 'speed auto', 'duplex auto', 'end']);
+      recompute(s);
+      const base = `https://${DNAC_IP}`;
+      const tok = restconf(s, 'ops', { method: 'POST', url: `${base}/dna/system/api/v1/auth/token`, user: DNAC.user, pass: DNAC.pass }).body.Token;
+      for (const p of ['/dna/intent/api/v1/network-device', '/dna/intent/api/v1/issues']) restconf(s, 'ops', { method: 'GET', url: base + p, headers: { 'x-auth-token': tok } });
+    },
+    recap: ['控制器式網路把管理集中起來：北向用 REST API（Token 驗證）給程式呼叫，南向用 SNMP、SSH、NETCONF 管理設備；資料平面仍然在每台設備上。', 'AI 驅動的 Assurance 依照網路自己的基準找出異常並建議處置，但最後還是要由人確認與修正。'],
   },
 ];

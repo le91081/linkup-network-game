@@ -64,6 +64,7 @@ export function curlOf(r) {
   if (r.user || r.pass) parts.push('-u', q(`${r.user}:${r.pass}`));
   if (r.accept) parts.push('-H', q(`Accept: ${r.accept}`));
   if (HAS_BODY.has(r.method) && r.ctype) parts.push('-H', q(`Content-Type: ${r.ctype}`));
+  for (const l of String(r.extra || '').split('\n').filter((x) => /:/.test(x))) parts.push('-H', q(l.trim()));
   if (HAS_BODY.has(r.method) && r.body) parts.push('-d', `'${r.body.replace(/\s*\n\s*/g, ' ')}'`);
   parts.push(r.url);
   return parts.join(' ');
@@ -74,7 +75,8 @@ const statusKind = (s) => (s >= 200 && s < 300 ? 'on' : s >= 400 ? 'off' : 'warn
 /** 送出請求，回傳要顯示的結果；也記錄在 app 上 */
 export function sendApi(app, devId, r) {
   const st = app.state;
-  const res = restconf(st, devId, { method: r.method, url: r.url, user: r.user, pass: r.pass, contentType: HAS_BODY.has(r.method) ? r.ctype : '', accept: r.accept, body: HAS_BODY.has(r.method) ? r.body : '', verify: r.verify });
+  const headers = Object.fromEntries(String(r.extra || '').split('\n').map((l) => l.match(/^\s*([\w-]+)\s*:\s*(.*?)\s*$/)).filter(Boolean).map((m) => [m[1].toLowerCase(), m[2]]));
+  const res = restconf(st, devId, { method: r.method, url: r.url, user: r.user, pass: r.pass, contentType: HAS_BODY.has(r.method) ? r.ctype : '', accept: r.accept, body: HAS_BODY.has(r.method) ? r.body : '', verify: r.verify, headers });
   const out = { ...res, at: Date.now(), req: { ...r }, ms: res.res ? 12 + (res.res.hops || []).length * 3 + (res.status === 201 || res.status === 204 ? 40 : 0) : 0 };
   if (res.res) app.showTrace(`${st.devices[devId].name} → ${r.method} ${r.url.replace(/^https:\/\/[^/]+/, '')}`, res.res.log, res.res.hops, res.res.ok && res.status ? { ...res.res, ok: res.status < 400, reason: `HTTP ${res.status} ${res.statusText}` } : res.res);
   return out;
@@ -106,6 +108,7 @@ export function apiTab(ctx, body) {
     if (HAS_BODY.has(ui.method)) { const c = jsonCheck(ui.body); if (!c.ok && ui.body.trim()) { /* 照樣送出：讓設備回 400，和真的一樣 */ } }
     const r = sendApi(app, dev.id, ui);
     ui.last = r;
+    if (r.status === 200 && r.body && r.body.Token) ui.lastToken = r.body.Token;
     ui.hist.unshift({ method: ui.method, url: ui.url, status: r.status, body: ui.body });
     ui.hist.length = Math.min(ui.hist.length, 8);
     ctx.commit(false);
@@ -115,13 +118,14 @@ export function apiTab(ctx, body) {
     h('div', { class: 'api-line' }, method, url),
     h('div', { class: 'grid2' }, fld('帳號（Basic Auth）', txt('user', '例如 admin')), fld('密碼', txt('pass', '', 'password')),
       fld('Accept（要什麼格式的回應）', sel('accept', CTYPES)), HAS_BODY.has(ui.method) ? fld('Content-Type（送出的內容格式）', sel('ctype', CTYPES)) : h('span')),
+    fld('其他標頭（一行一個，例如 X-Auth-Token: …）', (() => { const t = h('textarea', { class: 'code api-hdr', rows: 2, spellcheck: 'false', value: ui.extra || '', placeholder: 'X-Auth-Token: eyJ0eXAi…', oninput: (e) => { ui.extra = e.target.value; curl.textContent = curlOf(ui); } }); t.addEventListener('keydown', (e) => e.stopPropagation()); return t; })()),
     h('label', { class: 'switch' }, h('input', { type: 'checkbox', checked: ui.verify, onchange: (e) => { ui.verify = e.target.checked; rerender(); } }), h('i'), h('span', { text: '驗證 SSL 憑證（設備用的是自己簽的憑證時要關掉，curl 是 -k）' })),
     area && fld('內容 (Body)', area), area && lint,
     h('div', { class: 'addrow' },
       button('送出', { ic: 'play', kind: 'primary', small: true, onclick: send }),
       area && button('整理 JSON', { small: true, onclick: () => { try { ui.body = JSON.stringify(JSON.parse(ui.body), null, 2); area.value = ui.body; doLint(); } catch { doLint(); } } })),
     h('details', { class: 'api-tpl' }, h('summary', { text: '範本' }),
-      h('div', { class: 'chips' }, TEMPLATES(urlHost(ui.url) || guessTarget(state, dev)).map(([t, o]) => h('button', { class: 'chip btnchip', type: 'button', text: t, onclick: () => { Object.assign(ui, o, { ctype: YANG, accept: YANG }); rerender(); } })))),
+      h('div', { class: 'chips' }, [...dnacTemplates(state, ui), ...TEMPLATES(urlHost(ui.url) || guessTarget(state, dev))].map(([t, o]) => h('button', { class: 'chip btnchip', type: 'button', text: t, onclick: () => { Object.assign(ui, { ctype: YANG, accept: YANG }, o); rerender(); } })))),
     h('div', { class: 'f-label', text: '等效的 curl 指令（也可以在終端機直接輸入）' }), curl));
   url.addEventListener('input', () => { curl.textContent = curlOf(ui); });
   for (const el of body.querySelectorAll('.api-req input, .api-req select')) el.addEventListener('input', () => { curl.textContent = curlOf(ui); });
@@ -145,6 +149,18 @@ export function apiTab(ctx, body) {
       class: 'api-hist', type: 'button', onclick: () => { Object.assign(ui, { method: x.method, url: x.url, body: x.body || '' }); rerender(); },
     }, h('b', { class: 'mono', text: x.method }), h('span', { class: 'mono', text: x.url.replace(/^https:\/\/[^/]+/, '') }), x.status ? badge(statusKind(x.status), String(x.status)) : badge('off', '失敗')))));
   }
+}
+/** Catalyst Center 的範本（拿 Token、設備清單、問題清單） */
+function dnacTemplates(state, ui) {
+  const c = Object.values(state.devices).find((d) => d.dnac);
+  const ip = c && c.ifaces[0] && c.ifaces[0].ip;
+  if (!ip) return [];
+  const last = (ui.lastToken && `X-Auth-Token: ${ui.lastToken}`) || ui.extra || '';
+  return [
+    ['Catalyst Center：取得 Token', { method: 'POST', url: `https://${ip}/dna/system/api/v1/auth/token`, body: '', extra: '', accept: 'application/json', ctype: 'application/json' }],
+    ['Catalyst Center：設備清單', { method: 'GET', url: `https://${ip}/dna/intent/api/v1/network-device`, body: '', extra: last, accept: 'application/json' }],
+    ['Catalyst Center：問題清單', { method: 'GET', url: `https://${ip}/dna/intent/api/v1/issues`, body: '', extra: last, accept: 'application/json' }],
+  ];
 }
 const urlHost = (u) => (String(u).match(/^https?:\/\/([\d.]+)/) || [])[1];
 function insertAt(el, s) {

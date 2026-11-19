@@ -15,6 +15,7 @@ import { IOS_XE } from './ios.js';
 import { logEvent } from './ops.js';
 import { CATALOG, newIface } from './model.js';
 import { longIf } from './ops.js';
+import { dnacApi } from './dnac.js';
 
 const YANG = 'application/yang-data+json';
 const STATUS = { 200: 'OK', 201: 'Created', 204: 'No Content', 400: 'Bad Request', 401: 'Unauthorized', 404: 'Not Found', 405: 'Method Not Allowed', 409: 'Conflict', 415: 'Unsupported Media Type' };
@@ -71,24 +72,27 @@ const keyOf = (s) => decodeURIComponent(s || '');
 /** 送出一個 RESTCONF 請求。req = { method, url, user, pass, contentType, body（字串） } */
 export function restconf(state, fromId, req) {
   const method = String(req.method || 'GET').toUpperCase();
-  const m = String(req.url || '').trim().match(/^https:\/\/([\d.]+)(?::(\d+))?(\/[^\s?#]*)?$/i);
+  const m = String(req.url || '').trim().match(/^https:\/\/([\d.]+)(?::(\d+))?(\/[^\s?#]*)?(?:\?([^\s#]*))?$/i);
   if (!m) return { ...reply(0, null), error: 'URL 的格式：https://<設備 IP>/restconf/data/<YANG 路徑>（RESTCONF 一定走 HTTPS）', res: null };
   const ip = parseIp(m[1]), port = +(m[2] || 443), path = m[3] || '/';
+  const query = Object.fromEntries(String(m[4] || '').split('&').filter(Boolean).map((kv) => { const [k, v = ''] = kv.split('='); return [decodeURIComponent(k), decodeURIComponent(v.replace(/\+/g, ' '))]; }));
   const res = transact(state, fromId, { proto: 'tcp', dst: ip, dport: port, quiet: !!req.quiet });
   if (!res.ok) return { ...reply(0, null), error: `連不上 ${m[1]}:${port}：${res.reason}`, res };
   const d = state.devices[res.responder];
   // 設備的 HTTPS 用的是自己簽的憑證 (self-signed)：用戶端預設會拒絕，要明確選擇不驗證（curl -k）或先匯入設備的憑證
   if (req.verify) return { ...reply(0, null), error: 'SSL certificate problem: self-signed certificate', certErr: true, res, dev: d.id };
-  const out = (r) => {
-    const json = /json/i.test(req.accept || '');
+  const out = (r, forceJson) => {
+    const json = forceJson || /json/i.test(req.accept || '');
     const text = r.body == null ? '' : json ? JSON.stringify(r.body, null, 2) : toXml(r.body);
     if (!req.quiet) {
       const log = ((state.dyn ||= {}).api ||= []);
       log.push({ t: state.clock, from: fromId, dev: d.id, method, path, status: r.status });
       if (log.length > 40) log.splice(0, log.length - 40);
     }
-    return { ...r, res, dev: d.id, text, ctype: r.body == null ? '' : json ? 'application/yang-data+json' : 'application/yang-data+xml' };
+    return { ...r, statusText: r.statusText || STATUS[r.status] || '', res, dev: d.id, text, ctype: r.body == null ? '' : forceJson ? 'application/json' : json ? 'application/yang-data+json' : 'application/yang-data+xml' };
   };
+  // Catalyst Center：北向的 REST API（JSON、Token 驗證）
+  if (d.dnac) return out(dnacApi(state, d, req, method, path, query), true);
   if (!d.mgmt || !IOS_XE.has(d.model)) return out(reply(404, null, `${d.name}（${CATALOG[d.model].title}）沒有 RESTCONF：${d.model === 'c2960' || d.model === 'c2960p' ? 'Catalyst 2960 跑的是 IOS 15，不是 IOS XE' : /^n9/.test(d.model) ? 'Nexus 用的是 NX-API' : '它不是 IOS XE 設備'}`));
   if (!/^\/restconf(\/|$)/.test(path)) return out(reply(404, null, 'RESTCONF 的路徑都在 /restconf/ 底下（資料在 /restconf/data/）'));
   if (!d.mgmt.restconf) return out(reply(404, null, `${d.name} 沒有啟用 RESTCONF（設定模式下輸入 restconf）`));

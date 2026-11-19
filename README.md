@@ -45,7 +45,7 @@ npm run build    # 輸出到 dist/
 - **評分**：過關時依實際作答時間（畫面在前景、沒有開對話框才算；標準時間是 3 分鐘加上每個目標 1.5 分鐘）、看了幾個提示、跑了幾次完整測試給 S / A / B / C 與分數，關卡選單上顯示最佳等級。設定變更的次數只列出來參考。
 - **關卡編輯器**：自由模式的「關卡設計」可以寫關卡名稱、任務說明、提示，指定哪些設備鎖定（玩家看得到、不能設定），然後試玩、存成自訂關卡、或匯出成關卡檔分享；關卡選單的「自訂關卡」可以遊玩、匯出、刪除與匯入。
 
-## 關卡（16 章 61 關）
+## 關卡（16 章 62 關）
 
 | 章節 | 關卡數 | 主題 |
 | --- | --- | --- |
@@ -63,7 +63,7 @@ npm run build    # 輸出到 dist/
 | 12 語音與 QoS | 2 | IP 電話：PoE、語音 VLAN、CDP 與 LLDP-MED、DHCP option 150、CUCM 註冊；線路塞車時用 QoS 保住通話：信任邊界、LLQ、配合營運商合約頻寬的整形 |
 | 13 進階路由 | 4 | OSPF 的 DR / BDR 選舉（不搶位、`clear ip ospf process`）、Router ID 與 Loopback、passive-interface；參考頻寬與 cost、等價多路徑 (ECMP)；多區域 OSPF、ABR 與 `area range` 彙總；用 eBGP 同時接兩家 ISP：local-preference 決定出去走哪家、AS-path prepend 影響進來走哪家、prefix-list 避免變成轉運站 |
 | 14 無線控制器與無線環境 | 3 | 輕量型 AP 與無線控制器（CAPWAP、DHCP option 43、Local 模式的流量經控制器放進 VLAN、RRM 自動分頻道）、牆面衰減與訊號熱力圖、漫遊（同一個 VLAN、sticky client 與 802.11k/v/r） |
-| 15 網路自動化 | 2 | RESTCONF：只走 HTTPS、HTTP Basic 驗證、YANG 路徑（`ietf-interfaces`、`Cisco-IOS-XE-native`）、JSON 與 XML、狀態碼、名稱裡的 `/` 要寫成 `%2F`、自簽憑證；Ansible：INI 格式的 inventory、YAML、`network_cli`、資源模組、`--check`、PLAY RECAP 與冪等 |
+| 15 網路自動化 | 3 | RESTCONF：只走 HTTPS、HTTP Basic 驗證、YANG 路徑（`ietf-interfaces`、`Cisco-IOS-XE-native`）、JSON 與 XML、狀態碼、名稱裡的 `/` 要寫成 `%2F`、自簽憑證；Ansible：INI 格式的 inventory、YAML、`network_cli`、資源模組、`--check`、PLAY RECAP 與冪等；Catalyst Center：Token 驗證的北向 API、用 SNMP / SSH 輪詢的設備清單、AI 驅動的問題清單（DHCP 失敗率偏離基準、雙工不一致、設備連不到） |
 | 16 雲端網路 | 2 | AWS 的 VPC：公有 / 私有子網路與路由表、網際網路閘道與彈性 IP（一對一 NAT）、安全群組（有狀態）、NAT 閘道、網路 ACL（無狀態、臨時連接埠）、站對站 VPN 與路由傳播（混合雲），「下載設定檔」貼到公司的路由器 |
 
 ## 證照對照
@@ -72,18 +72,18 @@ npm run build    # 輸出到 dist/
 
 | 考試 | 有對應關卡的條目 | 還沒有關卡的條目 |
 | --- | --- | --- |
-| Cisco CCNA 200-301 v1.1 | 53 條中的 47 條 | 1.5、1.12、5.2、6.2 – 6.4（控制器式網路、SDN 架構、AI 維運） |
+| Cisco CCNA 200-301 v1.1 | 53 條中的 50 條 | 1.5（TCP 與 UDP）、1.12（虛擬化）、5.2（安全計畫） |
 | CompTIA Network+ N10-009 | 25 條全部有對應 | — |
 | CompTIA Security+ SY0-701 | 只列出與網路相關的 11 條，全部有對應 | — |
 
-沒有關卡的條目大多是觀念題，題庫裡有對應的題目（TCP / UDP、虛擬化、控制器式網路的南向 / 北向介面、AI 維運等）。
+沒有關卡的條目是觀念題，題庫裡有對應的題目（TCP / UDP、虛擬化、安全計畫）。
 條目編號依公開的考試大綱，標題是中文摘要。CCNA v2.0 預計在 2027 年 2 月取代 v1.1，改版後需要重新對照。
-題庫（137 題觀念題加上隨機產生的子網路計算題）是自行編寫的練習題，不是實際試題。
+題庫（139 題觀念題加上隨機產生的子網路計算題）是自行編寫的練習題，不是實際試題。
 
 ## CLI 設定指令
 
 支援的範圍是 `show running-config` 會印出來的那些指令，都可以縮寫（`conf t`、`int gi0/1`、`sw mo tr`），前面加 `no` 是取消。
-把一台設備的 running-config 整份貼到另一台同型號的設備上，會得到相同的設定（測試會對 104 台設備逐一驗證）。
+把一台設備的 running-config 整份貼到另一台同型號的設備上，會得到相同的設定（測試會對 108 台設備逐一驗證）。
 
 | 模式 | 指令 |
 | --- | --- |
@@ -210,6 +210,7 @@ npm run build    # 輸出到 dist/
 
 - **RESTCONF**：IOS XE 的設備（ISR 4321 / 4331、Catalyst 9300、9800）用 `ip http secure-server`、`ip http authentication local`、`restconf` 啟用；Catalyst 2960 是 IOS 15、Nexus 是 NX-API，沒有 RESTCONF。主機的「API」分頁像 Postman：方法、網址、Basic 驗證、Accept / Content-Type、JSON 內容（有語法檢查），回應顯示狀態碼與內容，旁邊列出等效的 curl 指令。終端機也可以直接打 `curl -k -u 帳號:密碼 -H "Accept: application/yang-data+json" https://…/restconf/data/…`（`-X`、`-d`、`-i`、`-v`）。請求真的走一趟 TCP 443，路上的 ACL、防火牆都會檢查；改設定時設備的紀錄寫下 `%DMI-5-CONFIG_I`。
 - **Ansible**：控制主機（Linux 的提示字元）有「Ansible」分頁：編輯 `inventory.ini` 與 playbook，`--check`、`-v`、`--limit`，也可以在終端機打 `ansible-playbook -i inventory.ini site.yml`。模組有 `cisco.ios.ios_vlans`、`ios_l2_interfaces`、`ios_interfaces`、`ios_l3_interfaces`、`ios_config`、`ios_command`、`ios_facts`、`debug`、`assert`；task 可以用 `register`、`loop`、`when`、`ignore_errors`。每台設備真的用 SSH 登入（帳號密碼、line vty、路由都要對），YAML 的錯誤訊息和真的一樣指出第幾行。
+- **Catalyst Center**：控制器的北向 API 用 Token 驗證（先 `POST /dna/system/api/v1/auth/token`，之後每個請求帶 `X-Auth-Token`，一小時過期）；`/dna/intent/api/v1/network-device` 的設備清單是控制器真的用 SNMP 與 SSH 輪詢的結果，`/dna/intent/api/v1/issues` 依網路的實際狀態列出問題（設備連不到、某個 VLAN 的 DHCP 失敗率偏離基準、雙工不一致、速率降級）。API 分頁有對應的範本，拿到的 Token 會自動帶到後面的請求。
 - **雲端**：AWS 的 VPC 用主控台設定（VPC、子網路、路由表、EC2、安全群組、網路 ACL、NAT 閘道、VPN）。EC2 分頁的 Instance Connect 可以從執行個體 ping / curl 測試；VPN 的「下載設定檔」產生 Cisco ISR 或 FortiGate 的設定，可以直接貼進公司的設備。
 
 ## 鄰居探索與 DTP
@@ -305,7 +306,7 @@ npm run build    # 輸出到 dist/
 - PPPoE 的帳號密碼要在圖形介面設定（IOS 沒有做 Dialer 介面）。兩種 CLI 都只涵蓋這個遊戲有模擬的功能。
 - IOS XE 只模擬 bundle 模式（直接用 `.bin` 開機），沒有 install 模式與 `packages.conf` 的展開；Nexus 也用 IOS 風格的 CLI 操作。FortiOS 的升級路徑簡化成「同一個主版本、次版本一次最多跳兩版」。
 - 檔案傳輸只有 TFTP 與 FTP，沒有 SCP / SFTP、`archive` 自動備份與 `configure replace`。
-- RESTCONF 只有介面、主機名稱、VLAN 與靜態路由幾個 YANG 路徑，內容只接受 JSON；沒有 NETCONF、gNMI 與 Catalyst Center 的 API。Ansible 沒有 roles、handlers、host_vars 檔案與 Vault，Jinja 只有變數與幾個常用的 filter。雲端只有一個 VPC（沒有 VPC peering、Transit Gateway、Direct Connect），VPN 只有一條通道（AWS 實際上給兩條），EC2 由關卡建立，也沒有 Terraform。
+- RESTCONF 只有介面、主機名稱、VLAN 與靜態路由幾個 YANG 路徑，內容只接受 JSON；沒有 NETCONF 與 gNMI；Catalyst Center 只有讀取的 API（設備清單、問題清單），沒有範本、SD-Access 與用 API 下發設定。Ansible 沒有 roles、handlers、host_vars 檔案與 Vault，Jinja 只有變數與幾個常用的 filter。雲端只有一個 VPC（沒有 VPC peering、Transit Gateway、Direct Connect），VPN 只有一條通道（AWS 實際上給兩條），EC2 由關卡建立，也沒有 Terraform。
 - 故障演練的故障只從固定的種類裡挑（沒有 IPv6、無線控制器與 BGP 的故障），只有 IPv6 的關卡挑不到故障。模擬考的題目來自題庫，題型只有單選；Network+ 的領域是依 CCNA 條目對照的近似。評分的標準時間是依目標數估計的，不是每一關各自訂的。
 - SNMP 只回答系統資訊與介面表（名稱、速率、狀態、位元組與錯誤計數器），沒有 MIB 瀏覽器、`snmpwalk` 與 SET；Trap 只有 linkUp、linkDown、coldStart、authenticationFailure。
 
@@ -313,7 +314,7 @@ npm run build    # 輸出到 dist/
 
 完整的功能規劃（每個領域已完成、部分完成、尚未開始的項目，以及建議的實作順序）在 [PLAN.md](PLAN.md)。以下是最接近的幾項：
 
-1. Catalyst Center 的意圖式 API 與 AI 分析（CCNA 6.2 – 6.4）、虛擬化（CCNA 1.12）。
+1. 虛擬化（CCNA 1.12：vSwitch、VM、容器網路、VRF）、用封包擷取比較 TCP 與 UDP（CCNA 1.5）。
 2. FortiGate 的 IPv6 政策、DHCPv6 Prefix Delegation、GRE / VTI / DMVPN、TACACS+、IOS 的 Dialer 介面。
 3. iBGP、OSPF 的 stub / NSSA 區域、自由模式畫牆、訪客入口 (Captive Portal)。
 4. Wi-Fi 的牆面衰減、802.1X 的憑證驗證。
@@ -340,6 +341,7 @@ src/engine/   模擬引擎（不依賴瀏覽器，可直接用 Node 測試）
   sim.js          供電與連線狀態、L2（VLAN / STP / LACP / Port Security / DHCP Snooping / DAI / 802.1X / Wi-Fi）、
                   L3（路由表、最長相符與 ECMP、VRRP）、DHCP 與 Relay、PPPoE、NAT、ACL、防火牆政策、VPN、DNS、
                   模擬時鐘（advance / settle / pendingOf）與傳輸速率（throughput）
+  dnac.js         Catalyst Center：Token、設備清單（SNMP / SSH 輪詢）、Assurance 的問題清單
   restconf.js     RESTCONF：YANG 路徑、HTTP 方法與狀態碼、JSON / XML
   yaml.js         YAML 解析（PyYAML 風格的錯誤訊息）
   automation.js   Ansible：inventory、Jinja 變數、network_cli 與 cisco.ios 模組、PLAY RECAP

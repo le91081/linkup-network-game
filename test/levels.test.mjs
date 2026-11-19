@@ -2044,6 +2044,30 @@ console.log('\n自動化：YAML、RESTCONF、Ansible');
     'Gathering Facts、loop 的 item、debug var、when、register 與 assert');
 }
 
+console.log('\nCatalyst Center：Token、設備清單、AI 問題');
+{
+  const { restconf } = await import('../src/engine/restconf.js');
+  const { issues } = await import('../src/engine/dnac.js');
+  const ok = (cond, title) => (cond ? console.log('  ✔ ' + title) : fail(title));
+  const lv = LEVELS.find((l) => l.id === 'l62');
+  const s = lv.setup(); settle(s);
+  const B = 'https://10.1.98.50';
+  const rq = (o) => restconf(s, 'ops', { method: 'GET', ...o, url: B + o.url });
+  ok(rq({ url: '/dna/intent/api/v1/network-device' }).status === 401 && rq({ method: 'POST', url: '/dna/system/api/v1/auth/token', user: 'netops', pass: 'x' }).status === 401, '沒有 Token、密碼錯：401');
+  const tok = rq({ method: 'POST', url: '/dna/system/api/v1/auth/token', user: 'netops', pass: 'C@talyst-2026' }).body.Token;
+  const H = { headers: { 'x-auth-token': tok } };
+  const inv = rq({ url: '/dna/intent/api/v1/network-device', ...H });
+  const sw3 = inv.body.response.find((x) => x.hostname === 'SW-3');
+  ok(inv.status === 200 && inv.body.response.length === 4 && sw3.reachabilityStatus === 'Unreachable' && sw3.reachabilityFailureReason === 'SNMP Timeouts' && inv.ctype === 'application/json', '設備清單：控制器真的用 SNMP 輪詢，沒有預設閘道的 SW-3 是 Unreachable');
+  ok(rq({ url: '/dna/intent/api/v1/network-device?hostname=SW-1', ...H }).body.response.length === 1, '查詢字串可以篩選 (?hostname=)');
+  const iss = rq({ url: '/dna/intent/api/v1/issues', ...H }).body.response;
+  ok(iss.length === 3 && iss.some((x) => x.aiDriven === 'Yes' && /VLAN 30/.test(x.name)) && iss.some((x) => /Duplex Mismatch/.test(x.name)) && iss.some((x) => x.priority === 'P1'), '問題清單：設備連不到 (P1)、VLAN 30 的 DHCP 失敗（AI 偵測）、雙工不一致');
+  advance(s, 3700);
+  ok(rq({ url: '/dna/intent/api/v1/issues', ...H }).status === 401, 'Token 一小時後過期');
+  lv.solve(s); settle(s);
+  ok(!issues(s, s.devices.dnac).length, '修好之後問題清單是空的');
+}
+
 console.log('\n雲端：VPC、IGW 與 EIP、NAT 閘道、安全群組、網路 ACL、站對站 VPN');
 {
   const { naclCheck, vpnConfig, reservedWhy } = await import('../src/engine/cloud.js');
