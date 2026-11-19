@@ -124,7 +124,7 @@ export function nmsTab(ctx, body) {
     const tr = nmsOf(state, dev.id).traps;
     if (!tr.length) return note('muted', '還沒有收到任何 Trap。設備要設定 Trap 的接收端（snmp-server host）並開啟 snmp-server enable traps，發生事件時才會主動通知。');
     return tr.slice(-20).reverse().map((x) => h('div', { class: 'line' }, h('b', { class: 'mono', text: x.from }),
-      h('span', { text: `${TRAP_TEXT[x.kind] || x.kind}${x.info && x.info.ifName ? '：' + x.info.ifName : ''}` }), h('span', { class: 'muted', style: { marginLeft: 'auto' }, text: `${fmtDur(state.clock - x.t)}前` })));
+      h('span', { text: `${x.info && x.info.admin ? '介面被關閉 (shutdown)' : TRAP_TEXT[x.kind] || x.kind}${x.info && x.info.ifName ? '：' + x.info.ifName : ''}` }), h('span', { class: 'muted', style: { marginLeft: 'auto' }, text: `${fmtDur(state.clock - x.t)}前` })));
   })));
 }
 

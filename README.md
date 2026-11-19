@@ -32,12 +32,14 @@ npm run build    # 輸出到 dist/
 - 電腦與伺服器還有「封包擷取」分頁：像 Wireshark 一樣記下網路卡收送的訊框，可以用 `ip.addr == …`、`tcp.port == …`、`arp`、`telnet` 之類的條件篩選，點一下看每一層的標頭。
 - Cisco 的路由器與交換器有「CLI」分頁：IOS 風格的命令列。`show running-config`、`show startup-config`、`show ip route`、`show vlan brief`、`show interfaces trunk`、`show arp` 等四十多個 `show` 指令用來查看狀態；輸入 `configure terminal` 之後可以直接用指令設定（見下方「CLI 設定指令」），改的和圖形介面是同一份設定。
 - FortiGate 防火牆也有「CLI」分頁，用的是 FortiOS 的階層式語法（`config firewall policy` → `edit 1` → `set …` → `next` → `end`）。
+- 伺服器的「網路設定」分頁可以開啟伺服器角色：TFTP、FTP、SNMP 網管 (NMS)。有 TFTP / FTP 的伺服器多一個「檔案」分頁（備份上來的設定、放在上面的韌體），網管伺服器多一個「網管」分頁（輪詢結果、每條線路的使用率、收到的 Trap）。
+- 電腦與伺服器可以「新增持續傳輸」：一條一直在跑的背景流量（例如每天下午的大量存檔），會和其他連線搶同一條線路的頻寬。
 - 網址加上 `?profile=名稱` 會使用另一份獨立的進度，適合多人共用一台電腦。
 - 防火牆有「紀錄」分頁，家用路由器與路由器的「狀態」分頁有連線紀錄與 NAT 轉換表；政策與 ACL 規則會顯示命中次數。
 - 頂端列的「測驗」是觀念題與子網路速算，「證照」是考試大綱與關卡的對照表。
 - 關卡選單最上方的「自由模式」是沙盒：自己擺設備、接線、設定。可以把測試存成「應該要通 / 應該不通」的目標一鍵重跑，也可以把整個拓撲匯出成 JSON 檔再匯入。
 
-## 關卡（10 章 39 關）
+## 關卡（11 章 43 關）
 
 | 章節 | 關卡數 | 主題 |
 | --- | --- | --- |
@@ -51,6 +53,7 @@ npm run build    # 輸出到 dist/
 | 8 高可用與進階路由 | 6 | STP、EtherChannel、VRRP / HSRP、DHCP Relay、OSPF Cost、VLSM |
 | 9 IPv6 | 2 | Link-local、SLAAC、IPv6 靜態路由、雙協定 |
 | 10 故障排除 | 4 | 網路已經設定好但被改壞了：IP 衝突與 DHCP 保留、Trunk / VLAN / shutdown、閘道 / 回程路由 / NAT / ACL / DNS、ping 會通但傳檔很慢（速率寫死、duplex mismatch、舊 Hub） |
+| 11 維運與管理 | 4 | 從 TFTP 還原設定（合併與整份取代的差別）、韌體升級（flash 空間、MD5、`boot system`、TFTP 與 FTP 的速度）、讓原廠交換器能用 SSH（主機名稱、網域、RSA 金鑰、`login local`）、用 SNMPv3 找出滿載的線路（線對斷掉自動降到 100 Mbps） |
 
 ## 證照對照
 
@@ -58,22 +61,22 @@ npm run build    # 輸出到 dist/
 
 | 考試 | 有對應關卡的條目 | 還沒有關卡的條目 |
 | --- | --- | --- |
-| Cisco CCNA 200-301 v1.1 | 53 條中的 39 條 | 1.5、1.12、2.3、2.6、4.7、4.9、5.2 與第 6 領域（自動化） |
-| CompTIA Network+ N10-009 | 25 條中的 23 條 | 1.3（雲端）、3.1（組織流程） |
+| Cisco CCNA 200-301 v1.1 | 53 條中的 40 條 | 1.5、1.12、2.3、2.6、4.7、5.2 與第 6 領域（自動化） |
+| CompTIA Network+ N10-009 | 25 條中的 24 條 | 1.3（雲端） |
 | CompTIA Security+ SY0-701 | 只列出與網路相關的 11 條，全部有對應 | — |
 
-沒有關卡的條目大多是觀念題，題庫裡有對應的題目（TCP / UDP、CDP / LLDP、QoS、TFTP、AAA、REST API、JSON、Ansible 等）。
+沒有關卡的條目大多是觀念題，題庫裡有對應的題目（TCP / UDP、CDP / LLDP、QoS、AAA、REST API、JSON、Ansible 等）。
 條目編號依公開的考試大綱，標題是中文摘要。CCNA v2.0 預計在 2027 年 2 月取代 v1.1，改版後需要重新對照。
-題庫（76 題觀念題加上隨機產生的子網路計算題）是自行編寫的練習題，不是實際試題。
+題庫（84 題觀念題加上隨機產生的子網路計算題）是自行編寫的練習題，不是實際試題。
 
 ## CLI 設定指令
 
 支援的範圍是 `show running-config` 會印出來的那些指令，都可以縮寫（`conf t`、`int gi0/1`、`sw mo tr`），前面加 `no` 是取消。
-把一台設備的 running-config 整份貼到另一台同型號的設備上，會得到相同的設定（測試會對 54 台設備逐一驗證）。
+把一台設備的 running-config 整份貼到另一台同型號的設備上，會得到相同的設定（測試會對 62 台設備逐一驗證）。
 
 | 模式 | 指令 |
 | --- | --- |
-| 全域 | `hostname`、`interface` / `interface range` / `interface vlan`、`vlan`、`ip route`、`ipv6 route`、`router ospf`、`ip dhcp pool`、`ip dhcp excluded-address`、`ip nat inside source …`、`ip access-list extended`、`spanning-tree vlan … priority`、`ip dhcp snooping`、`ip arp inspection vlan`、`line vty`、`ntp server`、`logging host`、`snmp-server community`、`username` |
+| 全域 | `hostname`、`interface` / `interface range` / `interface vlan`、`vlan`、`ip route`、`ipv6 route`、`router ospf`、`ip dhcp pool`、`ip dhcp excluded-address`、`ip nat inside source …`、`ip access-list extended`、`spanning-tree vlan … priority`、`ip dhcp snooping`、`ip arp inspection vlan`、`line vty`、`ntp server`、`logging host`、`snmp-server …`、`username`、`ip domain name`、`ip ssh version`、`boot system`、`ip ftp username / password` |
 | 介面 | `ip address`、`shutdown`、`switchport mode / access vlan / trunk native vlan / trunk allowed vlan`、`no switchport`、`encapsulation dot1q`、`ip nat inside / outside`、`ip helper-address`、`ip ospf cost`、`ip access-group`、`vrrp`、`channel-group`、`switchport port-security`、`spanning-tree bpduguard`、`ip dhcp snooping trust`、`ipv6 address` |
 | 其他 | VLAN 的 `name`、OSPF 的 `network` 與 `default-information originate`、DHCP 位址池的 `network` / `default-router` / `dns-server`、ACL 的 `permit` / `deny`、`line vty` 的 `transport input` / `access-class` |
 
@@ -97,11 +100,14 @@ npm run build    # 輸出到 dist/
 - **OSPF**：`router-id`。
 - **遠端登入**：`line vty 0 4` 裡的 `exec-timeout`、`login block-for … attempts … within …`、`login on-failure log` / `login on-success log`、`banner motd`；`show users`、`show login`。
 - **連接埠鏡像**：`monitor session <n> source interface <介面> [rx|tx|both]`、`monitor session <n> destination interface <介面>`、`show monitor`。
+- **檔案與韌體**：`dir [flash: | bootflash:]`、`show flash:`、`show boot`、`show version`、`delete`、`verify /md5 <檔案> [MD5]`、`copy <來源> <目的>`（`running-config`、`startup-config`、`flash:`、`tftp://伺服器/檔名`、`ftp://帳號:密碼@伺服器/檔名`，沒寫完整會一行一行問）、`boot system flash:<檔名>`、`ip tftp blocksize`、`ip ftp username` / `password`。ROMMON 下可以用 `dir`、`boot <檔案>` 與 `reset`。
+- **SSH**：`ip domain name`、`crypto key generate rsa [modulus <位元>]`、`crypto key zeroize rsa`、`ip ssh version 2`、`ip ssh time-out`、`ip ssh authentication-retries`、`line vty` 裡的 `login` / `login local` / `password`；`show ip ssh`、`show crypto key mypubkey rsa`。
+- **SNMP**：`snmp-server community <字串> [RO|RW] [ACL]`、`snmp-server group <群組> v3 priv`、`snmp-server user <帳號> <群組> v3 auth sha <密碼> priv aes 128 <密碼>`、`snmp-server host <IP> [version 2c|3 priv] <community|帳號>`、`snmp-server enable traps`、`snmp-server location` / `contact`；`show snmp`、`show snmp user`、`show snmp host`。和真的 IOS 一樣，v3 的使用者不會出現在 running-config 裡。
 - **排除故障**：`traceroute`、`show interfaces [介面]`、`show interfaces counters errors`、`clear counters`、`debug ip packet`、`debug ip icmp`、`undebug all`、`show debugging`、`show ip protocols`、`show ip ospf interface brief`。
 
 ### FortiGate（FortiOS）
 
-`show` 印出來的整份設定可以貼到另一台 FortiGate。支援的區段：
+`show` 印出來的整份設定可以貼到另一台 FortiGate。可以放好幾個值的欄位（`allowaccess`、`member`、`srcaddr`…）支援 `append` 與 `unselect`。支援的區段：
 
 | 區段 | 內容 |
 | --- | --- |
@@ -115,9 +121,12 @@ npm run build    # 輸出到 dist/
 | `system global` 的 `admintimeout` | 管理者登入之後閒置幾分鐘自動登出 |
 | `vpn ssl settings` / `vpn ssl web portal`、`user local` / `user group` | 遠端存取的 SSL-VPN |
 | `router static` | 靜態路由；用指令建立的通道要有一筆 `set device "<通道>"` 的路由才會導流量 |
-| `system global`、`system admin`、`system ntp`、`log syslogd setting`、`system snmp community` | 主機名稱與管理設定 |
+| `system global`、`system admin`、`system ntp`、`log syslogd setting` | 主機名稱與管理設定 |
+| `system snmp sysinfo` / `community`（含 `config hosts`）/ `user` | SNMP 代理程式、v2c 的 community 與允許查詢的來源、v3 使用者與 Trap 接收端；介面的 `allowaccess` 也要有 `snmp` |
 
 查看狀態：`get system status`、`get system interface`、`get router info routing-table all`、`get vpn ipsec tunnel summary`、`diagnose vpn tunnel list`、`diagnose vpn ike gateway list`、`diagnose sys session list`、`diagnose sys session clear`、`diagnose sys ntp status`、`execute log display`、`execute date`、`execute time`、`execute ping`、`execute traceroute`、`execute reboot`、`get system info admin status`、`diagnose hardware deviceinfo nic <埠>`。
+
+備份與升級：`execute backup config tftp <檔名> <伺服器>`、`execute backup config ftp <檔名> <伺服器> <帳號> <密碼>`、`execute restore config tftp …`（整份換掉，然後重新開機）、`execute restore image tftp <檔名> <伺服器>`（會檢查機型、MD5 與升級路徑）。
 
 排除故障：`diagnose sniffer packet <介面|any> '<篩選條件>' [詳細程度] [數量]`（篩選條件用 tcpdump 的寫法：`host`、`net`、`port`、`icmp`、`tcp`、`arp`，用 `and` / `or` / `not` 組合）；`diagnose debug flow filter addr <IP>`、`diagnose debug flow trace start <數量>`、`diagnose debug enable` 會逐步印出封包在防火牆裡經過的每一關（收到封包、找路由、符合哪一條政策、NAT、進 VPN）。
 
@@ -142,6 +151,8 @@ npm run build    # 輸出到 dist/
 | NTP 對時 | IOS 約 4 分鐘、FortiGate 立刻 | 每 64 秒輪詢一次；IOS 要連續幾次都正常才採信。伺服器失聯八次輪詢之後失去同步 |
 | 開機 | Hub 2 秒、家用路由器與 AP 1 分鐘、FortiGate 70 – 90 秒、Catalyst 2960 2 分鐘、ISR 3 分鐘、Catalyst 9300 / Nexus 4 分鐘 | 按下電源或 `reload` 之後，這段時間和關機沒有兩樣 |
 | 遠端登入閒置 | IOS 10 分鐘、FortiGate 5 分鐘 | `exec-timeout`、`admintimeout` 可以調整 |
+| 檔案傳輸 | 依檔案大小與線路 | TFTP 每送一個 512 位元組的區塊就要等一次確認，速度取決於來回時間，700 MB 的映像檔要二、三十分鐘；FTP 走 TCP，同一條線只要幾十秒。傳輸期間時鐘跟著前進 |
+| SNMP 輪詢 | 60 秒 | 網管伺服器每 60 秒問一次每台設備；使用率是兩次輪詢之間計數器的差值，所以至少要兩次輪詢才看得到 |
 
 關卡裡的交換器已經預先開好 `spanning-tree portfast default`，不用每接一條線就等 30 秒；自由模式的設備是原廠預設值，要自己開。
 時間只在遊戲分頁開著、沒有對話框的時候前進。復原 / 重做不會把時鐘倒轉。
@@ -161,6 +172,15 @@ npm run build    # 輸出到 dist/
 - 密碼錯三次連線就斷了。設了 `login block-for`（FortiGate 預設就有），短時間內失敗太多次，設備會暫時拒絕所有登入。
 - 用 SSH 登入時，紀錄與 debug 的訊息預設不會出現在畫面上，要先輸入 `terminal monitor`。CLI 分頁則相當於接著 console 線，訊息會直接跳出來。
 
+## 維運：備份、韌體與監控
+
+- **設定備份**：`copy running-config tftp:` 把設定存到 TFTP 伺服器（預設檔名是「主機名稱-confg」）。`copy tftp: running-config` 是把檔案的每一行貼進設定模式，等於**合併**：檔案裡沒寫到的設定（例如後來才加的 `shutdown`）不會被拿掉。要整份取代，複製到 `startup-config` 再 `reload`。
+- **韌體**：每台 Cisco 設備有 flash（ISR 4000、Catalyst 9300、Nexus 叫 bootflash），裡面放著映像檔、設定與 core dump，空間不夠就複製不進去。下載完用 `verify /md5` 對照原廠公布的值；`boot system` 指定開機的映像檔，存檔再 `reload` 才會換版本。開機時會依序試 `boot system` 列出的檔案：檔案不存在、MD5 不對、平台不符（例如 ISR 4400 的映像檔放在 ISR 4300 上）就跳過，改用 flash 裡第一個能開機的映像檔；一個都沒有就停在 ROMMON，網路完全不通，要在 console 用 `boot` 手動指定。
+- **FortiGate 升級**：`execute restore image` 會檢查機型與 MD5，並且要照升級路徑走（例如 7.0 不能直接跳到 7.4）；成功之後自動重新開機。
+- **SSH 的前置條件**：要先有不是原廠預設的主機名稱、`ip domain name`，才能產生 RSA 金鑰（至少 768 位元才支援 SSH v2）；SSH 需要帳號，所以 `line vty` 要用 `login local`。原廠的交換器 vty 只有 `login` 而沒有密碼，Telnet 連上之後會立刻被關掉（Password required, but none set）。重新產生金鑰之後，用戶端會發現主機金鑰變了。
+- **SNMP**：v2c 用 community 字串（明文），可以綁一個標準 ACL 限制誰能查；v3 有帳號、SHA 認證與 AES 加密，密碼不對就解不開回應。網管伺服器顯示每台設備的名稱、開機時間、版本，以及每個介面的速率、收送使用率與錯誤數的變化。設定了 `snmp-server host` 與 `enable traps` 的設備，在介面斷線 / 上線、重新開機、有人用錯 community 查詢時會主動送 Trap（UDP 162，沒有確認，送不到就掉了）。
+- **背景流量**：關卡或玩家可以設定一直在跑的傳輸，它們依路徑上剩下的頻寬分配（小的先滿足，其餘平分，近似 TCP 的公平分享），算進介面計數器；`iperf3`、檔案傳輸會和它們搶同一條線。
+
 ## 排除故障的工具
 
 | 工具 | 看得到什麼 |
@@ -179,6 +199,8 @@ npm run build    # 輸出到 dist/
 - 半雙工（接到 Hub）約 40%。
 - Duplex mismatch 只剩標稱速率的 1%（上限 2 Mbps），並出現大量重送：ping 會通，傳檔卻慢得不能用。
 - Wi-Fi 約為連線速率的一半；IPsec 通道再扣 10%。
+- 有背景流量在跑的線路，只分得到剩下的頻寬（至少和其他連線平分），結果會註明是和背景流量共用。
+- 網路線有線對斷掉時，兩端的 Gigabit 埠會自動降到 100 Mbps (speed downshift)，燈號照樣是亮的；寫死 `speed 1000` 的話則連不起來。
 
 ## 貼近真實網路的行為
 
@@ -198,18 +220,18 @@ npm run build    # 輸出到 dist/
 - **running-config 與 startup-config**：IOS 設備改的是 running-config，沒有 `write memory` 就 `reload` 或斷電，設定會回到上一次存檔的樣子。
 - **速率與雙工**：一端寫死、另一端自動協商時，自動的那一端會退回半雙工，形成 duplex mismatch；兩端速率寫死成不同的值則連線建立不起來。
 - **OSPF 的 network 敘述**：持續生效，之後才設定 IP 的介面只要位址符合就自動加入。
-- **管理存取**：FortiGate 每個介面各自決定開放 ping / HTTPS / SSH / HTTP / Telnet。
+- **管理存取**：FortiGate 每個介面各自決定開放 ping / HTTPS / SSH / SNMP / HTTP / Telnet。
 - **故障模擬**：任何設備都可以關機，路由器的介面與交換器的連接埠可以 `shutdown`；錯誤訊息會指出是哪一台關機或哪個介面被停用。
 
 ## 模擬的範圍與簡化
 
 - MAC 位址表會學習、過期與泛洪，但實際的轉送路徑仍然由拓撲算出，所以不會出現「表裡的項目指到錯的埠」這種狀況。
 - 只有 SSH / Telnet 是長時間保持的連線；ping、curl、iperf3 建立之後就結束了。
-- 封包擷取記錄的是模擬裡真的跑過的訊框（測試、終端機指令、背景的 BPDU 與 CDP）；沒有模擬一般使用者上網的背景流量。OSPF Hello、VRRP 通告只算進計數器，不會出現在擷取畫面上。
+- 封包擷取記錄的是模擬裡真的跑過的訊框（測試、終端機指令、檔案傳輸、SNMP、背景的 BPDU 與 CDP）；持續傳輸的背景流量、OSPF Hello、VRRP 通告只算進計數器，不會出現在擷取畫面上。檔案傳輸只記下開頭幾個封包，不會把 70 萬個 TFTP 區塊一個一個列出來。
 - FortiGate 的 sniffer 與 debug flow 是在背景執行，輸入任何指令就會停止（相當於 Ctrl-C）。IOS 的 `debug` 只做了 `ip packet` 與 `ip icmp`。
 - DR / BDR 只依 Router ID 決定，不模擬「先上線的不讓位」。
 - NTP 只有一台伺服器、沒有驗證；設備的時鐘不會慢慢漂移（沒對時的誤差是固定的）。
-- 頻寬是每條路徑各自計算，多條連線同時搶同一條線路時不會互相擠壓；沒有 QoS。Hub 的碰撞只反映在速率打折上。
+- 頻寬分配只發生在背景流量與一次性的量測（`iperf3`、檔案傳輸）之間，以每段線路剩下的頻寬近似 TCP 的公平分享，沒有模擬壅塞控制本身；沒有 QoS。Hub 的碰撞只反映在速率打折上。
 - 遠端存取的 SSL-VPN 沒有連線建立的時間。
 - STP 以每個 VLAN 各算一棵樹的方式近似 Rapid PVST+，只處理交換器直接相連的情況；非網管交換器形成迴圈會被判定為廣播風暴。邊緣埠用的是傳統的 30 秒計時（和 Cisco 預設的 PVST+ 一樣）。
 - IPsec 只有 IKEv1 與預先共用金鑰。圖形介面建立的 FortiGate 通道會自動帶出通往對端的路由（相當於用精靈建立）。SSL-VPN 的加密流量在引擎內部仍然當成一層封裝來處理。
@@ -217,16 +239,19 @@ npm run build    # 輸出到 dist/
 - 802.1X 只驗證帳號密碼（沒有憑證）。
 - IPv6 目前只有位址、SLAAC、靜態路由與 ping；ACL、防火牆、NAT、OSPF 仍然只作用在 IPv4。
 - PPPoE 的帳號密碼要在圖形介面設定（IOS 沒有做 Dialer 介面）。兩種 CLI 都只涵蓋這個遊戲有模擬的功能。
+- IOS XE 只模擬 bundle 模式（直接用 `.bin` 開機），沒有 install 模式與 `packages.conf` 的展開；Nexus 也用 IOS 風格的 CLI 操作。FortiOS 的升級路徑簡化成「同一個主版本、次版本一次最多跳兩版」。
+- 檔案傳輸只有 TFTP 與 FTP，沒有 SCP / SFTP、`archive` 自動備份與 `configure replace`。
+- SNMP 只回答系統資訊與介面表（名稱、速率、狀態、位元組與錯誤計數器），沒有 MIB 瀏覽器、`snmpwalk` 與 SET；Trap 只有 linkUp、linkDown、coldStart、authenticationFailure。
 
 ## 還可以做的
 
 完整的功能規劃（每個領域已完成、部分完成、尚未開始的項目，以及建議的實作順序）在 [PLAN.md](PLAN.md)。以下是最接近的幾項：
 
-1. IPv6 的 ACL、防火牆政策與 OSPFv3。
-2. Voice VLAN（需要新的 IP 電話設備）、TACACS+、IKEv2、IOS 的 Dialer 介面。
-3. QoS 與多條連線互相搶頻寬、SNMP Trap、設定備份等維運情境的關卡。
+1. LLDP、DTP、Voice VLAN（需要新的 IP 電話設備）、QoS（規劃中的階段 4）。
+2. IPv6 的 ACL、防火牆政策與 OSPFv3。
+3. TACACS+、IKEv2、IOS 的 Dialer 介面。
 4. Wi-Fi 的牆面衰減、802.1X 的憑證驗證。
-5. SNMP 監控、TFTP 備份與韌體升級（規劃中的階段 3）。
+5. NTP 與 Syslog 的維運關卡（引擎已經有了，還沒有獨立的關卡）。
 
 ## 程式結構
 
@@ -237,13 +262,15 @@ src/engine/   模擬引擎（不依賴瀏覽器，可直接用 Node 測試）
   ios.js          IOS 風格的設定指令解譯器、show running-config、startup-config
   fortios.js      FortiOS 風格的設定樹（config / edit / set / next / end）
   ops.js          每台設備的時鐘、NTP、事件紀錄與 Syslog、開機時間
-  remote.js       SSH / Telnet 登入（長時間保持的連線、驗證、閒置逾時、登入封鎖）
+  remote.js       SSH / Telnet 登入（長時間保持的連線、RSA 金鑰、驗證、閒置逾時、登入封鎖）
+  files.js        flash 與檔案、映像檔清單與 MD5、開機時挑選映像檔、TFTP / FTP 傳輸
+  snmp.js         SNMP 代理程式的驗證（community、ACL、v3）、網管伺服器的輪詢與使用率、Trap
   wire.js         線路上的訊框：介面計數器、封包擷取、SPAN、IOS debug、FortiGate sniffer 與 debug flow
   sim.js          供電與連線狀態、L2（VLAN / STP / LACP / Port Security / DHCP Snooping / DAI / 802.1X / Wi-Fi）、
                   L3（路由 / OSPF / VRRP）、DHCP 與 Relay、PPPoE、NAT、ACL、防火牆政策、VPN、DNS、
                   模擬時鐘（advance / settle / pendingOf）與傳輸速率（throughput）
   sim6.js         IPv6：SLAAC、鄰居探索、靜態路由
-src/levels/   關卡定義：設備、初始設定、任務目標、提示、參考解法（trouble.js 是故障排除章）
+src/levels/   關卡定義：設備、初始設定、任務目標、提示、參考解法（trouble.js 是故障排除章，maint.js 是維運章）
 src/data/     題庫與證照對照表
 src/scene/    three.js 場景、設備模型、網路線、無線涵蓋範圍與封包動畫
 src/ui/       設定面板、終端機、CLI、任務面板、測驗、自由模式與對話框
