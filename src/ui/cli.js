@@ -611,7 +611,7 @@ function policyIfLines(st, d, i) {
         if (c.cls === 'class-default') o.push(`${ind}  Match: any `);
         else for (const r of (d.classMaps[c.cls] || { rules: [] }).rules) o.push(`${ind}  Match: ${r.t === 'dscp' ? ` dscp ${r.v.map((x) => `${dscpName(x)} (${x})`).join(' ')}` : r.t === 'acl' ? `access-group name ${r.v}` : r.t === 'protocol' ? `protocol ${r.v}` : r.t === 'cos' ? `cos ${r.v.join(' ')}` : 'any'}`);
         if (c.priority) o.push(`${ind}  Priority: ${c.priority.kbps ? c.priority.kbps + ' kbps' : `${c.priority.pct}% (${Math.round((base * c.priority.pct) / 100 * 1000)} kbps)`}, burst bytes 1500, b/w exceed drops: 0`, '');
-        else if (c.bandwidth || c.fq || c.cls === 'class-default') {
+        else if ((c.bandwidth || c.fq || c.cls === 'class-default') && !c.child) { // 有子政策的 parent：佇列在子政策裡
           o.push(`${ind}  Queueing`, `${ind}  queue limit ${c.qlimit || QLIMIT} packets`, `${ind}  (queue depth/total drops/no-buffer drops) ${cong && by.n && !c.fq ? Math.round((c.qlimit || QLIMIT) * 0.7) : cong && by.n ? 2 : 0}/${total}/0`);
           if (c.bandwidth) o.push(`${ind}  bandwidth ${c.bandwidth.kbps ? c.bandwidth.kbps + ' kbps' : c.bandwidth.rpct ? 'remaining ' + c.bandwidth.rpct + '%' : c.bandwidth.pct + '%'}`);
           if (c.fq) o.push(`${ind}  Fair-queue: per-flow queue limit 16 packets`);

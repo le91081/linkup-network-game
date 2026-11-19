@@ -269,6 +269,7 @@ export function openCableMenu(app, cableId, x, y) {
     h('span', { class: 'mono', text: `${A.name} [${portOf(A, c.a.port).label}]  ↔  ${B.name} [${portOf(B, c.b.port).label}]` }),
     h('span', { class: 'muted', style: { fontSize: '12px' }, text: `兩端相距 ${pairDist(st, A.id, B.id)} 公尺 · 這種線材最長 ${CABLES[cableKind(c)].max} 公尺` }),
     li && h('span', { class: 'muted', style: { fontSize: '12px' }, text: `自動協商：${li.text}` }),
+    +c.cir > 0 && h('span', { class: 'note warn', text: `電信業者的線路（例如 Metro Ethernet）：實體連線 ${li ? li.speed + ' Mbps' : ''}，合約頻寬只有 ${c.cir} Mbps。送超過合約的量，多出來的會在業者那端被管制丟掉 (policing)，語音也不例外；要在自己這端整形 (shape) 到合約以內。` }),
     li && li.half && h('span', { class: 'note warn', text: '半雙工：同一時間只能有一端傳送，否則會碰撞 (CSMA/CD)。' }),
     li && li.mismatch && h('span', { class: 'note warn', text: '雙工不一致 (duplex mismatch)：線是通的，但全雙工的那一端不會等對方，會造成大量碰撞與 CRC 錯誤，實際速度極慢。兩端都改成自動協商，或兩端寫死成一樣。' }),
     st.rt.why[c.id] && h('span', { class: 'note warn', text: '沒有燈號：' + st.rt.why[c.id] }),

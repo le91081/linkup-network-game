@@ -33,13 +33,15 @@ npm run build    # 輸出到 dist/
 - Cisco 的路由器與交換器有「CLI」分頁：IOS 風格的命令列。`show running-config`、`show startup-config`、`show ip route`、`show vlan brief`、`show interfaces trunk`、`show arp` 等四十多個 `show` 指令用來查看狀態；輸入 `configure terminal` 之後可以直接用指令設定（見下方「CLI 設定指令」），改的和圖形介面是同一份設定。
 - FortiGate 防火牆也有「CLI」分頁，用的是 FortiOS 的階層式語法（`config firewall policy` → `edit 1` → `set …` → `next` → `end`）。
 - 伺服器的「網路設定」分頁可以開啟伺服器角色：TFTP、FTP、SNMP 網管 (NMS)。有 TFTP / FTP 的伺服器多一個「檔案」分頁（備份上來的設定、放在上面的韌體），網管伺服器多一個「網管」分頁（輪詢結果、每條線路的使用率、收到的 Trap）。
+- IP 電話有「電話」分頁：螢幕上看得到它卡在哪一步（沒電、開機、拿位址、下載設定、註冊），可以撥分機試打、或保持通話，看到 MOS、延遲、抖動、遺失，以及語音沿路經過的每一個佇列。伺服器開啟 CUCM 角色之後多一個「CUCM」分頁（自動註冊、分機）。
+- 路由器與 L3 交換器有「QoS」分頁：class-map、policy-map（priority、bandwidth、fair-queue、set dscp、shape 加子政策）、套用在介面，以及一鍵建立「語音優先 + 整形」。
 - 電腦與伺服器可以「新增持續傳輸」：一條一直在跑的背景流量（例如每天下午的大量存檔），會和其他連線搶同一條線路的頻寬。
 - 網址加上 `?profile=名稱` 會使用另一份獨立的進度，適合多人共用一台電腦。
 - 防火牆有「紀錄」分頁，家用路由器與路由器的「狀態」分頁有連線紀錄與 NAT 轉換表；政策與 ACL 規則會顯示命中次數。
 - 頂端列的「測驗」是觀念題與子網路速算，「證照」是考試大綱與關卡的對照表。
 - 關卡選單最上方的「自由模式」是沙盒：自己擺設備、接線、設定。可以把測試存成「應該要通 / 應該不通」的目標一鍵重跑，也可以把整個拓撲匯出成 JSON 檔再匯入。
 
-## 關卡（11 章 43 關）
+## 關卡（12 章 46 關）
 
 | 章節 | 關卡數 | 主題 |
 | --- | --- | --- |
@@ -48,12 +50,13 @@ npm run build    # 輸出到 dist/
 | 3 企業網路 | 3 | 防火牆政策與 DMZ、靜態路由與回程路由、一對一靜態 NAT |
 | 4 資料中心 | 3 | ToR 與 SVI、Spine-Leaf 與 OSPF、銅纜 / 多模 / 單模光纖與距離 |
 | 5 無線網路 | 3 | SSID、WPA2 / WPA3、PoE、頻道規劃、訪客 SSID 對應 VLAN |
-| 6 網路安全 | 7 | DHCP Snooping、Port Security、ACL、管理加固、DAI、BPDU Guard、802.1X / RADIUS |
+| 6 網路安全 | 8 | DHCP Snooping、Port Security、ACL、管理加固、DAI、BPDU Guard、802.1X / RADIUS、用 DTP 偽裝成交換器的 VLAN hopping 與邊緣埠加固 |
 | 7 VPN 與廣域備援 | 3 | 站對站 IPsec、遠端存取 VPN、雙線路浮動靜態路由 |
 | 8 高可用與進階路由 | 6 | STP、EtherChannel、VRRP / HSRP、DHCP Relay、OSPF Cost、VLSM |
 | 9 IPv6 | 2 | Link-local、SLAAC、IPv6 靜態路由、雙協定 |
 | 10 故障排除 | 4 | 網路已經設定好但被改壞了：IP 衝突與 DHCP 保留、Trunk / VLAN / shutdown、閘道 / 回程路由 / NAT / ACL / DNS、ping 會通但傳檔很慢（速率寫死、duplex mismatch、舊 Hub） |
 | 11 維運與管理 | 4 | 從 TFTP 還原設定（合併與整份取代的差別）、韌體升級（flash 空間、MD5、`boot system`、TFTP 與 FTP 的速度）、讓原廠交換器能用 SSH（主機名稱、網域、RSA 金鑰、`login local`）、用 SNMPv3 找出滿載的線路（線對斷掉自動降到 100 Mbps） |
+| 12 語音與 QoS | 2 | IP 電話：PoE、語音 VLAN、CDP 與 LLDP-MED、DHCP option 150、CUCM 註冊；線路塞車時用 QoS 保住通話：信任邊界、LLQ、配合營運商合約頻寬的整形 |
 
 ## 證照對照
 
@@ -61,18 +64,18 @@ npm run build    # 輸出到 dist/
 
 | 考試 | 有對應關卡的條目 | 還沒有關卡的條目 |
 | --- | --- | --- |
-| Cisco CCNA 200-301 v1.1 | 53 條中的 40 條 | 1.5、1.12、2.3、2.6、4.7、5.2 與第 6 領域（自動化） |
+| Cisco CCNA 200-301 v1.1 | 53 條中的 42 條 | 1.5、1.12、2.6、5.2 與第 6 領域（自動化） |
 | CompTIA Network+ N10-009 | 25 條中的 24 條 | 1.3（雲端） |
 | CompTIA Security+ SY0-701 | 只列出與網路相關的 11 條，全部有對應 | — |
 
-沒有關卡的條目大多是觀念題，題庫裡有對應的題目（TCP / UDP、CDP / LLDP、QoS、AAA、REST API、JSON、Ansible 等）。
+沒有關卡的條目大多是觀念題，題庫裡有對應的題目（TCP / UDP、AAA、REST API、JSON、Ansible 等）。
 條目編號依公開的考試大綱，標題是中文摘要。CCNA v2.0 預計在 2027 年 2 月取代 v1.1，改版後需要重新對照。
-題庫（84 題觀念題加上隨機產生的子網路計算題）是自行編寫的練習題，不是實際試題。
+題庫（93 題觀念題加上隨機產生的子網路計算題）是自行編寫的練習題，不是實際試題。
 
 ## CLI 設定指令
 
 支援的範圍是 `show running-config` 會印出來的那些指令，都可以縮寫（`conf t`、`int gi0/1`、`sw mo tr`），前面加 `no` 是取消。
-把一台設備的 running-config 整份貼到另一台同型號的設備上，會得到相同的設定（測試會對 62 台設備逐一驗證）。
+把一台設備的 running-config 整份貼到另一台同型號的設備上，會得到相同的設定（測試會對 70 台設備逐一驗證）。
 
 | 模式 | 指令 |
 | --- | --- |
@@ -103,6 +106,10 @@ npm run build    # 輸出到 dist/
 - **檔案與韌體**：`dir [flash: | bootflash:]`、`show flash:`、`show boot`、`show version`、`delete`、`verify /md5 <檔案> [MD5]`、`copy <來源> <目的>`（`running-config`、`startup-config`、`flash:`、`tftp://伺服器/檔名`、`ftp://帳號:密碼@伺服器/檔名`，沒寫完整會一行一行問）、`boot system flash:<檔名>`、`ip tftp blocksize`、`ip ftp username` / `password`。ROMMON 下可以用 `dir`、`boot <檔案>` 與 `reset`。
 - **SSH**：`ip domain name`、`crypto key generate rsa [modulus <位元>]`、`crypto key zeroize rsa`、`ip ssh version 2`、`ip ssh time-out`、`ip ssh authentication-retries`、`line vty` 裡的 `login` / `login local` / `password`；`show ip ssh`、`show crypto key mypubkey rsa`。
 - **SNMP**：`snmp-server community <字串> [RO|RW] [ACL]`、`snmp-server group <群組> v3 priv`、`snmp-server user <帳號> <群組> v3 auth sha <密碼> priv aes 128 <密碼>`、`snmp-server host <IP> [version 2c|3 priv] <community|帳號>`、`snmp-server enable traps`、`snmp-server location` / `contact`；`show snmp`、`show snmp user`、`show snmp host`。和真的 IOS 一樣，v3 的使用者不會出現在 running-config 裡。
+- **鄰居探索**：`cdp run` / `no cdp run`、`cdp timer`、`cdp holdtime`、`lldp run`、`lldp timer`、`lldp holdtime`；介面上的 `no cdp enable`、`no lldp transmit`、`no lldp receive`；`show cdp`、`show cdp neighbors [detail]`、`show cdp entry *`、`show cdp interface`、`show cdp traffic`、`show lldp`、`show lldp neighbors [detail]`、`show lldp interface`、`show lldp traffic`、`clear cdp table`、`clear lldp table`。
+- **DTP**：`switchport mode dynamic auto | desirable`、`switchport nonegotiate`；`show interfaces [埠] switchport`、`show dtp`、`show interfaces trunk`（Mode 欄位是 on / auto / desirable）。
+- **IP 電話**：`switchport voice vlan <ID>`、`power inline auto | never`、`show power inline`；DHCP 位址池裡的 `option 150 ip <TFTP 伺服器>`。
+- **QoS**：`class-map [match-any | match-all]`（`match dscp`、`match access-group name`、`match protocol rtp | sip`、`match cos`、`match any`）、`policy-map` → `class` →（`priority percent | <kbps>`、`bandwidth percent | remaining percent | <kbps>`、`fair-queue`、`queue-limit`、`set dscp`、`police cir`、`shape average`、`service-policy <子政策>`）、介面上的 `service-policy input | output`；Catalyst 2960 的 `mls qos`、`mls qos trust dscp | cos | device cisco-phone`、`mls qos map cos-dscp`、`auto qos voip cisco-phone | trust`；`show policy-map [interface <介面>]`、`show class-map`、`show mls qos [interface <埠> | maps cos-dscp]`。
 - **排除故障**：`traceroute`、`show interfaces [介面]`、`show interfaces counters errors`、`clear counters`、`debug ip packet`、`debug ip icmp`、`undebug all`、`show debugging`、`show ip protocols`、`show ip ospf interface brief`。
 
 ### FortiGate（FortiOS）
@@ -112,7 +119,7 @@ npm run build    # 輸出到 dist/
 | 區段 | 內容 |
 | --- | --- |
 | `system interface` | 介面的 mode、ip、allowaccess（每個介面各自開放的管理協定） |
-| `system dhcp server` | 位址範圍（`config ip-range`）、閘道、DNS、保留位址 |
+| `system dhcp server` | 位址範圍（`config ip-range`）、閘道、DNS、保留位址、`tftp-server`（給 IP 電話） |
 | `firewall address` / `addrgrp` | 位址物件與群組；政策裡用名稱引用 |
 | `firewall vip` | 連接埠轉發，或一對一的靜態 NAT |
 | `firewall policy` | 介面、位址、服務、動作、NAT；`move` 調整順序、`delete` 刪除 |
@@ -152,6 +159,8 @@ npm run build    # 輸出到 dist/
 | 開機 | Hub 2 秒、家用路由器與 AP 1 分鐘、FortiGate 70 – 90 秒、Catalyst 2960 2 分鐘、ISR 3 分鐘、Catalyst 9300 / Nexus 4 分鐘 | 按下電源或 `reload` 之後，這段時間和關機沒有兩樣 |
 | 遠端登入閒置 | IOS 10 分鐘、FortiGate 5 分鐘 | `exec-timeout`、`admintimeout` 可以調整 |
 | 檔案傳輸 | 依檔案大小與線路 | TFTP 每送一個 512 位元組的區塊就要等一次確認，速度取決於來回時間，700 MB 的映像檔要二、三十分鐘；FTP 走 TCP，同一條線只要幾十秒。傳輸期間時鐘跟著前進 |
+| CDP 與 LLDP | CDP 每 60 秒、holdtime 180 秒；LLDP 每 30 秒、holdtime 120 秒 | 接線的那一刻兩端會立刻通告一次。對面把 CDP 關掉，這一端要等 holdtime 過了才忘記它；LLDP 關掉時會先送一個 TTL = 0 的通告，對方立刻刪除 |
+| IP 電話 | 開機約 90 秒，註冊約 8 秒 | 交換器開始供電 (PoE) 才開機；交換器重新開機，電話也跟著斷電重開。已經註冊的電話每 120 秒確認一次 CUCM，連不到才顯示未註冊 |
 | SNMP 輪詢 | 60 秒 | 網管伺服器每 60 秒問一次每台設備；使用率是兩次輪詢之間計數器的差值，所以至少要兩次輪詢才看得到 |
 
 關卡裡的交換器已經預先開好 `spanning-tree portfast default`，不用每接一條線就等 30 秒；自由模式的設備是原廠預設值，要自己開。
@@ -180,6 +189,22 @@ npm run build    # 輸出到 dist/
 - **SSH 的前置條件**：要先有不是原廠預設的主機名稱、`ip domain name`，才能產生 RSA 金鑰（至少 768 位元才支援 SSH v2）；SSH 需要帳號，所以 `line vty` 要用 `login local`。原廠的交換器 vty 只有 `login` 而沒有密碼，Telnet 連上之後會立刻被關掉（Password required, but none set）。重新產生金鑰之後，用戶端會發現主機金鑰變了。
 - **SNMP**：v2c 用 community 字串（明文），可以綁一個標準 ACL 限制誰能查；v3 有帳號、SHA 認證與 AES 加密，密碼不對就解不開回應。網管伺服器顯示每台設備的名稱、開機時間、版本，以及每個介面的速率、收送使用率與錯誤數的變化。設定了 `snmp-server host` 與 `enable traps` 的設備，在介面斷線 / 上線、重新開機、有人用錯 community 查詢時會主動送 Trap（UDP 162，沒有確認，送不到就掉了）。
 - **背景流量**：關卡或玩家可以設定一直在跑的傳輸，它們依路徑上剩下的頻寬分配（小的先滿足，其餘平分，近似 TCP 的公平分享），算進介面計數器；`iperf3`、檔案傳輸會和它們搶同一條線。
+
+## 鄰居探索與 DTP
+
+- **CDP 與 LLDP**：鄰居表是從真的收到的通告學來的，每一筆都有剩下的 holdtime。Catalyst 與 ISR 出廠時 CDP 開、LLDP 關；Nexus 兩個都開；IP 電話兩個都講（Yealink 只講 LLDP-MED）；UniFi 基地台只講 LLDP。中間隔著 Hub 或非網管交換器時，CDP 會被泛洪過去（一個埠上看到好幾個鄰居），LLDP 的目的位址是 802.1D 保留給「最近的橋接器」的，交換器不會轉送。
+- **靠 CDP 才知道的事**：雙工不一致 (`%CDP-4-DUPLEX_MISMATCH`)、Native VLAN 不一致 (`%CDP-4-NATIVE_VLAN_MISMATCH`) 都要收到對方的 CDP 才會出現，每分鐘抱怨一次。電話的語音 VLAN 與 PoE 協商也是。
+- **DTP**：Catalyst 的埠出廠是 `dynamic auto`。對面是 `trunk` 或 `desirable` 就協商成 Trunk；兩端都是 auto 維持 Access；設了 `nonegotiate` 的一端不送 DTP，對面的 dynamic 埠永遠等不到要求。電腦、路由器、Nexus 都不講 DTP；攻擊工具（例如 Yersinia）可以假裝成交換器，把使用者的埠協商成 Trunk（VLAN hopping）。
+
+## IP 電話與 QoS
+
+- **電話的開機流程**：PoE 供電 → 開機 → 從交換器的 CDP（Cisco）或 LLDP-MED（其他廠牌）學到語音 VLAN → 在語音 VLAN 用 DHCP 拿位址（option 150 / 66 告訴它 TFTP 伺服器）→ 下載設定檔（Cisco 是 SEP + MAC.cnf.xml）→ 向 CUCM 註冊。哪一步卡住，電話的螢幕上就停在那裡。也可以在電話上手動設定語音 VLAN 與備用 TFTP 伺服器。
+- **語音 VLAN**：電話裡有一台小交換器。電腦的流量不帶標籤，屬於交換器埠的 Access VLAN；電話的語音帶著語音 VLAN 的標籤 (CoS 5、DSCP EF)。電話沒電時，接在它後面的電腦也一起斷線。
+- **PoE**：只有標示 PoE 的埠能供電，交換器有總預算（2960-CX-8PC-L 是 124 W）。依 PoE 等級先保留上限（Class 2 是 7 W、Class 0 / 3 是 15.4 W），Cisco 電話開機後用 CDP 協商出實際用量 (6.3 W)。
+- **通話品質**：每一通電話依沿路每一個出口佇列算出延遲、抖動與遺失，再用 ITU-T G.107 的 E-model 換算成 MOS（G.711，含抖動緩衝與封包遺失補償）。4.0 以上是「好」，3.6 以下就聽得到斷斷續續。
+- **壅塞與佇列**：持續的 TCP 流量會把瓶頸的佇列塞滿（預設 64 個封包），同一個佇列裡的語音要排隊，佇列滿了就被丟。`priority`（LLQ）讓語音不用排隊；`fair-queue` 讓每條流量各排各的；`bandwidth` 保證某一類的頻寬。佇列只在出口、而且只有真的塞車時才有作用。
+- **營運商的合約頻寬**：網路線上可以標示營運商的 CIR（例如 Metro Ethernet 實體 1 Gbps、合約 20 Mbps）。超過的量在營運商那端被管制丟掉，不分語音還是資料，TCP 也只跑得到合約的八成多；在自己這端 `shape average` 到合約以內，佇列才會在自己手上，子政策的 LLQ 才有作用。
+- **信任邊界**：交換器沒開 `mls qos` 時標記原樣通過；開了之後，沒設 `trust` 的埠會把 DSCP 與 CoS 歸零。`trust cos` 會依 CoS→DSCP 對照表換算，預設把 CoS 5 變成 40 而不是 EF；`trust device cisco-phone` 只有在 CDP 認出對面是 Cisco 電話時才信任。`auto qos voip cisco-phone` 會一次設好。
 
 ## 排除故障的工具
 
@@ -227,11 +252,14 @@ npm run build    # 輸出到 dist/
 
 - MAC 位址表會學習、過期與泛洪，但實際的轉送路徑仍然由拓撲算出，所以不會出現「表裡的項目指到錯的埠」這種狀況。
 - 只有 SSH / Telnet 是長時間保持的連線；ping、curl、iperf3 建立之後就結束了。
-- 封包擷取記錄的是模擬裡真的跑過的訊框（測試、終端機指令、檔案傳輸、SNMP、背景的 BPDU 與 CDP）；持續傳輸的背景流量、OSPF Hello、VRRP 通告只算進計數器，不會出現在擷取畫面上。檔案傳輸只記下開頭幾個封包，不會把 70 萬個 TFTP 區塊一個一個列出來。
+- 封包擷取記錄的是模擬裡真的跑過的訊框（測試、終端機指令、檔案傳輸、SNMP、背景的 BPDU、CDP、LLDP 與 DTP）；持續傳輸的背景流量、OSPF Hello、VRRP 通告只算進計數器，不會出現在擷取畫面上。檔案傳輸只記下開頭幾個封包，不會把 70 萬個 TFTP 區塊一個一個列出來。
 - FortiGate 的 sniffer 與 debug flow 是在背景執行，輸入任何指令就會停止（相當於 Ctrl-C）。IOS 的 `debug` 只做了 `ip packet` 與 `ip icmp`。
 - DR / BDR 只依 Router ID 決定，不模擬「先上線的不讓位」。
 - NTP 只有一台伺服器、沒有驗證；設備的時鐘不會慢慢漂移（沒對時的誤差是固定的）。
-- 頻寬分配只發生在背景流量與一次性的量測（`iperf3`、檔案傳輸）之間，以每段線路剩下的頻寬近似 TCP 的公平分享，沒有模擬壅塞控制本身；沒有 QoS。Hub 的碰撞只反映在速率打折上。
+- 背景流量之間用 max-min 公平分配近似 TCP 的行為，沒有模擬壅塞控制本身。佇列的延遲與遺失用「TCP 會把佇列塞滿」的穩態估計（平均約七成滿、遺失率隨流量條數增加），不是逐封包的模擬；營運商的管制 (policing) 也是用估計的遺失率。Hub 的碰撞只反映在速率打折上。
+- QoS 只模擬路由器的 MQC 與 Catalyst 2960 的 `mls qos` 信任邊界；交換器自己的出口佇列（`srr-queue`）、WRED、NBAR 的完整協定庫、FortiGate 的流量整形都沒有做。Wi-Fi 的 WMM 也沒有。
+- IP 電話只有 G.711；CUCM 只做註冊與分機（沒有撥號規則、語音信箱、會議）。通話的訊令（SIP）只用來判斷註冊，媒體 (RTP) 才走實際的路徑算品質。
+- DTP 不模擬 VTP 網域不同造成的協商失敗，也不模擬經過非網管交換器的 DTP。雙重標籤 (double tagging) 的 VLAN hopping 只在觀念題出現。
 - 遠端存取的 SSL-VPN 沒有連線建立的時間。
 - STP 以每個 VLAN 各算一棵樹的方式近似 Rapid PVST+，只處理交換器直接相連的情況；非網管交換器形成迴圈會被判定為廣播風暴。邊緣埠用的是傳統的 30 秒計時（和 Cisco 預設的 PVST+ 一樣）。
 - IPsec 只有 IKEv1 與預先共用金鑰。圖形介面建立的 FortiGate 通道會自動帶出通往對端的路由（相當於用精靈建立）。SSL-VPN 的加密流量在引擎內部仍然當成一層封裝來處理。
@@ -247,7 +275,7 @@ npm run build    # 輸出到 dist/
 
 完整的功能規劃（每個領域已完成、部分完成、尚未開始的項目，以及建議的實作順序）在 [PLAN.md](PLAN.md)。以下是最接近的幾項：
 
-1. LLDP、DTP、Voice VLAN（需要新的 IP 電話設備）、QoS（規劃中的階段 4）。
+1. OSPF 進階（DR 選舉、多區域、passive-interface）、ECMP、BGP（規劃中的階段 5）。
 2. IPv6 的 ACL、防火牆政策與 OSPFv3。
 3. TACACS+、IKEv2、IOS 的 Dialer 介面。
 4. Wi-Fi 的牆面衰減、802.1X 的憑證驗證。
@@ -265,12 +293,15 @@ src/engine/   模擬引擎（不依賴瀏覽器，可直接用 Node 測試）
   remote.js       SSH / Telnet 登入（長時間保持的連線、RSA 金鑰、驗證、閒置逾時、登入封鎖）
   files.js        flash 與檔案、映像檔清單與 MD5、開機時挑選映像檔、TFTP / FTP 傳輸
   snmp.js         SNMP 代理程式的驗證（community、ACL、v3）、網管伺服器的輪詢與使用率、Trap
+  disc.js         CDP 與 LLDP 的通告、鄰居表與 holdtime
+  qos.js          QoS：標記與信任邊界、class-map / policy-map 的分類、出口佇列、整形與營運商的管制
+  voice.js        IP 電話的開機與註冊、CUCM、通話品質（E-model / MOS）
   wire.js         線路上的訊框：介面計數器、封包擷取、SPAN、IOS debug、FortiGate sniffer 與 debug flow
   sim.js          供電與連線狀態、L2（VLAN / STP / LACP / Port Security / DHCP Snooping / DAI / 802.1X / Wi-Fi）、
                   L3（路由 / OSPF / VRRP）、DHCP 與 Relay、PPPoE、NAT、ACL、防火牆政策、VPN、DNS、
                   模擬時鐘（advance / settle / pendingOf）與傳輸速率（throughput）
   sim6.js         IPv6：SLAAC、鄰居探索、靜態路由
-src/levels/   關卡定義：設備、初始設定、任務目標、提示、參考解法（trouble.js 是故障排除章，maint.js 是維運章）
+src/levels/   關卡定義：設備、初始設定、任務目標、提示、參考解法（trouble.js 是故障排除章，maint.js 是維運章，voip.js 是語音與 QoS 章）
 src/data/     題庫與證照對照表
 src/scene/    three.js 場景、設備模型、網路線、無線涵蓋範圍與封包動畫
 src/ui/       設定面板、終端機、CLI、任務面板、測驗、自由模式與對話框

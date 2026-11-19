@@ -29,8 +29,8 @@ README 說明「現在有什麼、怎麼玩」，這份文件說明「整體應�
 
 | 領域 | ✅ 已完成 | 🟡 部分完成 | ⬜ 尚未開始 |
 | --- | --- | --- | --- |
-| 1. 實體層與接線 | 6 | 2 | 6 |
-| 2. 第二層：交換 | 10 | 1 | 6 |
+| 1. 實體層與接線 | 7 | 1 | 6 |
+| 2. 第二層：交換 | 13 | 0 | 4 |
 | 3. 第三層：路由 | 6 | 0 | 9 |
 | 4. IP 服務 | 9 | 4 | 1 |
 | 5. 網路安全 | 8 | 3 | 5 |
@@ -38,16 +38,16 @@ README 說明「現在有什麼、怎麼玩」，這份文件說明「整體應�
 | 7. 無線網路 | 3 | 2 | 5 |
 | 8. IPv6 | 2 | 0 | 6 |
 | 9. 高可用 | 5 | 0 | 6 |
-| 10. 時間、效能與流量 | 7 | 2 | 2 |
+| 10. 時間、效能與流量 | 8 | 2 | 1 |
 | 11. 設備管理與維運 | 12 | 3 | 3 |
 | 12. 自動化、雲端與虛擬化 | 0 | 0 | 5 |
-| 13. 設備型錄 | 9 | 1 | 3 |
+| 13. 設備型錄 | 9 | 2 | 2 |
 | 14. 遊戲系統 | 10 | 3 | 9 |
 | 15. 介面與體驗 | 5 | 1 | 8 |
 | 16. 工程品質 | 2 | 0 | 8 |
-| **合計** | **100** | **23** | **88** |
+| **合計** | **105** | **22** | **84** |
 
-另外：關卡 43 關（第 17 節）、證照條目涵蓋情形（第 18 節）、建議的實作順序（第 19 節）。
+另外：關卡 46 關（第 17 節）、證照條目涵蓋情形（第 18 節）、建議的實作順序（第 19 節）。
 
 ---
 
@@ -58,7 +58,7 @@ README 說明「現在有什麼、怎麼玩」，這份文件說明「整體應�
 | 線材種類與距離上限 | ✅ | Cat6 銅纜、DAC、多模光纖 (OM4 + SR)、單模光纖 (OS2 + LR)；超過距離就沒有燈號 |
 | 連接埠型式 | ✅ | RJ45、SFP+ / SFP28、QSFP28，線材要和連接埠相符 |
 | 速率與雙工協商 | ✅ | 自動協商、寫死 `speed` / `duplex`、duplex mismatch、兩端速率寫死成不同值時連線建立不起來 |
-| PoE 供電 | 🟡 | AP 要接在有 PoE 的埠才會開機；沒有瓦數預算與等級 (802.3af / at / bt) |
+| PoE 供電 | ✅ | 只有 PoE 埠能供電；依等級保留瓦數、Cisco 設備用 CDP 協商實際用量、交換器的總預算、`power inline never`、`show power inline`；受電設備插電後才開機，交換器重開它們也跟著重開。沒有 802.3bt / UPOE |
 | 設備電源、介面 shutdown | ✅ | 任何設備可以關機，介面可以停用，錯誤訊息會指出是哪一台 |
 | 連線狀態與原因 | ✅ | 點網路線可以看線材、距離、協商結果與斷線原因 |
 | 線路故障 | 🟡 | 故障演練會切斷指定的線路；線對斷掉的網路線會自動降到 100 Mbps（寫死 1000 時連不起來）；沒有接觸不良、光衰過大這類造成 CRC 錯誤與間歇掉包的故障 |
@@ -84,10 +84,10 @@ README 說明「現在有什麼、怎麼玩」，這份文件說明「整體應�
 | ARP | ✅ | 廣播詢問、快取、逐筆逾時、介面斷線時清除、`clear arp` |
 | MAC 位址表 | ✅ | 從實際的流量學習、300 秒過期（可調整）、斷線與生成樹拓撲改變時清除、不認得的目的 MAC 會泛洪；`show mac address-table`、`clear mac address-table dynamic` |
 | 靜態 MAC 項目 | ⬜ | `mac address-table static`；目前只有 Port Security 指定的位址會顯示成 STATIC |
-| CDP | 🟡 | 有 `show cdp neighbors`；沒有 LLDP，也不能關閉 (`no cdp run`)，還沒有對應的關卡 |
-| DTP | ⬜ | `dynamic auto` / `dynamic desirable` 自動協商 Trunk |
+| CDP 與 LLDP | ✅ | 依計時器通告、鄰居表與 holdtime、LLDP 的 shutdown 通告、經過 Hub / 非網管交換器的行為、全域與每個埠的開關、`show cdp / lldp neighbors [detail]`、traffic、`clear`；Native VLAN 與雙工不一致的訊息靠 CDP；LLDP-MED 給電話語音 VLAN |
+| DTP | ✅ | Catalyst 出廠 `dynamic auto`、`dynamic desirable`、`nonegotiate`、運作中的模式與原因、`show interfaces switchport`、`show dtp`；攻擊工具偽裝成交換器 (VLAN hopping)；Nexus 沒有 DTP |
 | VTP | ⬜ | VLAN 資料庫同步 |
-| Voice VLAN | ⬜ | 需要新增 IP 電話設備 |
+| Voice VLAN | ✅ | `switchport voice vlan`：資料不帶標籤、語音帶標籤；電話從 CDP 或 LLDP-MED 學到，也可以手動設定 |
 | Private VLAN、Storm Control | ⬜ | |
 | STP 進階 | ⬜ | MST、Loop Guard、UDLD、拓撲變更通知、交換器不是直接相連的拓撲 |
 | SPAN（連接埠鏡像） | ✅ | `monitor session` 與圖形介面；目的埠不轉送一般流量；搭配主機的封包擷取 |
@@ -145,7 +145,7 @@ README 說明「現在有什麼、怎麼玩」，這份文件說明「整體應�
 | Port Security | ✅ | 靜態與 sticky MAC、違規時 err-disabled |
 | 802.1X / RADIUS | 🟡 | 有線埠與 WPA2-Enterprise 的帳號密碼驗證；沒有憑證 (EAP-TLS) |
 | Wi-Fi 加密 | ✅ | 開放、WEP、WPA2、WPA2 / WPA3 混合、WPA3 |
-| 攻擊情境 | 🟡 | 已有冒牌 DHCP、ARP 欺騙、搶根橋、未授權設備、密碼暴力嘗試（`login block-for`）、側錄 Telnet 明文密碼；還沒有 MAC flooding、VLAN hopping、SYN flood |
+| 攻擊情境 | 🟡 | 已有冒牌 DHCP、ARP 欺騙、搶根橋、未授權設備、密碼暴力嘗試（`login block-for`）、側錄 Telnet 明文密碼；用 DTP 偽裝成交換器的 VLAN hopping；還沒有 MAC flooding、雙重標籤、SYN flood |
 | TACACS+ 與 AAA | ⬜ | 授權、稽核、權限等級 |
 | IOS 進階過濾 | ⬜ | Zone-Based Firewall、時間型 ACL、Reflexive ACL |
 | NGFW / UTM | ⬜ | IPS、防毒、網頁過濾、應用程式控管、SSL 檢查 |
@@ -222,11 +222,11 @@ README 說明「現在有什麼、怎麼玩」，這份文件說明「整體應�
 | 協定計時器 | ✅ | STP、OSPF、VRRP、DHCP 租約、ARP 快取 |
 | 頻寬模型 | ✅ | 找出路徑上最慢的一段；全雙工、半雙工、duplex mismatch、Wi-Fi、IPsec 各有折扣 |
 | `iperf3` 與速率目標 | ✅ | |
-| 延遲 | 🟡 | `ping` 的時間依站數估算；沒有距離、線路種類、抖動與封包遺失率 |
+| 延遲 | 🟡 | 通話依每個出口佇列算出延遲、抖動與遺失（再換算成 MOS）；`ping` 的時間仍然依站數估算，沒有距離與線路種類 |
 | 其他逾時 | ✅ | MAC 位址表、NAT 轉換表、防火牆連線、IPsec SA 都會過期；SSH / Telnet 是長時間保持的連線，閒置太久會被設備登出、或被路上的防火牆忘掉 |
 | 開機時間 | ✅ | 依機型 2 秒到 4 分鐘；按下電源或 `reload` / `execute reboot` 之後，這段時間和關機一樣 |
 | 流量互相擠壓 | ✅ | 背景流量依路徑上剩下的頻寬分配（小的先滿足、其餘平分，近似 TCP 公平分享）；`iperf3` 與檔案傳輸會和它們搶頻寬 |
-| QoS | ⬜ | 分類、DSCP 標記、佇列、整形與管制（CCNA 4.7 的缺口） |
+| QoS | ✅ | MQC：class-map、policy-map（priority / LLQ、bandwidth、fair-queue、queue-limit、set dscp、police、shape 加子政策）、service-policy；Catalyst 2960 的 `mls qos`、trust 與 CoS→DSCP 對照表、AutoQoS；營運商的 CIR 管制；`show policy-map interface`。沒有 WRED、交換器的出口佇列、FortiGate 的流量整形 |
 | 排程事件 | ⬜ | 關卡劇本：「60 秒後主線斷線」 |
 | 流量產生器與流量圖 | 🟡 | 主機可以新增持續傳輸；網管畫面有每條線路的使用率與趨勢；沒有整張拓撲的流量熱圖 |
 
@@ -237,7 +237,7 @@ README 說明「現在有什麼、怎麼玩」，這份文件說明「整體應�
 | 圖形介面 | ✅ | 每一種設備都有對應的設定頁面與即時狀態 |
 | IOS CLI | ✅ | 模式切換、縮寫、`no`、Tab 補齊、`?` 說明、`do show` |
 | IOS 的查看指令 | ✅ | 四十多個 `show` 指令，包含 MAC 位址表、NAT 轉換表、IPsec SA、時鐘、NTP、紀錄、介面計數器、SPAN、登入的使用者、flash、開機設定、SSH、SNMP |
-| 設定可以整份貼回 | ✅ | 測試對 62 台 Cisco 設備、6 台 FortiGate 逐一驗證 |
+| 設定可以整份貼回 | ✅ | 測試對 70 台 Cisco 設備、6 台 FortiGate 逐一驗證 |
 | running / startup-config | ✅ | `write memory`、`reload`、未存檔的提示、斷電後回到上一次存檔 |
 | FortiOS CLI | ✅ | `config` / `edit` / `set` / `next` / `end`、`show`、`get`、`diagnose`、`execute ping` |
 | 主機終端機 | ✅ | `ping`、`ipconfig`、`arp`、`tracert`、`nslookup`、`curl`、`iperf3` |
@@ -276,20 +276,20 @@ README 說明「現在有什麼、怎麼玩」，這份文件說明「整體應�
 | 第三層交換器 | ✅ | Cisco Catalyst 9300-24T、Nexus 93180YC-FX、Nexus 9332C |
 | 防火牆 | ✅ | Fortinet FortiGate 60F、100F |
 | 網際網路 | ✅ | ISP、公用 DNS、外部網站與外部使用者 |
-| 語音與監控 | ⬜ | IP 電話、PoE 攝影機 |
+| 語音與監控 | 🟡 | Cisco IP Phone 8841、Yealink SIP-T54W（只有 LLDP-MED）；還沒有 PoE 攝影機 |
 | 無線控制器 | ⬜ | WLC 與 Lightweight AP |
-| 伺服器角色 | 🟡 | 已有 RADIUS、DHCP、Syslog、NTP、TFTP、FTP、SNMP 網管；TFTP / FTP / 網管可以自己啟用；還沒有 DNS |
+| 伺服器角色 | 🟡 | 已有 RADIUS、DHCP、Syslog、NTP、TFTP、FTP、SNMP 網管、CUCM；TFTP / FTP / 網管 / CUCM 可以自己啟用；還沒有 DNS |
 | 其他 | ⬜ | 數據機 / ONT、負載平衡器、UPS、其他廠牌（Juniper、Aruba、MikroTik） |
 
 ## 14. 遊戲系統
 
 | 功能 | 狀態 | 說明 |
 | --- | --- | --- |
-| 關卡 | ✅ | 11 章 43 關（清單見第 17 節） |
-| 任務目標 | ✅ | ping、TCP、UDP、DHCP、設定檢查、故障演練、IPv6 ping、傳輸速率、遠端登入（SSH / Telnet 帳號密碼） |
+| 關卡 | ✅ | 12 章 46 關（清單見第 17 節） |
+| 任務目標 | ✅ | ping、TCP、UDP、DHCP、設定檢查、故障演練、IPv6 ping、傳輸速率、遠端登入（SSH / Telnet 帳號密碼）、IP 電話註冊、通話品質 (MOS) |
 | 提示與星等 | ✅ | 每關 3 個提示，看一個少一顆星 |
 | 學習卡 | ✅ | 每關 2 到 4 張觀念說明 |
-| 題庫 | ✅ | 84 題觀念題、隨機產生的子網路計算題、過關後的小考 |
+| 題庫 | ✅ | 93 題觀念題、隨機產生的子網路計算題、過關後的小考 |
 | 證照地圖 | ✅ | 三種考試的條目與關卡對照、完成進度 |
 | 故障排除章 | ✅ | 網路已經設定好但被改壞，要自己找出原因 |
 | 自由模式 | ✅ | 自己擺設備、接線、設定；可以存目標、匯出與匯入 |
@@ -346,7 +346,7 @@ README 說明「現在有什麼、怎麼玩」，這份文件說明「整體應�
 
 ## 17. 關卡規劃
 
-### 現有的 43 關
+### 現有的 46 關
 
 | 章 | 關卡 |
 | --- | --- |
@@ -355,12 +355,13 @@ README 說明「現在有什麼、怎麼玩」，這份文件說明「整體應�
 | 3 企業網路 | 守門員、總公司與分公司、對外伺服器群 |
 | 4 資料中心 | 機櫃上線、Spine-Leaf、跨棟連線 |
 | 5 無線網路 | 家裡的 Wi-Fi、辦公室基地台、訪客 Wi-Fi |
-| 6 網路安全 | 誰在發 IP？、不速之客、存取控制清單、管理介面加固、冒牌閘道、搶走根橋、你是誰？ |
+| 6 網路安全 | 誰在發 IP？、不速之客、存取控制清單、管理介面加固、冒牌閘道、搶走根橋、你是誰？、偽裝成交換器 |
 | 7 VPN 與廣域備援 | 站對站 VPN、在家上班、雙線路備援 |
 | 8 高可用與進階路由 | 迴圈與生成樹、EtherChannel、閘道備援、集中式 DHCP、OSPF 路徑選擇、切蛋糕 |
 | 9 IPv6 | IPv6 初體驗、雙協定 |
 | 10 故障排除 | 誰搶了我的 IP、樓層之間又斷了、分公司的求救電話、明明連得上，為什麼這麼慢 |
 | 11 維運與管理 | 還好有備份、韌體升級、讓 SSH 能用、網路怎麼變慢了 |
+| 12 語音與 QoS | 電話接上了，然後呢？、語音斷斷續續 |
 
 ### 規劃中的關卡
 
@@ -369,12 +370,12 @@ README 說明「現在有什麼、怎麼玩」，這份文件說明「整體應�
 | 章 | 規劃的關卡 | 需要的功能 |
 | --- | --- | --- |
 | 補進第 11 章 | 對時與紀錄（用 NTP 與 Syslog 把事件順序對起來）、設定被誰改了（差異比對） | 第 4、11 節 |
-| 12 進階路由 | OSPF 多區域、DR 選舉、ECMP、雙 ISP 的 BGP、路由重分配 | 第 3 節 |
-| 13 語音與 QoS | Voice VLAN、語音優先、線路擁塞時保住重要流量 | 第 2、10、13 節 |
+| 13 進階路由 | OSPF 多區域、DR 選舉、ECMP、雙 ISP 的 BGP、路由重分配 | 第 3 節 |
+| 補進第 12 章 | 不看圖用 CDP / LLDP 把拓撲畫出來、PoE 預算不夠、雙 WAN 的 QoS | 第 1、2、10 節 |
 | 14 無線控制器 | 用 WLC 集中管理 AP、漫遊、訪客入口 | 第 7、13 節 |
 | 15 自動化 | 用 REST API 讀設定、用 JSON 批次改 VLAN、用 playbook 部署多台設備 | 第 12 節 |
 | 16 雲端 | VPC 與安全群組、站到雲 VPN | 第 12 節 |
-| 補進第 6 章 | VLAN hopping、MAC flooding、NGFW 設定檔 | 第 2、5 節 |
+| 補進第 6 章 | MAC flooding、雙重標籤、NGFW 設定檔 | 第 2、5 節 |
 | 補進第 7 章 | 三個站台的 Hub-and-spoke、IKEv2、通道重新協商 | 第 6 節 |
 | 補進第 9 章 | DHCPv6、OSPFv3、IPv6 的 ACL | 第 8 節 |
 | 補進第 10 章 | OSPF 鄰居起不來、VPN 通了但流量不走、Wi-Fi 很慢、STP 選錯根橋、隨機故障 | 第 14 節 |
@@ -383,19 +384,17 @@ README 說明「現在有什麼、怎麼玩」，這份文件說明「整體應�
 
 | 考試 | 已有關卡的條目 | 還沒有關卡的條目 |
 | --- | --- | --- |
-| Cisco CCNA 200-301 v1.1 | 53 條中的 40 條 | 見下表 |
+| Cisco CCNA 200-301 v1.1 | 53 條中的 42 條 | 見下表 |
 | CompTIA Network+ N10-009 | 25 條中的 24 條 | 1.3 雲端概念與連線選項 |
 | CompTIA Security+ SY0-701 | 網路相關的 11 條，全部有對應 | — |
 
-CCNA 還沒有關卡的 13 條，以及補上的方式：
+CCNA 還沒有關卡的 11 條，以及補上的方式：
 
 | 條目 | 內容 | 規劃 |
 | --- | --- | --- |
 | 1.5 | TCP 與 UDP 的比較 | 用封包擷取比較兩種連線（第 11 節） |
 | 1.12 | 虛擬化基礎 | 虛擬化關卡（第 12 節） |
-| 2.3 | CDP、LLDP | 補上 LLDP 後做一關「不看圖把拓撲畫出來」（第 2 節） |
 | 2.6 | 無線架構與 AP 模式 | 第 14 章 |
-| 4.7 | QoS 的逐跳行為 | 第 13 章 |
 | 5.2 | 安全計畫的要素 | 觀念題即可 |
 | 6.1 – 6.7 | 自動化、控制器式網路、AI、REST API、Ansible / Terraform、JSON | 第 15 章；6.1、6.4 維持觀念題 |
 
@@ -410,8 +409,8 @@ CCNA v2.0 預計在 2027 年 2 月取代 v1.1，改版後整張對照表要重�
 | 1（已完成） | MAC 位址表的學習與逾時、NAT 與連線紀錄逾時、IPsec 協商時間與 SA 生命週期、NTP 對時、Syslog 伺服器 | 時鐘已經有了，這些原本都假裝「瞬間完成、永不過期」 |
 | 2（已完成） | 從主機 SSH 進設備（長時間保持的連線，連線逾時才有作用）、開機時間、IOS 的 `traceroute` / `debug` / `show interfaces`、介面計數器、封包擷取與 SPAN、FortiGate 的 sniffer 與 debug flow | 排除故障的工具補齊，故障排除章才能做得更深 |
 | 3（已完成） | TFTP / FTP 備份與還原、韌體升級與 ROMMON、SSH 的前置條件、SNMP 監控與 Trap、背景流量 → 第 11 章 | 補上 CCNA 4.9、Network+ 3.1 |
-| 4 | LLDP、DTP、Voice VLAN、QoS 與流量擠壓 → 第 13 章 | 補上 CCNA 2.3、4.7 |
-| 5 | OSPF 進階、ECMP、BGP → 第 12 章 | |
+| 4（已完成） | CDP / LLDP 的計時與鄰居表、DTP、IP 電話（PoE、語音 VLAN、option 150、CUCM）、QoS（信任邊界、LLQ、整形、營運商管制、通話品質）→ 第 12 章與 6-8 | 補上 CCNA 2.3、4.7 |
+| 5 | OSPF 進階、ECMP、BGP → 第 13 章 | |
 | 6 | IPv6 補齊（DHCPv6、OSPFv3、ACL）、IKEv2、多站台 VPN | |
 | 7 | 無線控制器、牆面衰減、漫遊 → 第 14 章 | 補上 CCNA 2.6 |
 | 8 | 自動化與雲端 → 第 15、16 章 | 補上 CCNA 第 6 領域、Network+ 1.3 |

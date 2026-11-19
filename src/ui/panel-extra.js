@@ -604,7 +604,8 @@ export function dhcpScopesTab(ctx, body) {
         field('起始 IP', inp(ctx, ...bind(s, 'start'), { ph: '例如 10.0.10.100', check: isIp })),
         field('結束 IP', inp(ctx, ...bind(s, 'end'), { ph: '例如 10.0.10.199', check: isIp })),
         field('發給用戶端的閘道', inp(ctx, ...bind(s, 'gw'), { ph: '留空＝轉送來的那個閘道', check: isIp })),
-        field('發給用戶端的 DNS', inp(ctx, ...bind(s, 'dns'), { ph: '例如 8.8.8.8', check: isIpList }))),
+        field('發給用戶端的 DNS', inp(ctx, ...bind(s, 'dns'), { ph: '例如 8.8.8.8', check: isIpList })),
+        field('TFTP 伺服器（option 150 / 66）', inp(ctx, ...bind(s, 'tftp'), { ph: 'IP 電話下載設定檔用', check: isIpList }))),
       ctx.live(() => {
         const e = Object.entries(state.leases[`${dev.id}/scope/${s.start}`] || {});
         return e.length ? note('ok', '已發出：' + e.map(([k, ip]) => `${nameOf(ctx, k.split('/')[0])} ${fmtIp(ip)}`).join('、')) : note('muted', '這個範圍還沒有發出任何位址。');

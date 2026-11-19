@@ -2,7 +2,7 @@
 import { h, button, toast } from './dom.js';
 import { inp, sel, toggle, field, note, kv, del, cardHead, grid2, bind, badge, isIp, isNum, isMask, ifaceNote } from './form.js';
 import { fmtIp, fmtMask } from '../engine/ip.js';
-import { CATALOG } from '../engine/model.js';
+import { CATALOG, peerOf } from '../engine/model.js';
 import { fmtDur } from '../engine/sim.js';
 import { phoneState, PHONE_TEXT, callQuality, mosText, phoneName, isPhone } from '../engine/voice.js';
 import { portNd, setPortNd, neighbors } from '../engine/disc.js';
@@ -19,7 +19,8 @@ function screen(ctx) {
   const { dev, state } = ctx;
   return ctx.live(() => {
     const st = phoneState(state, dev), i = dev.ifaces[0];
-    const t = new Date(deviceTime(state, dev));
+    // 電話的時間來自 CUCM（Date/Time Group 設成台北，UTC+8）
+    const t = new Date(deviceTime(state, dev).ms + 8 * 3600000);
     const reg = st.st === 'reg';
     return h('div', { class: 'phone-lcd' + (reg ? ' ok' : st.st === 'off' ? ' off' : ' warn') },
       h('div', { class: 'lcd-top' }, h('span', { text: reg ? `分機 ${st.ext}` : phoneName(dev) }), h('span', { text: st.st === 'off' ? '' : `${two(t.getUTCHours())}:${two(t.getUTCMinutes())}` })),
@@ -90,7 +91,8 @@ function phoneInfoCard(ctx) {
   const { dev, state } = ctx;
   return h('div', { class: 'card' }, cardHead('狀態'), ctx.live(() => {
     const i = dev.ifaces[0], st = phoneState(state, dev);
-    const l = state.rt.links[dev.id + ':sw'];
+    // 開機中的電話還沒有連線，PoE 要看網路線接在哪個埠
+    const l = peerOf(state, dev.id, 'sw');
     const poe = l && (state.rt.poe || {})[l.dev + ':' + l.port];
     const nb = neighbors(state, dev).filter((r) => r.pid === 'sw');
     return [

@@ -325,7 +325,7 @@ export function poeTable(state, isDead) {
       const pc = d.sw && d.sw.ports[p.id];
       if (pc && pc.poe === 'never') { out[key] = { pd: x.id, state: 'never', watts: 0, alloc: 0, cls }; continue; }
       if (isDead(d.id) || shutPort(d, p.id)) { out[key] = { pd: x.id, state: 'off', watts: 0, alloc: 0, cls }; continue; }
-      const cdp = speaksCdp(x) && cdpOn(d, p.id) && cdpOn(x, o.port);
+      const cdp = speaksCdp(x) && !isDead(x.id) && cdpOn(d, p.id) && cdpOn(x, o.port); // 還在開機的電話還沒送 CDP，先依等級保留
       const alloc = cdp ? watts : POE_CLASS_W[cls];
       if (sum + alloc > budget + 1e-9) { out[key] = { pd: x.id, state: 'denied', watts: 0, alloc, cls, cdp }; continue; }
       sum += alloc;

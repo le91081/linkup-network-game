@@ -305,7 +305,7 @@ const SEC = {
     remove(d) { d.mgmt.snmp = 'off'; delete d.mgmt.snmpUser; },
   },
   'system dhcp server': {
-    numeric: true, fields: { 'default-gateway': 'b', netmask: 'b', interface: 'q', 'dns-service': 'b', 'dns-server1': 'b', 'dns-server2': 'b', 'dns-server3': 'b', 'lease-time': 'b' },
+    numeric: true, fields: { 'default-gateway': 'b', netmask: 'b', interface: 'q', 'dns-service': 'b', 'dns-server1': 'b', 'dns-server2': 'b', 'dns-server3': 'b', 'lease-time': 'b', 'tftp-server': 'q' },
     subs: {
       'ip-range': { numeric: true, fields: { 'start-ip': 'b', 'end-ip': 'b' } },
       'reserved-address': { numeric: true, fields: { ip: 'b', mac: 'b', description: 'q' } },
@@ -320,6 +320,7 @@ const SEC = {
           interface: [i.id],
           ...Object.fromEntries(list(i.dhcp.dns).slice(0, 3).map((x, k) => [`dns-server${k + 1}`, [x]])),
           ...(+i.dhcp.lease > 0 ? { 'lease-time': [String(+i.dhcp.lease)] } : {}),
+          ...(i.dhcp.tftp ? { 'tftp-server': list(i.dhcp.tftp) } : {}),
         },
         sub: {
           'ip-range': i.dhcp.start && i.dhcp.end ? [{ key: '1', f: { 'start-ip': [i.dhcp.start], 'end-ip': [i.dhcp.end] } }] : [],
@@ -342,7 +343,9 @@ const SEC = {
       const rsv = (sub['reserved-address'] || []).map((e) => ({ ip: (e.f.ip || [''])[0], mac: (e.f.mac || [''])[0].toLowerCase() })).filter((x) => x.ip && x.mac);
       const lease = (f['lease-time'] || [''])[0];
       if (lease && !(+lease >= 300)) return ERR('lease-time 是秒數，最短 300');
-      Object.assign(i.dhcp, { on: true, start: a, end: b, gw: gw && gw !== i.ip ? gw : '', dns: dns.join(', '), reserved: rsv, lease: lease ? +lease : '' });
+      const tftp = (f['tftp-server'] || []).map((x) => x.replace(/"/g, ''));
+      if (tftp.some((x) => parseIp(x) == null)) return ERR('tftp-server 請填 IP 位址');
+      Object.assign(i.dhcp, { on: true, start: a, end: b, gw: gw && gw !== i.ip ? gw : '', dns: dns.join(', '), reserved: rsv, lease: lease ? +lease : '', tftp: tftp.join(', ') });
       return undefined;
     },
     remove(d, key) { const i = this.servers(d)[+key - 1]; if (!i) return notFound('沒有這個編號的 DHCP 伺服器'); i.dhcp.on = false; return undefined; },
