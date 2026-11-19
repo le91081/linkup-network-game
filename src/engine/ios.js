@@ -815,10 +815,58 @@ export function iosSession(getDev, getState, who = null) {
     ['logging host <ip>', ([ip]) => (parseIp(ip) == null ? err('IP 位址的格式不正確') : void (dev().mgmt && (dev().mgmt.syslog = ip)))],
     ['logging <ip>', ([ip]) => (parseIp(ip) == null ? err('用法：logging host <Syslog 伺服器 IP>') : void (dev().mgmt && (dev().mgmt.syslog = ip)))],
     ['no logging [...]', () => void (dev().mgmt && (dev().mgmt.syslog = ''))],
-    ['snmp-server community <str> [...]', ([str]) => void (dev().mgmt && Object.assign(dev().mgmt, { snmp: 'v2c', community: str }))],
-    ['no snmp-server community [...]', () => void (dev().mgmt && dev().mgmt.snmp !== 'v3' && (dev().mgmt.snmp = 'off'))],
-    ['snmp-server group <...>', ([rest]) => void (dev().mgmt && /\bv3\b/i.test(rest) && (dev().mgmt.snmp = 'v3'))],
-    ['snmp-server user <...>', () => undefined],
+    // snmp-server community <字串> [RO|RW] [ACL]：ACL 限制只有哪些來源可以查詢
+    ['snmp-server community <str> [...]', ([str, rest]) => {
+      const m = dev().mgmt;
+      if (!m) return err('這台設備不支援');
+      const t = (rest || '').split(/\s+/).filter(Boolean);
+      let rw = false, acl = null;
+      for (let k = 0; k < t.length; k++) {
+        if (/^ro$/i.test(t[k])) rw = false; else if (/^rw$/i.test(t[k])) rw = true; else if (/^view$/i.test(t[k])) k++; else acl = t[k].toUpperCase();
+      }
+      Object.assign(m, { snmp: 'v2c', community: str });
+      if (rw) m.snmpRw = true; else delete m.snmpRw;
+      if (acl) m.snmpAcl = acl; else delete m.snmpAcl;
+      return rw ? '（RW community 可以用 SNMP 改設定：除非真的需要，只給 RO）' : undefined;
+    }],
+    ['no snmp-server community [...]', () => { const m = dev().mgmt; if (m && m.snmp !== 'v3') { m.snmp = 'off'; delete m.snmpAcl; delete m.snmpRw; } }],
+    ['snmp-server group <...>', ([rest]) => { const m = dev().mgmt; if (m && /\bv3\b/i.test(rest)) { m.snmp = 'v3'; m.snmpGroup = rest.split(/\s+/)[0]; } }],
+    // snmp-server user <使用者> <群組> v3 auth sha <認證密碼> priv aes 128 <加密密碼>（這一行不會出現在 running-config 裡）
+    ['snmp-server user <...>', ([rest]) => {
+      const m = dev().mgmt, t = rest.split(/\s+/), lo = t.map((x) => x.toLowerCase());
+      if (!m) return err('這台設備不支援');
+      const a = lo.indexOf('auth'), p = lo.indexOf('priv');
+      if (t.length < 3 || lo[2] !== 'v3') return err('用法：snmp-server user <使用者> <群組> v3 auth sha <認證密碼> priv aes 128 <加密密碼>');
+      if (a < 0 || !t[a + 2]) return err('SNMPv3 要設定認證：auth sha <密碼>（至少 8 個字元）');
+      if (t[a + 2].length < 8) return err('% Password too short：認證密碼至少要 8 個字元');
+      const pw = p >= 0 ? t[p + (['aes', '3des', 'des'].includes(lo[p + 1]) ? (lo[p + 1] === 'aes' ? 3 : 2) : 1)] : '';
+      m.snmpUser = { user: t[0], group: t[1], auth: t[a + 2], priv: pw || '' };
+      m.snmp = 'v3';
+      if (!m.snmpGroup) m.snmpGroup = t[1];
+      return pw ? undefined : '（沒有設定 priv：查詢的內容不會加密。公司規定要 v3 的話，通常是 auth 加上 priv）';
+    }],
+    ['no snmp-server user <...>', () => { const m = dev().mgmt; if (m) delete m.snmpUser; }],
+    // snmp-server host <IP> [traps] [version 2c|3 [auth|noauth|priv]] <community 或使用者>：Trap 要送去哪裡
+    ['snmp-server host <ip> [...]', ([ip, rest]) => {
+      const m = dev().mgmt;
+      if (!m) return err('這台設備不支援');
+      if (parseIp(ip) == null) return err('用法：snmp-server host <IP> version 2c <community>');
+      const t = (rest || '').split(/\s+/).filter(Boolean).filter((x) => !/^(traps|informs)$/i.test(x));
+      let ver = 'v2c';
+      const v = t.findIndex((x) => /^version$/i.test(x));
+      if (v >= 0) { ver = t[v + 1] === '3' ? 'v3' : 'v2c'; t.splice(v, ver === 'v3' && /^(auth|noauth|priv)$/i.test(t[v + 2] || '') ? 3 : 2); }
+      const name = t[0];
+      if (!name) return err('最後要寫 community（v2c）或 SNMPv3 的使用者名稱');
+      m.trapHosts = [...(m.trapHosts || []).filter((h) => h.ip !== ip), { ip, ver, name }];
+      return m.traps ? undefined : '（還要 snmp-server enable traps，設備才會真的送出 Trap）';
+    }],
+    ['no snmp-server host <ip> [...]', ([ip]) => { const m = dev().mgmt; if (m && m.trapHosts) m.trapHosts = m.trapHosts.filter((h) => h.ip !== ip); }],
+    ['snmp-server enable traps [...]', () => { if (dev().mgmt) dev().mgmt.traps = true; }],
+    ['no snmp-server enable traps [...]', () => { if (dev().mgmt) delete dev().mgmt.traps; }],
+    ['snmp-server location <...>', ([t]) => { if (dev().mgmt) dev().mgmt.location = t; }],
+    ['snmp-server contact <...>', ([t]) => { if (dev().mgmt) dev().mgmt.contact = t; }],
+    ['no snmp-server location [...]', () => { if (dev().mgmt) delete dev().mgmt.location; }],
+    ['no snmp-server contact [...]', () => { if (dev().mgmt) delete dev().mgmt.contact; }],
     ['no snmp-server', () => void (dev().mgmt && (dev().mgmt.snmp = 'off'))],
     ['username <...>', ([rest]) => {
       const m = dev().mgmt, t = rest.split(/\s+/);
@@ -1813,9 +1861,15 @@ export function runningConfig(state, dev) {
     if (m.loginLog && m.loginLog.fail) o.push('login on-failure log');
     if (m.loginLog && m.loginLog.ok) o.push('login on-success log');
     if (m.banner) { const q = ['#', '^', '$', '%', '~'].find((c) => !m.banner.includes(c)) || '#'; o.push(`banner motd ${q}${m.banner}${q}`); }
-    const snmp = m.snmp || 'v2c';
-    if (snmp === 'v2c') o.push(`snmp-server community ${m.community || 'public'} RO`);
-    else if (snmp === 'v3') o.push('snmp-server group NMS v3 priv'); // SNMPv3 的使用者不會出現在 running-config 裡，真的 IOS 也是如此
+    const snmp = m.snmp || 'off';
+    if (snmp === 'v2c') o.push(`snmp-server community ${m.community || 'public'} ${m.snmpRw ? 'RW' : 'RO'}${m.snmpAcl ? ' ' + m.snmpAcl : ''}`);
+    else if (snmp === 'v3') o.push(`snmp-server group ${m.snmpGroup || 'NMS'} v3 priv`); // SNMPv3 的使用者不會出現在 running-config 裡，真的 IOS 也是如此
+    if (snmp !== 'off') {
+      if (m.location) o.push(`snmp-server location ${m.location}`);
+      if (m.contact) o.push(`snmp-server contact ${m.contact}`);
+      if (m.traps) o.push('snmp-server enable traps snmp authentication linkdown linkup coldstart');
+      for (const h of m.trapHosts || []) o.push(`snmp-server host ${h.ip} version ${h.ver === 'v3' ? '3 priv' : '2c'} ${h.name}`);
+    }
     o.push(m.http ? 'ip http server' : 'no ip http server', m.https ? 'ip http secure-server' : 'no ip http secure-server');
     const allow = String(m.allow || '').split(/[,\s]+/).filter(Boolean).map((s) => { const x = s.match(/^([\d.]+)(?:\/(\d+))?$/); const ip = x && parseIp(x[1]); return ip == null ? null : { net: ip, bits: x[2] == null ? 32 : +x[2] }; }).filter(Boolean);
     const an = m.aclName || 'MGMT';

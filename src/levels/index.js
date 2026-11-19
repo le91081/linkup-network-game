@@ -636,6 +636,7 @@ for (const lv of LEVELS) {
       if (!d.mgmt || !isCiscoOs(d)) continue;
       if (d.mgmt.sshKey === undefined) { d.mgmt.sshKey = { bits: 2048, gen: 1 }; d.mgmt.domain ||= 'corp.local'; }
       if (d.mgmt.vtyLogin === undefined) d.mgmt.vtyLogin = 'local';
+      if (d.mgmt.snmp === undefined) { d.mgmt.snmp = 'v2c'; d.mgmt.community ||= 'public'; } // 前任留下的 SNMP v2c public
     }
     return s;
   };

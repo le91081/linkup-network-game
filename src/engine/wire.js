@@ -226,6 +226,14 @@ export function onHop(state, h, frame, leak) {
   if (!h.wifi) { mirror(h.to, h.toPort, 'rx'); mirror(h.from, h.fromPort, 'tx'); }
 }
 
+/** 持續的背景流量：一段線路上這段時間送了多少位元組（另一個方向是 TCP 的確認封包） */
+export function countBytes(state, h, bytes) {
+  if (h.wifi || !h.cable || bytes <= 0) return;
+  const pk = Math.max(1, Math.round(bytes / 1514));
+  countFrame(state, h.from, h.fromPort, h.to, h.toPort, { dmac: '' }, pk, bytes, true);
+  countFrame(state, h.to, h.toPort, h.from, h.fromPort, { dmac: '' }, Math.ceil(pk / 2), Math.ceil(pk / 2) * 66, true);
+}
+
 /** iperf3 之類的大量資料：只算計數器（不逐一擷取） */
 export function onBulk(state, hops, mbps, secs, retr) {
   const seen = new Set();

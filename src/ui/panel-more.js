@@ -147,7 +147,7 @@ export function accountCard(ctx) {
 
 export function snmpFields(ctx) {
   const m = ctx.dev.mgmt;
-  const ver = m.snmp || 'v2c';
+  const ver = m.snmp || 'off';
   return [
     grid2(
       field('SNMP', sel(ctx, () => ver, (v) => { m.snmp = v; }, [['v2c', 'v2c（Community 明文）'], ['v3', 'v3（驗證加上加密）'], ['off', '關閉']], { rerender: true })),

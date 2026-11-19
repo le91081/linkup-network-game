@@ -608,3 +608,15 @@ h3.sec { font-size: 11.5px; letter-spacing: 0.08em; color: var(--faint); text-tr
 .cap-kv span { color: var(--muted); }
 .cap-kv code { font: 11.5px var(--mono); overflow-wrap: anywhere; }
 .tl.con { color: #9fe7c8; }
+
+/* ───────── SNMP 網管 ───────── */
+.nms-ifs { display: flex; flex-direction: column; gap: 4px; }
+.nms-if { display: grid; grid-template-columns: 58px 30px 16px 1fr 44px 16px 1fr 44px; align-items: center; gap: 4px 6px; padding: 5px 7px; border-radius: 8px; background: rgba(6, 10, 22, 0.35); font-size: 11.5px; }
+.nms-if.bad { background: rgba(255, 93, 108, 0.1); }
+.nms-if .spark { grid-column: 1 / -1; width: 100%; height: 22px; }
+.nms-if em { grid-column: 1 / -1; font-style: normal; color: #ffb0b8; font-size: 11px; }
+.spark polyline { fill: none; stroke: var(--accent); stroke-width: 1.4; vector-effect: non-scaling-stroke; }
+.ubar { position: relative; height: 7px; border-radius: 4px; background: rgba(150, 170, 225, 0.16); overflow: hidden; }
+.ubar i { position: absolute; left: 0; top: 0; bottom: 0; border-radius: 4px; background: var(--accent); }
+.ubar.warm i { background: var(--warn); }
+.ubar.hot i { background: #ff5d6c; }

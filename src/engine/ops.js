@@ -9,6 +9,7 @@ import { transact, macsBehind, closeFlow } from './sim.js';
 import { isIos } from './ios.js';
 import { linkInfo } from './model.js';
 import { ensureFlash, bootPick, isCiscoOs, IMAGES } from './files.js';
+import { nmsTick, queueTrap, flushTraps } from './snmp.js';
 
 export const SIM_EPOCH = Date.UTC(2026, 0, 5, 1, 0, 0); // 模擬世界開始的那一刻：2026-01-05 09:00（UTC+8）
 const FACTORY = Date.UTC(1993, 2, 1, 0, 0, 0); // 沒有硬體時鐘的 IOS 交換器，每次開機都從這一刻算起
@@ -402,6 +403,7 @@ function diffDevice(state, d, a, b) {
     ev(3, 'LINK-3-UPDOWN', `Interface ${L}, changed state to ${up ? 'up' : 'down'}`,
       `logid="0100020099" type="event" subtype="system" level="information" vd="root" logdesc="Interface status changed" action="interface-stat-change" status="${up ? 'UP' : 'DOWN'}" msg="Link monitor: Interface ${fgIf(pid)} was turned ${up ? 'up' : 'down'}"`);
     if (ios) ev(5, 'LINEPROTO-5-UPDOWN', `Line protocol on Interface ${L}, changed state to ${up ? 'up' : 'down'}`);
+    queueTrap(state, d, up ? 'linkUp' : 'linkDown', { ifName: L });
   };
   // 埠已經被關掉了，所以從接線去找這個埠後面有哪些 MAC：對面是電腦就是它自己，是交換器或基地台就是接在它後面的設備
   const macsOn = (pid) => {
@@ -511,6 +513,7 @@ export function opsAfter(state) {
       for (const n of c.bootNotes || []) rawLog(state, d, 3, n);
       delete c.bootNotes;
       logEvent(state, d, 5, 'SYS-5-RESTART', 'System restarted --', `logid="0100032009" type="event" subtype="system" level="information" vd="root" logdesc="System restarted" msg="Fortigate started${d.fw ? ' v' + d.fw.ver : ''}"`);
+      queueTrap(state, d, 'coldStart', {});
     }
     const snap = snapshot(state, d);
     let prev = dyn.ev[d.id];
@@ -526,5 +529,7 @@ export function opsAfter(state) {
   }
   for (const id of Object.keys(dyn.ev)) if (!state.devices[id]) delete dyn.ev[id];
   pruneVty(state);
+  nmsTick(state);
   flushSyslog(state);
+  flushTraps(state);
 }

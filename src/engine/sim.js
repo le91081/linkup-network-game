@@ -6,7 +6,8 @@ import { cloneState, primaryIface, CATALOG, CABLES, cableKind, cableDist, linkIn
 import { recompute6, transact6, globalIp6 } from './sim6.js';
 import { parseIp6 } from './ip6.js';
 import { opsBefore, opsAfter, logEvent, debugLog, longIf, UPTIME0 } from './ops.js';
-import { onHop, BCAST, spanDest, background, flowTraceStart, debugOf } from './wire.js';
+import { onHop, BCAST, spanDest, background, flowTraceStart, debugOf, countBytes } from './wire.js';
+import { agentOn } from './snmp.js';
 
 const DROP = Symbol('drop');
 const isVlanSw = (d) => !!d.sw && d.sw.mode === 'vlan';
@@ -1303,6 +1304,7 @@ export function recompute(state) {
     Object.assign(state.dyn, side);
     opsAfter(state);
     background(state, { isBridge: isBridgePort, ospfOn, uptime0: UPTIME0 });
+    flowsTick(state);
   } finally {
     if (realDown === undefined) delete state.down; else state.down = realDown;
   }
@@ -1628,6 +1630,11 @@ function deliver(dev, inIf, pkt) {
     if ((pkt.dport === 1812 || pkt.dport === 1813) && dev.radiusServer) return ok;
     if ((pkt.dport === 500 || pkt.dport === 4500) && dev.vpns && dev.vpns.length) return ok;
     if (pkt.dport === 123 && dev.rt.ntpServe) return ok; // 設成 ntp master，或自己已經對好時的設備可以替別人報時
+    if (pkt.dport === 161 && dev.mgmt && agentOn(dev)) {
+      // FortiGate 每個介面要在 allowaccess 開放 snmp，代理才會回答
+      if (dev.kind === 'firewall' && inIf && !accessOf(dev, inIf).includes('snmp')) return no(`${dev.name} 的 ${inIf.label} 介面沒有開放 SNMP（allowaccess 裡沒有 snmp）`);
+      return ok;
+    }
   }
   if (pkt.proto === 'tcp' && dev.vpnServer && dev.vpnServer.on && pkt.dport === (+dev.vpnServer.port || 10443)) return ok; // SSL-VPN
   if (pkt.proto === 'tcp' && dev.mgmt && MGMT[pkt.dport]) {
@@ -2301,6 +2308,49 @@ export function runObjective(state, o) {
  * - 雙工不一致：全雙工的那端不會等對方，半雙工的那端不斷碰撞、重傳，幾乎不能用。
  * - Wi-Fi 的實際吞吐量大約是連線速率的一半。
  */
+/** 一段線路單方向實際跑得到的速率（Mbps）與說明 */
+function linkCap(state, h) {
+  const li = linkInfo(state, h.from, h.fromPort);
+  if (!li || li.down) return null;
+  if (li.mismatch) return { mbps: Math.min(li.speed * 0.01, 2), note: `${li.speed} Mbps，但兩端的雙工不一致 (duplex mismatch)`, loss: 35, retr: 1800 };
+  if (li.half) return { mbps: li.speed * 0.4, note: `${li.speed} Mbps 半雙工，會發生碰撞`, loss: 3, retr: 60 };
+  return { mbps: li.speed * 0.94, note: `${li.speed >= 1000 ? li.speed / 1000 + ' Gbps' : li.speed + ' Mbps'} 全雙工`, loss: 0, retr: 0 };
+}
+const dirKey = (h) => h.cable + '>' + h.to;
+
+/**
+ * 背景流量（例如夜間備份）：每一條持續地從一台主機送資料到另一個位址。
+ * state.flows = [{ id, from, ip, port, mbps（想要的速率）, label, on }]
+ * 依路徑上每一段剩下的頻寬分配（小的先滿足，近似 TCP 的公平分享），算進介面計數器，
+ * 也記在 state.rt.load：之後的 iperf3、檔案傳輸會和它們搶同一條線
+ */
+function flowsTick(state) {
+  const dyn = state.dyn, now = state.clock;
+  const dt = dyn.flowT == null ? 0 : Math.max(0, now - dyn.flowT);
+  dyn.flowT = now;
+  const load = {}, count = {};
+  state.rt.load = load; state.rt.loadN = count;
+  const flows = (state.flows || []).filter((f) => f.on !== false && state.devices[f.from]).sort((a, b) => (+a.mbps || 0) - (+b.mbps || 0));
+  for (const f of flows) {
+    const ip = typeof f.ip === 'number' ? f.ip : parseIp(f.ip || '');
+    const res = ip == null ? null : transact(state, f.from, { proto: 'tcp', dst: ip, dport: +f.port || 5201, quiet: true });
+    if (!res || !res.ok) { f.rt = { mbps: 0, why: res ? res.reason : '目的位址不正確' }; continue; }
+    // TCP 的 SYN 與 ACK 走同一條路：每一段只算一次
+    const once = new Set();
+    const hops = res.hops.filter((h) => !h.wave && !h.reply && h.proto !== 'arp' && h.cable && !h.wifi && !once.has(dirKey(h)) && once.add(dirKey(h)));
+    let rate = Math.max(0, +f.mbps || 0), where = '';
+    for (const h of hops) {
+      const c = linkCap(state, h);
+      if (!c) continue;
+      const free = Math.max(0, c.mbps - (load[dirKey(h)] || 0));
+      if (free < rate) { rate = free; where = `${state.devices[h.from].name} ↔ ${state.devices[h.to].name}（${c.note}）`; }
+    }
+    for (const h of hops) { load[dirKey(h)] = (load[dirKey(h)] || 0) + rate; count[dirKey(h)] = (count[dirKey(h)] || 0) + 1; }
+    f.rt = { mbps: Math.round(rate * 10) / 10, where, full: rate < (+f.mbps || 0) - 0.5 };
+    if (dt > 0) for (const h of hops) countBytes(state, h, (rate * 1e6 * dt) / 8);
+  }
+}
+
 export function throughput(state, hops) {
   let best = Infinity, where = '', dev = null, loss = 0, retr = 0;
   const seen = new Set();
@@ -2315,11 +2365,16 @@ export function throughput(state, hops) {
     } else {
       if (!h.cable || seen.has(h.cable)) continue;
       seen.add(h.cable);
-      const li = linkInfo(state, h.from, h.fromPort);
-      if (!li || li.down) continue;
-      if (li.mismatch) { mbps = Math.min(li.speed * 0.01, 2); note = `${li.speed} Mbps，但兩端的雙工不一致 (duplex mismatch)`; loss = Math.max(loss, 35); retr = Math.max(retr, 1800); }
-      else if (li.half) { mbps = li.speed * 0.4; note = `${li.speed} Mbps 半雙工，會發生碰撞`; loss = Math.max(loss, 3); retr = Math.max(retr, 60); }
-      else { mbps = li.speed * 0.94; note = `${li.speed >= 1000 ? li.speed / 1000 + ' Gbps' : li.speed + ' Mbps'} 全雙工`; }
+      const c = linkCap(state, h);
+      if (!c) continue;
+      ({ mbps, note } = c);
+      loss = Math.max(loss, c.loss); retr = Math.max(retr, c.retr);
+      // 這條線上已經有背景流量：TCP 大致上平分，但別人用不完的也拿得到
+      const L = (state.rt.load || {})[dirKey(h)] || 0, n = (state.rt.loadN || {})[dirKey(h)] || 0;
+      if (L > 0.5) {
+        const share = Math.max(mbps - L, mbps / (n + 1));
+        if (share < mbps) { mbps = share; note += `，和 ${n} 條背景流量共用（已經用掉 ${Math.round(L)} Mbps）`; }
+      }
     }
     if (mbps < best) { best = mbps; dev = h.from; where = `${state.devices[h.from].name} ↔ ${state.devices[h.to].name}（${note}）`; }
   }

@@ -165,7 +165,8 @@ function iface(id, label, bind, extra = {}) {
 export const newIface = iface;
 
 const swPort = () => ({ mode: 'access', vlan: 1, native: 1, allowed: 'all', shut: false });
-const mgmt = () => ({ ssh: true, telnet: true, http: true, https: true, allow: '', ntp: '', syslog: '', snmp: 'v2c', community: 'public', user: 'admin', pass: 'admin' });
+// 原廠預設：SNMP 沒有開（snmp 不寫就是關閉）。關卡裡的設備由 levels/index.js 補上前任管理員留下的設定
+const mgmt = () => ({ ssh: true, telnet: true, http: true, https: true, allow: '', ntp: '', syslog: '', user: 'admin', pass: 'admin' });
 export const newWifi = (ssids = []) => ({ ssids, ch24: 1, ch5: 36, power: 'mid' });
 export const newSsid = (o = {}) => ({ name: '', sec: 'wpa2', pass: '', vlan: '', isolate: false, ...o });
 

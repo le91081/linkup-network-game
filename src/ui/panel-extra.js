@@ -9,6 +9,7 @@ import { CATALOG, peerOf, portOf, newSsid, cableAt, linkInfo } from '../engine/m
 import { visibleSsids, WIFI_SEC, macsBehind, isBridgePort, hitsOf, P1, accessOf, portfastOn, macRows, clearMac, macAgeOf, saInfo, fmtDur } from '../engine/sim.js';
 import { ntpInfo, deviceTime, plainStamp, logRows, clearLog, syslogStats, NTP_POLL } from '../engine/ops.js';
 import * as M from './panel-more.js';
+import * as OPS from './panel-ops.js';
 
 const nameOf = (ctx, id) => ctx.state.devices[id]?.name || id;
 const DH_GROUPS = [['2', 'DH 2（1024-bit）'], ['5', 'DH 5（1536-bit）'], ['14', 'DH 14（2048-bit）'], ['19', 'DH 19（ECP-256）']];
@@ -393,9 +394,12 @@ export function mgmtTab(ctx, body) {
       return w.length ? w.map((x) => note('warn', x)) : note('ok', '管理介面已加固：只開放加密協定，並限制了來源網段。');
     })));
   body.append(M.accountCard(ctx));
+  const ssh = OPS.sshCard(ctx);
+  if (ssh) body.append(ssh);
   if (dev.radius && dev.sw) body.append(M.radiusClientCard(ctx));
   body.append(h('div', { class: 'card' }, cardHead('監控、時間與紀錄'),
     M.snmpFields(ctx),
+    OPS.snmpExtra(ctx),
     grid2(
       field('NTP 伺服器', inp(ctx, ...bind(m, 'ntp'), { ph: '例如 10.0.99.20', check: isIp })),
       field('Syslog 伺服器', inp(ctx, ...bind(m, 'syslog'), { ph: '例如 10.0.99.20', check: isIp }))),

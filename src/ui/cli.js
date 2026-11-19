@@ -8,6 +8,7 @@ import { quietLeft } from '../engine/remote.js';
 import { counters, clearCounters, clearedAt, spanDest, debugOf, setDebug, consoleRows } from '../engine/wire.js';
 import { ensureFlash, IMAGES, PLATFORM, fsName, flashUsed } from '../engine/files.js';
 import { hostKey, vtyMode } from '../engine/remote.js';
+import { snmpStats } from '../engine/snmp.js';
 import { portByName } from '../engine/ios.js';
 import { isIos } from '../engine/ios.js';
 import { fmtMask } from '../engine/ip.js';
@@ -330,6 +331,25 @@ const SHOW = {
         const role = !nb.length ? 'DR' : all[0] === d ? 'DR' : all[1] === d ? 'BDR' : 'DROTH';
         return pad(i.label, 12) + pad(1, 6) + pad(0, 16) + pad(`${fmtIp(i.rt.ip)}/${i.rt.bits}`, 20) + pad(Math.max(1, +i.ospfCost || 1), 6) + pad(nb.length && full.length < nb.length ? 'WAIT' : role, 6) + `${full.length}/${nb.length}`;
       })];
+  },
+  'show snmp': (st, d) => {
+    const m = d.mgmt || {};
+    if (!m.snmp || m.snmp === 'off') return ['%SNMP agent not enabled'];
+    const bad = snmpStats(st, d).bad;
+    return [, ...(m.contact ? [] : []), ...(m.location ? [] : []),
+      , , , '    0 Illegal operation for community name supplied',
+      , ...(m.trapHosts || []).map((h) => )];
+  },
+  'show snmp user': (st, d) => {
+    const u = (d.mgmt || {}).snmpUser;
+    if (!u || d.mgmt.snmp !== 'v3') return ['（沒有任何 SNMPv3 使用者）'];
+    return [, , 'storage-type: nonvolatile        active',
+      'Authentication Protocol: SHA', , ];
+  },
+  'show snmp host': (st, d) => {
+    const m = d.mgmt || {};
+    if (!(m.trapHosts || []).length) return ['（沒有設定 Trap 的接收端：snmp-server host）'];
+    return (m.trapHosts || []).flatMap((h) => [, , '']).concat(m.traps ? [] : ['（還沒有 snmp-server enable traps：設定好了也不會送）']);
   },
   'show users': (st, d) => {
     const o = ['    Line       User       Host(s)              Idle       Location', '*  0 con 0                idle                 00:00:00'];

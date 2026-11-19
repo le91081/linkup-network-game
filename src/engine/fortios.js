@@ -27,6 +27,9 @@ export function fortiFromText(state, dev, lines) {
   for (const [k, v] of Object.entries(s2.devices[dev.id])) if (!keep.has(k)) dev[k] = v;
   return bad;
 }
+/** FortiOS 顯示密碼時會加密（ENC …），貼回去的時候再解開 */
+const encPw = (s) => { let o = ''; for (const c of String(s)) o += c.charCodeAt(0).toString(16).padStart(4, '0'); return o; };
+const decPw = (h) => (String(h).match(/.{4}/g) || []).map((x) => String.fromCharCode(parseInt(x, 16))).join('');
 /** FortiOS 的版本號 7.2.10 → [7, 2, 10] */
 const verOf = (v) => String(v || '0').split('.').map((x) => parseInt(x, 10) || 0);
 
@@ -259,21 +262,45 @@ const SEC = {
       return undefined;
     },
   },
-  'system snmp community': {
-    numeric: true, only: (d) => !!d.mgmt, fields: { name: 'q', status: 'b' },
-    read: (d) => ((d.mgmt.snmp || 'v2c') === 'v2c' ? [{ key: '1', f: { name: [d.mgmt.community || 'public'] } }] : []),
+  // SNMP 代理本身要先開：config system snmp sysinfo → set status enable
+  'system snmp sysinfo': {
+    single: true, only: (d) => !!d.mgmt, fields: { status: 'b', description: 'q', location: 'q', 'contact-info': 'q' },
+    read: (d) => [{ key: '', f: d.mgmt.snmpAgent ? { status: ['enable'], ...(d.mgmt.location ? { location: [d.mgmt.location] } : {}), ...(d.mgmt.contact ? { 'contact-info': [d.mgmt.contact] } : {}) } : {} }],
     write(d, key, f) {
-      if (!f.name || !f.name[0]) return ERR('community 需要名稱：set name "<字串>"');
-      Object.assign(d.mgmt, { snmp: 'v2c', community: f.name[0] });
+      d.mgmt.snmpAgent = (f.status || [])[0] === 'enable';
+      if (f.location) d.mgmt.location = f.location.join(' '); else delete d.mgmt.location;
+      if (f['contact-info']) d.mgmt.contact = f['contact-info'].join(' '); else delete d.mgmt.contact;
       return undefined;
     },
-    remove(d) { d.mgmt.snmp = 'off'; },
+  },
+  'system snmp community': {
+    numeric: true, only: (d) => !!d.mgmt, fields: { name: 'q', status: 'b', events: 'b' },
+    subs: { hosts: { numeric: true, fields: { ip: 'b', 'host-type': 'b' } } },
+    read: (d) => (d.mgmt.snmp === 'v2c' ? [{ key: '1', f: { name: [d.mgmt.community || 'public'] }, sub: { hosts: (d.mgmt.snmpHosts || []).map((h, n) => ({ key: String(n + 1), f: { ip: cidrTok(h) } })) } }] : []),
+    write(d, key, f, sub) {
+      if (!f.name || !f.name[0]) return ERR('community 需要名稱：set name "<字串>"');
+      const hosts = ((sub && sub.hosts) || []).map((e) => tokCidr((e.f || {}).ip || [])).filter(Boolean);
+      Object.assign(d.mgmt, { snmp: 'v2c', community: f.name[0], snmpHosts: hosts });
+      return undefined;
+    },
+    remove(d) { d.mgmt.snmp = 'off'; delete d.mgmt.snmpHosts; },
   },
   'system snmp user': {
-    only: (d) => !!d.mgmt, fields: { 'security-level': 'b', 'auth-proto': 'b', 'auth-pwd': 'b', 'priv-proto': 'b', 'priv-pwd': 'b' },
-    read: (d) => (d.mgmt.snmp === 'v3' ? [{ key: 'monitor', f: { 'security-level': ['auth-priv'] } }] : []),
-    write(d) { d.mgmt.snmp = 'v3'; },
-    remove(d) { d.mgmt.snmp = 'off'; },
+    only: (d) => !!d.mgmt, fields: { 'security-level': 'b', 'auth-proto': 'b', 'auth-pwd': 'b', 'priv-proto': 'b', 'priv-pwd': 'b', 'notify-hosts': 'b', status: 'b' },
+    read: (d) => (d.mgmt.snmp === 'v3' && d.mgmt.snmpUser ? [{
+      key: d.mgmt.snmpUser.user,
+      f: { 'security-level': ['auth-priv'], 'auth-proto': ['sha256'], 'auth-pwd': ['ENC', encPw(d.mgmt.snmpUser.auth)], 'priv-proto': ['aes256'], 'priv-pwd': ['ENC', encPw(d.mgmt.snmpUser.priv)],
+        ...((d.mgmt.snmpHosts || []).length ? { 'notify-hosts': d.mgmt.snmpHosts.map((h) => h.split('/')[0]) } : {}) },
+    }] : []),
+    write(d, key, f) {
+      const pw = (k) => { const v = f[k] || []; return v[0] === 'ENC' ? decPw(v[1] || '') : v.join(' '); };
+      if (!pw('auth-pwd') || pw('auth-pwd').length < 8) return ERR('auth-pwd 至少要 8 個字元（SNMPv3 的認證密碼）');
+      d.mgmt.snmp = 'v3';
+      d.mgmt.snmpUser = { user: key, auth: pw('auth-pwd'), priv: pw('priv-pwd') };
+      if (f['notify-hosts']) d.mgmt.snmpHosts = f['notify-hosts'].map((ip) => ip + '/32');
+      return undefined;
+    },
+    remove(d) { d.mgmt.snmp = 'off'; delete d.mgmt.snmpUser; },
   },
   'system dhcp server': {
     numeric: true, fields: { 'default-gateway': 'b', netmask: 'b', interface: 'q', 'dns-service': 'b', 'dns-server1': 'b', 'dns-server2': 'b', 'dns-server3': 'b', 'lease-time': 'b' },

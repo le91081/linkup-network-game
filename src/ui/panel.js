@@ -11,6 +11,8 @@ import { buildTerminal } from './terminal.js';
 import * as X from './panel-extra.js';
 import * as M from './panel-more.js';
 import * as DG from './panel-diag.js';
+import * as OPS from './panel-ops.js';
+import { isTftp, isFtp } from '../engine/files.js';
 import { buildCli } from './cli.js';
 import { buildFortiCli } from './forticli.js';
 import { isIos, iosDirty, saveStartup } from '../engine/ios.js';
@@ -119,6 +121,8 @@ function hostNet(ctx, body) {
     body.append(h('div', { class: 'card' }, cardHead('這台設備提供的服務'),
       h('div', { class: 'chips' }, dev.services.map((s) => h('span', { class: 'chip', text: `${s.name ? s.name + ' · ' : ''}${s.proto.toUpperCase()} ${s.port}` })))));
   }
+  if (OPS.isServer(dev)) body.append(OPS.serverRolesCard(ctx));
+  body.append(OPS.flowsCard(ctx));
 }
 
 const KIND_TEXT = {
@@ -478,7 +482,9 @@ function baseTabs(dev) {
   switch (dev.kind) {
     case 'host': return [T.net, dev.vpnClient && ['vpn', 'VPN', X.vpnClientTab], dev.dhcpScopes && ['dhcp', 'DHCP 服務', X.dhcpScopesTab],
       dev.radiusServer && ['radius', 'RADIUS', M.radiusServerTab],
-      (dev.services || []).some((s) => s.proto === 'udp' && s.port === 514) && ['syslog', 'Syslog', M.syslogTab], ['cap', '封包擷取', DG.captureTab], T.term].filter(Boolean);
+      (dev.services || []).some((s) => s.proto === 'udp' && s.port === 514) && ['syslog', 'Syslog', M.syslogTab],
+      (isTftp(dev) || isFtp(dev)) && ['files', '檔案', OPS.filesTab], dev.nms && ['nms', '網管', OPS.nmsTab],
+      ['cap', '封包擷取', DG.captureTab], T.term].filter(Boolean);
     case 'hub': case 'switch': return [T.ports];
     case 'ap': return [['ssid', '無線網路', X.ssidTab], ['radio', '無線電', X.radioTab], T.ports];
     case 'mswitch': return [T.swports, T.vlan, T.sec, T.mgmt, T.status];
