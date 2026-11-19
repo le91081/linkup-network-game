@@ -70,6 +70,8 @@ export function iosDirty(state, dev) {
   return saved != null && saved.join('\n') !== runningConfig(state, dev).join('\n');
 }
 
+/** 跑 IOS XE 的型號（有 RESTCONF / NETCONF） */
+export const IOS_XE = new Set(['isr4321', 'isr4331', 'c9300', 'c9800']);
 export const hostName = (dev) => dev.name.replace(/[^\w-]+/g, '-').replace(/^-+|-+$/g, '') || 'Device';
 export const aclName = (i, dir) => (i.aclNames && i.aclNames[dir]) || `${i.label.replace(/[^\w.]+/g, '_')}_${dir}`.toUpperCase();
 export const poolName = (i) => (i.dhcp && i.dhcp.pool) || i.label.replace(/[^\w.]+/g, '_').toUpperCase();
@@ -460,6 +462,8 @@ export function iosSession(getDev, getState, who = null) {
   };
 
   const IF = [
+    ['description <...>', ([t]) => each((x) => { if (x.pc) x.pc.desc = t; else if (x.iface) x.iface.desc = t; })],
+    ['no description [...]', () => each((x) => { if (x.pc) delete x.pc.desc; else if (x.iface) delete x.iface.desc; })],
     ['ip address dhcp', () => onL3((i) => { i.mode = 'dhcp'; })],
     ['ip address <ip> <mask>', ([ip, mask]) => {
       if (parseIp(ip) == null) return err('IP 位址的格式不正確');
@@ -1199,6 +1203,14 @@ export function iosSession(getDev, getState, who = null) {
     ['no ip tftp blocksize [...]', () => { delete dev().tftpBlk; }],
     ['line vty [...]', () => { if (!dev().mgmt) return err('這台設備不支援'); enter('line', null); return undefined; }],
     ['line console [...]', () => { enter('line', 'console'); return undefined; }],
+    ['restconf', () => {
+      const d = dev();
+      if (!IOS_XE.has(d.model)) return err(`${CATALOG[d.model].title} 跑的不是 IOS XE，沒有 RESTCONF（Catalyst 2960 是 IOS 15、Nexus 用的是 NX-API）`);
+      d.mgmt.restconf = true;
+      return d.mgmt.https ? undefined : '（RESTCONF 走 HTTPS：還要 ip http secure-server）';
+    }],
+    ['no restconf', () => { if (dev().mgmt) delete dev().mgmt.restconf; }],
+    ['ip http authentication local', () => undefined],
     ['ip http server', () => void (dev().mgmt && (dev().mgmt.http = true))],
     ['no ip http server', () => void (dev().mgmt && (dev().mgmt.http = false))],
     ['ip http secure-server', () => void (dev().mgmt && (dev().mgmt.https = true))],
@@ -2591,16 +2603,19 @@ export function runningConfig(state, dev) {
     if (i.qosOut) l.push(` service-policy output ${i.qosOut}`);
     return l.filter(Boolean);
   };
-  for (const i of dev.ifaces.filter((x) => x.bind.t === 'loop').sort((a, b) => a.bind.n - b.bind.n)) o.push(`interface Loopback${i.bind.n}`, ...l3lines(i).filter((x) => !/ip nat (inside|outside)/.test(x)), ...(i.shut ? [' shutdown'] : []), '!');
+  for (const i of dev.ifaces.filter((x) => x.bind.t === 'loop').sort((a, b) => a.bind.n - b.bind.n)) o.push(`interface Loopback${i.bind.n}`, ...(i.desc ? [` description ${i.desc}`] : []), ...l3lines(i).filter((x) => !/ip nat (inside|outside)/.test(x)), ...(i.shut ? [' shutdown'] : []), '!');
   for (const p of dev.ports) {
     const peer = state.cables.find((c) => (c.a.dev === dev.id && c.a.port === p.id) || (c.b.dev === dev.id && c.b.port === p.id));
     const other = peer && state.devices[peer.a.dev === dev.id ? peer.b.dev : peer.a.dev];
-    const desc = other ? [` description to ${other.kind === 'internet' ? 'ISP' : hostName(other)}`] : [];
+    const auto = other ? [` description to ${other.kind === 'internet' ? 'ISP' : hostName(other)}`] : [];
     const pc = dev.sw && dev.sw.ports[p.id];
+    const pi = !pc && dev.ifaces.find((x) => x.bind.t === 'port' && x.bind.port === p.id);
+    // 自己設定的 description 優先，沒有才用「to 對端」的自動說明
+    const desc = pc && pc.desc ? [` description ${pc.desc}`] : pi && pi.desc ? [` description ${pi.desc}`] : auto;
     if (pc && isSw(dev)) {
       const phy = [pc.speed && pc.speed !== 'auto' ? ` speed ${pc.speed}` : null, pc.duplex && pc.duplex !== 'auto' ? ` duplex ${pc.duplex}` : null].filter(Boolean);
       const nd = portNd(dev, p.id), ndl = [nd.cdp === false ? ' no cdp enable' : null, nd.tx === false ? ' no lldp transmit' : null, nd.rx === false ? ' no lldp receive' : null].filter(Boolean);
-      const def = pc.mode === defaultPortMode(dev.model) && pc.vlan === 1 && pc.native === 1 && (!pc.allowed || pc.allowed === 'all') && !pc.voice && !pc.noneg && !pc.qosTrust && !pc.trustDevice && !pc.poe && !ndl.length && !pc.shut && !peer && !pc.trust && !(+pc.lag > 0) && !(pc.ps && pc.ps.on) && !pc.bpduguard && !pc.rootguard && !pc.dot1x && !phy.length && pc.portfast == null;
+      const def = pc.mode === defaultPortMode(dev.model) && pc.vlan === 1 && pc.native === 1 && (!pc.allowed || pc.allowed === 'all') && !pc.voice && !pc.noneg && !pc.qosTrust && !pc.trustDevice && !pc.poe && !ndl.length && !pc.shut && !peer && !pc.trust && !(+pc.lag > 0) && !(pc.ps && pc.ps.on) && !pc.bpduguard && !pc.rootguard && !pc.dot1x && !phy.length && pc.portfast == null && !pc.desc;
       if (def) continue;
       o.push(`interface ${p.label}`, ...desc, ...phy);
       if (pc.mode === 'routed') {
@@ -2644,13 +2659,13 @@ export function runningConfig(state, dev) {
         ...(nd.cdp === false ? [' no cdp enable'] : []), ...(nd.tx === false ? [' no lldp transmit'] : []), ...(nd.rx === false ? [' no lldp receive'] : []),
         i.shut ? ' shutdown' : ' no shutdown', '!');
       for (const s of dev.ifaces.filter((x) => x.bind.t === 'sub' && x.bind.port === p.id)) {
-        o.push(`interface ${s.label}`, ` encapsulation dot1Q ${s.bind.vlan}`, ...l3lines(s), '!');
+        o.push(`interface ${s.label}`, ...(s.desc ? [` description ${s.desc}`] : []), ` encapsulation dot1Q ${s.bind.vlan}`, ...l3lines(s), '!');
       }
     }
   }
   for (const i of dev.ifaces.filter((x) => x.bind.t === 'svi')) {
     if (!i.ip && dev.kind === 'mswitch') continue;
-    o.push(`interface Vlan${i.bind.vlan}`, ...l3lines(i), ' no shutdown', '!');
+    o.push(`interface Vlan${i.bind.vlan}`, ...(i.desc ? [` description ${i.desc}`] : []), ...l3lines(i), ' no shutdown', '!');
   }
   if (dev.kind === 'mswitch') {
     const mg = dev.ifaces.find((x) => x.id === 'mgmt');
@@ -2794,6 +2809,7 @@ export function runningConfig(state, dev) {
       for (const h of m.trapHosts || []) o.push(`snmp-server host ${h.ip} version ${h.ver === 'v3' ? '3 priv' : '2c'} ${h.name}`);
     }
     o.push(m.http ? 'ip http server' : 'no ip http server', m.https ? 'ip http secure-server' : 'no ip http secure-server');
+    if (m.restconf) o.push('ip http authentication local', 'restconf');
     const allow = String(m.allow || '').split(/[,\s]+/).filter(Boolean).map((s) => { const x = s.match(/^([\d.]+)(?:\/(\d+))?$/); const ip = x && parseIp(x[1]); return ip == null ? null : { net: ip, bits: x[2] == null ? 32 : +x[2] }; }).filter(Boolean);
     const an = m.aclName || 'MGMT';
     if (allow.length) { o.push(`ip access-list standard ${an}`); for (const c of allow) o.push(c.bits === 32 ? ` permit host ${fmtIp(c.net)}` : ` permit ${fmtIp(netOf(c.net, c.bits))} ${wild(c.bits)}`); }

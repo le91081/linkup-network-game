@@ -12,6 +12,7 @@ import { CHAPTERS7, LEVELS7 } from './routing.js';
 import { LEVELS8 } from './ipv6.js';
 import { LEVELS9 } from './vpn2.js';
 import { CHAPTERS8, LEVELS10 } from './wireless.js';
+import { CHAPTERS9, LEVELS11 } from './auto.js';
 import { isCiscoOs } from '../engine/files.js';
 
 export const CHAPTERS = [
@@ -625,8 +626,8 @@ export const LEVELS = [
   },
 ];
 
-CHAPTERS.push(...CHAPTERS2, ...CHAPTERS3, ...CHAPTERS4, ...CHAPTERS5, ...CHAPTERS6, ...CHAPTERS7, ...CHAPTERS8);
-LEVELS.push(...LEVELS2, ...LEVELS3, ...LEVELS4, ...LEVELS5, ...LEVELS6, ...LEVELS7, ...LEVELS8, ...LEVELS9, ...LEVELS10);
+CHAPTERS.push(...CHAPTERS2, ...CHAPTERS3, ...CHAPTERS4, ...CHAPTERS5, ...CHAPTERS6, ...CHAPTERS7, ...CHAPTERS8, ...CHAPTERS9);
+LEVELS.push(...LEVELS2, ...LEVELS3, ...LEVELS4, ...LEVELS5, ...LEVELS6, ...LEVELS7, ...LEVELS8, ...LEVELS9, ...LEVELS10, ...LEVELS11);
 LEVELS.sort((a, b) => a.chapter - b.chapter); // 穩定排序：補充關卡排到所屬章節的最後
 
 // 關卡裡的交換器都由「前任管理員」下過 spanning-tree portfast default：接終端設備的埠一連上就開始轉送。

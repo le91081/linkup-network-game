@@ -1969,6 +1969,81 @@ console.log('\nFortiGate CLI');
   }
 }
 
+console.log('\n自動化：YAML、RESTCONF、Ansible');
+{
+  const { parseYaml, YamlError } = await import('../src/engine/yaml.js');
+  const { restconf } = await import('../src/engine/restconf.js');
+  const { runPlaybook, parseInventory, template } = await import('../src/engine/automation.js');
+  const { runningConfig } = await import('../src/engine/ios.js');
+  const ok = (cond, title) => (cond ? console.log('  ✔ ' + title) : fail(title));
+  const yErr = (t) => { try { parseYaml(t); return null; } catch (e) { return e instanceof YamlError ? e : null; } };
+
+  // YAML
+  const y = parseYaml('---\n- name: a  # 註解\n  hosts: "sw:core"\n  vars:\n    vl: [10, 20]\n    on: yes\n  tasks:\n    - debug:\n        msg: "x: {{ vl }}"\n    - name: b\n      ios_vlans:\n        config:\n        - vlan_id: 50\n          name: IOT\n');
+  ok(y[0].hosts === 'sw:core' && y[0].vars.vl.join() === '10,20' && y[0].vars.on === true && y[0].tasks[0].debug.msg === 'x: {{ vl }}' && y[0].tasks[1].ios_vlans.config[0].vlan_id === 50,
+    'YAML：清單裡的 mapping、flow 清單、yes 是 true、引號裡的冒號、清單可以和鍵對齊');
+  const tab = yErr('- name: a\n\thosts: all\n'), colon = yErr('- name: a\n  msg: VLAN: 50\n'), quote = yErr('- debug:\n    msg: {{ x }}\n');
+  ok(tab && tab.line === 2 && /Tab/.test(tab.message) && colon && /mapping values/.test(colon.message) && colon.line === 2 && quote && quote.quoteHint, 'YAML 的錯誤：Tab 縮排、值裡沒加引號的「: 」、{{ 開頭沒加引號，都指出第幾行');
+  const inv = parseInventory('[access]\nsw-a ansible_host=10.0.0.11\n[core]\nsw-core ansible_host=10.0.0.2\n[campus:children]\naccess\ncore\n[campus:vars]\nansible_user=u\n');
+  ok(inv.groups.campus.children.length === 2 && inv.hosts['sw-a'].ansible_host === '10.0.0.11' && template('{{ item.name | upper }}-{{ n | default(3) }}', { item: { name: 'iot' } }) === 'IOT-3', 'inventory 的群組 / 子群組 / 變數、Jinja 的變數與 filter');
+
+  // RESTCONF（15-1 解完之後）
+  const lv58 = LEVELS.find((l) => l.id === 'l58');
+  const s = lv58.setup(); recompute(s); lv58.solve(s); recompute(s);
+  const U = { user: 'netauto', pass: 'Aut0mate!26' }, B = 'https://10.20.0.1/restconf/data';
+  const rq = (o) => restconf(s, 'auto', { ...U, accept: 'application/yang-data+json', contentType: 'application/yang-data+json', ...o });
+  const list = rq({ method: 'GET', url: `${B}/ietf-interfaces:interfaces` });
+  const names = list.body['ietf-interfaces:interfaces'].interface.map((x) => x.name);
+  ok(list.status === 200 && names.includes('GigabitEthernet0/0/0') && names.includes('Loopback100') && JSON.parse(list.text)['ietf-interfaces:interfaces'], 'GET 介面清單：200、JSON、名稱用完整的 GigabitEthernet0/0/0');
+  const xml = restconf(s, 'auto', { ...U, method: 'GET', url: `${B}/Cisco-IOS-XE-native:native/hostname` });
+  ok(xml.ctype === 'application/yang-data+xml' && xml.text.startsWith('<hostname xmlns="http://cisco.com/ns/yang/Cisco-IOS-XE-native">R1</hostname>'), '沒有 Accept 標頭：IOS XE 回 XML');
+  const codes = [
+    rq({ method: 'GET', url: `${B}/ietf-interfaces:interfaces`, pass: 'wrong' }).status,
+    rq({ method: 'GET', url: `${B}/ietf-interfaces:interfaces/interface=GigabitEthernet0/0/9` }).status,
+    rq({ method: 'POST', url: `${B}/ietf-interfaces:interfaces`, contentType: 'application/json', body: '{}' }).status,
+    rq({ method: 'POST', url: `${B}/ietf-interfaces:interfaces`, body: '{"ietf-interfaces:interface": {"name": "Loopback100",}}' }).status,
+    rq({ method: 'POST', url: `${B}/ietf-interfaces:interfaces`, body: '{"ietf-interfaces:interface": {"name": "Loopback100"}}' }).status,
+    rq({ method: 'DELETE', url: `${B}/ietf-interfaces:interfaces/interface=GigabitEthernet0%2F0%2F1` }).status,
+    rq({ method: 'DELETE', url: `${B}/Cisco-IOS-XE-native:native/hostname` }).status,
+  ];
+  ok(codes.join() === '401,404,415,400,409,400,405', `錯誤碼：401 密碼錯、404 路徑不存在、415 Content-Type、400 JSON 格式、409 已存在、400 刪實體介面、405 方法不支援（${codes.join()}）`);
+  const put = rq({ method: 'PUT', url: `${B}/ietf-interfaces:interfaces/interface=Loopback100`, body: '{"ietf-interfaces:interface": {"name": "Loopback100", "description": "only-desc"}}' });
+  const lo = s.devices.rt.ifaces.find((i) => i.bind.t === 'loop');
+  ok(put.status === 204 && lo.desc === 'only-desc' && !lo.ip, 'PUT 是整個取代：只寫 description，原本的 IP 被拿掉了（PATCH 才是部分修改）');
+  ok(runningConfig(s, s.devices.rt).includes(' description WAN-to-ISP') && runningConfig(s, s.devices.rt).includes('restconf'), '用 API 改的設定出現在 running-config（description、restconf）');
+  ok(rq({ method: 'DELETE', url: `${B}/ietf-interfaces:interfaces/interface=Loopback100` }).status === 204 && !s.devices.rt.ifaces.some((i) => i.bind.t === 'loop'), 'DELETE 刪除 Loopback');
+  const t5 = (await import('../src/engine/ops.js')).logRows(s, s.devices.rt);
+  ok(t5.some((r) => /DMI-5-CONFIG_I/.test(r.tag || r.text || JSON.stringify(r))), '設備的紀錄寫下 %DMI-5-CONFIG_I（Configured from NETCONF/RESTCONF）');
+  s.devices.rt.mgmt.restconf = false;
+  ok(rq({ method: 'GET', url: `${B}/ietf-interfaces:interfaces` }).status === 404, '沒有啟用 restconf：404');
+
+  // Ansible（15-2）
+  const lv59 = LEVELS.find((l) => l.id === 'l59');
+  const a = lv59.setup(); recompute(a);
+  const ctl = a.devices.ctl.ansible;
+  const run = (o = {}) => runPlaybook(a, 'ctl', { inventory: ctl.inventory, playbook: ctl.playbook, file: 'vlan50.yml', ...o });
+  const r0 = run();
+  ok(r0.rc === 4 && /conflicting action statements: cisco\.ios\.ios_l2_interfaces, config/.test(r0.lines[0].t) && r0.lines.some((l) => /line 15, column 7/.test(l.t)), '同事的 playbook：模組參數沒縮排 → conflicting action statements，指出第 15 行');
+  ctl.playbook = ctl.playbook.replace(/\n {6}config:\n {8}- name: GigabitEthernet0\/5\n {10}mode: access\n {10}access:\n {12}vlan: 50\n {6}state: merged/, '\n        config:\n          - name: GigabitEthernet0/5\n            mode: access\n            access:\n              vlan: 50\n        state: merged');
+  const r1 = run();
+  ok(Object.values(r1.recap).every((x) => x.failed === 1) && r1.lines.some((l) => /Connection type ssh is not valid/.test(l.t)), '沒有 ansible_connection=network_cli：每台都 FAILED');
+  ctl.inventory += 'ansible_connection=ansible.netcommon.network_cli\n';
+  const chk = run({ check: true });
+  ok(a.devices.swa.sw.vlans.every((v) => v.id !== 50) && chk.recap['sw-a'].changed === 2, '--check：回報會改 (changed)，但設備沒有真的被改');
+  const r2 = run();
+  ok(r2.recap['sw-c'].unreachable === 1 && r2.recap['sw-a'].changed === 2 && a.devices.swa.sw.vlans.some((v) => v.id === 50 && v.name === 'IOT') && a.devices.swa.sw.ports['Gi0/5'].vlan === 50,
+    'SW-C 沒有 netadmin 帳號 → UNREACHABLE；其他三台建立 VLAN 50、Gi0/5 放進 VLAN 50');
+  ok(runningConfig(a, a.devices.swa).includes('vlan 50') && (await import('../src/engine/ops.js')).logRows(a, a.devices.swa).some((r) => /Configured from console by netadmin on vty/.test(JSON.stringify(r))), 'Ansible 是用 SSH 登入下指令：紀錄寫著 Configured from console by netadmin on vty');
+  const r3 = run();
+  ok(r3.recap['sw-a'].changed === 0 && r3.recap['sw-a'].ok === 2, '再跑一次：已經設定好的交換器是 ok、changed=0（冪等）');
+  ctl.playbook += '\n- name: trunk\n  hosts: access\n  gather_facts: no\n  tasks:\n    - name: add\n      cisco.ios.ios_config:\n        parents: interface GigabitEthernet0/9\n        lines:\n          - switchport trunk allowed vlan add 50\n';
+  run(); const r4 = run();
+  ok(r4.recap['sw-a'].changed === 1 && a.devices.swa.sw.ports['Gi0/9'].allowed.split(',').includes('50'), 'ios_config 送 allowed vlan add：每次都 changed（不冪等），和真的 Ansible 一樣');
+  const fx = runPlaybook(a, 'ctl', { inventory: ctl.inventory, file: 'f.yml', playbook: '- hosts: sw-a\n  gather_facts: yes\n  vars:\n    vl: [{id: 61, n: CAM}, {id: 62, n: BMS}]\n  tasks:\n    - cisco.ios.ios_vlans:\n        config:\n          - vlan_id: "{{ item.id }}"\n            name: "{{ item.n }}"\n      loop: "{{ vl }}"\n    - debug:\n        var: ansible_net_iostype\n    - cisco.ios.ios_command:\n        commands: [show vlan brief]\n      register: out\n      when: ansible_net_iostype == \'IOS\'\n    - assert:\n        that: [out.stdout | length > 0]\n' });
+  ok(fx.rc === 0 && a.devices.swa.sw.vlans.some((v) => v.id === 62 && v.name === 'BMS') && fx.lines.some((l) => l.t.includes("(item={'id': 61, 'n': 'CAM'})")) && fx.lines.some((l) => l.t.includes('"ansible_net_iostype": "IOS"')),
+    'Gathering Facts、loop 的 item、debug var、when、register 與 assert');
+}
+
 // ── 題庫與證照對照表的資料檢查 ──
 {
   const { QUESTIONS, TOPICS, LEVEL_TOPIC } = await import('../src/data/quiz.js');

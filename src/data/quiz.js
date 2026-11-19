@@ -10,7 +10,8 @@ export const TOPICS = [
   { id: 'security', name: '網路安全', desc: 'L2 安全、ACL、防火牆、設備加固' },
   { id: 'vpn', name: 'VPN', desc: 'IPsec、站對站、遠端存取' },
   { id: 'ipv6', name: 'IPv6', desc: '位址寫法、位址類型、SLAAC、NDP' },
-  { id: 'ops', name: '維運與自動化', desc: 'AAA、SNMP、QoS、CDP / LLDP、REST API' },
+  { id: 'ops', name: '維運與進階', desc: 'AAA、SNMP、QoS、CDP / LLDP、OSPF、BGP、無線控制器' },
+  { id: 'auto', name: '自動化與雲端', desc: 'REST API、JSON、YANG、Ansible、控制器式網路、雲端' },
 ];
 
 /** 關卡過關後的小考要考哪一個主題 */
@@ -29,6 +30,7 @@ export const LEVEL_TOPIC = {
   l47: 'routing', l48: 'routing', l49: 'routing', l50: 'routing',
   l51: 'ipv6', l52: 'ipv6', l53: 'ipv6', l54: 'vpn',
   l55: 'wireless', l56: 'wireless', l57: 'wireless',
+  l58: 'auto', l59: 'auto',
 };
 
 export const QUESTIONS = {
@@ -121,9 +123,6 @@ export const QUESTIONS = {
     { q: 'CDP 與 LLDP 的差別是什麼？', a: ['CDP 是 Cisco 專屬協定，LLDP 是 IEEE 的公開標準', 'LLDP 只能用在無線網路', 'CDP 運作在第三層', '兩者不能同時啟用'], c: 0, e: '兩者都是第二層的鄰居探索協定。CDP 只有 Cisco 設備支援；LLDP (IEEE 802.1AB) 可以跨廠牌使用。', r: 'CCNA 2.3' },
     { q: 'QoS 標記中，DSCP EF (Expedited Forwarding) 通常用在哪一種流量？', a: ['檔案備份', '語音通話', '電子郵件', '網頁瀏覽'], c: 1, e: '語音對延遲與抖動最敏感，會標記成 EF 並放進優先佇列。', r: 'CCNA 4.7' },
     { q: '關於 TFTP，哪一個說法正確？', a: ['使用 TCP 21，需要帳號密碼', '使用 UDP 69，沒有驗證機制', '會加密傳輸內容', '只能傳送文字檔'], c: 1, e: 'TFTP 簡單、沒有驗證也沒有加密，常用來備份設定檔或更新韌體，只適合在受信任的管理網路中使用。', r: 'CCNA 4.9' },
-    { q: 'REST API 中，建立一筆新資源通常使用哪一個 HTTP 方法？', a: ['GET', 'POST', 'DELETE', 'HEAD'], c: 1, e: 'CRUD 對應到 HTTP：Create = POST、Read = GET、Update = PUT / PATCH、Delete = DELETE。', r: 'CCNA 6.5' },
-    { q: 'JSON 中，方括號 [ ] 代表什麼？', a: ['物件', '陣列', '字串', '註解'], c: 1, e: '大括號 { } 是物件（一組「鍵: 值」），方括號 [ ] 是陣列（有順序的清單）。', r: 'CCNA 6.7' },
-    { q: 'Ansible 的特色是什麼？', a: ['必須在每台設備上安裝代理程式', '不需要代理程式，透過 SSH 連線並用 YAML 撰寫 Playbook', '只能管理 Windows 伺服器', '使用專屬的圖形介面，不能寫成檔案'], c: 1, e: 'Ansible 是 agentless 的，控制端透過 SSH（或 API）連到設備，工作內容用 YAML 寫成 Playbook。', r: 'CCNA 6.6' },
     { q: '在路由器上輸入 copy tftp: running-config 還原一份舊的設定檔，結果會怎樣？', a: ['整份設定換成檔案的內容', '檔案的內容合併進目前的設定，檔案裡沒寫到的設定不會被拿掉', '只會更新 startup-config', '路由器會立刻重新開機'], c: 1, e: '複製到 running-config 等於把每一行貼進設定模式。要整份取代，複製到 startup-config 再重新開機。', r: 'CCNA 4.9' },
     { q: 'TFTP 和 FTP 最主要的差別是什麼？', a: ['TFTP 用 TCP，FTP 用 UDP', 'TFTP 用 UDP 69 而且不需要帳號密碼；FTP 用 TCP 21，需要登入', 'TFTP 會加密，FTP 不會', '兩者只差在連接埠號碼'], c: 1, e: 'TFTP 簡單、沒有驗證，每次只送一個 512 位元組的區塊並等待確認，所以傳大檔很慢。FTP 走 TCP，要登入，但帳號密碼和內容都是明文。', r: 'CCNA 4.9' },
     { q: '下載了新的 IOS 映像檔之後，開機之前應該先做什麼？', a: ['把舊的映像檔全部刪掉', '用 verify /md5 確認和原廠公布的 MD5 一樣', '執行 erase startup-config', '把 flash 格式化'], c: 1, e: '檔案傳輸不完整或被竄改都會讓 MD5 不同。確認無誤後再設定 boot system、存檔、重新開機；舊版本最好留著當退路。', r: 'CCNA 4.9' },
@@ -167,6 +166,22 @@ export const QUESTIONS = {
     { q: '會議室在混凝土牆後面收不到 Wi-Fi。最好的做法是？', a: ['把 AP 的功率開到最大', '在牆的另一邊再加一台 AP，讓控制器的 RRM 錯開頻道', '改用 5 GHz', '換一個 SSID'], c: 1, e: '混凝土牆衰減 12 – 15 dB，5 GHz 更多。功率開大，牆後面也許勉強收得到，但用戶端回傳的功率沒變，還會干擾更多鄰居；語音、視訊以 -67 dBm 為規劃標準。', r: 'CCNA 1.11' },
     { q: '筆電走到另一台 AP 旁邊，卻還連著遠的那台、速度很慢。這叫做什麼？怎麼改善？', a: ['頻道干擾；改頻道', 'Sticky client；開啟 802.11k/v，讓 AP 提供鄰近清單、建議用戶端換過去', 'DHCP 衝突；換 IP', '隱藏 SSID'], c: 1, e: '漫遊是用戶端決定的，很多用戶端要等訊號低到一定程度才會換。802.11k 提供鄰近 AP 清單，802.11v 的 BSS Transition 建議換過去，802.11r 讓換過去時不用重新完整驗證。', r: 'Network+ 2.3' },
     { q: '兩台 AP 都放送 SSID「Corp」，但一台放進 VLAN 31、另一台放進 VLAN 32。筆電從一台漫遊到另一台時會怎樣？', a: ['沒有影響', '換了網段：IP 改變，進行中的連線（遠端桌面、通話）都會斷', '速度會變快', 'SSID 會消失'], c: 1, e: '漫遊要在同一個第二層網段裡才不會斷。用無線控制器時，所有 AP 的用戶端都從控制器放進同一個 VLAN，就沒有這個問題。', r: 'CCNA 1.11' },
+  ],
+  auto: [
+    { q: 'REST API 中，建立一筆新資源通常使用哪一個 HTTP 方法？', a: ['GET', 'POST', 'DELETE', 'HEAD'], c: 1, e: 'CRUD 對應到 HTTP：Create = POST、Read = GET、Update = PUT / PATCH、Delete = DELETE。', r: 'CCNA 6.5' },
+    { q: 'JSON 中，方括號 [ ] 代表什麼？', a: ['物件', '陣列', '字串', '註解'], c: 1, e: '大括號 { } 是物件（一組「鍵: 值」），方括號 [ ] 是陣列（有順序的清單）。', r: 'CCNA 6.7' },
+    { q: 'Ansible 的特色是什麼？', a: ['必須在每台設備上安裝代理程式', '不需要代理程式，透過 SSH 連線並用 YAML 撰寫 Playbook', '只能管理 Windows 伺服器', '使用專屬的圖形介面，不能寫成檔案'], c: 1, e: 'Ansible 是 agentless 的，控制端透過 SSH（或 API）連到設備，工作內容用 YAML 寫成 Playbook。', r: 'CCNA 6.6' },
     { q: '控制器式網路中，「南向介面 (southbound API)」連接的是什麼？', a: ['控制器與應用程式', '控制器與網路設備', '兩台控制器之間', '使用者與網頁介面'], c: 1, e: '南向介面讓控制器下達指令給設備（例如 NETCONF、OpenFlow）；北向介面則提供給上層的應用程式與自動化工具呼叫。', r: 'CCNA 6.3' },
+    { q: '下列哪一段是合法的 JSON？', a: ["{'vlan': 50, 'name': 'IOT'}", '{"vlan": 50, "name": "IOT",}', '{"vlan": 50, "name": "IOT", "active": true}', '{vlan: 50, name: "IOT"}'], c: 2, e: 'JSON 的鍵和字串都要用雙引號；數字、true / false、null 不加引號；最後一項後面不能有逗號。', r: 'CCNA 6.7' },
+    { q: '用 RESTCONF 送出 PATCH 修改介面的說明，回應是 204 No Content。這代表什麼？', a: ['找不到這個介面', '修改成功，只是回應沒有內容', '伺服器忙碌，稍後再試', '沒有權限'], c: 1, e: '2xx 都是成功：200 OK 帶著資料、201 Created 建立成功、204 No Content 改好了但不回傳內容。4xx 才是請求有問題。', r: 'CCNA 6.5' },
+    { q: '用 curl -d 送 JSON 給 IOS XE 的 RESTCONF，得到 415 Unsupported Media Type。少了什麼？', a: ['帳號密碼', 'Content-Type: application/yang-data+json 標頭', 'HTTPS', 'Accept 標頭'], c: 1, e: '415 表示伺服器不接受這種內容格式。curl 用 -d 卻沒指定 Content-Type 時，預設是 application/x-www-form-urlencoded（網頁表單）。401 才是帳號密碼的問題。', r: 'CCNA 6.5' },
+    { q: 'RESTCONF 的 PUT 和 PATCH 有什麼不同？', a: ['沒有差別', 'PUT 用內容整個取代那筆資料（沒寫到的會被拿掉），PATCH 只修改寫到的欄位', 'PATCH 只能刪除資料', 'PUT 只能建立新資料'], c: 1, e: '只想改一個欄位時用 PATCH。用 PUT 卻只寫了 description，介面上原本的 IP 之類的設定可能就被清掉了。', r: 'CCNA 6.5' },
+    { q: 'RESTCONF 的網址 …/data/ietf-interfaces:interfaces 裡，ietf-interfaces 是什麼？', a: ['設備的主機名稱', '定義這份資料結構的 YANG 模型（模組）名稱', 'HTTP 的方法', '使用者帳號'], c: 1, e: 'YANG 定義設備資料的結構。ietf-interfaces 是 IETF 的標準模型，各家廠商都支援；Cisco-IOS-XE-native 是 Cisco 自己的模型，涵蓋 IOS XE 的所有設定。', r: 'CCNA 6.5' },
+    { q: '同一份 Ansible playbook 跑第二次，PLAY RECAP 全部是 ok、changed=0。這代表什麼？', a: ['第二次沒有連上設備', '設定已經是要的樣子，所以沒有再修改 —— 冪等 (idempotent)', 'playbook 有錯', '要加 --force 才會執行'], c: 1, e: '宣告式的模組先比對現況，只改不一樣的地方。能安心重複執行，才適合排程定期跑、確保設定沒有被人改掉（設定漂移）。', r: 'CCNA 6.6' },
+    { q: '用 Ansible 管理 Cisco IOS 交換器，inventory 的 ansible_connection 應該設成什麼？', a: ['ssh（預設值）', 'ansible.netcommon.network_cli', 'winrm', 'local'], c: 1, e: '預設的 ssh 連線會在受管主機上執行 Python 模組，網路設備沒有 Python。network_cli 由控制主機登入 CLI、替你下指令，還要搭配 ansible_network_os=cisco.ios.ios。', r: 'CCNA 6.6' },
+    { q: 'YAML 用什麼表示資料的階層？', a: ['大括號', '縮排（只能用空白，不能用 Tab）', '分號', 'XML 標籤'], c: 1, e: '縮排錯一格，意思就完全不同：例如模組的參數沒有縮排在模組底下，Ansible 會以為那是另一個模組（conflicting action statements）。', r: 'CCNA 6.6' },
+    { q: 'Terraform 的典型流程是什麼？', a: ['逐台 SSH 登入下指令', '寫好宣告式的設定檔 → terraform plan 預覽差異 → terraform apply 建立，並用 state 檔記住現況', '只能修改既有的設定，不能建立資源', '需要在每台設備上安裝代理程式'], c: 1, e: 'Terraform 和 Ansible 都是「基礎架構即程式碼 (IaC)」。Terraform 擅長建立與刪除雲端資源（VPC、子網路、虛擬機），用 state 檔對照現況；Ansible 擅長設定設備與作業系統。', r: 'CCNA 6.6' },
+    { q: '和傳統逐台設定相比，控制器式（軟體定義）網路最大的不同是什麼？', a: ['設備不需要轉送封包', '控制平面集中在控制器，管理者對控制器表達意圖，控制器再把設定推到所有設備', '一定要用 OpenFlow', '不需要任何網路設備'], c: 1, e: '資料平面仍然在每台設備上轉送封包；變的是管理與控制集中了。例如 Catalyst Center (DNA Center) 用北向 REST API 提供給自動化程式呼叫。', r: 'CCNA 6.2' },
+    { q: 'AI / 機器學習在網路維運上最常見的用途是什麼？', a: ['取代所有網路工程師', '學習每個網路的正常基準 (baseline)，自動找出異常、預測問題並建議處置', '自動產生 IP 位址', '加快光纖的速度'], c: 1, e: '例如 AI 分析發現「某台 AP 的用戶端連線失敗率比平常同時段高很多」，在使用者抱怨之前就提出來。判斷與修改仍然要由人確認。', r: 'CCNA 6.4' },
   ],
 };

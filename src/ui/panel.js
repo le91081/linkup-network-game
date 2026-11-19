@@ -1,4 +1,5 @@
 // 設備設定面板：依設備類別產生對應的管理頁面
+import * as AUTO from './panel-auto.js';
 import * as W from './panel-wlc.js';
 import { h, icon, button, faceplate, toast } from './dom.js';
 import {
@@ -573,6 +574,7 @@ function baseTabs(dev) {
       dev.radiusServer && ['radius', 'RADIUS', M.radiusServerTab],
       (dev.services || []).some((s) => s.proto === 'udp' && s.port === 514) && ['syslog', 'Syslog', M.syslogTab],
       (isTftp(dev) || isFtp(dev)) && ['files', '檔案', OPS.filesTab], dev.nms && ['nms', '網管', OPS.nmsTab], dev.cucm && ['cucm', 'CUCM', V.cucmTab],
+      (dev.apps || []).includes('api') && ['api', 'API', AUTO.apiTab], ((dev.apps || []).includes('ansible') || dev.ansible) && ['ansible', 'Ansible', AUTO.ansibleTab],
       ['cap', '封包擷取', DG.captureTab], T.term].filter(Boolean);
     case 'hub': case 'switch': return [T.ports];
     case 'ap': return dev.lwap ? [['lwap', 'AP', W.lwapTab]] : [['ssid', '無線網路', X.ssidTab], ['radio', '無線電', X.radioTab], T.ports];

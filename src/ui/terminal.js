@@ -11,6 +11,7 @@ import { counters, onBulk } from '../engine/wire.js';
 import { fortiRun } from './forticli.js';
 import { transact6, dhcp6Trace, duidOf, iaidOf } from '../engine/sim6.js';
 import { parseIp6, fmtIp6 } from '../engine/ip6.js';
+import { isApiCurl, curlApi, ansibleCmd, fileCmd } from './term-auto.js';
 
 const V6SRC = { slaac: '（SLAAC）', dhcp6: '（DHCPv6）' };
 const v6Lines = (rt, i) => (rt.v6 && rt.v6.ll != null
@@ -44,6 +45,9 @@ const HELP = [
 
 export function buildTerminal(ctx, body) {
   const { app, dev } = ctx;
+  // Ansible 的控制主機跑的是 Linux（Ansible 不能裝在 Windows 上）
+  const linux = !!dev.ansible;
+  const PS = linux ? `netops@${dev.name.replace(/[^\w-]+/g, '-').replace(/^-+|-+$/g, '').toLowerCase() || 'ansible'}:~$` : 'C:\\>';
   const logs = (app.termLog[dev.id] ||= [{ t: `${dev.name} 終端機 — 輸入 help 查看指令`, c: 'dim' }]);
   const hist = (app.termHist[dev.id] ||= []);
   let hi = hist.length;
@@ -210,10 +214,14 @@ export function buildTerminal(ctx, body) {
 
   const run = async (line) => {
     if (remote()) { remoteInput(line); draw(); return; }
-    print('C:\\> ' + line, 'cmd');
+    print(PS + ' ' + line, 'cmd');
     const [cmd, ...args] = line.trim().split(/\s+/);
     const c = (cmd || '').toLowerCase();
-    if (c === 'help' || c === '?') HELP.forEach((x) => print(x, 'dim'));
+    if (c === 'help' || c === '?') {
+      HELP.forEach((x) => print(x, 'dim'));
+      if ((dev.apps || []).includes('api')) print('  curl -k -u 帳號:密碼 -H "Accept: application/yang-data+json" https://<IP>/restconf/data/…   呼叫 REST API（-X 方法、-d 內容、-i 顯示標頭）', 'dim');
+      if (linux) { print('  ansible-playbook -i inventory.ini <playbook> [--check] [-v] [--limit 主機]   執行 playbook', 'dim'); print('  ls / cat <檔名>          列出 / 顯示控制主機上的檔案', 'dim'); }
+    }
     else if (c === 'ssh' || (c === 'telnet' && args[0] && (args[1] == null || args[1] === '23') && !args[0].includes(':'))) {
       // ssh admin@10.0.99.1、ssh -l admin 10.0.99.1、telnet 10.0.99.1
       let user = '', target = '';
@@ -352,6 +360,14 @@ export function buildTerminal(ctx, body) {
         if (r.ok) { print(`名稱:    ${args[0]}`); print(`Address: ${fmtIp(r.ip)}`, 'ok'); }
         else print('*** ' + r.reason, 'bad');
       }
+    } else if (c === 'curl' && isApiCurl(line)) {
+      curlApi(app, dev, line.trim(), print);
+      ctx.commit(false);
+    } else if (c === 'ansible-playbook' && dev.ansible) {
+      ansibleCmd(app, dev, line.trim(), print);
+      ctx.commit(false);
+    } else if (dev.ansible && ['ls', 'cat', 'less', 'more', 'ansible', 'ansible-galaxy'].includes(c) && fileCmd(dev, c, args, print)) {
+      // 控制主機上的檔案
     } else if ((c === 'curl' || c === 'telnet') && /^(https?:\/\/)?\[|^[0-9a-f]*:[0-9a-f:]*:/i.test(args[0] || '')) {
       const raw = (args[0] || '').replace(/^https?:\/\//, '');
       const m6 = raw.match(/^\[([^\]]+)\](?::(\d+))?/);
@@ -406,7 +422,7 @@ export function buildTerminal(ctx, body) {
           app.tick(10); // 測試本身跑了 10 秒
         }
       }
-    } else if (c) print(`'${cmd}' 不是內部或外部命令。輸入 help 查看可用指令。`, 'warn');
+    } else if (c) print(linux ? `${cmd}: command not found（輸入 help 查看可用指令）` : `'${cmd}' 不是內部或外部命令。輸入 help 查看可用指令。`, 'warn');
     draw();
   };
 
@@ -435,12 +451,12 @@ export function buildTerminal(ctx, body) {
     }
     e.stopPropagation();
   });
-  const promptEl = h('span', { class: 'prompt', text: 'C:\\>' });
+  const promptEl = h('span', { class: 'prompt', text: PS });
   const term = h('div', { class: 'term', onclick: () => input.focus() }, out, h('div', { class: 'term-line' }, promptEl, input));
   // 提示字元跟著目前的狀態變：本機、等待輸入密碼，或已經登入對方的命令列
   drawPrompt = () => {
     const r = remote();
-    promptEl.textContent = !r ? 'C:\\>' : r.stage === 'key' ? '(yes/no)?' : r.stage === 'user' ? 'Username:' : r.stage === 'pass' ? 'Password:' : r.sess.prompt();
+    promptEl.textContent = !r ? PS : r.stage === 'key' ? '(yes/no)?' : r.stage === 'user' ? 'Username:' : r.stage === 'pass' ? 'Password:' : r.sess.prompt();
     input.type = r && r.stage === 'pass' ? 'password' : 'text';
     input.placeholder = r ? '' : 'ping 192.168.1.1';
   };
@@ -452,7 +468,9 @@ export function buildTerminal(ctx, body) {
     if (!a.ok) { lost(r, a); draw(); return; }
     if ((r.kind !== 'ios' || r.monitor) && consoleFollow(app, r.conn.to, 'vty:' + r.conn.cid, print)) draw();
   });
-  body.append(term, h('div', { class: 'chips' }, ['ipconfig', 'ping 8.8.8.8', 'tracert 8.8.8.8', 'nslookup www.example.com', 'arp -a', 'help'].map((x) =>
+  const chips = linux ? ['ls', 'cat inventory.ini', `ansible-playbook -i inventory.ini ${dev.ansible.file}`, `ansible-playbook -i inventory.ini ${dev.ansible.file} --check -v`, 'help']
+    : ['ipconfig', 'ping 8.8.8.8', 'tracert 8.8.8.8', 'nslookup www.example.com', 'arp -a', 'help'];
+  body.append(term, h('div', { class: 'chips' }, chips.map((x) =>
     h('button', { class: 'chip btnchip', type: 'button', text: x, onclick: () => { hist.push(x); hi = hist.length; run(x); } }))));
   draw();
   setTimeout(() => input.focus(), 30);

@@ -680,7 +680,11 @@ function prepStpTimers(state) {
       // 連線剛建立，或這個埠換了 VLAN / 模式：STP 要重新走一次
       const sig = isTrunk(d, pid) ? `t|${pc.native}|${pc.allowed}` : `a|${pc.vlan}|${pc.voice || ''}`;
       let rec = dyn.port[key];
-      if (!rec || rec.sig !== sig) rec = dyn.port[key] = { since: dyn.boot ? -1e9 : now, sig };
+      if (!rec || rec.sig !== sig) {
+        // Trunk 只是增減允許的 VLAN：每個 VLAN 各跑一個 STP (PVST+)，原本就在轉送的 VLAN 不受影響
+        const keep = rec && rec.sig.startsWith('t|') && sig.startsWith('t|') && rec.sig.split('|')[1] === sig.split('|')[1];
+        rec = dyn.port[key] = { since: keep ? rec.since : dyn.boot ? -1e9 : now, sig };
+      }
       const x = state.devices[l.dev];
       const toSwitch = isVlanSw(x) && !(x.sw.stp && x.sw.stp.on === false) && isBridgePort(x, l.port);
       const delay = toSwitch ? STP_P2P_DELAY : portfastOn(d, pc, pid) ? 0 : STP_EDGE_DELAY;
