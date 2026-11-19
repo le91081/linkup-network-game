@@ -24,6 +24,14 @@ export const portTo = (s, swId, devId) => {
   }
   return null;
 };
+/** 交換器上接到某台設備的那個埠「現在」的模式：access / trunk / down（dynamic 的埠要看 DTP 的結果） */
+export const operTo = (s, swId, devId) => {
+  for (const p of dev(s, swId).ports) {
+    const peer = peerOf(s, swId, p.id);
+    if (peer && peer.dev === devId) { const t = dev(s, swId).rt && dev(s, swId).rt.dtp && dev(s, swId).rt.dtp[p.id]; return t ? t.oper : dev(s, swId).sw.ports[p.id].mode; }
+  }
+  return null;
+};
 export const wlan = (s, id) => dev(s, id).ifaces.find((i) => i.bind.t === 'wlan');
 export const joinWifi = (s, id, ssid, pass) => Object.assign(wlan(s, id).wifi, { ssid, pass });
 

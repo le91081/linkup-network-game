@@ -2,7 +2,7 @@
 import { makeDevice as D, makeState, setLine, newIface } from '../engine/model.js';
 import { parseIp } from '../engine/ip.js';
 
-import { dev, ifc, link, setIp, useDhcp, swp, addVlan, portTo, WEB, DB } from './util.js';
+import { dev, ifc, link, setIp, useDhcp, swp, addVlan, portTo, operTo, WEB, DB } from './util.js';
 import { CHAPTERS2, LEVELS2 } from './advanced.js';
 import { CHAPTERS3, LEVELS3 } from './more.js';
 import { CHAPTERS4, LEVELS4 } from './trouble.js';
@@ -239,7 +239,7 @@ export const LEVELS = [
           for (const [id, v] of [['pc-s1', 10], ['pc-s2', 10], ['pc-r1', 20], ['pc-r2', 20]]) {
             const p = portTo(s, 'sw', id);
             if (!p) return `${dev(s, id).name} 沒有接在交換器上`;
-            if (p.mode !== 'access' || p.vlan !== v) return `${dev(s, id).name} 所在的埠還不是 VLAN ${v} 的 Access Port`;
+            if (operTo(s, 'sw', id) !== 'access' || p.vlan !== v) return `${dev(s, id).name} 所在的埠還不是 VLAN ${v} 的 Access Port`;
           }
           return true;
         },
@@ -248,7 +248,7 @@ export const LEVELS = [
     hints: [
       '點交換器 →「VLAN」分頁，新增 VLAN 10（業務）和 VLAN 20（研發）。',
       '到「連接埠」分頁，把 Gi0/1、Gi0/2 的 VLAN 改成 10，Gi0/3、Gi0/4 改成 20。',
-      '模式維持 Access 就好。Trunk 是下一關的事。',
+      'Catalyst 的埠出廠是 dynamic auto，接電腦時會以 Access 運作；正式環境習慣明確設成 Access（switchport mode access）。Trunk 是下一關的事。',
     ],
     solve(s) {
       addVlan(s, 'sw', 10, '業務'); addVlan(s, 'sw', 20, '研發');

@@ -164,7 +164,10 @@ function iface(id, label, bind, extra = {}) {
 }
 export const newIface = iface;
 
-const swPort = () => ({ mode: 'access', vlan: 1, native: 1, allowed: 'all', shut: false });
+// Catalyst 的連接埠出廠是 dynamic auto（會用 DTP 和對面協商要不要變成 Trunk）；Nexus 沒有 DTP，出廠是 access
+export const DTP_MODELS = new Set(['c2960', 'c2960p', 'c9300']);
+export const defaultPortMode = (model) => (DTP_MODELS.has(model) ? 'dynamic-auto' : 'access');
+const swPort = (model) => ({ mode: defaultPortMode(model), vlan: 1, native: 1, allowed: 'all', shut: false });
 // 原廠預設：SNMP 沒有開（snmp 不寫就是關閉）。關卡裡的設備由 levels/index.js 補上前任管理員留下的設定
 const mgmt = () => ({ ssh: true, telnet: true, http: true, https: true, allow: '', ntp: '', syslog: '', user: 'admin', pass: 'admin' });
 export const newWifi = (ssids = []) => ({ ssids, ch24: 1, ch5: 36, power: 'mid' });
@@ -199,7 +202,7 @@ export function makeDevice(model, id, o = {}) {
     case 'l3switch':
       d.sw = {
         mode: 'vlan', vlans: [{ id: 1, name: 'default' }],
-        ports: Object.fromEntries(d.ports.map((p) => [p.id, swPort()])),
+        ports: Object.fromEntries(d.ports.map((p) => [p.id, swPort(model)])),
         stp: { on: true, prio: 32768 }, snoop: { on: false }, dai: { on: false },
       };
       d.mgmt = mgmt();

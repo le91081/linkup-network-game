@@ -2,7 +2,8 @@
 // L1 供電 / 連線狀態、L2 橋接 / VLAN / STP / LACP / Port Security / DHCP Snooping / Wi-Fi、
 // L3 路由 / OSPF / VRRP、DHCP（含 Relay）、PPPoE、NAT、ACL、防火牆政策、IPsec 與遠端存取 VPN、DNS
 import { parseIp, fmtIp, parseMask, netOf, sameNet, isPrivate, parseCidr, parseVlanList, hostAddrProblem } from './ip.js';
-import { cloneState, primaryIface, CATALOG, CABLES, cableKind, cableDist, linkInfo } from './model.js';
+import { cloneState, primaryIface, CATALOG, CABLES, cableKind, cableDist, linkInfo, DTP_MODELS } from './model.js';
+import { cdpOn, lldpTxOn, lldpRxOn } from './disc.js';
 import { recompute6, transact6, globalIp6 } from './sim6.js';
 import { parseIp6 } from './ip6.js';
 import { opsBefore, opsAfter, logEvent, debugLog, longIf, UPTIME0 } from './ops.js';
@@ -12,6 +13,27 @@ import { remoteOpen, remoteLogin, remoteClose } from './remote.js';
 
 const DROP = Symbol('drop');
 const isVlanSw = (d) => !!d.sw && d.sw.mode === 'vlan';
+/** 這個埠「現在」是不是 Trunk：dynamic auto / desirable 要看 DTP 協商的結果 */
+export const isTrunk = (d, pid) => {
+  const t = d.rt && d.rt.dtp && d.rt.dtp[pid];
+  return t ? t.oper === 'trunk' : !!(d.sw && d.sw.ports[pid] && d.sw.ports[pid].mode === 'trunk');
+};
+/** IP 電話的內建交換器：電話自己的介面接在哪個 VLAN（學到語音 VLAN 之前跟電腦一樣不帶標籤） */
+const bridgeKey = (d) => (d.sw && d.sw.mode === 'phone' && d.rt && d.rt.voice ? d.rt.voice.vlan : 'u');
+/**
+ * IP 電話有兩個埠：SW 接交換器、PC 接電腦。電腦的訊框不帶標籤直接通過；
+ * 電話自己的語音流量帶著語音 VLAN 的標籤（從 CDP / LLDP-MED 學到，或手動設定）
+ */
+function phoneIngress(dev, pid, tag) {
+  const v = dev.rt && dev.rt.voice ? dev.rt.voice.vlan : null;
+  if (pid === 'pc') return dev.phone && dev.phone.pcPort === false ? DROP : tag == null ? 'u' : DROP;
+  return tag == null ? 'u' : tag === v ? v : DROP;
+}
+function phoneEgress(dev, pid, key) {
+  const v = dev.rt && dev.rt.voice ? dev.rt.voice.vlan : null;
+  if (pid === 'pc') return dev.phone && dev.phone.pcPort === false ? DROP : key === 'u' ? null : DROP;
+  return key === 'u' ? null : key === v ? v : DROP;
+}
 
 function hash(s) {
   let h = 2166136261;
@@ -73,15 +95,19 @@ function ingressKey(dev, pid, tag, mac, notes) {
   if (dev.rt.wait && dev.rt.wait[pid] > 0) { notes.stp ||= { dev: dev.id, pid, left: dev.rt.wait[pid] }; return DROP; }
   if (sw.span && spanDest(dev, pid)) { notes.span ||= { dev: dev.id, pid }; return DROP; }
   if (!portUsable(dev, pid)) return DROP;
+  if (sw.mode === 'phone') return phoneIngress(dev, pid, tag);
   if (sw.mode !== 'vlan') return tag == null ? 'u' : tag;
   if (pc.ps && pc.ps.on && mac && !psAllowed(pc, mac)) { notes.ps = `${dev.name} 的 ${pid}`; return DROP; }
   let v;
-  if (pc.mode === 'trunk') {
+  if (isTrunk(dev, pid)) {
     v = tag == null ? pc.native : tag;
     if (!vlanAllowed(pc, v)) return DROP;
+  } else if (tag != null && tag !== 0) {
+    // Access 埠只收不帶標籤的訊框；設了 Voice VLAN 的埠另外收帶著語音 VLAN 標籤的訊框（IP 電話送的）
+    if (!pc.voice || tag !== pc.voice) return DROP;
+    v = pc.voice;
   } else {
-    if (tag != null) return DROP;
-    v = pc.vlan;
+    v = pc.vlan; // 不帶標籤，或只帶優先權的 802.1p 標籤 (VLAN 0)
   }
   if (!vlanExists(dev, v) || stpBlocked(dev, pid, v)) return DROP;
   return v;
@@ -91,12 +117,14 @@ function ingressKey(dev, pid, tag, mac, notes) {
 function egressTag(dev, pid, key) {
   const sw = dev.sw, pc = sw.ports[pid];
   if (!portUsable(dev, pid)) return DROP;
+  if (sw.mode === 'phone') return phoneEgress(dev, pid, key);
   if (sw.mode !== 'vlan') return key === 'u' ? null : key;
   if (stpBlocked(dev, pid, key)) return DROP;
-  if (pc.mode === 'trunk') {
+  if (isTrunk(dev, pid)) {
     if (!vlanAllowed(pc, key)) return DROP;
     return key === pc.native ? null : key;
   }
+  if (pc.voice && key === pc.voice && key !== pc.vlan) return key; // 語音 VLAN 帶著標籤送給電話
   return pc.vlan === key ? null : DROP;
 }
 
@@ -125,7 +153,7 @@ export function l2Explore(state, devId, iface) {
     seen.add(k);
     for (const i of d.ifaces) {
       if (i === iface) continue;
-      if ((i.bind.t === 'svi' && d.sw.mode === 'vlan' && i.bind.vlan === key) || (i.bind.t === 'bridge' && key === 'u')) {
+      if ((i.bind.t === 'svi' && d.sw.mode === 'vlan' && i.bind.vlan === key) || (i.bind.t === 'bridge' && key === bridgeKey(d))) {
         out.push({ dev: d.id, iface: i, path });
       }
     }
@@ -146,7 +174,7 @@ export function l2Explore(state, devId, iface) {
   if (b.t === 'port') emit(dev, b.port, null, []);
   else if (b.t === 'sub') emit(dev, b.port, b.vlan, []);
   else if (b.t === 'svi') flood(dev, b.vlan, null, []);
-  else if (b.t === 'bridge') flood(dev, 'u', null, []);
+  else if (b.t === 'bridge') flood(dev, bridgeKey(dev), null, []);
   else if (b.t === 'wlan') {
     const a = iface.rt.assoc;
     if (a) flood(state.devices[a.ap], a.key, null, [wifiHop(devId, a.ap)], a);
@@ -255,7 +283,7 @@ export function macRows(state, d) {
   if (isVlanSw(d)) {
     for (const [pid, pc] of Object.entries(d.sw.ports)) {
       if (!pc.ps || !pc.ps.on) continue;
-      for (const m of macList(pc.ps.macs)) rows.push({ vlan: pc.mode === 'trunk' ? pc.native : pc.vlan, mac: m, port: pid, label: label(pid), type: 'STATIC' });
+      for (const m of macList(pc.ps.macs)) rows.push({ vlan: isTrunk(d, pid) ? pc.native : pc.vlan, mac: m, port: pid, label: label(pid), type: 'STATIC' });
     }
   }
   const age = macAgeOf(d);
@@ -386,6 +414,62 @@ function prepPhysical(state) {
   }
 }
 
+// ── DTP ──
+// Catalyst 的連接埠預設是 dynamic auto：對面要求 (trunk / desirable) 才變成 Trunk。兩端都是 auto 就維持 Access。
+// switchport nonegotiate 不送 DTP，對面的 dynamic 埠永遠等不到要求。路由器、電腦、Nexus 都不講 DTP。
+const DYN = { 'dynamic-auto': 'auto', 'dynamic-desirable': 'desirable' };
+export const dtpSpeaker = (d) => isVlanSw(d) && DTP_MODELS.has(d.model);
+/** 對面那個埠在 DTP 裡的態度：trunk / desirable / auto / access，或 null（不送 DTP） */
+function dtpOf(x, port) {
+  if (x.kind === 'host' && x.dtp) return x.dtp; // 攻擊工具（例如 Yersinia）假裝成交換器送 DTP
+  if (!dtpSpeaker(x)) return null;
+  const pc = x.sw.ports[port];
+  if (!pc || pc.mode === 'routed' || pc.noneg) return null;
+  return pc.mode === 'trunk' ? 'trunk' : pc.mode === 'access' ? 'access' : DYN[pc.mode] || null;
+}
+function prepDtp(state) {
+  for (const d of Object.values(state.devices)) {
+    if (!isVlanSw(d)) continue;
+    d.rt.dtp = {};
+    for (const [pid, pc] of Object.entries(d.sw.ports)) {
+      if (pc.mode === 'routed') continue;
+      const l = state.rt.links[d.id + ':' + pid];
+      let oper = pc.mode === 'trunk' ? 'trunk' : 'access', why = '', peer = null;
+      if (!l) oper = 'down';
+      else if (DYN[pc.mode] && dtpSpeaker(d)) {
+        const x = state.devices[l.dev];
+        peer = dtpOf(x, l.port);
+        const mine = DYN[pc.mode];
+        if (peer === 'trunk' || peer === 'desirable' || (mine === 'desirable' && peer === 'auto')) {
+          oper = 'trunk';
+          why = `和 ${x.name} 用 DTP 協商成 Trunk（這一端 ${mine}、對面 ${peer}）`;
+        } else {
+          why = !peer ? `${x.name} 不送 DTP，所以維持 Access` : peer === 'auto' ? '兩端都是 dynamic auto，沒有人主動要求，維持 Access' : `對面是 ${peer}，維持 Access`;
+        }
+      }
+      d.rt.dtp[pid] = { admin: pc.mode, oper, why, peer };
+    }
+  }
+}
+
+// ── IP 電話的語音 VLAN ──
+// 電話從交換器的 CDP（Appliance VLAN）或 LLDP-MED（Network Policy）知道語音 VLAN 是幾號，之後語音流量就帶著這個標籤。
+// 兩種都沒有，就跟接在後面的電腦一樣不帶標籤，拿到的是資料 VLAN 的位址（也可以在電話上手動設定）
+function prepVoice(state) {
+  for (const d of Object.values(state.devices)) {
+    if (!d.sw || d.sw.mode !== 'phone') continue;
+    const l = state.rt.links[d.id + ':sw'];
+    const manual = d.phone && +d.phone.vlan > 0 ? +d.phone.vlan : null;
+    if (manual) { d.rt.voice = { vlan: manual, via: 'manual' }; continue; }
+    const x = l && state.devices[l.dev];
+    if (!x || !isVlanSw(x)) continue;
+    const pc = x.sw.ports[l.port];
+    if (!pc || !pc.voice || isTrunk(x, l.port)) continue;
+    if (cdpOn(x, l.port) && cdpOn(d, 'sw')) d.rt.voice = { vlan: pc.voice, via: 'cdp', from: x.id };
+    else if (lldpTxOn(x, l.port) && lldpRxOn(x, l.port) && lldpTxOn(d, 'sw') && lldpRxOn(d, 'sw')) d.rt.voice = { vlan: pc.voice, via: 'lldp', from: x.id };
+  }
+}
+
 function prepLag(state) {
   const rt = state.rt, groups = new Map();
   const lagOf = (D, pid) => (isVlanSw(D) && isBridgePort(D, pid) && +D.sw.ports[pid].lag > 0 ? D.sw.ports[pid] : null);
@@ -461,7 +545,7 @@ function prepStp(state) {
   for (const d of sws) for (const v of d.sw.vlans) vlans.add(v.id);
   const carries = (D, pid, v) => {
     const pc = D.sw.ports[pid];
-    return vlanExists(D, v) && (pc.mode === 'trunk' ? vlanAllowed(pc, v) : pc.vlan === v);
+    return vlanExists(D, v) && (isTrunk(D, pid) ? vlanAllowed(pc, v) : pc.vlan === v || pc.voice === v);
   };
   const pidx = (D, pid) => D.ports.findIndex((p) => p.id === pid);
   const role = (D, pid, v, r) => { (D.rt.stp.roles[pid] ||= {})[v] = r; };
@@ -554,7 +638,7 @@ export const fmtDur = (s) => {
 const STP_EDGE_DELAY = 30; // 沒有 PortFast 的埠：listening 15 秒 + learning 15 秒
 const STP_P2P_DELAY = 2; // 交換器之間用 RSTP 的 proposal / agreement 快速協商
 /** PortFast：這個埠接的是終端設備，連線後直接開始轉送 */
-export const portfastOn = (d, pc) => (pc.portfast != null ? !!pc.portfast : !!(d.sw.stp && d.sw.stp.portfastDefault) && pc.mode !== 'trunk');
+export const portfastOn = (d, pc, pid) => (pc.portfast != null ? !!pc.portfast : !!(d.sw.stp && d.sw.stp.portfastDefault) && !(pid ? isTrunk(d, pid) : pc.mode === 'trunk'));
 
 function prepStpTimers(state) {
   const rt = state.rt, dyn = state.dyn, now = state.clock, live = new Set();
@@ -566,12 +650,12 @@ function prepStpTimers(state) {
       const key = d.id + ':' + pid;
       live.add(key);
       // 連線剛建立，或這個埠換了 VLAN / 模式：STP 要重新走一次
-      const sig = pc.mode === 'trunk' ? `t|${pc.native}|${pc.allowed}` : `a|${pc.vlan}`;
+      const sig = isTrunk(d, pid) ? `t|${pc.native}|${pc.allowed}` : `a|${pc.vlan}|${pc.voice || ''}`;
       let rec = dyn.port[key];
       if (!rec || rec.sig !== sig) rec = dyn.port[key] = { since: dyn.boot ? -1e9 : now, sig };
       const x = state.devices[l.dev];
       const toSwitch = isVlanSw(x) && !(x.sw.stp && x.sw.stp.on === false) && isBridgePort(x, l.port);
-      const delay = toSwitch ? STP_P2P_DELAY : portfastOn(d, pc) ? 0 : STP_EDGE_DELAY;
+      const delay = toSwitch ? STP_P2P_DELAY : portfastOn(d, pc, pid) ? 0 : STP_EDGE_DELAY;
       const left = rec.since + delay - now;
       if (left <= 0) continue;
       d.rt.wait[pid] = left;
@@ -1319,7 +1403,7 @@ function computePass(state, auth) {
   const down = state.down || {};
   state.rt = { links: {}, off: {}, clients: {}, cable: {}, why: {}, auth, wait: {}, pending: [] };
   for (const d of devs) {
-    d.rt = { routes: [], nbrs: [], tunnels: [], lag: {}, err: {}, stp: null, interf: [], vpn: null, unauth: null, wait: {} };
+    d.rt = { routes: [], nbrs: [], tunnels: [], lag: {}, err: {}, stp: null, interf: [], vpn: null, unauth: null, wait: {}, dtp: null, voice: null };
     if (isVlanSw(d)) {
       for (const [pid, pc] of Object.entries(d.sw.ports)) {
         const a = auth.dot1x[d.id + ':' + pid];
@@ -1331,6 +1415,8 @@ function computePass(state, auth) {
     }
   }
   prepPhysical(state);
+  prepDtp(state);
+  prepVoice(state);
   prepLag(state);
   prepStp(state);
   prepStpTimers(state);

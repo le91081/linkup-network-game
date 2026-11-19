@@ -3,7 +3,8 @@
 // 所以把一台設備的 running-config 整份貼到另一台同型號的設備上，會得到相同的設定。
 import { parseIp, fmtIp, parseMask, fmtMask, maskOf, netOf, bcastOf } from './ip.js';
 import { parseCidr6, parseIp6 } from './ip6.js';
-import { newIface, cloneState, CATALOG, makeDevice } from './model.js';
+import { newIface, cloneState, CATALOG, makeDevice, defaultPortMode } from './model.js';
+import { cdpCfg, lldpCfg, portNd, setPortNd, speaksCdp, clearNeighbors, CDP_TIMER, CDP_HOLD, LLDP_TIMER, LLDP_HOLD } from './disc.js';
 import { transfer, configFile, ensureFlash, flashFree, flashPath, fsName, IMAGES, PLATFORM, PLATFORM_NAME, imageFile, fmtBytes } from './files.js';
 import { macsBehind, recompute, ospfOn } from './sim.js';
 import { logEvent, markReboot, setClock, deviceTime, SEVERITY, bootTime } from './ops.js';
@@ -120,6 +121,13 @@ function syncVpnAcl(d, name) {
 }
 
 const err = (s) => '% ' + s;
+const DTP_OK = (d) => defaultPortMode(d.model) !== 'access';
+function tidy(d, k) {
+  const o = d[k];
+  if (!o) return;
+  for (const x of Object.keys(o)) if (o[x] === undefined) delete o[x];
+  if (!Object.keys(o).length) delete d[k];
+}
 const isErr = (r) => typeof r === 'string' && r.startsWith('%');
 const dotted = (s) => /^\d+\.\d+\.\d+\.\d+$/.test(s || '');
 const maskBits = (s) => (dotted(s) ? parseMask(s) : null);
@@ -282,8 +290,8 @@ const HELP = {
   config: ['hostname <名稱>', 'interface <介面> | interface range <介面> - <n> | interface vlan <ID>', 'vlan <ID>', 'ip route <網段> <遮罩> <下一站> [距離]',
     'router ospf 1', 'ip dhcp pool <名稱> / ip dhcp excluded-address <起> <迄>', 'ip nat inside source list 1 interface <介面> overload',
     'ip nat inside source static <內部 IP> <公用 IP>', 'ip access-list extended <名稱>', 'spanning-tree vlan <清單> priority <值>',
-    'ip dhcp snooping / ip arp inspection vlan <清單>', 'line vty 0 4', 'ntp server / logging host / snmp-server community', 'do <show 指令>、end、exit'],
-  if: ['ip address <IP> <遮罩> | ip address dhcp', 'shutdown / no shutdown', 'switchport mode access|trunk', 'switchport access vlan <ID>',
+    'ip dhcp snooping / ip arp inspection vlan <清單>', 'line vty 0 4', 'ntp server / logging host / snmp-server community', 'cdp run / no cdp run / lldp run / cdp timer / lldp timer', 'do <show 指令>、end、exit'],
+  if: ['ip address <IP> <遮罩> | ip address dhcp', 'shutdown / no shutdown', 'switchport mode access|trunk|dynamic auto|dynamic desirable', 'switchport nonegotiate', 'switchport voice vlan <ID>', 'no cdp enable / no lldp transmit / no lldp receive', 'switchport access vlan <ID>',
     'switchport trunk native vlan <ID> / allowed vlan <清單>', 'no switchport（L3 交換器改成 Routed 埠）', 'ip nat inside|outside', 'ip helper-address <IP>',
     'ip ospf cost <值>', 'ip access-group <名稱> in|out', 'encapsulation dot1q <VLAN>（子介面）', 'vrrp 1 ip <虛擬 IP> / vrrp 1 priority <值>',
     'channel-group <編號> mode active|passive|on', 'switchport port-security [mac-address <MAC> | violation <模式>]',
@@ -386,10 +394,26 @@ export function iosSession(getDev, getState, who = null) {
     ['description [...]', () => undefined],
     ['no description', () => undefined],
     // ── 第二層 ──
+    ['switchport mode dynamic <m>', ([m]) => {
+      const mode = ['auto', 'desirable'].find((x) => x.startsWith(m.toLowerCase()));
+      if (!mode) return err('用法：switchport mode dynamic auto | desirable');
+      if (!DTP_OK(dev())) return err('這台交換器不支援 DTP（Nexus 沒有 dynamic 模式），請用 switchport mode access 或 trunk');
+      return onL2((pc, t) => (pc.noneg ? err(`Conflict between 'nonegotiate' and 'dynamic' status on this interface: ${t.name}`) : void (pc.mode = 'dynamic-' + mode)));
+    }],
     ['switchport mode <m>', ([m]) => {
       const mode = ['access', 'trunk'].find((x) => x.startsWith(m.toLowerCase()));
-      return mode ? onL2((pc) => { pc.mode = mode; }) : err('模式必須是 access 或 trunk');
+      return mode ? onL2((pc) => { pc.mode = mode; }) : err('模式必須是 access、trunk、dynamic auto 或 dynamic desirable');
     }],
+    ['no switchport mode', () => onL2((pc, t) => (pc.noneg && DTP_OK(dev()) ? err(`Conflict between 'nonegotiate' and 'dynamic' status on this interface: ${t.name}`) : void (pc.mode = defaultPortMode(dev().model))))],
+    ['switchport voice vlan <id>', ([id], out) => {
+      if (!(+id >= 1 && +id <= 4094)) return err('VLAN ID 必須是 1 – 4094（也可以用 dot1p、untagged、none，但這裡只支援 VLAN 編號）');
+      return onL2((pc) => {
+        const sw = dev().sw;
+        if (!sw.vlans.some((v) => v.id === +id)) { sw.vlans.push({ id: +id, name: 'VLAN' + String(id).padStart(4, '0') }); out.push(`% Voice VLAN does not exist. Creating vlan ${+id}`); }
+        pc.voice = +id;
+      });
+    }],
+    ['no switchport voice vlan [...]', () => onL2((pc) => { delete pc.voice; })],
     ['switchport access vlan <id>', ([id], out) => (+id >= 1 && +id <= 4094 ? onL2((pc) => { ensureVlan(+id, out); pc.vlan = +id; }) : err('VLAN ID 必須是 1 – 4094'))],
     ['no switchport access vlan', () => onL2((pc) => { pc.vlan = 1; })],
     ['switchport trunk native vlan <id>', ([id]) => (+id >= 1 && +id <= 4094 ? onL2((pc) => { pc.native = +id; }) : err('VLAN ID 必須是 1 – 4094'))],
@@ -398,7 +422,15 @@ export function iosSession(getDev, getState, who = null) {
     ['switchport trunk allowed vlan <list>', ([list]) => (/^(all|\d+(-\d+)?(,\d+(-\d+)?)*)$/i.test(list) ? onL2((pc) => { pc.allowed = list.toLowerCase(); }) : err('VLAN 清單的格式：10,20 或 10-20 或 all'))],
     ['no switchport trunk allowed vlan', () => onL2((pc) => { pc.allowed = 'all'; })],
     ['switchport trunk encapsulation <e>', () => onL2(() => {})],
-    ['switchport nonegotiate', () => onL2(() => {})],
+    ['switchport nonegotiate', () => onL2((pc, t) => (/^dynamic/.test(pc.mode) ? err(`Conflict between 'nonegotiate' and 'dynamic' status on this interface: ${t.name}`) : void (pc.noneg = true)))],
+    ['no switchport nonegotiate', () => onL2((pc) => { delete pc.noneg; })],
+    // ── CDP / LLDP（介面）──
+    ['cdp enable', () => ndIf('cdp', true)],
+    ['no cdp enable', () => ndIf('cdp', false)],
+    ['lldp transmit', () => ndIf('tx', true)],
+    ['no lldp transmit', () => ndIf('tx', false)],
+    ['lldp receive', () => ndIf('rx', true)],
+    ['no lldp receive', () => ndIf('rx', false)],
     ['no switchport', () => each((t) => {
       const d = dev();
       if (!t.pc || d.kind !== 'l3switch') return err('只有 L3 交換器的連接埠可以改成 Routed 埠');
@@ -406,7 +438,7 @@ export function iosSession(getDev, getState, who = null) {
       if (!t.iface) { t.iface = newIface(t.port.id, t.port.label, { t: 'port', port: t.port.id }); d.ifaces.push(t.iface); }
       return undefined;
     })],
-    ['switchport', () => onL2((pc) => { if (pc.mode === 'routed') pc.mode = 'access'; })],
+    ['switchport', () => onL2((pc) => { if (pc.mode === 'routed') pc.mode = defaultPortMode(dev().model); })],
     ['switchport port-security', () => onL2((pc) => { (pc.ps ||= { on: false, macs: '', mode: 'shutdown' }).on = true; })],
     ['no switchport port-security', () => onL2((pc) => { if (pc.ps) pc.ps.on = false; })],
     ['switchport port-security maximum <n>', () => onL2(() => {})],
@@ -455,6 +487,15 @@ export function iosSession(getDev, getState, who = null) {
     ['duplex <v>', ([v]) => { const d = ['auto', 'full', 'half'].find((x) => x.startsWith(v.toLowerCase())); return d ? setPhy('duplex', d) : err('duplex 可用的值：auto、full、half'); }],
     ['no duplex', () => setPhy('duplex', 'auto')],
   ];
+  /** cdp enable / lldp transmit 這類介面指令：只能下在實體介面上 */
+  function ndIf(key, on) {
+    return each((t) => {
+      if (!t.port) return err(`${t.name} 不是實體介面；CDP / LLDP 要設定在實體介面上`);
+      if (key === 'cdp' && !speaksCdp(dev())) return err('這台設備不支援 CDP');
+      setPortNd(dev(), t.port.id, key, on);
+      return undefined;
+    });
+  }
   function setPhy(key, v) {
     return each((t) => {
       const c = t.pc || (t.port && t.iface);
@@ -474,6 +515,20 @@ export function iosSession(getDev, getState, who = null) {
 
   const CONFIG = [
     ['hostname <name>', ([name]) => { dev().name = name; }],
+    ['cdp run', () => { delete (dev().cdp ||= {}).run; tidy(dev(), 'cdp'); }],
+    ['no cdp run', () => { (dev().cdp ||= {}).run = false; }],
+    ['cdp timer <n>', ([n]) => (+n >= 5 && +n <= 254 ? void ((dev().cdp ||= {}).timer = +n === CDP_TIMER ? undefined : +n, tidy(dev(), 'cdp')) : err('CDP timer 的範圍是 5 – 254 秒'))],
+    ['no cdp timer', () => { if (dev().cdp) delete dev().cdp.timer; tidy(dev(), 'cdp'); }],
+    ['cdp holdtime <n>', ([n]) => (+n >= 10 && +n <= 255 ? void ((dev().cdp ||= {}).hold = +n === CDP_HOLD ? undefined : +n, tidy(dev(), 'cdp')) : err('CDP holdtime 的範圍是 10 – 255 秒'))],
+    ['no cdp holdtime', () => { if (dev().cdp) delete dev().cdp.hold; tidy(dev(), 'cdp'); }],
+    ['cdp advertise-v2', () => { if (dev().cdp) delete dev().cdp.v2; tidy(dev(), 'cdp'); }],
+    ['no cdp advertise-v2', () => { (dev().cdp ||= {}).v2 = false; }],
+    ['lldp run', () => { (dev().lldp ||= {}).run = true; }],
+    ['no lldp run', () => { (dev().lldp ||= {}).run = false; }],
+    ['lldp timer <n>', ([n]) => (+n >= 5 && +n <= 65534 ? void ((dev().lldp ||= {}).timer = +n === LLDP_TIMER ? undefined : +n, tidy(dev(), 'lldp')) : err('LLDP timer 的範圍是 5 – 65534 秒'))],
+    ['no lldp timer', () => { if (dev().lldp) delete dev().lldp.timer; tidy(dev(), 'lldp'); }],
+    ['lldp holdtime <n>', ([n]) => (+n >= 0 && +n <= 65535 ? void ((dev().lldp ||= {}).hold = +n === LLDP_HOLD ? undefined : +n, tidy(dev(), 'lldp')) : err('LLDP holdtime 的範圍是 0 – 65535 秒'))],
+    ['no lldp holdtime', () => { if (dev().lldp) delete dev().lldp.hold; tidy(dev(), 'lldp'); }],
     ['interface range <...>', ([text]) => { const r = resolveRange(dev(), text); if (isErr(r)) return r; enter('if', r); return undefined; }],
     ['interface <...>', ([text]) => { const r = resolveIf(dev(), text); if (isErr(r)) return r; enter('if', [r]); return undefined; }],
     ['no interface <...>', ([text]) => {
@@ -1271,6 +1326,9 @@ export function iosSession(getDev, getState, who = null) {
     if (!tok.length || tok[0].startsWith('!')) return done(false);
     const t0 = tok[0].toLowerCase();
     if (S.mode === 'exec') {
+      if (match(tok, 'clear cdp table')) { clearNeighbors(getState(), dev(), 'cdp'); return done(false); }
+      if (match(tok, 'clear lldp table')) { clearNeighbors(getState(), dev(), 'lldp'); return done(false); }
+      if (match(tok, 'clear cdp counters') || match(tok, 'clear lldp counters')) { const c = ((getState().dyn.ndCnt ||= {})[dev().id] ||= {}); const k = tok[1].toLowerCase().startsWith('c') ? 'cdp' : 'lldp'; c[k + 'Out'] = 0; c[k + 'In'] = 0; return done(false); }
       if (match(tok, 'configure terminal') || match(tok, 'configure')) { S.mode = 'config'; out.push('Enter configuration commands, one per line.  End with CNTL/Z.'); return done(false); }
       if (match(tok, 'enable') || match(tok, 'disable') || match(tok, 'end') || match(tok, 'terminal <...>')) return done(false);
       if (match(tok, 'write') || match(tok, 'write memory') || match(tok, 'copy running-config startup-config')) {
@@ -1640,6 +1698,19 @@ export function runningConfig(state, dev) {
       ...(m.sshTimeout ? [`ip ssh time-out ${m.sshTimeout}`] : []), ...(m.sshRetries ? [`ip ssh authentication-retries ${m.sshRetries}`] : []), '!');
   }
   if (dev.v6routing) o.push('ipv6 unicast-routing', '!');
+  {
+    const c = cdpCfg(dev), l = lldpCfg(dev), raw = dev.lldp || {};
+    const g = [];
+    if (speaksCdp(dev) && !c.run) g.push('no cdp run');
+    if (c.timer !== CDP_TIMER) g.push(`cdp timer ${c.timer}`);
+    if (c.hold !== CDP_HOLD) g.push(`cdp holdtime ${c.hold}`);
+    if (!c.v2) g.push('no cdp advertise-v2');
+    if (raw.run === true) g.push('lldp run');
+    else if (raw.run === false && l.run !== lldpCfg({ ...dev, lldp: {} }).run) g.push('no lldp run');
+    if (l.timer !== LLDP_TIMER) g.push(`lldp timer ${l.timer}`);
+    if (l.hold !== LLDP_HOLD) g.push(`lldp holdtime ${l.hold}`);
+    if (g.length) o.push(...g, '!');
+  }
   if (isSw(dev)) {
     const sw = dev.sw;
     for (const v of sw.vlans.slice().sort((a, b) => a.id - b.id)) if (v.id !== 1) o.push(`vlan ${v.id}`, ` name ${v.name.replace(/\s+/g, '_')}`);
@@ -1741,23 +1812,26 @@ export function runningConfig(state, dev) {
     const pc = dev.sw && dev.sw.ports[p.id];
     if (pc && isSw(dev)) {
       const phy = [pc.speed && pc.speed !== 'auto' ? ` speed ${pc.speed}` : null, pc.duplex && pc.duplex !== 'auto' ? ` duplex ${pc.duplex}` : null].filter(Boolean);
-      const def = pc.mode === 'access' && pc.vlan === 1 && !pc.shut && !peer && !pc.trust && !(+pc.lag > 0) && !(pc.ps && pc.ps.on) && !pc.bpduguard && !pc.rootguard && !pc.dot1x && !phy.length && pc.portfast == null;
+      const nd = portNd(dev, p.id), ndl = [nd.cdp === false ? ' no cdp enable' : null, nd.tx === false ? ' no lldp transmit' : null, nd.rx === false ? ' no lldp receive' : null].filter(Boolean);
+      const def = pc.mode === defaultPortMode(dev.model) && pc.vlan === 1 && pc.native === 1 && (!pc.allowed || pc.allowed === 'all') && !pc.voice && !pc.noneg && !ndl.length && !pc.shut && !peer && !pc.trust && !(+pc.lag > 0) && !(pc.ps && pc.ps.on) && !pc.bpduguard && !pc.rootguard && !pc.dot1x && !phy.length && pc.portfast == null;
       if (def) continue;
       o.push(`interface ${p.label}`, ...desc, ...phy);
       if (pc.mode === 'routed') {
         const i = dev.ifaces.find((x) => x.bind.t === 'port' && x.bind.port === p.id);
-        o.push(' no switchport', ...(i ? l3lines(i) : []));
-      } else if (pc.mode === 'trunk') {
-        o.push(' switchport mode trunk');
+        o.push(' no switchport', ...(i ? l3lines(i) : []), ...ndl);
+      } else {
+        // 真的 IOS 的順序：access vlan、trunk 的設定、mode、nonegotiate、voice vlan。出廠預設的模式不會印出來
+        if (pc.vlan !== 1) o.push(` switchport access vlan ${pc.vlan}`);
         if (pc.native !== 1) o.push(` switchport trunk native vlan ${pc.native}`);
         if (pc.allowed && pc.allowed !== 'all') o.push(` switchport trunk allowed vlan ${pc.allowed}`);
-        if (pc.portfast === true) o.push(' spanning-tree portfast trunk');
-      } else {
-        o.push(' switchport mode access');
-        if (pc.vlan !== 1) o.push(` switchport access vlan ${pc.vlan}`);
-        if (pc.portfast === true) o.push(' spanning-tree portfast');
+        if (pc.mode !== defaultPortMode(dev.model) || (pc.mode === 'access' && !DTP_OK(dev))) o.push(` switchport mode ${pc.mode.replace('-', ' ')}`);
+        if (pc.noneg) o.push(' switchport nonegotiate');
+        if (pc.voice) o.push(` switchport voice vlan ${pc.voice}`);
+        if (pc.mode === 'trunk') { if (pc.portfast === true) o.push(' spanning-tree portfast trunk'); }
+        else if (pc.portfast === true) o.push(' spanning-tree portfast');
         else if (pc.portfast === false && stp0.portfastDefault) o.push(' spanning-tree portfast disable');
       }
+      if (pc.mode !== 'routed') o.push(...ndl);
       if (+pc.lag > 0) o.push(` channel-group ${+pc.lag} mode ${pc.lagMode || 'active'}`);
       if (pc.ps && pc.ps.on) {
         o.push(' switchport port-security');
@@ -1773,8 +1847,10 @@ export function runningConfig(state, dev) {
     } else if (!pc) {
       const i = dev.ifaces.find((x) => x.bind.t === 'port' && x.bind.port === p.id);
       if (!i) continue;
+      const nd = portNd(dev, p.id);
       o.push(`interface ${p.label}`, ...desc, ...l3lines(i),
         ...(i.speed && i.speed !== 'auto' ? [` speed ${i.speed}`] : []), ...(i.duplex && i.duplex !== 'auto' ? [` duplex ${i.duplex}`] : []),
+        ...(nd.cdp === false ? [' no cdp enable'] : []), ...(nd.tx === false ? [' no lldp transmit'] : []), ...(nd.rx === false ? [' no lldp receive'] : []),
         i.shut ? ' shutdown' : ' no shutdown', '!');
       for (const s of dev.ifaces.filter((x) => x.bind.t === 'sub' && x.bind.port === p.id)) {
         o.push(`interface ${s.label}`, ` encapsulation dot1Q ${s.bind.vlan}`, ...l3lines(s), '!');

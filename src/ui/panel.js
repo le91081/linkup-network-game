@@ -4,7 +4,7 @@ import {
   inp, sel, toggle, seg, field, note, kv, del, cardHead, grid2, bind, linkBadge, ifaceNote,
   isIp, isMask, isIpList, isVlanSpec, isPortNo, isAddr, isAddrList, isNum, isMacList, isCidrList,
 } from './form.js';
-import { CATALOG, MEDIA, peerOf, newIface } from '../engine/model.js';
+import { CATALOG, MEDIA, peerOf, newIface, defaultPortMode } from '../engine/model.js';
 import { parseIp, fmtIp } from '../engine/ip.js';
 import { routeRows, SERVICE_NAMES, hitsOf, ospfOn, setOspf, fmtDur } from '../engine/sim.js';
 import { buildTerminal } from './terminal.js';
@@ -147,9 +147,9 @@ function swPorts(ctx, body) {
   body.append(faceplate(state, dev, { onPick: (p) => { pinned.add(p.id); app.renderPanel(); } }),
     h('p', { class: 'tip', text: '下方列出已接線或已調整過的連接埠；點面板上的埠可以把它加入清單預先設定。' }));
   const adv = (pc) => pc.shut || pc.trust || +pc.lag > 0 || (pc.ps && pc.ps.on) || pc.bpduguard || pc.rootguard || pc.dot1x || (pc.speed && pc.speed !== 'auto') || (pc.duplex && pc.duplex !== 'auto');
-  const isDefault = (pc) => pc.mode === 'access' && pc.vlan === 1 && !adv(pc);
+  const isDefault = (pc) => pc.mode === defaultPortMode(dev.model) && pc.vlan === 1 && !pc.voice && !adv(pc);
   const shown = dev.ports.filter((p) => peerOf(state, dev.id, p.id) || !isDefault(sw.ports[p.id]) || pinned.has(p.id));
-  if (!shown.length) body.append(note('muted', '所有連接埠都是預設值（Access · VLAN 1）。'));
+  if (!shown.length) body.append(note('muted', `所有連接埠都是預設值（${defaultPortMode(dev.model) === 'access' ? 'Access' : 'Dynamic Auto'} · VLAN 1）。`));
   const vlans = sw.vlans.slice().sort((a, b) => a.id - b.id);
   const vlanOpts = (curId) => {
     const o = vlans.map((v) => [v.id, `${v.id} · ${v.name}`]);
@@ -160,7 +160,10 @@ function swPorts(ctx, body) {
     const pc = sw.ports[p.id];
     const key = dev.id + ':' + p.id;
     const modes = [['access', 'Access'], ['trunk', 'Trunk']];
+    if (defaultPortMode(dev.model) !== 'access') modes.push(['dynamic-auto', 'Dynamic Auto（DTP，出廠預設）'], ['dynamic-desirable', 'Dynamic Desirable（DTP，主動要求）']);
     if (dev.kind === 'l3switch') modes.push(['routed', 'Routed (L3)']);
+    const dyn = /^dynamic/.test(pc.mode), trunkish = pc.mode === 'trunk' || dyn, accessish = pc.mode !== 'trunk' && pc.mode !== 'routed';
+    const voiceOpts = () => [['', '（不使用）'], ...vlanOpts(pc.voice || 1).filter(([id]) => id !== 1 || pc.voice === 1)];
     const ri = dev.ifaces.find((i) => i.bind.t === 'port' && i.bind.port === p.id);
     const setMode = (v) => {
       pc.mode = v;
@@ -172,18 +175,20 @@ function swPorts(ctx, body) {
       cardHead(p.label, h('span', { class: 'chip tiny', text: MEDIA[p.media].name + (p.poe ? ' · PoE' : '') }), linkBadge(ctx, p.id)),
       grid2(
         field('模式', sel(ctx, () => pc.mode, setMode, modes, { rerender: true })),
-        pc.mode === 'access' && field('VLAN', sel(ctx, () => pc.vlan, (v) => { pc.vlan = +v; }, vlanOpts(pc.vlan))),
-        pc.mode === 'trunk' && field('Native VLAN', sel(ctx, () => pc.native, (v) => { pc.native = +v; }, vlanOpts(pc.native))),
-        pc.mode === 'trunk' && field('允許的 VLAN', inp(ctx, ...bind(pc, 'allowed'), { ph: 'all 或 10,20', check: isVlanSpec })),
+        accessish && field(dyn ? 'Access VLAN（協商成 Access 時）' : 'VLAN', sel(ctx, () => pc.vlan, (v) => { pc.vlan = +v; }, vlanOpts(pc.vlan))),
+        accessish && field('Voice VLAN（IP 電話）', sel(ctx, () => pc.voice || '', (v) => { if (v === '' || v == null) delete pc.voice; else pc.voice = +v; }, voiceOpts())),
+        trunkish && field(dyn ? 'Native VLAN（協商成 Trunk 時）' : 'Native VLAN', sel(ctx, () => pc.native, (v) => { pc.native = +v; }, vlanOpts(pc.native))),
+        trunkish && field('允許的 VLAN', inp(ctx, ...bind(pc, 'allowed'), { ph: 'all 或 10,20', check: isVlanSpec })),
         routed && ri && field('IP 位址', inp(ctx, ...bind(ri, 'ip'), { ph: '例如 10.0.1.2', check: isIp })),
         routed && ri && field('子網路遮罩', inp(ctx, ...bind(ri, 'mask'), { ph: '255.255.255.252', check: isMask }))),
       routed && ri && h('div', { class: 'toggles' }, toggle(ctx, () => ospfOn(dev, ri), (v) => setOspf(dev, ri, v), 'OSPF（在此介面啟用動態路由）')),
       routed && ri && ifaceNote(ctx, ri),
+      !routed && X.dtpLine(ctx, p, pc),
       !routed && X.portWarn(ctx, p, pc),
       !routed && h('button', {
         type: 'button', class: 'advbtn' + (open ? ' on' : ''),
         onclick: () => { if (app.adv.has(key)) app.adv.delete(key); else app.adv.add(key); app.renderPanel(); },
-      }, icon(open ? 'down' : 'chevron', 13), '進階：停用、速率 / 雙工、Port-channel、Port Security、802.1X、BPDU / Root Guard'),
+      }, icon(open ? 'down' : 'chevron', 13), '進階：停用、DTP、CDP / LLDP、速率 / 雙工、Port-channel、Port Security、802.1X、BPDU / Root Guard'),
       !routed && open && X.portAdvanced(ctx, p, pc)));
   }
   body.append(DG.spanCard(ctx));
@@ -194,14 +199,14 @@ function swVlans(ctx, body) {
   const sw = dev.sw;
   const list = h('div', { class: 'card' }, cardHead('VLAN 資料庫'));
   for (const v of sw.vlans.slice().sort((a, b) => a.id - b.id)) {
-    const n = Object.values(sw.ports).filter((p) => p.mode === 'access' && p.vlan === v.id).length;
+    const n = Object.values(sw.ports).filter((p) => p.mode !== 'trunk' && p.mode !== 'routed' && p.vlan === v.id).length;
     list.append(h('div', { class: 'line' },
       h('b', { class: 'mono vid', text: v.id }),
       inp(ctx, ...bind(v, 'name'), { mono: false, ph: '名稱' }),
       h('span', { class: 'muted nowrap', text: `${n} 個 Access 埠` }),
       v.id === 1 ? h('span', { class: 'mini ghost' }) : del(() => {
         sw.vlans = sw.vlans.filter((x) => x.id !== v.id);
-        for (const p of Object.values(sw.ports)) { if (p.vlan === v.id) p.vlan = 1; if (p.native === v.id) p.native = 1; }
+        for (const p of Object.values(sw.ports)) { if (p.vlan === v.id) p.vlan = 1; if (p.native === v.id) p.native = 1; if (p.voice === v.id) delete p.voice; }
         ctx.commit(true);
       })));
   }
@@ -352,7 +357,8 @@ function statusTab(ctx, body) {
   }
   if (dev.kind === 'router' || dev.kind === 'homerouter') body.append(M.sessionTableCard(ctx), M.sessionCard(ctx, '連線紀錄（最新的在上面）'));
   if ((dev.sw && dev.sw.mode === 'vlan') || dev.kind === 'router' || dev.kind === 'firewall') body.append(DG.countersCard(ctx));
-  body.append(X.neighborsCard(ctx));
+  const nc = X.neighborsCard(ctx);
+  if (nc) body.append(nc);
 }
 
 function forwardsTab(ctx, body) {

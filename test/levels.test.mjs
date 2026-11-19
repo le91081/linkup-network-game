@@ -1343,6 +1343,80 @@ console.log('\n維運：TFTP / FTP、韌體、SSH 金鑰、SNMP、背景流量')
   }
 }
 
+console.log('\n第二層探索：CDP、LLDP 與 DTP');
+{
+  const disc = await import('../src/engine/disc.js');
+  const ops = await import('../src/engine/ops.js');
+  const { iosSession, runningConfig } = await import('../src/engine/ios.js');
+  const { makeState, makeDevice } = await import('../src/engine/model.js');
+  const ok = (cond, title) => (cond ? console.log('  ✔ ' + title) : fail(title));
+  const start = (id) => { const lv = LEVELS.find((l) => l.id === id); const s = lv.setup(); recompute(s); return { s, lv }; };
+  const ios = (s, id, lines) => { const sess = iosSession(() => s.devices[id], () => s); const out = []; for (const l of lines) out.push(...sess.exec(l).out); recomputeNow(s); return out; };
+  const nb = (s, id, proto) => disc.neighbors(s, s.devices[id], proto);
+  {
+    const { s } = start('l43');
+    const c = nb(s, 'core', 'cdp').find((r) => r.dev === 'dsg');
+    ok(c && c.label === 'Gi0/9' && c.info.port === 'GigabitEthernet0/9' && c.info.id === 'SW-Design.corp.local' && c.left > 120 && c.left <= 180 && !nb(s, 'core', 'lldp').length,
+      `CDP：一開始就看得到鄰居（Device ID 是 FQDN，剩 ${c && c.left} 秒）；Catalyst 出廠沒有開 LLDP`);
+    ios(s, 'core', ['configure terminal', 'lldp run', 'end']);
+    const half = nb(s, 'core', 'lldp').length;
+    ios(s, 'dsg', ['configure terminal', 'lldp run', 'end']);
+    const l = nb(s, 'core', 'lldp').find((r) => r.dev === 'dsg');
+    ok(!half && l && l.info.port === 'Gi0/9' && l.left === 120, 'LLDP 要兩端都 lldp run；開了之後馬上送出第一個通告');
+    ios(s, 'dsg', ['configure terminal', 'no cdp run', 'end']);
+    advance(s, 100);
+    const still = nb(s, 'core', 'cdp').some((r) => r.dev === 'dsg');
+    advance(s, 85);
+    ok(still && !nb(s, 'core', 'cdp').some((r) => r.dev === 'dsg'), '對面關掉 CDP：這一端要等 holdtime (180 秒) 過了才忘記它');
+    ios(s, 'dsg', ['configure terminal', 'interface gi0/9', 'no lldp transmit', 'end']);
+    ok(!nb(s, 'core', 'lldp').some((r) => r.dev === 'dsg'), 'LLDP 關掉送出時會先送一個 TTL = 0 的通告，對方立刻刪掉這一筆');
+    ok(runningConfig(s, s.devices.dsg).includes('no cdp run') && runningConfig(s, s.devices.dsg).includes(' no lldp transmit') && runningConfig(s, s.devices.core).includes('lldp run'),
+      'no cdp run、lldp run、no lldp transmit 會出現在 running-config');
+  }
+  {
+    // 兩台 Cisco 中間隔著一台非網管交換器：CDP 會被泛洪過去，LLDP 不會（802.1D 保留位址）
+    const s = makeState([makeDevice('c2960', 'a', { name: 'SW-A' }), makeDevice('isr4321', 'r', { name: 'R1' }), makeDevice('isr4321', 'r2', { name: 'R2' }), makeDevice('sw8', 'u', { name: '小交換器' })],
+      [['a:Gi0/1', 'u:1'], ['r:Gi0/0/1', 'u:2'], ['r2:Gi0/0/1', 'u:3']]);
+    recompute(s);
+    for (const id of ['a', 'r', 'r2']) ios(s, id, ['configure terminal', 'lldp run', 'end']);
+    const cdp = nb(s, 'a', 'cdp').map((r) => r.dev).sort().join(), lldp = nb(s, 'a', 'lldp').length;
+    ok(cdp === 'r,r2' && lldp === 0, 'CDP 經過非網管交換器：一個埠上看到兩個鄰居；LLDP 不會被交換器轉送');
+  }
+  {
+    const { s } = start('l43');
+    const op = (id) => s.devices[id].rt.dtp['Gi0/9'].oper;
+    const aa = op('core') + '/' + op('dsg');
+    ios(s, 'core', ['configure terminal', 'interface gi0/9', 'switchport mode trunk', 'end']);
+    const ta = op('core') + '/' + op('dsg');
+    ios(s, 'core', ['configure terminal', 'interface gi0/9', 'switchport nonegotiate', 'switchport trunk native vlan 99', 'end']);
+    const nn = op('core') + '/' + op('dsg');
+    advance(s, 61);
+    const log = ops.logRows(s, s.devices.core).map((x) => x.line);
+    ok(aa === 'access/access' && ta === 'trunk/trunk' && nn === 'trunk/access',
+      `DTP：兩端 dynamic auto 維持 Access；一端 trunk 就協商成 Trunk；加上 nonegotiate 對面就收不到要求（${aa} → ${ta} → ${nn}）`);
+    ok(log.some((l) => /CDP-4-NATIVE_VLAN_MISMATCH: Native VLAN mismatch discovered on GigabitEthernet0\/9 \(99\), with SW-Design GigabitEthernet0\/9 \(1\)/.test(l)),
+      'CDP 發現兩端的 Native VLAN 不同：%CDP-4-NATIVE_VLAN_MISMATCH');
+    const err = ios(s, 'dsg', ['configure terminal', 'interface gi0/9', 'switchport nonegotiate', 'end']);
+    ios(s, 'dsg', ['configure terminal', 'interface gi0/9', 'switchport mode dynamic desirable', 'end']);
+    ios(s, 'core', ['configure terminal', 'interface gi0/9', 'no switchport nonegotiate', 'switchport mode dynamic auto', 'end']);
+    ok(err.some((l) => /Conflict between 'nonegotiate' and 'dynamic'/.test(l)) && op('core') === 'trunk' && op('dsg') === 'trunk',
+      'dynamic 的埠不能 nonegotiate；desirable 對 auto 協商成 Trunk');
+    const rc = runningConfig(s, s.devices.dsg);
+    ok(rc.includes(' switchport mode dynamic desirable') && !runningConfig(s, s.devices.core).some((l) => /switchport mode dynamic auto/.test(l)),
+      'running-config：出廠預設的 dynamic auto 不會印出來，其他模式會');
+    const pcPort = s.devices.dsg.rt.dtp['Gi0/1'];
+    ok(pcPort.oper === 'access' && /不送 DTP/.test(pcPort.why), '接電腦的 dynamic auto 埠：電腦不講 DTP，維持 Access');
+  }
+  {
+    const { s } = start('l11');
+    const nx = Object.values(s.devices).find((d) => d.model === 'n93180');
+    const pid = nx.ports[0].id;
+    const out = ios(s, nx.id, ['configure terminal', `interface ${nx.ports[0].label}`, 'switchport mode dynamic auto', 'end']);
+    ok(nx.sw.ports[pid].mode !== 'dynamic-auto' && out.some((l) => /不支援 DTP/.test(l)), 'Nexus 沒有 DTP：出廠是 access，也不能設成 dynamic');
+  }
+  void makeState;
+}
+
 // ── FortiGate 的 CLI ──
 console.log('\nFortiGate CLI');
 {

@@ -6,7 +6,8 @@ import {
 } from './form.js';
 import { fmtIp } from '../engine/ip.js';
 import { CATALOG, peerOf, portOf, newSsid, cableAt, linkInfo } from '../engine/model.js';
-import { visibleSsids, WIFI_SEC, macsBehind, isBridgePort, hitsOf, P1, accessOf, portfastOn, macRows, clearMac, macAgeOf, saInfo, fmtDur } from '../engine/sim.js';
+import { visibleSsids, WIFI_SEC, macsBehind, isBridgePort, hitsOf, P1, accessOf, portfastOn, macRows, clearMac, macAgeOf, saInfo, fmtDur, isTrunk, dtpSpeaker } from '../engine/sim.js';
+import { cdpCfg, lldpCfg, cdpOn, lldpTxOn, lldpRxOn, portNd, setPortNd, neighbors, speaksCdp, speaksLldp } from '../engine/disc.js';
 import { ntpInfo, deviceTime, plainStamp, logRows, clearLog, syslogStats, NTP_POLL } from '../engine/ops.js';
 import * as M from './panel-more.js';
 import * as OPS from './panel-ops.js';
@@ -51,11 +52,15 @@ export const portWarn = (ctx, p, pc) => ctx.live(() => {
   const there = `${peer.name} 的 ${portOf(peer, n.port).label}`;
   const cap = (m) => (m === 'trunk' ? 'Trunk' : 'Access');
   const out = [];
-  if (qc && qc.mode !== 'routed') {
-    if (pc.mode !== qc.mode) out.push(`兩端模式不一致：這一端是 ${cap(pc.mode)}，${there} 是 ${cap(qc.mode)}，帶標籤的 VLAN 過不去。`);
-    else if (pc.mode === 'trunk' && pc.native !== qc.native) out.push(`Native VLAN 不一致：這一端是 ${pc.native}，${there} 是 ${qc.native}。沒有標籤的訊框會被兩端放進不同的 VLAN。`);
-    else if (pc.mode === 'access' && pc.vlan !== qc.vlan) out.push(`兩端的 Access VLAN 不同（這一端 ${pc.vlan}，${there} 是 ${qc.vlan}），兩個 VLAN 會被這條線接在一起。`);
+  const mine = isTrunk(dev, p.id) ? 'trunk' : 'access';
+  if (qc && qc.mode !== 'routed' && state.rt.links[dev.id + ':' + p.id]) {
+    const theirs = isTrunk(peer, n.port) ? 'trunk' : 'access';
+    if (mine !== theirs) out.push(`兩端模式不一致：這一端是 ${cap(mine)}，${there} 是 ${cap(theirs)}，帶標籤的 VLAN 過不去。${pc.noneg || qc.noneg ? '（設了 nonegotiate 的一端不送 DTP，對面的 dynamic 埠等不到要求，只能維持 Access）' : ''}`);
+    else if (mine === 'trunk' && pc.native !== qc.native) out.push(`Native VLAN 不一致：這一端是 ${pc.native}，${there} 是 ${qc.native}。沒有標籤的訊框會被兩端放進不同的 VLAN。`);
+    else if (mine === 'access' && pc.vlan !== qc.vlan) out.push(`兩端的 Access VLAN 不同（這一端 ${pc.vlan}，${there} 是 ${qc.vlan}），兩個 VLAN 會被這條線接在一起。`);
   }
+  // 對面是路由器的子介面（router-on-a-stick）：路由器不講 DTP，這一端一定要明確設成 Trunk
+  if (!qc && mine !== 'trunk' && peer.ifaces.some((i) => i.bind.t === 'sub' && i.bind.port === n.port)) out.push(`${there} 用子介面送帶 VLAN 標籤的訊框，這個埠要設成 Trunk（路由器不會用 DTP 協商）。`);
   out.push(...phyWarnings(state, dev, p.id));
   const left = dev.rt.wait && dev.rt.wait[p.id];
   if (left > 0) {
@@ -63,6 +68,15 @@ export const portWarn = (ctx, p, pc) => ctx.live(() => {
       : `這個埠剛啟用，STP 還在 ${left > 15 ? 'listening' : 'learning'}，再 ${Math.ceil(left)} 秒才會開始轉送資料。接電腦或伺服器的埠可以在進階設定打開 PortFast。`);
   }
   return out.map((t) => note('warn', t));
+});
+
+/** dynamic 的埠：現在協商成什麼、為什麼 */
+export const dtpLine = (ctx, p, pc) => ctx.live(() => {
+  const { dev } = ctx;
+  const t = dev.rt.dtp && dev.rt.dtp[p.id];
+  if (!t || !/^dynamic/.test(pc.mode)) return null;
+  if (t.oper === 'down') return note('muted', '還沒有接線。接上之後會用 DTP 和對面協商要不要變成 Trunk。');
+  return note(t.oper === 'trunk' ? 'ok' : 'muted', `運作中：${t.oper === 'trunk' ? 'Trunk' : 'Access'} — ${t.why}`);
 });
 
 /** OSPF 鄰居的狀態 */
@@ -235,8 +249,12 @@ export function portAdvanced(ctx, p, pc) {
   return h('div', { class: 'sub' },
     h('div', { class: 'toggles' },
       toggle(ctx, ...bind(pc, 'shut'), '停用此連接埠 (shutdown)'),
+      dtpSpeaker(dev) && !/^dynamic/.test(pc.mode) && toggle(ctx, () => !!pc.noneg, (v) => { if (v) pc.noneg = true; else delete pc.noneg; }, '不送 DTP (switchport nonegotiate)：接使用者的埠建議打開，避免被偽裝成交換器的設備協商成 Trunk'),
+      speaksCdp(dev) && toggle(ctx, () => portNd(dev, p.id).cdp !== false, (v) => setPortNd(dev, p.id, 'cdp', v), `CDP${cdpCfg(dev).run ? '' : '（整台的 CDP 已關閉）'}`),
+      speaksLldp(dev) && toggle(ctx, () => portNd(dev, p.id).tx !== false, (v) => setPortNd(dev, p.id, 'tx', v), `LLDP 送出${lldpCfg(dev).run ? '' : '（整台的 LLDP 沒有開）'}`),
+      speaksLldp(dev) && toggle(ctx, () => portNd(dev, p.id).rx !== false, (v) => setPortNd(dev, p.id, 'rx', v), 'LLDP 接收'),
       toggle(ctx, ...bind(pc, 'trust'), 'DHCP Snooping 信任埠（通往合法 DHCP 伺服器）'),
-      toggle(ctx, () => portfastOn(dev, pc), (v) => { pc.portfast = v; }, 'PortFast（接終端設備的埠：連線後立刻轉送，不等 30 秒）'),
+      toggle(ctx, () => portfastOn(dev, pc, p.id), (v) => { pc.portfast = v; }, 'PortFast（接終端設備的埠：連線後立刻轉送，不等 30 秒）'),
       toggle(ctx, ...bind(pc, 'bpduguard'), 'BPDU Guard（對面是交換器就關閉此埠）'),
       toggle(ctx, ...bind(pc, 'rootguard'), 'Root Guard（不允許這個埠後面的交換器成為根橋）'),
       toggle(ctx, ...bind(pc, 'dot1x'), '802.1X（通過 RADIUS 驗證才放行）'),
@@ -350,16 +368,20 @@ export function switchStatus(ctx, body) {
 
 export function neighborsCard(ctx) {
   const { dev, state } = ctx;
-  return h('div', { class: 'card' }, cardHead('鄰居 (LLDP / CDP)'), ctx.live(() => {
-    const rows = dev.ports.map((p) => {
-      const n = peerOf(state, dev.id, p.id);
-      if (!n) return null;
-      const d = state.devices[n.dev];
-      return h('div', { class: 'line' }, h('b', { class: 'mono', text: p.label }), h('span', { text: `${d.name} · ${portOf(d, n.port).label}` }),
-        h('span', { class: 'muted', style: { marginLeft: 'auto' }, text: CATALOG[d.model].title.replace(/^(Cisco|TP-Link|Ubiquiti|Fortinet|NETGEAR|ASUS|Dell|Lenovo|Apple|HP|Synology) /, '') }));
-    }).filter(Boolean);
-    return rows.length ? rows : note('muted', '沒有任何鄰居。');
-  }));
+  if (!speaksCdp(dev) && !speaksLldp(dev)) return null;
+  const tidy = () => { for (const k of ['cdp', 'lldp']) if (dev[k] && !Object.keys(dev[k]).some((x) => dev[k][x] !== undefined)) delete dev[k]; };
+  return h('div', { class: 'card' }, cardHead('鄰居 (CDP / LLDP)'),
+    h('div', { class: 'toggles' },
+      speaksCdp(dev) && toggle(ctx, () => cdpCfg(dev).run, (v) => { (dev.cdp ||= {}).run = v ? undefined : false; tidy(); }, `CDP（Cisco 專屬，每 ${cdpCfg(dev).timer} 秒通告一次，holdtime ${cdpCfg(dev).hold} 秒）`),
+      toggle(ctx, () => lldpCfg(dev).run, (v) => { (dev.lldp ||= {}).run = v; }, `LLDP（IEEE 802.1AB，每 ${lldpCfg(dev).timer} 秒，holdtime ${lldpCfg(dev).hold} 秒）`)),
+    ctx.live(() => {
+      const rows = neighbors(state, dev);
+      if (!rows.length) return note('muted', cdpCfg(dev).run || lldpCfg(dev).run ? '還沒有收到任何通告。對面不講 CDP / LLDP（電腦、非 Cisco 設備），或對面把它關掉了。' : 'CDP 與 LLDP 都沒有開，看不到任何鄰居。');
+      return rows.map((r) => h('div', { class: 'line' }, h('b', { class: 'mono', text: r.label }), h('span', { class: 'chip tiny', text: r.proto.toUpperCase() }),
+        h('span', { text: `${r.info.id} · ${r.info.port}` }),
+        h('span', { class: 'muted', style: { marginLeft: 'auto' }, text: `${r.info.platform}${r.info.ip ? ' · ' + r.info.ip : ''} · 剩 ${r.left} 秒` })));
+    }),
+    note('muted', '鄰居是從收到的通告學來的：對面關掉 CDP 之後，要等 holdtime 過了才會從表上消失。接使用者的埠常會關掉 CDP，避免洩漏型號與版本。'));
 }
 
 // ───────────────────────── 管理介面 ─────────────────────────

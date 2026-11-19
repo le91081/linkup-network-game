@@ -6,12 +6,13 @@
 // state.dyn.con[設備]       只會出現在命令列畫面上的輸出（FortiGate 的 sniffer、debug flow）
 // state.dyn.dbg[設備]       IOS 開了哪些 debug
 // state.dyn.sniff / dflow   FortiGate 的 sniffer 與 debug flow 設定
-import { linkInfo } from './model.js';
+import { linkInfo, DTP_MODELS } from './model.js';
+import { cdpOn, lldpTxOn, cdpCfg, lldpCfg, deviceIdOf } from './disc.js';
 import { fmtIp, parseIp, parseCidr, netOf } from './ip.js';
 import { isIos } from './ios.js';
 
 export const BCAST = 'ff:ff:ff:ff:ff:ff';
-const STP_MAC = '01:80:c2:00:00:00', CDP_MAC = '01:00:0c:cc:cc:cc';
+const STP_MAC = '01:80:c2:00:00:00', CDP_MAC = '01:00:0c:cc:cc:cc', LLDP_MAC = '01:80:c2:00:00:0e';
 const PROTO_NO = { icmp: 1, tcp: 6, udp: 17, esp: 50 };
 
 // ───────────────────────── 訊框 ─────────────────────────
@@ -22,6 +23,8 @@ export function frameLen(f) {
   if (f.proto === 'arp') return 42 + tag;
   if (f.proto === 'stp') return 60 + tag;
   if (f.proto === 'cdp') return 371;
+  if (f.proto === 'lldp') return 286;
+  if (f.proto === 'dtp') return 60;
   if (f.proto === 'dhcp') return 342 + tag;
   if (f.proto === 'icmp') return (f.big ? 114 : 74) + tag;
   if (f.proto === 'udp') return (f.dport === 53 || f.sport === 53 ? 82 : f.dport === 514 ? 150 : 90) + tag;
@@ -37,6 +40,8 @@ export function protoName(f) {
   if (f.proto === 'arp') return 'ARP';
   if (f.proto === 'stp') return 'STP';
   if (f.proto === 'cdp') return 'CDP';
+  if (f.proto === 'lldp') return 'LLDP';
+  if (f.proto === 'dtp') return 'DTP';
   if (f.proto === 'dhcp') return 'DHCP';
   if (f.proto === 'icmp') return 'ICMP';
   if (f.proto === 'esp') return f.ssl ? 'TLSv1.3' : 'ESP';
@@ -52,6 +57,8 @@ export function infoOf(f) {
   if (f.proto === 'arp') return f.arp.op === 1 ? `Who has ${fmtIp(f.arp.tip)}? Tell ${fmtIp(f.arp.sip)}` : `${fmtIp(f.arp.sip)} is at ${f.arp.sha}`;
   if (f.proto === 'stp') return `Conf. Root = ${f.stp.prio}/${f.stp.vlan}/${f.stp.root}  Cost = ${f.stp.cost}  Port = 0x80${String(f.stp.port).padStart(2, '0')}`;
   if (f.proto === 'cdp') return `Device ID: ${f.cdp.id}  Port ID: ${f.cdp.port}`;
+  if (f.proto === 'lldp') return `MA/${f.smac} LA/${f.lldp.port} ${f.lldp.ttl} SysN=${f.lldp.id}`;
+  if (f.proto === 'dtp') return `Dynamic Trunk Protocol（${f.dtp.mode}）`;
   if (f.proto === 'dhcp') return `DHCP ${DHCP_TYPE[f.dhcp.type]}  - Transaction ID 0x${f.dhcp.xid}`;
   if (f.proto === 'icmp') return `Echo (ping) ${f.reply ? 'reply  ' : 'request'}  id=0x${(f.reply ? f.dport : f.sport).toString(16).padStart(4, '0')}, seq=1/256, ttl=${f.ttl}`;
   if (f.proto === 'esp') return f.ssl ? 'Application Data（SSL-VPN 的加密內容）' : `ESP (SPI=0x${(f.spi || 0).toString(16).padStart(8, '0')})`;
@@ -285,7 +292,7 @@ export function background(state, { isBridge, ospfOn, uptime0 }) {
     // 剛好在擷取的主機：最近的幾個控制訊框也會出現在畫面上
     const cap = (dyn.cap || {})[l.dev];
     if (!first && cap && cap.on) {
-      const every = f.proto === 'stp' ? 2 : 60;
+      const every = f.proto === 'stp' ? 2 : f.proto === 'lldp' || f.proto === 'dtp' ? 30 : 60;
       for (let k = Math.min(n, 12) - 1; k >= 0; k--) {
         const saved = state.clock;
         state.clock = Math.max(cap.t0, now - k * every);
@@ -303,19 +310,24 @@ export function background(state, { isBridge, ospfOn, uptime0 }) {
         if (!isBridge(d, pid) || spanDest(d, pid) || pc.bpdufilter) continue;
         const roles = Object.values(s.roles[pid] || {});
         if (roles.length && roles.every((r) => r === 'root' || r === 'altn')) continue;
-        const vl = pc.mode === 'trunk' ? d.sw.vlans.length : 1;
-        const v = pc.mode === 'trunk' ? pc.native : pc.vlan, root = state.devices[s.root[v] || s.root[Object.keys(s.root)[0]] || d.id];
+        const trunk = d.rt.dtp && d.rt.dtp[pid] ? d.rt.dtp[pid].oper === 'trunk' : pc.mode === 'trunk';
+        const vl = trunk ? d.sw.vlans.length : 1;
+        const v = trunk ? pc.native : pc.vlan, root = state.devices[s.root[v] || s.root[Object.keys(s.root)[0]] || d.id];
         const rmac = (root && root.rt.stp && root.rt.stp.mac) || s.mac;
         const port = Math.max(1, d.ports.findIndex((p) => p.id === pid) + 1);
         send(d, pid, { proto: 'stp', smac: s.mac, dmac: STP_MAC, stp: { prio: (root && root.rt.stp && root.rt.stp.prio) || s.prio, vlan: v, root: rmac, cost: root === d ? 0 : 4, port } }, n * vl);
       }
     }
-    // CDP：Cisco 設備每 60 秒在每一個有接線的埠送出一次
-    if (isIos(d)) {
-      const n = ticks(60);
-      for (const p of d.ports) {
-        if (!state.rt.links[d.id + ':' + p.id] || (d.sw && spanDest(d, p.id))) continue;
-        send(d, p.id, { proto: 'cdp', smac: (d.ifaces.find((i) => i.rt && i.rt.mac) || { rt: {} }).rt.mac || '', dmac: CDP_MAC, cdp: { id: d.name, port: p.label } }, n);
+    // CDP（預設每 60 秒）、LLDP（預設每 30 秒）：有開的埠才送；DTP 每 30 秒，只有在協商的埠（dynamic、沒有 nonegotiate 的 trunk）
+    const smac = (d.ifaces.find((i) => i.rt && i.rt.mac) || { rt: {} }).rt.mac || '00:00:0c:00:00:00';
+    const cdpT = cdpCfg(d).timer, lldpT = lldpCfg(d).timer;
+    for (const p of d.ports) {
+      if (!state.rt.links[d.id + ':' + p.id] || (d.sw && spanDest(d, p.id))) continue;
+      if (cdpOn(d, p.id)) send(d, p.id, { proto: 'cdp', smac, dmac: CDP_MAC, cdp: { id: deviceIdOf(d), port: p.label } }, ticks(cdpT));
+      if (lldpTxOn(d, p.id)) send(d, p.id, { proto: 'lldp', smac, dmac: LLDP_MAC, lldp: { id: deviceIdOf(d).split('.')[0], port: p.label, ttl: lldpCfg(d).hold } }, ticks(lldpT));
+      const pc = d.sw && d.sw.mode === 'vlan' && d.sw.ports[p.id];
+      if (pc && DTP_MODELS.has(d.model) && !pc.noneg && pc.mode !== 'routed' && pc.mode !== 'access') {
+        send(d, p.id, { proto: 'dtp', smac, dmac: CDP_MAC, dtp: { mode: pc.mode === 'trunk' ? 'trunk' : pc.mode.replace('dynamic-', ''), status: d.rt.dtp && d.rt.dtp[p.id] ? d.rt.dtp[p.id].oper : '' } }, ticks(30));
       }
     }
     for (const i of d.ifaces) {

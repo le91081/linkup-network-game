@@ -10,6 +10,7 @@ import { isIos } from './ios.js';
 import { linkInfo } from './model.js';
 import { ensureFlash, bootPick, isCiscoOs, IMAGES } from './files.js';
 import { nmsTick, queueTrap, flushTraps } from './snmp.js';
+import { discTick, heardVia } from './disc.js';
 
 export const SIM_EPOCH = Date.UTC(2026, 0, 5, 1, 0, 0); // 模擬世界開始的那一刻：2026-01-05 09:00（UTC+8）
 const FACTORY = Date.UTC(1993, 2, 1, 0, 0, 0); // 沒有硬體時鐘的 IOS 交換器，每次開機都從這一刻算起
@@ -485,26 +486,47 @@ function diffDevice(state, d, a, b) {
   }
 }
 
-/** Duplex mismatch：CDP 每分鐘發現一次就抱怨一次，直到修好為止 */
-function duplexNag(state, d, snap, at) {
+/**
+ * CDP 每收到一次對方的通告就比對一次：雙工不一致、Native VLAN 不一致都會抱怨，直到修好為止。
+ * 要收得到對方的 CDP 才知道對方的設定：任何一端把 CDP 關掉，這些訊息就不會出現
+ */
+function cdpNag(state, d, snap, at) {
   if (!isIos(d)) return;
+  const label = (dev, p) => longIf((dev.ports.find((q) => q.id === p) || {}).label || p);
+  const entry = (pid, x) => ((((state.dyn.nb || {})[d.id] || {})[pid] || {})['cdp|' + x.id]);
+  const live = new Set();
   for (const [pid, v] of Object.entries(snap.dup)) {
+    const l = state.rt.links[d.id + ':' + pid], x = l && state.devices[l.dev];
+    if (!x || !heardVia(state, d, pid, 'cdp', x.id)) continue;
+    live.add(pid);
     if (at[pid] != null && state.clock - at[pid] < 60) continue;
     at[pid] = state.clock;
-    const l = state.rt.links[d.id + ':' + pid], x = l && state.devices[l.dev];
-    if (!x || !isIos(x)) continue; // CDP 是 Cisco 的協定：對面不是 Cisco 就不知道對方的雙工
     const [mine, peer] = v.split('|');
     const txt = (dx) => (dx === 'half' ? 'half duplex' : 'not half duplex');
-    const label = (dev, p) => longIf((dev.ports.find((q) => q.id === p) || {}).label || p);
     logEvent(state, d, 4, 'CDP-4-DUPLEX_MISMATCH', `duplex mismatch discovered on ${label(d, pid)} (${txt(mine)}), with ${x.name} ${label(x, l.port)} (${txt(peer)}).`);
   }
-  for (const pid of Object.keys(at)) if (!snap.dup[pid]) delete at[pid];
+  if (d.sw && d.sw.mode === 'vlan') {
+    for (const [pid, pc] of Object.entries(d.sw.ports)) {
+      const l = state.rt.links[d.id + ':' + pid], x = l && state.devices[l.dev];
+      const e = x && entry(pid, x), op = d.rt.dtp && d.rt.dtp[pid];
+      if (!e || e.info.native == null || !op || op.oper === 'down' || pc.mode === 'routed') continue;
+      const mine = op.oper === 'trunk' ? pc.native : pc.vlan;
+      if (mine === e.info.native) continue;
+      const k = 'nv:' + pid;
+      live.add(k);
+      if (at[k] != null && state.clock - at[k] < 60) continue;
+      at[k] = state.clock;
+      logEvent(state, d, 4, 'CDP-4-NATIVE_VLAN_MISMATCH', `Native VLAN mismatch discovered on ${label(d, pid)} (${mine}), with ${x.name} ${label(x, l.port)} (${e.info.native}).`);
+    }
+  }
+  for (const k of Object.keys(at)) if (!live.has(k)) delete at[k];
 }
 
 /** 每次重新計算之後呼叫：NTP 輪詢、找出這一次發生的事件並記下來、把訊息送到 Syslog 伺服器 */
 export function opsAfter(state) {
   const dyn = state.dyn, boot = !!dyn.boot, down = state.down || {};
   ntpTick(state, boot);
+  discTick(state);
   for (const d of Object.values(state.devices)) {
     if (!d.mgmt || !(isIos(d) || d.kind === 'firewall')) continue;
     const c = (dyn.clk[d.id] ||= {});
@@ -525,7 +547,7 @@ export function opsAfter(state) {
     }
     if (prev && !boot) diffDevice(state, d, prev, snap);
     snap.dupAt = (prev && prev.dupAt) || {};
-    if (!boot) duplexNag(state, d, snap, snap.dupAt);
+    if (!boot) cdpNag(state, d, snap, snap.dupAt);
     dyn.ev[d.id] = snap;
   }
   for (const id of Object.keys(dyn.ev)) if (!state.devices[id]) delete dyn.ev[id];

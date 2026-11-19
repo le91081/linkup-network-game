@@ -2,7 +2,8 @@
 import { h } from './dom.js';
 import { fmtIp, parseIp } from '../engine/ip.js';
 import { fmtIp6 } from '../engine/ip6.js';
-import { transact, routeRows, isBridgePort, arpRows, clearArp, hitsOf, fmtDur, portfastOn, macRows, clearMac, macAgeOf, sessionRows, clearSessions, saInfo } from '../engine/sim.js';
+import { transact, routeRows, isBridgePort, arpRows, clearArp, hitsOf, fmtDur, portfastOn, macRows, clearMac, macAgeOf, sessionRows, clearSessions, saInfo, isTrunk, dtpSpeaker } from '../engine/sim.js';
+import { cdpCfg, lldpCfg, cdpOn, lldpTxOn, lldpRxOn, neighbors, ndCounters, cdpCapText, speaksCdp, speaksLldp } from '../engine/disc.js';
 import { iosClock, deviceTime, ntpInfo, logRows, clearLog, syslogStats, uptimeOf, routerId, longIf, SEVERITY, NTP_POLL, vtyRows, idleLimit } from '../engine/ops.js';
 import { quietLeft } from '../engine/remote.js';
 import { counters, clearCounters, clearedAt, spanDest, debugOf, setDebug, consoleRows } from '../engine/wire.js';
@@ -91,19 +92,26 @@ const SHOW = {
     if (!isSw(d)) return ['% 這個指令只適用於交換器'];
     const o = [pad('VLAN', 6) + pad('Name', 18) + pad('Status', 10) + 'Ports', '---- ' + '-'.repeat(17) + ' --------- ' + '-'.repeat(30)];
     for (const v of d.sw.vlans.slice().sort((a, b) => a.id - b.id)) {
-      const ports = d.ports.filter((p) => d.sw.ports[p.id].mode === 'access' && d.sw.ports[p.id].vlan === v.id).map((p) => p.label);
+      const ports = d.ports.filter((p) => { const pc = d.sw.ports[p.id]; return pc.mode !== 'routed' && !isTrunk(d, p.id) && (pc.vlan === v.id || pc.voice === v.id); }).map((p) => p.label);
       o.push(pad(v.id, 6) + pad(v.name.slice(0, 16), 18) + pad('active', 10) + ports.slice(0, 6).join(', ') + (ports.length > 6 ? ', ...' : ''));
     }
     return o;
   },
   'show interfaces trunk': (st, d) => {
     if (!isSw(d)) return ['% 這個指令只適用於交換器'];
-    const tr = d.ports.filter((p) => d.sw.ports[p.id].mode === 'trunk');
-    if (!tr.length) return ['沒有任何 Trunk 埠'];
-    const o = [pad('Port', 14) + pad('Mode', 8) + pad('Encapsulation', 15) + pad('Status', 12) + 'Native vlan'];
-    for (const p of tr) o.push(pad(p.label, 14) + pad('on', 8) + pad('802.1q', 15) + pad(st.rt.links[d.id + ':' + p.id] ? 'trunking' : 'not-connect', 12) + d.sw.ports[p.id].native);
+    const tr = d.ports.filter((p) => isTrunk(d, p.id));
+    if (!tr.length) return ['沒有任何 Trunk 埠（dynamic auto 的埠要對面主動要求才會變成 Trunk）'];
+    const mode = (pc) => (pc.mode === 'trunk' ? 'on' : pc.mode.replace('dynamic-', ''));
+    const o = [pad('Port', 14) + pad('Mode', 13) + pad('Encapsulation', 15) + pad('Status', 12) + 'Native vlan'];
+    for (const p of tr) o.push(pad(p.label, 14) + pad(mode(d.sw.ports[p.id]), 13) + pad('802.1q', 15) + pad('trunking', 12) + d.sw.ports[p.id].native);
+    const allowed = (pc) => (pc.allowed === 'all' || !pc.allowed ? '1-4094' : pc.allowed);
+    const active = (pc) => d.sw.vlans.map((v) => v.id).filter((v) => pc.allowed === 'all' || !pc.allowed || String(pc.allowed).split(',').some((r) => { const [a, b] = r.split('-').map(Number); return b ? v >= a && v <= b : v === a; })).sort((a, b) => a - b);
     o.push('', pad('Port', 14) + 'Vlans allowed on trunk');
-    for (const p of tr) o.push(pad(p.label, 14) + (d.sw.ports[p.id].allowed === 'all' ? '1-4094' : d.sw.ports[p.id].allowed));
+    for (const p of tr) o.push(pad(p.label, 14) + allowed(d.sw.ports[p.id]));
+    o.push('', pad('Port', 14) + 'Vlans allowed and active in management domain');
+    for (const p of tr) o.push(pad(p.label, 14) + (active(d.sw.ports[p.id]).join(',') || 'none'));
+    o.push('', pad('Port', 14) + 'Vlans in spanning tree forwarding state and not pruned');
+    for (const p of tr) o.push(pad(p.label, 14) + (active(d.sw.ports[p.id]).filter((v) => !(d.rt.stp && d.rt.stp.blocked.has(p.id + '|' + v))).join(',') || 'none'));
     return o;
   },
   'show mac address-table': (st, d) => {
@@ -135,8 +143,8 @@ const SHOW = {
       for (const p of d.ports) {
         const pc = d.sw.ports[p.id];
         if (!st.rt.links[d.id + ':' + p.id] || pc.mode === 'routed' || (s.roles[p.id] && s.roles[p.id][v])) continue;
-        if (pc.mode === 'access' && pc.vlan !== +v) continue;
-        o.push(pad(p.label, 16) + pad('Desg', 6) + pad(stpState(d, p.id), 5) + (portfastOn(d, pc) ? 'P2p Edge' : 'P2p'));
+        if (!isTrunk(d, p.id) && pc.vlan !== +v && pc.voice !== +v) continue;
+        o.push(pad(p.label, 16) + pad('Desg', 6) + pad(stpState(d, p.id), 5) + (portfastOn(d, pc, p.id) ? 'P2p Edge' : 'P2p'));
       }
       o.push('');
     }
@@ -375,7 +383,7 @@ const SHOW = {
       const up = !!st.rt.links[d.id + ':' + p.id];
       const li = up && linkInfo(st, d.id, p.id);
       const status = pc && pc.shut ? 'disabled' : d.rt.err[p.id] ? 'err-disabled' : d.sw && spanDest(d, p.id) ? 'monitoring' : up ? 'connected' : 'notconnect';
-      const vlan = !pc || pc.mode === 'routed' ? 'routed' : pc.mode === 'trunk' ? 'trunk' : pc.vlan;
+      const vlan = !pc || pc.mode === 'routed' ? 'routed' : isTrunk(d, p.id) ? 'trunk' : pc.vlan;
       // 前面有 a- 的是自動協商出來的結果，沒有的是手動寫死的設定
       const cfg = phyConfig(d, p.id);
       const dup = cfg.duplex || (li ? 'a-' + li.duplex : 'auto'), spd = cfg.speed != null ? String(cfg.speed) : li ? 'a-' + li.speed : 'auto';
@@ -383,6 +391,56 @@ const SHOW = {
     }
     return o;
   },
+  'show cdp': (st, d) => {
+    const c = cdpCfg(d);
+    if (!c.run) return ['% CDP is not enabled'];
+    return ['Global CDP information:', `\tSending CDP packets every ${c.timer} seconds`, `\tSending a holdtime value of ${c.hold} seconds`, `\tSending CDPv2 advertisements is  ${c.v2 ? 'enabled' : 'not enabled'}`];
+  },
+  'show cdp neighbors': (st, d) => cdpTable(st, d),
+  'show cdp neighbors detail': (st, d) => cdpDetail(st, d),
+  'show cdp entry *': (st, d) => cdpDetail(st, d),
+  'show cdp interface': (st, d) => {
+    const c = cdpCfg(d);
+    if (!c.run) return ['% CDP is not enabled'];
+    const o = [];
+    for (const p of d.ports) {
+      if (!cdpOn(d, p.id)) continue;
+      const up = !!st.rt.links[d.id + ':' + p.id];
+      o.push(`${longIf(p.label)} is ${up ? 'up' : 'down'}, line protocol is ${up ? 'up' : 'down'}`, '  Encapsulation ARPA', `  Sending CDP packets every ${c.timer} seconds`, `  Holdtime is ${c.hold} seconds`);
+    }
+    const off = d.ports.filter((p) => !cdpOn(d, p.id)).map((p) => p.label);
+    if (off.length) o.push('', `（這些介面關掉了 CDP：${off.join('、')}）`);
+    return o;
+  },
+  'show cdp traffic': (st, d) => {
+    if (!cdpCfg(d).run) return ['% CDP is not enabled'];
+    const c = ndCounters(st, d);
+    return ['CDP counters :', `\tTotal packets output: ${c.cdpOut}, Input: ${c.cdpIn}`, '\tHdr syntax: 0, Chksum error: 0, Encaps failed: 0', '\tNo memory: 0, Invalid packet: 0,',
+      '\tCDP version 1 advertisements output: 0, Input: 0', `\tCDP version 2 advertisements output: ${c.cdpOut}, Input: ${c.cdpIn}`];
+  },
+  'show lldp': (st, d) => {
+    const l = lldpCfg(d);
+    if (!l.run) return ['% LLDP is not enabled', '（Catalyst 與 ISR 出廠時 LLDP 是關的，要在設定模式下 lldp run）'];
+    return ['', 'Global LLDP Information:', '    Status: ACTIVE', `    LLDP advertisements are sent every ${l.timer} seconds`, `    LLDP hold time advertised is ${l.hold} seconds`, '    LLDP interface reinitialisation delay is 2 seconds'];
+  },
+  'show lldp neighbors': (st, d) => lldpTable(st, d),
+  'show lldp neighbors detail': (st, d) => lldpDetail(st, d),
+  'show lldp entry *': (st, d) => lldpDetail(st, d),
+  'show lldp interface': (st, d) => {
+    if (!lldpCfg(d).run) return ['% LLDP is not enabled'];
+    return d.ports.flatMap((p) => { const up = !!st.rt.links[d.id + ':' + p.id]; return [`${longIf(p.label)}:`, `    Tx: ${lldpTxOn(d, p.id) ? 'enabled' : 'disabled'}`, `    Rx: ${lldpRxOn(d, p.id) ? 'enabled' : 'disabled'}`, `    Tx state: ${up ? 'IDLE' : 'INIT'}`, `    Rx state: ${up ? 'WAIT FOR FRAME' : 'WAIT PORT OPER'}`, '']; });
+  },
+  'show lldp traffic': (st, d) => {
+    if (!lldpCfg(d).run) return ['% LLDP is not enabled'];
+    const c = ndCounters(st, d);
+    return ['', 'LLDP traffic statistics: ', `    Total frames out: ${c.lldpOut}`, '    Total entries aged: 0', `    Total frames in: ${c.lldpIn}`, '    Total frames received in error: 0', '    Total frames discarded: 0', '    Total TLVs discarded: 0', '    Total TLVs unrecognized: 0'];
+  },
+  'show dtp': (st, d) => {
+    if (!dtpSpeaker(d)) return ['% 這台設備不支援 DTP'];
+    const n = Object.entries(d.sw.ports).filter(([, pc]) => pc.mode !== 'routed' && pc.mode !== 'access' && !pc.noneg).length;
+    return ['Global DTP information', '\tSending DTP Hello packets every 30 seconds', '\tDynamic Trunk timeout is 300 seconds', `\t${n} interfaces using DTP`];
+  },
+  'show interfaces switchport': (st, d) => (isSw(d) ? d.ports.filter((p) => d.sw.ports[p.id].mode !== 'routed').flatMap((p) => [...switchportLines(st, d, p), '']) : ['% 這個指令只適用於交換器']),
   'show vrrp brief': (st, d) => {
     const v = d.ifaces.filter((i) => i.vrrp && i.vrrp.on);
     if (!v.length) return ['沒有設定 VRRP'];
@@ -391,6 +449,81 @@ const SHOW = {
         + (i.rt.vrrp && i.rt.vrrp.wait > 0 ? `   (Master down，${Math.ceil(i.rt.vrrp.wait)} 秒後接手)` : ''))];
   },
 };
+// ───────────────────────── CDP / LLDP / switchport ─────────────────────────
+/** CDP 表格裡的介面寫法：Gig 0/1、Ten 1/1/1、Eth 1/49 */
+const cdpIf = (s) => String(s).replace(/^(GigabitEthernet|Gi)(?=\d)/, 'Gig ').replace(/^(TenGigabitEthernet|Te)(?=\d)/, 'Ten ').replace(/^(Ethernet|Eth)(?=\d)/, 'Eth ');
+function cdpTable(st, d) {
+  if (!cdpCfg(d).run) return ['% CDP is not enabled'];
+  const rows = neighbors(st, d, 'cdp');
+  const o = ['Capability Codes: R - Router, T - Trans Bridge, B - Source Route Bridge', '                  S - Switch, H - Host, I - IGMP, r - Repeater, P - Phone,', '                  D - Remote, C - CVTA, M - Two-port Mac Relay', '',
+    'Device ID        Local Intrfce     Holdtme    Capability  Platform  Port ID'];
+  for (const r of rows) {
+    const tail = pad(cdpIf(r.label), 18) + pad(String(r.left).padStart(5), 11) + pad(r.info.caps.join(' ').padStart(11), 12) + pad(r.info.platform.slice(0, 9), 10) + cdpIf(r.info.port);
+    if (r.info.id.length > 16) o.push(r.info.id, ' '.repeat(17) + tail); // 名稱太長時自己一行（真的 IOS 也是這樣）
+    else o.push(pad(r.info.id, 17) + tail);
+  }
+  o.push('', `Total cdp entries displayed : ${rows.length}`);
+  if (!rows.length) o.push('（沒有收到任何 CDP 通告：對面不是 Cisco 設備、對面關掉了 CDP，或還沒到下一次通告的時間）');
+  return o;
+}
+function cdpDetail(st, d) {
+  if (!cdpCfg(d).run) return ['% CDP is not enabled'];
+  const o = [];
+  for (const r of neighbors(st, d, 'cdp')) {
+    const i = r.info;
+    o.push('-------------------------', `Device ID: ${i.id}`, 'Entry address(es): ', ...(i.ip ? [`  IP address: ${i.ip}`] : []),
+      `Platform: ${/^Cisco/.test(i.platform) ? i.platform : 'cisco ' + i.platform},  Capabilities: ${cdpCapText(i.caps)} `,
+      `Interface: ${longIf(r.label)},  Port ID (outgoing port): ${i.port}`, `Holdtime : ${r.left} sec`, '', 'Version :', i.ver, '', 'advertisement version: 2',
+      ...(i.voice ? [`Appliance VLAN-ID TLV: 語音 VLAN ${i.voice}`] : []), ...(i.power ? [`Power drawn: ${i.power.toFixed(3)} Watts`] : []),
+      ...(i.native != null ? ["VTP Management Domain: ''", `Native VLAN: ${i.native}`] : []), `Duplex: ${i.duplex}`, 'Management address(es): ', ...(i.ip ? [`  IP address: ${i.ip}`] : []), '');
+  }
+  o.push(`Total cdp entries displayed : ${neighbors(st, d, 'cdp').length}`);
+  return o;
+}
+const LLDP_CAP = { R: 'R', B: 'B', T: 'T', W: 'W' };
+function lldpTable(st, d) {
+  if (!lldpCfg(d).run) return ['% LLDP is not enabled', '（Catalyst 與 ISR 出廠時 LLDP 是關的，要在設定模式下 lldp run）'];
+  const rows = neighbors(st, d, 'lldp');
+  const o = ['Capability codes:', '    (R) Router, (B) Bridge, (T) Telephone, (C) DOCSIS Cable Device', '    (W) WLAN Access Point, (P) Repeater, (S) Station, (O) Other', '',
+    pad('Device ID', 20) + pad('Local Intf', 15) + pad('Hold-time', 11) + pad('Capability', 16) + 'Port ID'];
+  for (const r of rows) o.push(pad(r.info.id.slice(0, 19), 20) + pad(r.label, 15) + pad(r.hold, 11) + pad(r.info.caps.map((c) => LLDP_CAP[c] || c).join(','), 16) + r.info.port);
+  o.push('', `Total entries displayed: ${rows.length}`);
+  return o;
+}
+function lldpDetail(st, d) {
+  if (!lldpCfg(d).run) return ['% LLDP is not enabled'];
+  const o = [];
+  for (const r of neighbors(st, d, 'lldp')) {
+    const i = r.info, x = st.devices[r.dev];
+    const mac = x && ((x.ifaces.find((y) => y.rt && y.rt.mac) || {}).rt || {}).mac;
+    o.push('------------------------------------------------', `Local Intf: ${r.label}`, `Chassis id: ${mac ? dotMac(mac) : i.id}`, `Port id: ${i.port}`, `Port Description: ${longIf(i.port)}`, `System Name: ${i.id}`, '',
+      'System Description: ', i.ver, '', `Time remaining: ${r.left} seconds`, `System Capabilities: ${i.caps.join(',')}`, `Enabled Capabilities: ${i.caps.join(',')}`,
+      'Management Addresses:', i.ip ? `    IP: ${i.ip}` : '    （沒有）', 'Auto Negotiation - supported, enabled', 'Physical media capabilities:', '    1000baseT(FD)', '    100base-TX(FD)', 'Media Attachment Unit type: 30',
+      ...(i.native != null ? [`Vlan ID: ${i.native}`] : []),
+      ...(i.med ? ['', 'MED Information:', '', '    MED Codes:', '          (NP) Network Policy, (LI) Location Identification', '          (PS) Power Source Entity, (PD) Power Device', '          (IN) Inventory', '',
+        '    H/W revision: 1', '    F/W revision: ' + i.ver, '    Manufacturer: Cisco Systems, Inc.', '    Model: ' + i.platform, '    Capabilities: NP, PD, IN', '    Device type: Endpoint Class III', `    PD device, Power source: Unknown, Power Priority: High, Wattage: ${i.power || 6.3}`] : []),
+      ...(i.voice ? ['', `    Network Policy(Voice): VLAN ${i.voice}, tagged, Layer-2 priority: 5, DSCP: 46`, '    （LLDP-MED：交換器告訴電話語音 VLAN 是幾號）'] : []), '');
+  }
+  o.push(`Total entries displayed: ${neighbors(st, d, 'lldp').length}`);
+  return o;
+}
+/** show interfaces <埠> switchport */
+function switchportLines(st, d, p) {
+  const pc = d.sw.ports[p.id], t = (d.rt.dtp || {})[p.id] || { oper: 'down' };
+  const vname = (v) => { const x = d.sw.vlans.find((y) => y.id === v); return x ? x.name.replace(/\s+/g, '_') : 'Inactive'; };
+  const adm = pc.mode === 'dynamic-auto' ? 'dynamic auto' : pc.mode === 'dynamic-desirable' ? 'dynamic desirable' : pc.mode === 'trunk' ? 'trunk' : 'static access';
+  const oper = t.oper === 'trunk' ? 'trunk' : t.oper === 'down' ? 'down' : 'static access';
+  const neg = dtpSpeaker(d) && pc.mode !== 'access' && !pc.noneg;
+  return [`Name: ${p.label}`, 'Switchport: Enabled', `Administrative Mode: ${adm}`, `Operational Mode: ${oper}`, 'Administrative Trunking Encapsulation: dot1q',
+    `Operational Trunking Encapsulation: ${t.oper === 'trunk' ? 'dot1q' : 'native'}`, `Negotiation of Trunking: ${neg ? 'On' : 'Off'}`,
+    `Access Mode VLAN: ${pc.vlan} (${pc.vlan === 1 ? 'default' : vname(pc.vlan)})`, `Trunking Native Mode VLAN: ${pc.native} (${pc.native === 1 ? 'default' : vname(pc.native)})`,
+    'Administrative Native VLAN tagging: enabled', `Voice VLAN: ${pc.voice ? `${pc.voice} (${vname(pc.voice)})` : 'none'}`,
+    'Administrative private-vlan host-association: none', 'Administrative private-vlan mapping: none', 'Operational private-vlan: none',
+    `Trunking VLANs Enabled: ${pc.allowed === 'all' || !pc.allowed ? 'ALL' : pc.allowed}`, 'Pruning VLANs Enabled: 2-1001', 'Capture Mode Disabled', 'Capture VLANs Allowed: ALL', '',
+    'Protected: false', 'Unknown unicast blocked: disabled', 'Unknown multicast blocked: disabled', 'Appliance trust: none',
+    ...(t.why ? [`（DTP：${t.why}）`] : []), ...(pc.noneg ? ['（nonegotiate：這個埠不送 DTP，對面的 dynamic 埠不會因為它而變成 Trunk）'] : [])];
+}
+
 /** show version：跑的是哪一個版本、從哪一個映像檔開機 */
 function versionLines(st, d) {
   ensureFlash(d);
@@ -565,7 +698,14 @@ function showOrPing(app, devId, line, print) {
     return true;
   }
   // show interfaces [名稱]、show monitor session <n>
-  if (tok[0].length >= 2 && 'show'.startsWith(tok[0]) && tok[1] && tok[1].length >= 3 && 'interfaces'.startsWith(tok[1]) && !(tok[2] && ['status', 'trunk', 'counters'].some((w) => tok[2].length >= 2 && w.startsWith(tok[2])))) {
+  if (tok[0].length >= 2 && 'show'.startsWith(tok[0]) && tok[1] && tok[1].length >= 3 && 'interfaces'.startsWith(tok[1]) && tok.length >= 4 && tok[tok.length - 1].length >= 2 && 'switchport'.startsWith(tok[tok.length - 1])) {
+    const p = portByName(d, tok.slice(2, -1).join(''));
+    if (!p) { print(`% 找不到介面「${tok.slice(2, -1).join(' ')}」`, 'warn'); return true; }
+    if (!isSw(d) || d.sw.ports[p.id].mode === 'routed') { print(`Name: ${p.label}`, 'pre'); print('Switchport: Disabled', 'pre'); return true; }
+    switchportLines(st, d, p).forEach((l) => print(l, l.startsWith('（') ? 'hint' : 'pre'));
+    return true;
+  }
+  if (tok[0].length >= 2 && 'show'.startsWith(tok[0]) && tok[1] && tok[1].length >= 3 && 'interfaces'.startsWith(tok[1]) && !(tok[2] && ['status', 'trunk', 'counters', 'switchport'].some((w) => tok[2].length >= 2 && w.startsWith(tok[2])))) {
     const name = tok.slice(2).join('');
     const ports = name ? [portByName(d, name)] : d.ports.filter((p) => st.rt.links[d.id + ':' + p.id] || (d.sw && d.sw.ports[p.id] && d.sw.ports[p.id].shut));
     if (name && !ports[0]) { print(`% 找不到介面「${tok.slice(2).join(' ')}」`, 'warn'); return true; }
