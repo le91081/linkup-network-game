@@ -436,6 +436,7 @@ function diffDevice(state, d, a, b) {
       ev(5, 'LINK-5-CHANGED', `Interface ${L}, changed state to administratively down`,
         `logid="0100020099" type="event" subtype="system" level="information" vd="root" logdesc="Interface status changed" action="interface-stat-change" status="DOWN" msg="Link monitor: Interface ${fgIf(pid)} was turned down"`);
       if (ios && wasUp) ev(5, 'LINEPROTO-5-UPDOWN', `Line protocol on Interface ${L}, changed state to down`);
+      if (wasUp) queueTrap(state, d, 'linkDown', { ifName: L, admin: true }); // ifAdminStatus = down
     } else if (now === 'rootinc') {
       ev(2, 'SPANTREE-2-ROOTGUARD_BLOCK', `Root guard blocking port ${L} on VLAN0001.`);
     } else if (now === 'bpdu') {

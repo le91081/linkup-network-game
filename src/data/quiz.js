@@ -24,6 +24,7 @@ export const LEVEL_TOPIC = {
   l20: 'vpn', l21: 'vpn',
   l29: 'services', l30: 'basics', l31: 'security', l32: 'security', l33: 'ops', l34: 'ipv6', l35: 'ipv6',
   l36: 'services', l37: 'switching', l38: 'routing', l39: 'basics',
+  l40: 'ops', l41: 'ops', l42: 'ops', l43: 'ops',
 };
 
 export const QUESTIONS = {
@@ -119,6 +120,14 @@ export const QUESTIONS = {
     { q: 'REST API 中，建立一筆新資源通常使用哪一個 HTTP 方法？', a: ['GET', 'POST', 'DELETE', 'HEAD'], c: 1, e: 'CRUD 對應到 HTTP：Create = POST、Read = GET、Update = PUT / PATCH、Delete = DELETE。', r: 'CCNA 6.5' },
     { q: 'JSON 中，方括號 [ ] 代表什麼？', a: ['物件', '陣列', '字串', '註解'], c: 1, e: '大括號 { } 是物件（一組「鍵: 值」），方括號 [ ] 是陣列（有順序的清單）。', r: 'CCNA 6.7' },
     { q: 'Ansible 的特色是什麼？', a: ['必須在每台設備上安裝代理程式', '不需要代理程式，透過 SSH 連線並用 YAML 撰寫 Playbook', '只能管理 Windows 伺服器', '使用專屬的圖形介面，不能寫成檔案'], c: 1, e: 'Ansible 是 agentless 的，控制端透過 SSH（或 API）連到設備，工作內容用 YAML 寫成 Playbook。', r: 'CCNA 6.6' },
+    { q: '在路由器上輸入 copy tftp: running-config 還原一份舊的設定檔，結果會怎樣？', a: ['整份設定換成檔案的內容', '檔案的內容合併進目前的設定，檔案裡沒寫到的設定不會被拿掉', '只會更新 startup-config', '路由器會立刻重新開機'], c: 1, e: '複製到 running-config 等於把每一行貼進設定模式。要整份取代，複製到 startup-config 再重新開機。', r: 'CCNA 4.9' },
+    { q: 'TFTP 和 FTP 最主要的差別是什麼？', a: ['TFTP 用 TCP，FTP 用 UDP', 'TFTP 用 UDP 69 而且不需要帳號密碼；FTP 用 TCP 21，需要登入', 'TFTP 會加密，FTP 不會', '兩者只差在連接埠號碼'], c: 1, e: 'TFTP 簡單、沒有驗證，每次只送一個 512 位元組的區塊並等待確認，所以傳大檔很慢。FTP 走 TCP，要登入，但帳號密碼和內容都是明文。', r: 'CCNA 4.9' },
+    { q: '下載了新的 IOS 映像檔之後，開機之前應該先做什麼？', a: ['把舊的映像檔全部刪掉', '用 verify /md5 確認和原廠公布的 MD5 一樣', '執行 erase startup-config', '把 flash 格式化'], c: 1, e: '檔案傳輸不完整或被竄改都會讓 MD5 不同。確認無誤後再設定 boot system、存檔、重新開機；舊版本最好留著當退路。', r: 'CCNA 4.9' },
+    { q: '在 Cisco 交換器上執行 crypto key generate rsa，卻出現「Please define a domain-name first」。要先做什麼？', a: ['設定 ip domain name', '開啟 ip http server', '設定 enable secret', '設定 ip default-gateway'], c: 0, e: 'RSA 金鑰的名稱是「主機名稱.網域名稱」，所以要先有不是原廠預設的主機名稱，以及網域名稱。', r: 'CCNA 4.8' },
+    { q: 'line vty 0 4 底下只設定了 login 與 password，SSH 會怎樣？', a: ['用線路密碼就能登入', 'SSH 需要帳號，要改成 login local（或 AAA）才登入得了', 'SSH 會自動改用 Telnet', '完全沒有影響'], c: 1, e: 'login 只會問線路密碼；login local 才會使用 username 建立的本機帳號，SSH 需要這樣的帳號。', r: 'CCNA 4.8' },
+    { q: 'SNMPv3 比 v2c 多了什麼？', a: ['更快的輪詢速度', '帳號、認證與加密（authPriv）', '可以送 Trap', '可以查詢介面的計數器'], c: 1, e: 'v1 / v2c 用 community 字串而且是明文；v3 有使用者、認證（SHA）與加密（AES），查詢的內容別人看不到。', r: 'CCNA 4.4' },
+    { q: '網管伺服器兩次輪詢相隔 60 秒，一個 1 Gbps 介面的 ifHCOutOctets 增加了 3,750,000,000。這段時間的送出使用率大約是多少？', a: ['5%', '25%', '50%', '75%'], c: 2, e: '3.75 × 10⁹ 位元組 × 8 ÷ 60 秒 = 500 Mbps，是 1 Gbps 的 50%。', r: 'CCNA 4.4' },
+    { q: '兩台都支援 Gigabit 的交換器之間只協商到 100 Mbps 全雙工，燈號也正常。最可能的原因是？', a: ['VLAN 設錯了', '網路線有線對斷了，自動降到 100 Mbps', 'STP 把埠封鎖了', 'IP 位址衝突'], c: 1, e: '1000BASE-T 要四對線都正常，只剩兩對能用時會自動降速 (speed downshift)。燈是亮的，很容易被忽略。', r: 'Network+ 5.2' },
     { q: '控制器式網路中，「南向介面 (southbound API)」連接的是什麼？', a: ['控制器與應用程式', '控制器與網路設備', '兩台控制器之間', '使用者與網頁介面'], c: 1, e: '南向介面讓控制器下達指令給設備（例如 NETCONF、OpenFlow）；北向介面則提供給上層的應用程式與自動化工具呼叫。', r: 'CCNA 6.3' },
   ],
 };

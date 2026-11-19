@@ -273,7 +273,8 @@ console.log('\nCLI 設定指令');
       const s2 = cloneState(s);
       s2.devices[d.id] = makeDevice(d.model, d.id, { name: d.name, pos: d.pos });
       // RSA 金鑰、韌體與 flash 不在設定檔裡：當作同一台設備換回原本的設定
-      if (d.mgmt && s2.devices[d.id].mgmt) s2.devices[d.id].mgmt.sshKey = d.mgmt.sshKey;
+      // SNMPv3 的使用者也一樣：IOS 不會把它寫進 running-config
+      if (d.mgmt && s2.devices[d.id].mgmt) { s2.devices[d.id].mgmt.sshKey = d.mgmt.sshKey; if (d.mgmt.snmpUser) s2.devices[d.id].mgmt.snmpUser = { ...d.mgmt.snmpUser }; }
       for (const k of ['fw', 'flash']) if (d[k]) s2.devices[d.id][k] = JSON.parse(JSON.stringify(d[k]));
       recompute(s2);
       const errs = type(s2, d.id, ['configure terminal', ...want, 'end']);
@@ -1161,6 +1162,184 @@ console.log('\n排除故障的工具：遠端登入、計數器、擷取、SPAN�
     'sniffer：看得到封包從 internal 進來、NAT 之後從 wan1 出去；抓滿 3 個自動停止；hardware deviceinfo nic 看得到計數器');
     const tr = fortiSession(() => s.devices.fw, () => s).exec('execute traceroute 8.8.8.8');
     ok(tr.trace === '8.8.8.8', 'execute traceroute 交給畫面去追蹤路徑');
+  }
+}
+
+// ── 階段 3：檔案傳輸、韌體、SSH 金鑰、SNMP、背景流量 ──
+console.log('\n維運：TFTP / FTP、韌體、SSH 金鑰、SNMP、背景流量');
+{
+  const files = await import('../src/engine/files.js');
+  const snmp = await import('../src/engine/snmp.js');
+  const rem = await import('../src/engine/remote.js');
+  const ops = await import('../src/engine/ops.js');
+  const { iosSession, runningConfig } = await import('../src/engine/ios.js');
+  const { fortiSession, fortiConfig } = await import('../src/engine/fortios.js');
+  const { removeCable, addCable, makeState, makeDevice, linkInfo } = await import('../src/engine/model.js');
+  const sim = await import('../src/engine/sim.js');
+  const ok = (cond, title) => (cond ? console.log('  ✔ ' + title) : fail(title));
+  const start = (id) => { const lv = LEVELS.find((l) => l.id === id); const s = lv.setup(); recompute(s); return { s, lv }; };
+  const ios = (s, id, lines) => { const sess = iosSession(() => s.devices[id], () => s); const res = []; for (const l of lines) res.push(sess.exec(l)); recomputeNow(s); return { out: res.flatMap((r) => r.out), wait: res.reduce((a, r) => a + (r.wait || 0), 0), res }; };
+  const forti = (s, id, lines) => { const sess = fortiSession(() => s.devices[id], () => s); const res = []; for (const l of lines) res.push(sess.exec(l)); recomputeNow(s); return { out: res.flatMap((r) => r.out), wait: res.reduce((a, r) => a + (r.wait || 0), 0) }; };
+
+  // ── 設定備份與還原 ──
+  {
+    const { s, lv } = start('l40');
+    const merged = ios(s, 'sw', ['copy tftp: running-config', '10.0.99.30', 'sw-core-confg', '']);
+    const pass1 = evaluate(s, lv.objectives);
+    ok(merged.out.some((l) => /^\[OK - \d+ bytes\]$/.test(l)) && merged.out.some((l) => /bytes copied in/.test(l)) && pass1[0].pass && !pass1[1].pass && s.devices.sw.sw.ports['Gi0/4'].shut,
+      'copy tftp: running-config 是合併：VLAN 20 回來了，但檔案裡沒寫到的 shutdown 還在（印表機還是不通）');
+    const { s: s2 } = start('l40');
+    ios(s2, 'sw', ['copy tftp://10.0.99.30/sw-core-confg startup-config', '']);
+    const before = s2.devices.sw.sw.ports['Gi0/4'].shut;
+    ios(s2, 'sw', ['reload', 'no', '']); // 「System configuration has been modified. Save?」要回答 no，不然剛還原的 startup 會被蓋掉
+    advance(s2, 121); recompute(s2);
+    ok(before && !s2.devices.sw.sw.ports['Gi0/4'].shut && s2.devices.sw.sw.vlans.some((v) => v.id === 20) && evaluate(s2, lv.objectives).slice(0, 3).every((r) => r.pass),
+      'copy tftp: startup-config 再 reload 是整份取代：Gi0/4 的 shutdown 也不見了');
+    const up = ios(s2, 'rt', ['copy running-config tftp:', '10.0.99.30', '']);
+    ok(s2.devices.bak.files['r1-confg'] && s2.devices.bak.files['r1-confg'].lines.join('\n') === runningConfig(s2, s2.devices.rt).join('\n') && up.out.some((l) => /^!+$/.test(l)),
+      'copy running-config tftp: 照預設的檔名 (r1-confg) 上傳到伺服器');
+    const miss = ios(s2, 'sw', ['copy tftp://10.0.99.30/nope running-config', '']);
+    ok(miss.out.some((l) => l === '%Error opening tftp://10.0.99.30/nope (No such file or directory)'), '伺服器上沒有這個檔案：%Error opening … (No such file or directory)');
+  }
+  // ── 韌體升級 ──
+  {
+    const { s, lv } = start('l41');
+    const NEW = 'isr4300-universalk9.17.09.05a.SPA.bin';
+    const full = ios(s, 'rt', [`copy tftp://10.0.99.30/${NEW} bootflash:`, '']);
+    ok(full.out.some((l) => /Not enough space on device/.test(l)), 'bootflash 空間不夠：Not enough space on device');
+    ios(s, 'rt', ['delete bootflash:isr4300-universalk9.17.03.04a.SPA.bin', '', '']);
+    const t0 = s.clock;
+    const tftp = ios(s, 'rt', [`copy tftp://10.0.99.30/${NEW} bootflash:`, '']);
+    s.devices.rt.flash.files = Object.fromEntries(Object.entries(s.devices.rt.flash.files).filter(([n]) => n !== NEW));
+    const ftp = ios(s, 'rt', [`copy ftp://netadmin:Fw#Upgrade2026@10.0.99.30/${NEW} bootflash:`, '']);
+    ok(tftp.wait > 1200 && ftp.wait < 60 && s.devices.rt.flash.files[NEW] && s.clock === t0,
+      `TFTP 一次只送 512 位元組，722 MB 要 ${Math.round(tftp.wait / 60)} 分鐘；FTP 只要 ${Math.round(ftp.wait)} 秒`);
+    const v = ios(s, 'rt', [`verify /md5 bootflash:${NEW} ${files.IMAGES[NEW].md5}`]);
+    ok(v.out.some((l) => l.startsWith('Verified (bootflash:')), 'verify /md5 和原廠公布的值一樣：Verified');
+    // 拿錯平台的映像檔：開機會跳過它，改用下一個
+    const WRONG = 'isr4400-universalk9.17.09.05a.SPA.bin';
+    ios(s, 'rt', ['delete bootflash:isr4300-universalk9.16.12.04.SPA.bin', '', '', 'delete bootflash:core/isr4300_RP_0_iosd_10251_20251022-081132-UTC.core.gz', '', '']);
+    ios(s, 'rt', [`copy ftp://netadmin:Fw#Upgrade2026@10.0.99.30/${WRONG} bootflash:`, '', 'configure terminal', 'no boot system', `boot system bootflash:${WRONG}`, 'end', 'write memory', 'reload', '']);
+    advance(s, 181); recompute(s);
+    const log = ops.logRows(s, s.devices.rt).map((x) => x.line);
+    ok(s.devices.rt.fw.ver !== '17.9.5a' && log.some((l) => /Boot of bootflash:isr4400.* failed: .*ISR 4400/.test(l)), 'boot system 指向 ISR 4400 的映像檔：開機時跳過它，改用 flash 裡第一個能開機的映像檔');
+    ios(s, 'rt', ['configure terminal', 'no boot system', `boot system bootflash:${NEW}`, 'end', 'write memory', 'reload', '']);
+    advance(s, 181); recompute(s);
+    ok(s.devices.rt.fw.ver === '17.9.5a' && evaluate(s, lv.objectives).every((r) => r.pass), 'boot system 指向新的映像檔、存檔、reload：show version 是 17.9.5a，三個目標都通過');
+    // 所有能開機的映像檔都刪掉 → ROMMON，再手動開機
+    for (const n of Object.keys(s.devices.rt.flash.files)) if (/^isr4300/.test(n) && n !== NEW) delete s.devices.rt.flash.files[n];
+    s.devices.rt.flash.files[NEW].md5 = 'deadbeef';
+    ios(s, 'rt', ['reload', '']);
+    const rom = s.rt.rommon && s.rt.rommon.rt;
+    const blocked = !sim.transact(s, 'usr', { proto: 'icmp', dst: parseIp('8.8.8.8') }).ok;
+    s.devices.rt.flash.files[NEW].md5 = files.IMAGES[NEW].md5;
+    const r = ios(s, 'rt', [`boot bootflash:${NEW}`]);
+    advance(s, 181); recompute(s);
+    ok(rom && blocked && r.out.some((l) => /開機中/.test(l)) && !s.rt.rommon.rt && s.devices.rt.fw.ver === '17.9.5a', '沒有能開機的映像檔就停在 ROMMON；在 ROMMON 用 boot 指定檔案就能開機');
+  }
+  // ── FortiGate：備份、還原、升級路徑 ──
+  {
+    const { s } = start('l09');
+    const fw = s.devices.fw;
+    fw.fw = { image: 'FGT_60F-v7.0.15.M-build0632-FORTINET.out', ver: '7.0.15' };
+    const srv = s.devices.web;
+    srv.services.push({ proto: 'udp', port: 69, name: 'TFTP' });
+    srv.files = { 'FGT_60F-v7.4.7.F-build2731-FORTINET.out': files.imageFile('FGT_60F-v7.4.7.F-build2731-FORTINET.out', 0), 'FGT_60F-v7.2.10.M-build1706-FORTINET.out': files.imageFile('FGT_60F-v7.2.10.M-build1706-FORTINET.out', 0) };
+    const ip = sim.primaryIpOf ? null : srv.ifaces[0].ip;
+    // 防火牆到 DMZ 的伺服器：本機送出的流量不需要政策
+    const bk = forti(s, 'fw', [`execute backup config tftp fw.conf ${ip}`]);
+    const saved = srv.files['fw.conf'];
+    ok(bk.out.includes('Send config file to tftp server OK.') && saved && saved.lines.join('\n') === fortiConfig(s, fw).join('\n'), 'FortiGate execute backup config tftp：整份設定存到伺服器');
+    const jump = forti(s, 'fw', [`execute restore image tftp FGT_60F-v7.4.7.F-build2731-FORTINET.out ${ip}`, 'y']);
+    ok(jump.out.some((l) => /Upgrade path check failed: 7\.0\.15 → 7\.4\.7/.test(l)) && fw.fw.ver === '7.0.15', 'FortiGate 不能從 7.0 直接跳到 7.4：要照升級路徑先到 7.2');
+    forti(s, 'fw', [`execute restore image tftp FGT_60F-v7.2.10.M-build1706-FORTINET.out ${ip}`, 'y']);
+    advance(s, 71); recompute(s);
+    ok(fw.fw.ver === '7.2.10', '先升到 7.2.10，重新開機之後生效');
+    fw.policies[0].name = '被改壞了';
+    forti(s, 'fw', [`execute restore config tftp fw.conf ${ip}`, 'y']);
+    advance(s, 71); recompute(s);
+    ok(fw.policies[0].name !== '被改壞了' && fortiConfig(s, fw).join('\n') === saved.lines.join('\n'), 'execute restore config：整份設定換回備份的內容，然後重新開機');
+  }
+  // ── SSH 的前置條件 ──
+  {
+    const { s, lv } = start('l42');
+    const no = rem.remoteOpen(s, 'adm', 'ssh', parseIp('10.0.98.2'), 'admin');
+    const e1 = ios(s, 'sw', ['configure terminal', 'crypto key generate rsa modulus 2048']).out;
+    const e2 = ios(s, 'sw', ['configure terminal', 'hostname SW-Floor3', 'crypto key generate rsa modulus 2048']).out;
+    ok(!no.ok && e1.includes('% Please define a hostname other than Switch.') && e2.includes('% Please define a domain-name first.'),
+      '原廠交換器沒有 RSA 金鑰，SSH 連不進去；產生金鑰之前要先改主機名稱、設定網域名稱');
+    const { s: s3 } = start('l42');
+    ios(s3, 'sw', ['configure terminal', 'ip default-gateway 10.0.98.1', 'end']);
+    const tel = rem.remoteOpen(s3, 'adm', 'telnet', parseIp('10.0.98.2'), '');
+    ok(!tel.ok && tel.noPass, 'line vty 只有 login 又沒有密碼：Telnet 連上之後立刻被關掉 (Password required, but none set)');
+    ios(s, 'sw', ['configure terminal', 'ip domain name corp.local', 'crypto key generate rsa modulus 2048', 'ip ssh version 2', 'username netadmin privilege 15 secret Sw!tch-Admin-2026', 'line vty 0 4', 'transport input ssh', 'end']);
+    const noGw = evaluate(s, lv.objectives)[0];
+    ios(s, 'sw', ['configure terminal', 'ip default-gateway 10.0.98.1', 'end']);
+    const lineOnly = evaluate(s, lv.objectives)[0];
+    ios(s, 'sw', ['configure terminal', 'line vty 0 4', 'login local', 'end']);
+    ok(!noGw.pass && !lineOnly.pass && /login local/.test(lineOnly.reason) && evaluate(s, lv.objectives).every((r) => r.pass),
+      '少了 ip default-gateway 回應回不去；只有 login 的話 SSH 登入不了；改成 login local 之後三個目標都通過');
+    const k1 = rem.hostKey(s.devices.sw);
+    ios(s, 'sw', ['configure terminal', 'crypto key generate rsa modulus 2048', 'yes', 'end']);
+    ok(rem.hostKey(s.devices.sw) !== k1, '重新產生 RSA 金鑰之後，SSH 的指紋就不一樣了（用戶端會警告主機金鑰變了）');
+  }
+  // ── SNMP ──
+  {
+    const { s, lv } = start('l43');
+    const nms = s.devices.nms;
+    nms.nms.targets = [{ ip: '10.0.50.2', ver: 'v2c', community: 'public' }];
+    const off = snmp.pollOne(s, nms, nms.nms.targets[0]);
+    ios(s, 'core', ['configure terminal', 'snmp-server community Watch!2026 RO 10', 'access-list 10 permit 10.0.50.30', 'end']);
+    const wrong = snmp.pollOne(s, nms, nms.nms.targets[0]);
+    nms.nms.targets[0].community = 'Watch!2026';
+    const good = snmp.pollOne(s, nms, nms.nms.targets[0]);
+    ios(s, 'core', ['configure terminal', 'no access-list 10', 'access-list 10 permit 10.0.50.99', 'end']);
+    const acl = snmp.pollOne(s, nms, nms.nms.targets[0]);
+    ok(!off.ok && /UDP\/161|沒有在|服務/.test(off.why) && !wrong.ok && /community/.test(wrong.why) && good.ok && good.sys.name === 'SW-Core' && !acl.ok && /ACL/.test(acl.why),
+      'SNMP：沒開就沒有回應；community 錯了或來源不在 ACL 裡，設備什麼都不回；對了就查得到');
+    ios(s, 'dsg', ['configure terminal', 'snmp-server group NMS v3 priv', 'snmp-server user nms NMS v3 auth sha Mon!tor-Auth26 priv aes 128 Mon!tor-Priv26', 'end']);
+    const t = { ip: '10.0.50.3', ver: 'v3', user: 'nms', auth: 'Mon!tor-Auth26', priv: 'wrong-priv' };
+    const badPriv = snmp.pollOne(s, nms, t);
+    t.priv = 'Mon!tor-Priv26';
+    nms.nms.targets.push(t);
+    snmp.pollOne(s, nms, t);
+    advance(s, 60);
+    const r = snmp.nmsOf(s, 'nms').targets['10.0.50.3'];
+    const up = r && r.ifs['Gi0/9'];
+    ok(!badPriv.ok && r && r.ok && up && up.speed === 100 && up.util && up.util.out > 90,
+      `SNMPv3：加密密碼不對就解不開；對了之後網管看得到 SW-Design 的上行線只跑 100 Mbps、使用率 ${up && up.util ? Math.round(up.util.out) : '?'}%`);
+    // Trap
+    ios(s, 'dsg', ['configure terminal', 'snmp-server host 10.0.50.30 version 3 priv nms', 'snmp-server enable traps', 'interface gi0/1', 'shutdown', 'end']);
+    const traps = snmp.nmsOf(s, 'nms').traps;
+    ok(traps.some((x) => x.kind === 'linkDown' && x.info.ifName === 'GigabitEthernet0/1' && x.from === '10.0.50.3'), '介面被關掉：交換器送出 linkDown Trap，網管伺服器收到了');
+    ios(s, 'dsg', ['configure terminal', 'interface gi0/1', 'no shutdown', 'end']);
+    // 線材降速與背景流量
+    const c = s.cables.find((x) => x.damaged);
+    const li = linkInfo(s, 'dsg', 'Gi0/9');
+    const slow = evaluate(s, lv.objectives)[2];
+    removeCable(s, c.id);
+    addCable(s, 'core', 'Gi0/9', 'dsg', 'Gi0/9');
+    recompute(s);
+    const fast = evaluate(s, lv.objectives)[2];
+    ok(li.speed === 100 && li.downshift && /只協商到/.test(li.text) && !slow.pass && fast.pass && fast.speed.mbps > 250,
+      `網路線有線對斷了：兩端都是 Gigabit 卻只協商到 100 Mbps；換一條線之後設計部跑到 ${fast.speed ? fast.speed.mbps : '?'} Mbps`);
+    ok(s.flows.every((f) => f.rt && f.rt.mbps > 0) && /背景流量共用/.test(fast.speed.where + JSON.stringify(sim.throughput(s, sim.transact(s, 'dpc', { proto: 'tcp', dst: parseIp('10.0.50.20'), dport: 5201, quiet: true }).hops))),
+      '背景流量會和其他連線平分頻寬：iperf3 的結果會說明是和背景流量共用');
+  }
+  // ── FortiGate 的 SNMP ──
+  {
+    const { s } = start('l09');
+    const fw = s.devices.fw;
+    const inner = fw.ifaces.find((i) => i.id === 'internal');
+    forti(s, 'fw', ['config system snmp sysinfo', 'set status enable', 'end', 'config system snmp community', 'edit 1', 'set name "Watch!2026"', 'config hosts', 'edit 1', 'set ip 192.168.1.100 255.255.255.255', 'next', 'end', 'next', 'end']);
+    const pc = s.devices['pc-1'];
+    pc.nms = { targets: [{ ip: inner.ip, ver: 'v2c', community: 'Watch!2026' }] };
+    const noAccess = snmp.pollOne(s, pc, pc.nms.targets[0]);
+    forti(s, 'fw', ['config system interface', 'edit "internal"', 'append allowaccess snmp', 'next', 'end']);
+    const yes = snmp.pollOne(s, pc, pc.nms.targets[0]);
+    ok(!noAccess.ok && /allowaccess/.test(noAccess.why) && yes.ok && fortiConfig(s, fw).join('\n').includes('set ip 192.168.1.100 255.255.255.255'),
+      'FortiGate：要開 sysinfo、建 community 與允許的 hosts，介面的 allowaccess 也要有 snmp 才查得到');
+    void makeState; void makeDevice;
   }
 }
 

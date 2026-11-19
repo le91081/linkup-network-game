@@ -76,19 +76,19 @@ function walk(state, d) {
   return { sys: { name: d.name, uptime: uptimeOf(state, d), descr: `${d.model} ${d.fw ? d.fw.ver : ''}`.trim(), location: d.mgmt.location || '', contact: d.mgmt.contact || '' }, ifs };
 }
 
-/** 網管伺服器輪詢一台設備 */
+/** 網管伺服器輪詢一台設備；回傳這一次的結果（網管裡的紀錄之後還會被下一次輪詢更新） */
 export function pollOne(state, nms, t) {
   const ip = parseIp(t.ip || '');
   const store = ((state.dyn.nms ||= {})[nms.id] ||= { targets: {}, traps: [] });
   const rec = (store.targets[t.ip] ||= { hist: {} });
   rec.t = state.clock;
-  if (ip == null) { Object.assign(rec, { ok: false, why: 'IP 位址不正確' }); return rec; }
+  if (ip == null) { Object.assign(rec, { ok: false, why: 'IP 位址不正確' }); return { ...rec }; }
   const req = t.ver === 'v3' ? { ver: 'v3', user: t.user || '', auth: t.auth || '', priv: t.priv || '' } : { ver: 'v2c', community: t.community || '' };
   const res = transact(state, nms.id, { proto: 'udp', dst: ip, dport: 161, data: { snmp: req } });
-  if (!res.ok) { Object.assign(rec, { ok: false, why: res.reason }); return rec; }
+  if (!res.ok) { Object.assign(rec, { ok: false, why: res.reason }); return { ...rec }; }
   const d = state.devices[res.responder];
   const why = authorize(state, d, req, res.seenSrc ?? res.srcIp);
-  if (why) { Object.assign(rec, { ok: false, why, dev: d.id }); return rec; }
+  if (why) { Object.assign(rec, { ok: false, why, dev: d.id }); return { ...rec }; }
   const now = walk(state, d), prev = rec.raw, dt = prev ? state.clock - prev.t : 0;
   // 使用率 = 這段時間多出來的位元組 × 8 ÷ (時間 × 速率)
   for (const [pid, x] of Object.entries(now.ifs)) {
@@ -98,7 +98,7 @@ export function pollOne(state, nms, t) {
     if (x.util) { const h = (rec.hist[pid] ||= []); h.push({ t: state.clock, in: x.util.in, out: x.util.out }); if (h.length > HIST) h.shift(); }
   }
   Object.assign(rec, { ok: true, why: '', dev: d.id, sys: now.sys, ifs: now.ifs, raw: { t: state.clock, ifs: now.ifs } });
-  return rec;
+  return { ...rec };
 }
 
 /** 每次重新計算之後：到了輪詢的時間就把每一個目標問一次 */

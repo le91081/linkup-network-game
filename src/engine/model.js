@@ -353,13 +353,18 @@ export function linkInfo(state, devId, pid) {
   if (!peer) return null;
   const A = state.devices[devId], B = state.devices[peer.dev];
   const pa = portOf(A, pid), pb = portOf(B, peer.port);
-  const max = Math.min(portSpeed(A, pa), portSpeed(B, pb));
+  const max0 = Math.min(portSpeed(A, pa), portSpeed(B, pb));
+  // 網路線有線對斷了：1000BASE-T 要四對線都正常，只剩兩對能用的時候自動降到 100 Mbps (speed downshift)
+  const cab = state.cables.find((x) => x.id === peer.cable);
+  const broken = !!(cab && cab.damaged) && pa.media === 'rj45';
+  const max = broken ? Math.min(max0, 100) : max0;
   const done = (speed, da, db) => ({
-    speed, duplex: da, peerDuplex: db, half: da === 'half' && db === 'half', mismatch: da !== db,
-    text: `${fmtSpeed(speed)} · ${da === db ? DUP[da] : `雙工不一致（這一端${DUP[da]}、對端${DUP[db]}）`}`,
+    speed, duplex: da, peerDuplex: db, half: da === 'half' && db === 'half', mismatch: da !== db, downshift: broken && max0 > 100,
+    text: `${fmtSpeed(speed)} · ${da === db ? DUP[da] : `雙工不一致（這一端${DUP[da]}、對端${DUP[db]}）`}${broken && max0 > 100 ? `（兩端都支援 ${fmtSpeed(max0)}，但只協商到 ${fmtSpeed(speed)}）` : ''}`,
   });
   if (pa.media !== 'rj45') return done(max, 'full', 'full'); // 光纖與 DAC：速率由收發器決定，一律全雙工
   const ca = phyConfig(A, pid), cb = phyConfig(B, peer.port);
+  if (broken && (ca.speed === 1000 || cb.speed === 1000)) return { down: '速率被寫死成 1000 Mbps，但這條網路線有線對斷了（1000BASE-T 要四對線都正常），連線建立不起來' };
   if (ca.speed != null && cb.speed != null && ca.speed !== cb.speed) return { down: `兩端的速率設定不同（${A.name} 是 ${ca.speed} Mbps、${B.name} 是 ${cb.speed} Mbps），連線建立不起來` };
   const speed = ca.speed ?? cb.speed ?? max;
   if (speed > max) return { down: `速率被設定成 ${speed} Mbps，但對面的連接埠最高只支援 ${max} Mbps` };

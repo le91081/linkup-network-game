@@ -94,9 +94,11 @@ export const phyFields = (ctx, c) => grid2(
 export function accessRow(ctx, i) {
   const { dev } = ctx;
   const cur = accessOf(dev, i);
-  const all = [['ping', 'PING'], ['https', 'HTTPS'], ['ssh', 'SSH'], ['http', 'HTTP'], ['telnet', 'TELNET']];
+  const all = [['ping', 'PING'], ['https', 'HTTPS'], ['ssh', 'SSH'], ['snmp', 'SNMP'], ['http', 'HTTP'], ['telnet', 'TELNET']];
   const flip = (k) => {
-    i.access = all.map((x) => x[0]).filter((x) => (x === k ? !cur.includes(k) : cur.includes(x)));
+    // 畫面上沒列出來的值（fgfm 之類從 CLI 設的）保留下來
+    const keep = cur.filter((x) => !all.some((y) => y[0] === x));
+    i.access = [...all.map((x) => x[0]).filter((x) => (x === k ? !cur.includes(k) : cur.includes(x))), ...keep];
     i.ping = i.access.includes('ping');
     ctx.commit(true);
   };
@@ -104,6 +106,7 @@ export function accessRow(ctx, i) {
     h('span', { class: 'f-label', text: '管理存取 (allowaccess)：從這個介面可以用哪些方式連到防火牆本身' }),
     h('div', { class: 'chips' }, all.map(([k, t]) => h('button', { type: 'button', class: 'chip btnchip acc' + (cur.includes(k) ? ' on' : ''), text: t, onclick: () => flip(k) }))),
     (cur.includes('http') || cur.includes('telnet')) && note('warn', 'HTTP 與 Telnet 是明文協定，帳號密碼會被看光，不應該開放。'),
+    cur.includes('snmp') && !(dev.mgmt && dev.mgmt.snmpAgent) && note('muted', '介面開放了 SNMP，但 SNMP 代理程式還沒啟用（系統 → SNMP）。'),
     /^wan/.test(i.id) && cur.some((k) => k !== 'ping') && note('warn', '對外的介面開放了管理協定，任何人都能從網際網路嘗試登入。'));
 }
 

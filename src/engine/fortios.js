@@ -33,7 +33,9 @@ const decPw = (h) => (String(h).match(/.{4}/g) || []).map((x) => String.fromChar
 /** FortiOS 的版本號 7.2.10 → [7, 2, 10] */
 const verOf = (v) => String(v || '0').split('.').map((x) => parseInt(x, 10) || 0);
 
-const ACCESS = ['ping', 'https', 'ssh', 'http', 'telnet'];
+const ACCESS = ['ping', 'https', 'ssh', 'snmp', 'http', 'telnet', 'fgfm', 'radius-acct', 'fabric'];
+/** 可以放好幾個值、能用 append / unselect 的欄位 */
+const MULTI = new Set(['allowaccess', 'member', 'srcintf', 'dstintf', 'srcaddr', 'dstaddr', 'service', 'proposal', 'dhgrp', 'dns-server', 'interface']);
 const PROPOSALS = ['aes128-sha1', 'aes128-sha256', 'aes256-sha1', 'aes256-sha256'];
 const DH = ['2', '5', '14', '19'];
 const P1_DEFAULT = ['aes128-sha256', 'aes256-sha256', 'aes128-sha1', 'aes256-sha1']; // FortiOS 新建通道時的預設提案
@@ -196,7 +198,7 @@ const SEC = {
       if (!['static', 'dhcp', 'pppoe'].includes(mode)) return ERR('mode 必須是 static、dhcp 或 pppoe');
       if (f.ip && (parseIp(f.ip[0] || '') == null || dottedBits(f.ip[1]) == null)) return ERR('用法：set ip <IP> <遮罩>，例如 set ip 192.168.1.1 255.255.255.0');
       const acc = (f.allowaccess || []).map((x) => x.toLowerCase());
-      const bad = acc.find((x) => ![...ACCESS, 'snmp', 'fgfm', 'radius-acct', 'fabric'].includes(x));
+      const bad = acc.find((x) => !ACCESS.includes(x));
       if (bad) return ERR(`allowaccess 不認識「${bad}」；可用的值：${ACCESS.join(' ')}`);
       i.mode = mode;
       if (mode === 'static') { i.ip = f.ip ? f.ip[0] : ''; i.mask = f.ip ? f.ip[1] : ''; }
@@ -921,13 +923,18 @@ export function fortiSession(getDev, getState) {
       stack.push({ t: 'edit', nested: !!t.nested, sec: t.sec, spec: t.spec, list: t.list, key, isNew: !cur, ...clone({ f: {}, sub: {}, ...(cur || {}) }), key2: key });
       return res();
     }
-    if (cmd === 'set' || cmd === 'unset') {
+    if (cmd === 'set' || cmd === 'unset' || cmd === 'append' || cmd === 'unselect') {
       if (!t || t.t !== 'edit') return fail(parseErr(cmd));
       const field = (tok[1] || '').toLowerCase();
       if (!(field in spec(t).fields)) return fail([...parseErr(tok[1] || ''), `（這裡可以設定的欄位：${Object.keys(spec(t).fields).join('、')}）`]);
       if (cmd === 'unset') { delete t.f[field]; return res(); }
       if (tok.length < 3) return fail(['incomplete command', 'Command fail. Return code -160']);
-      t.f[field] = tok.slice(2);
+      if (cmd === 'set') { t.f[field] = tok.slice(2); return res(); }
+      // append / unselect 只能用在可以放好幾個值的欄位（allowaccess、member、srcaddr…）
+      if (!MULTI.has(field)) return fail([`command parse error before '${tok[1]}'`, `（${cmd} 只能用在可以放好幾個值的欄位，例如 allowaccess、member、srcaddr）`, 'Command fail. Return code -61']);
+      const cur = t.f[field] || [], low = (x) => x.toLowerCase();
+      t.f[field] = cmd === 'append' ? [...cur, ...tok.slice(2).filter((x) => !cur.some((y) => low(y) === low(x)))] : cur.filter((y) => !tok.slice(2).some((x) => low(x) === low(y)));
+      if (!t.f[field].length) delete t.f[field];
       return res();
     }
     if (cmd === 'next' || cmd === 'end') {
@@ -1006,11 +1013,11 @@ export function fortiSession(getDev, getState) {
       // ── 備份與還原：execute backup config tftp <檔名> <伺服器>、execute restore config / image tftp <檔名> <伺服器> ──
       const bk = tok.slice(1).map((x) => x.toLowerCase());
       if (bk[0] === 'backup' || bk[0] === 'restore') {
-        const what = bk[1], proto = bk[2], file = tok[3], ip = parseIp(tok[4] || ''), user = tok[5], pass = tok[6];
+        const what = bk[1], proto = bk[2], file = tok[4], ip = parseIp(tok[5] || ''), user = tok[6], pass = tok[7];
         const usage = '用法：execute backup config tftp <檔名> <伺服器 IP>、execute backup config ftp <檔名> <伺服器 IP> <帳號> <密碼>、execute restore config tftp …、execute restore image tftp <檔名> <伺服器 IP>';
         if (!['config', 'image'].includes(what) || !['tftp', 'ftp'].includes(proto) || !file || ip == null || (bk[0] === 'backup' && what !== 'config')) return fail(usage);
         const creds = proto === 'ftp' ? { user: user || '', pass: pass || '' } : {};
-        const srvName = `${proto} server ${tok[4]}`;
+        const srvName = `${proto} server ${tok[5]}`;
         if (bk[0] === 'backup') {
           const put = configFile(fortiConfig(st(), d), st().clock);
           const r = transfer(st(), d.id, { proto, server: ip, file, dir: 'put', bytes: put.size, put, ...creds });
@@ -1079,12 +1086,13 @@ export function fortiSession(getDev, getState) {
     const t = top(), d = dev();
     let cand;
     const first = (tok[0] || '').toLowerCase();
-    if (!tok.length) cand = !t ? ['config', 'show', 'get', 'diagnose', 'execute'] : t.t === 'cfg' ? ['edit', 'delete', 'show', 'end', ...(t.sec && t.sec.move ? ['move'] : [])] : ['set', 'unset', 'show', 'get', 'end', 'abort', ...(t.single ? [] : ['next']), ...(!t.nested && t.sec.subs ? ['config'] : [])];
+    if (!tok.length) cand = !t ? ['config', 'show', 'get', 'diagnose', 'execute'] : t.t === 'cfg' ? ['edit', 'delete', 'show', 'end', ...(t.sec && t.sec.move ? ['move'] : [])] : ['set', 'unset', 'append', 'unselect', 'show', 'get', 'end', 'abort', ...(t.single ? [] : ['next']), ...(!t.nested && t.sec.subs ? ['config'] : [])];
     else if (first === 'config' || (first === 'show' && !t)) {
       const names = t ? Object.keys((t.sec && t.sec.subs) || {}) : ORDER.filter((n) => !SEC[n].only || SEC[n].only(d));
       const pre = tok.slice(1).join(' ').toLowerCase();
       cand = uniq(names.filter((n) => n.startsWith(pre ? pre + ' ' : '')).map((n) => n.slice(pre ? pre.length + 1 : 0).split(' ')[0]).filter(Boolean));
     } else if ((first === 'set' || first === 'unset') && t && t.t === 'edit' && tok.length === 1) cand = Object.keys(spec(t).fields);
+    else if ((first === 'append' || first === 'unselect') && t && t.t === 'edit' && tok.length === 1) cand = Object.keys(spec(t).fields).filter((f) => MULTI.has(f));
     else if ((first === 'edit' || first === 'delete') && t && t.t === 'cfg' && tok.length === 1) cand = (t.nested ? t.list : t.sec.read(d, st())).map((e) => String(e.key));
     else cand = [];
     const options = cand.filter((w) => w.toLowerCase().startsWith(partial)).sort();

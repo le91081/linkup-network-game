@@ -8,6 +8,7 @@ import { parseIp6 } from './ip6.js';
 import { opsBefore, opsAfter, logEvent, debugLog, longIf, UPTIME0 } from './ops.js';
 import { onHop, BCAST, spanDest, background, flowTraceStart, debugOf, countBytes } from './wire.js';
 import { agentOn } from './snmp.js';
+import { remoteOpen, remoteLogin, remoteClose } from './remote.js';
 
 const DROP = Symbol('drop');
 const isVlanSw = (d) => !!d.sw && d.sw.mode === 'vlan';
@@ -1302,9 +1303,10 @@ export function recompute(state) {
     for (const id of ids) if (isFinite(booting[id])) state.rt.pending.push({ at: state.clock + booting[id], dev: id, kind: 'boot', text: `${state.devices[id].name}：開機中` });
     state.rt.rommon = Object.fromEntries(ids.filter((id) => !isFinite(booting[id])).map((id) => [id, state.dyn.clk[id].rommon.why]));
     Object.assign(state.dyn, side);
-    opsAfter(state);
+    // 背景流量先算進計數器，網管伺服器這一輪的輪詢才看得到
     background(state, { isBridge: isBridgePort, ospfOn, uptime0: UPTIME0 });
     flowsTick(state);
+    opsAfter(state);
   } finally {
     if (realDown === undefined) delete state.down; else state.down = realDown;
   }
@@ -2203,6 +2205,22 @@ export function resolveName(state, devId, name, depth = 0) {
  *  { type:'failover', down?:[devId], cut?:[[devId, portId]], test:{...} }
  */
 export function runObjective(state, o) {
+  if (o.type === 'login') {
+    // 真的用 SSH / Telnet 登入一次：連得上、而且帳號密碼對得上才算
+    const expect = o.expect ?? true, proto = o.proto || 'ssh';
+    const op = remoteOpen(state, o.from, proto, parseIp(o.ip), o.user || '');
+    let ok = false, reason = '';
+    if (!op.ok) reason = op.reason;
+    else if (op.open) ok = true;
+    else {
+      const a = remoteLogin(state, op.conn, o.pass || '');
+      ok = a.ok;
+      if (!ok) reason = a.reason || (a.hint ? `登入失敗：${a.hint}` : `${proto === 'ssh' ? 'SSH' : 'Telnet'} 連上了，但登入失敗（帳號或密碼不對，或 line vty 的登入方式不對）`);
+    }
+    if (op.conn) remoteClose(state, op.conn);
+    const pass = ok === expect;
+    return { pass, ok, reason: pass ? '' : expect ? reason : `${proto === 'ssh' ? 'SSH' : 'Telnet'} 登入成功了，但這應該要被擋下`, failDev: o.from, log: op.res ? op.res.log : [], hops: op.res ? op.res.hops : [] };
+  }
   if (o.type === 'check') {
     const r = o.test(state);
     return { pass: r === true, ok: r === true, reason: r === true ? '' : r, log: [], hops: [] };
@@ -2349,6 +2367,17 @@ function flowsTick(state) {
     f.rt = { mbps: Math.round(rate * 10) / 10, where, full: rate < (+f.mbps || 0) - 0.5 };
     if (dt > 0) for (const h of hops) countBytes(state, h, (rate * 1e6 * dt) / 8);
   }
+}
+
+/** 某條線路目前的使用率（兩個方向取比較高的那一個），給關卡檢查用 */
+export function linkUtil(state, devId, pid) {
+  const l = state.rt.links[devId + ':' + pid];
+  if (!l) return null;
+  const a = { cable: l.cable, from: devId, fromPort: pid, to: l.dev, toPort: l.port }, b = { cable: l.cable, from: l.dev, fromPort: l.port, to: devId, toPort: pid };
+  const ca = linkCap(state, a);
+  if (!ca) return null;
+  const load = Math.max((state.rt.load || {})[dirKey(a)] || 0, (state.rt.load || {})[dirKey(b)] || 0);
+  return { mbps: load, cap: ca.mbps, util: Math.min(100, (load / ca.mbps) * 100), note: ca.note };
 }
 
 export function throughput(state, hops) {
