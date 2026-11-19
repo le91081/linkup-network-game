@@ -11,7 +11,7 @@ const HELP = {
   show: '顯示設定；在最外層可以接區段名稱，例如 show firewall policy',
   get: 'get system status / get system interface / get router info routing-table all / get vpn ipsec tunnel summary / get system info admin status',
   diagnose: "diagnose sniffer packet any 'host <IP>' 4 / diagnose debug flow … / diagnose sys session list / diagnose vpn tunnel list / diagnose hardware deviceinfo nic <埠> / diagnose sys ntp status",
-  execute: 'execute ping <IP> / execute traceroute <IP> / execute log display / execute date / execute time / execute reboot',
+  execute: 'execute ping / traceroute <IP> / backup config tftp <檔名> <IP> / restore config tftp <檔名> <IP> / restore image tftp <檔名> <IP> / log display / date / reboot',
   edit: '編輯或新增一筆，例如 edit 1、edit "HQ"；edit 0 會自動用下一個編號',
   delete: '刪除一筆',
   move: 'move <政策編號> before|after <政策編號>（政策由上往下比對）',
@@ -68,7 +68,7 @@ export function fortiRun(app, devId, sess, line, print) {
     else { for (let k = 1; k <= 3; k++) print(` ${res.l3.length + k}  * * *`, 'bad'); print('  ↳ ' + res.reason, 'hint'); }
   }
   const d = app.state.devices[devId];
-  return { changed: !!r.changed, reloaded: !!r.reloaded, renamed: !!r.changed && (!!r.reloaded || !d || d.name !== before) };
+  return { changed: !!r.changed, reloaded: !!r.reloaded, renamed: !!r.changed && (!!r.reloaded || !d || d.name !== before), wait: r.wait || 0, xfer: r.xfer || null };
 }
 
 export function buildFortiCli(ctx, body) {
@@ -96,6 +96,8 @@ export function buildFortiCli(ctx, body) {
     const r = fortiRun(app, dev.id, sess, line, print);
     if (r.clear) logs.length = 0;
     if (r.changed) ctx.commit(false);
+    if (r.xfer) app.showTrace(`${dev.name} # ${line}`, r.xfer.log, r.xfer.hops, r.xfer);
+    if (r.wait > 0) app.tick(Math.ceil(r.wait));
     follow();
     if (r.renamed) app.renderPanel();
     else draw();

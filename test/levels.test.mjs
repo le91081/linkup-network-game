@@ -272,6 +272,9 @@ console.log('\nCLI 設定指令');
       const want = runningConfig(s, d);
       const s2 = cloneState(s);
       s2.devices[d.id] = makeDevice(d.model, d.id, { name: d.name, pos: d.pos });
+      // RSA 金鑰、韌體與 flash 不在設定檔裡：當作同一台設備換回原本的設定
+      if (d.mgmt && s2.devices[d.id].mgmt) s2.devices[d.id].mgmt.sshKey = d.mgmt.sshKey;
+      for (const k of ['fw', 'flash']) if (d[k]) s2.devices[d.id][k] = JSON.parse(JSON.stringify(d[k]));
       recompute(s2);
       const errs = type(s2, d.id, ['configure terminal', ...want, 'end']);
       recompute(s2);

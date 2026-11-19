@@ -525,7 +525,8 @@ export function renderDevicePanel(app, root) {
   if (isDown) body.append(note('warn', '這台設備目前是關機狀態（故障模擬），所有連接埠都沒有燈號。按右上角的電源鈕可以開機。'));
   else {
     body.append(ctx.live(() => {
-      const left = (app.state.rt.booting || {})[dev.id];
+      const left = (app.state.rt.booting || {})[dev.id], rom = (app.state.rt.rommon || {})[dev.id];
+      if (rom) return note('warn', `這台設備沒有開機成功，停在 ROMMON（開機程式）：${rom}。到 CLI 分頁用 dir flash: 看看有哪些檔案，再用 boot flash:<檔名> 手動開機。`);
       return left > 0 ? note('warn', `這台設備正在開機，還要 ${Math.ceil(left)} 秒才會開始工作。在那之前所有連接埠都沒有燈號，也不會回應任何封包。`) : null;
     }));
   }

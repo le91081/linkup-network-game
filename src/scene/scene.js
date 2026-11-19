@@ -689,6 +689,7 @@ export class Scene3D {
       l.nm.textContent = d.name;
       let sub = '', cls = '';
       if (down) { sub = '已關機'; cls = 'warn'; }
+      else if (booting && !isFinite(booting)) { sub = 'ROMMON · 沒有開機成功'; cls = 'warn'; }
       else if (booting) { sub = `開機中 · 還要 ${booting} 秒`; cls = 'warn'; }
       else if (off) { sub = '沒有電（需要 PoE）'; cls = 'warn'; }
       else if (d.kind === 'host') {

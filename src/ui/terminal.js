@@ -3,7 +3,7 @@ import { h } from './dom.js';
 import { fmtIp, fmtMask, parseIp } from '../engine/ip.js';
 import { transact, resolveName, dhcpTrace, arpRows, clearArp, dhcpRelease, dhcpRenew, fmtDur, throughput } from '../engine/sim.js';
 import { plainStamp } from '../engine/ops.js';
-import { remoteOpen, remoteLogin, remoteSend, remoteAlive, remoteClose } from '../engine/remote.js';
+import { remoteOpen, remoteLogin, remoteSend, remoteAlive, remoteClose, remoteBusy } from '../engine/remote.js';
 import { iosSession } from '../engine/ios.js';
 import { fortiSession } from '../engine/fortios.js';
 import { iosRun, IOS_CMDS, consoleFollow } from './cli.js';
@@ -75,13 +75,30 @@ export function buildTerminal(ctx, body) {
     const o = remoteOpen(st(), dev.id, proto, r0.ip, user);
     app.showTrace(`${dev.name}> ${line}`, [...r0.log, ...o.res.log], [...r0.hops, ...o.res.hops], o.res);
     if (proto === 'telnet') print(`Trying ${ip} ...`);
+    if (o.noPass) {
+      // TCP 連得上，但設備說「這條線路要密碼，可是沒有設定」就把連線關掉
+      print(`Connected to ${ip}.`);
+      print('');
+      print('Password required, but none set', 'bad');
+      print('Connection closed by foreign host.', 'dim');
+      print('  ↳ ' + o.reason, 'hint');
+      return;
+    }
     if (!o.ok) {
       const why = o.refused ? 'Connection refused' : o.res.phase === 'request' && /沒有.*路由|沒有設定預設閘道/.test(o.reason) ? 'No route to host' : /連線被拒絕|沒有開啟|沒有開放|不在.*允許/.test(o.reason) ? 'Connection refused' : 'Connection timed out';
       print(proto === 'ssh' ? `ssh: connect to host ${ip} port 22: ${why}` : `telnet: Unable to connect to remote host: ${why}`, 'bad');
       print('  ↳ ' + o.reason, 'hint');
       return;
     }
-    const r = (app.remote[dev.id] = { conn: o.conn, kind: o.kind, key: o.key, ip, stage: null, sess: null });
+    const r = (app.remote[dev.id] = { conn: o.conn, kind: o.kind, key: o.key, ip, stage: null, sess: null, auth: o.auth });
+    if (o.open) {
+      // no login：不用驗證就直接進去了
+      print(`Connected to ${ip}.`);
+      banner(r);
+      shell(r);
+      print('（這台設備的 line vty 是 no login：任何人連進來都不用帳號密碼）', 'hint');
+      return;
+    }
     if (proto === 'ssh') {
       // 第一次連到這台主機：先確認它的金鑰指紋。之後同一個 IP 換了一台設備（或有人冒充），用戶端會拒絕連線
       const known = ((app.knownHosts ||= {})[dev.id] ||= {});
@@ -102,8 +119,17 @@ export function buildTerminal(ctx, body) {
       print(`Connected to ${ip}.`);
       banner(r);
       print('User Access Verification');
-      r.stage = 'user';
+      print('');
+      if (o.auth === 'line') { r.stage = 'pass'; } else r.stage = 'user';
     }
+  };
+  /** 登入成功，接下來打的每一行都送到對方的命令列 */
+  const shell = (r) => {
+    const c = r.conn;
+    r.stage = 'shell';
+    const line = 'vty' + Math.max(0, ((st().dyn.vty || {})[c.to] || []).findIndex((v) => v.cid === c.cid));
+    r.sess = r.kind === 'ios' ? iosSession(() => st().devices[c.to], st, { user: c.user || '(line)', line, ip: c.seen }) : fortiSession(() => st().devices[c.to], st);
+    consoleFollow(app, c.to, 'vty:' + c.cid, () => {}); // 從現在開始看：以前的紀錄不會倒出來
   };
 
   const remoteInput = (line) => {
@@ -123,16 +149,15 @@ export function buildTerminal(ctx, body) {
       const a = remoteLogin(s, c, line);
       ctx.commit(false);
       if (a.ok) {
-        r.stage = 'shell';
-        const line = 'vty' + Math.max(0, ((st().dyn.vty || {})[c.to] || []).findIndex((v) => v.cid === c.cid));
-        r.sess = r.kind === 'ios' ? iosSession(() => st().devices[c.to], st, { user: c.user, line, ip: c.seen }) : fortiSession(() => st().devices[c.to], st);
         if (c.proto === 'ssh') banner(r);
-        consoleFollow(app, c.to, 'vty:' + c.cid, () => {}); // 從現在開始看：以前的紀錄不會倒出來
+        shell(r);
         print('');
       } else if (a.closed) {
-        endRemote(c.proto === 'ssh' ? `${c.user}@${ip}: Permission denied (publickey,password).` : '% Login invalid', 'bad', a.reason);
+        endRemote(c.proto === 'ssh' ? `${c.user}@${ip}: Permission denied (publickey,password).` : r.auth === 'line' ? '% Bad passwords' : '% Login invalid', 'bad', a.reason);
         if (c.proto === 'telnet') print('Connection closed by foreign host.', 'dim');
-      } else if (c.proto === 'ssh') { print('Permission denied, please try again.', 'bad'); askPass(r); } else { print('% Login invalid', 'bad'); print(''); r.stage = 'user'; }
+      } else if (c.proto === 'ssh') { print('Permission denied, please try again.', 'bad'); askPass(r); }
+      else if (r.auth === 'line') { print('% Login invalid', 'bad'); print(''); r.stage = 'pass'; }
+      else { print('% Login invalid', 'bad'); print(''); r.stage = 'user'; }
       return;
     }
     // 已經登入：這一行送到對方的命令列
@@ -154,6 +179,13 @@ export function buildTerminal(ctx, body) {
     const out = ios ? iosRun(app, c.to, r.sess, line, print) : fortiRun(app, c.to, r.sess, line, print);
     if (out.clear) logs.length = 0;
     if (out.changed) ctx.commit(false);
+    if (out.xfer) app.showTrace(`${st().devices[c.to].name}# ${line}`, out.xfer.log, out.xfer.hops, out.xfer);
+    if (out.wait > 0) {
+      // 指令執行期間（例如 copy 傳一個大檔案）時間照樣在走，但這條連線不算閒置
+      remoteBusy(s, c, true);
+      app.tick(Math.ceil(out.wait));
+      remoteBusy(s, c, false);
+    }
     if (!ios || r.monitor) consoleFollow(app, c.to, 'vty:' + c.cid, print); else consoleFollow(app, c.to, 'vty:' + c.cid, () => {});
     if (out.reloaded) endRemote(`Connection to ${ip} closed by remote host.`, 'warn', '設備重新開機了，所有登入的連線都會中斷。');
   };

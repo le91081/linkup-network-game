@@ -3,10 +3,12 @@
 // 所以把一台設備的 running-config 整份貼到另一台同型號的設備上，會得到相同的設定。
 import { parseIp, fmtIp, parseMask, fmtMask, maskOf, netOf, bcastOf } from './ip.js';
 import { parseCidr6, parseIp6 } from './ip6.js';
-import { newIface, cloneState, CATALOG } from './model.js';
+import { newIface, cloneState, CATALOG, makeDevice } from './model.js';
+import { transfer, configFile, ensureFlash, flashFree, flashPath, fsName, IMAGES, PLATFORM, PLATFORM_NAME, imageFile, fmtBytes } from './files.js';
 import { macsBehind, recompute, ospfOn } from './sim.js';
 import { logEvent, markReboot, setClock, deviceTime, SEVERITY, bootTime } from './ops.js';
 import { spanDest } from './wire.js';
+import { genKey } from './remote.js';
 
 // ───────────────────────── running-config 與 startup-config ─────────────────────────
 // IOS 設備改的是記憶體裡的 running-config；要下 write memory 才會存進 startup-config。
@@ -14,7 +16,8 @@ import { spanDest } from './wire.js';
 
 /** 這台設備是不是跑 IOS（有 running / startup 兩份設定） */
 export const isIos = (dev) => !dev.locked && CATALOG[dev.model].vendor === 'Cisco' && ['router', 'mswitch', 'l3switch'].includes(dev.kind);
-const KEEP = new Set(['id', 'model', 'kind', 'pos', 'ports', 'rt', 'startup', 'locked', 'note']);
+// fw（正在跑的韌體）與 flash 裡的檔案不是設定：重新開機、還原設定都不會動到它們
+const KEEP = new Set(['id', 'model', 'kind', 'pos', 'ports', 'rt', 'startup', 'locked', 'note', 'fw', 'flash', 'fwNext']);
 const snapshot = (dev) => JSON.stringify(Object.fromEntries(Object.entries(dev).filter(([k]) => !KEEP.has(k))), (k, v) => (k === 'rt' ? undefined : v));
 /** write memory：把目前的設定存成 startup-config */
 export function saveStartup(dev) { dev.startup = snapshot(dev); }
@@ -24,6 +27,31 @@ export function restoreStartup(dev) {
   for (const k of Object.keys(dev)) if (!KEEP.has(k)) delete dev[k];
   Object.assign(dev, JSON.parse(dev.startup));
 }
+/**
+ * 用一份設定檔（running-config 的格式）建立 startup-config：從出廠狀態開始，把每一行套上去。
+ * copy tftp: startup-config 再 reload，就是「整份換掉」的還原方式。RSA 金鑰存在另一個地方，不受影響
+ */
+export function startupFromText(state, dev, lines) {
+  const s2 = cloneState(state);
+  const fresh = makeDevice(dev.model, dev.id, { name: dev.name, pos: dev.pos });
+  for (const k of KEEP) if (k in dev && k !== 'rt' && k !== 'startup') fresh[k] = JSON.parse(JSON.stringify(dev[k]));
+  s2.devices[dev.id] = fresh;
+  recompute(s2);
+  const sess = iosSession(() => s2.devices[dev.id], () => s2);
+  sess.exec('configure terminal');
+  const bad = [];
+  for (const l of lines) {
+    const t = l.trim();
+    if (!t || t === '!' || t === 'end' || /^Building configuration/.test(t) || /^Current configuration/i.test(t)) continue;
+    const r = sess.exec(l);
+    if (r.out.some((x) => x.startsWith('%'))) bad.push(t);
+  }
+  const key = dev.mgmt && dev.mgmt.sshKey;
+  if (key && fresh.mgmt) fresh.mgmt.sshKey = key;
+  dev.startup = snapshot(fresh);
+  return bad;
+}
+
 /** startup-config 的內容（和 show running-config 同樣的格式） */
 export function startupConfig(state, dev) {
   if (dev.startup == null) return null;
@@ -702,6 +730,27 @@ export function iosSession(getDev, getState, who = null) {
       if (sw.span && !Object.keys(sw.span).length) delete sw.span;
       return undefined;
     }],
+    // ── 檔案傳輸與開機 ──
+    ['boot system <...>', ([rest]) => {
+      const t = rest.trim().split(/\s+/), f = t[t.length - 1];
+      if (!/^(boot)?flash:/i.test(f)) return err('用法：boot system flash:<映像檔的檔名>');
+      const d = dev();
+      if (!PLATFORM[d.model]) return err('這台設備不支援');
+      const name = `${fsName(d)}:${flashPath(f)}`;
+      if (!(d.bootSys ||= []).includes(name)) d.bootSys.push(name);
+      return (d.flash && d.flash.files[flashPath(f)]) ? undefined : `（${name} 現在不存在。開機時會跳過它，改用下一個）`;
+    }],
+    ['no boot system [...]', ([rest]) => {
+      const d = dev(), f = (rest || '').trim().split(/\s+/).pop();
+      if (!f) delete d.bootSys;
+      else if (d.bootSys) { d.bootSys = d.bootSys.filter((b) => flashPath(b) !== flashPath(f)); if (!d.bootSys.length) delete d.bootSys; }
+    }],
+    ['ip ftp username <user>', ([u]) => { (dev().ftpLogin ||= {}).user = u; }],
+    ['ip ftp password <...>', ([p]) => { (dev().ftpLogin ||= {}).pass = readSecret(p.split(/\s+/)); }],
+    ['no ip ftp username [...]', () => { if (dev().ftpLogin) delete dev().ftpLogin.user; }],
+    ['no ip ftp password [...]', () => { if (dev().ftpLogin) delete dev().ftpLogin.pass; }],
+    ['ip tftp blocksize <n>', ([n]) => { if (!/^\d+$/.test(n) || +n < 512 || +n > 8192) return err('用法：ip tftp blocksize <512-8192>'); if (+n === 512) delete dev().tftpBlk; else dev().tftpBlk = +n; return undefined; }],
+    ['no ip tftp blocksize [...]', () => { delete dev().tftpBlk; }],
     ['line vty [...]', () => { if (!dev().mgmt) return err('這台設備不支援'); enter('line', null); return undefined; }],
     ['line console [...]', () => { enter('line', 'console'); return undefined; }],
     ['ip http server', () => void (dev().mgmt && (dev().mgmt.http = true))],
@@ -785,6 +834,54 @@ export function iosSession(getDev, getState, who = null) {
     ['dot1x system-auth-control', () => undefined],
     ['radius server <name>', () => { if (!dev().radius) return err('這台設備不支援 RADIUS'); enter('radius', null); return undefined; }],
     // ── IPsec VPN ──
+    // ── SSH ──
+    ['crypto key generate rsa [...]', ([rest]) => {
+      const d = dev(), m = d.mgmt;
+      if (!m) return err('這台設備不支援');
+      const t = (rest || '').toLowerCase().split(/\s+/), k = t.indexOf('modulus');
+      const gen = (bits, o) => {
+        const e = genKey(getState(), d, bits);
+        if (e) { o.push(e); return { out: o, changed: false }; }
+        o.push(`The name for the keys will be: ${hostName(d)}.${m.domain}`, '', `% The key modulus size is ${bits} bits`, `% Generating ${bits} bit RSA keys, keys will be non-exportable...`,
+          `[OK] (elapsed time was ${bits >= 4096 ? 9 : bits >= 2048 ? 2 : 1} seconds)`, ...(bits < 768 ? ['', '（768 位元以下的金鑰不能用在 SSH 2，建議至少 2048）'] : []));
+        return { out: o, changed: true };
+      };
+      const start = (bits, o) => {
+        if (!(bits >= 360 && bits <= 4096)) { o.push('% 金鑰長度要在 360 – 4096 之間（建議 2048）'); return { out: o, changed: false }; }
+        if (m.sshKey && !/^(Router|Switch)$/i.test(hostName(d)) && m.domain) {
+          o.push(`% You already have RSA keys defined named ${hostName(d)}.${m.domain}.`, '% They will be replaced.', '', 'Do you really want to replace them? [yes/no]: ');
+          S.pending = { fn: (ans, o2) => { S.pending = null; if (!/^y/i.test(ans)) { o2.push('（已取消）'); return { out: o2, changed: false }; } return gen(bits, o2); } };
+          return { out: o, changed: false };
+        }
+        return gen(bits, o);
+      };
+      if (k >= 0) return { delegate: (o) => start(+t[k + 1], o) };
+      return { delegate: (o) => { o.push('The name for the keys will be: ' + hostName(d) + '.' + (m.domain || '(none)'), 'Choose the size of the key modulus in the range of 360 to 4096 for your', '  General Purpose Keys. Choosing a key modulus greater than 512 may take', '  a few minutes.', '', 'How many bits in the modulus [512]: ');
+        S.pending = { fn: (ans, o2) => { S.pending = null; return start(+(ans.trim() || 512), o2); } };
+        return { out: o, changed: false };
+      } };
+    }],
+    ['crypto key zeroize rsa [...]', () => ({ delegate: (o) => {
+      const d = dev(), m = d.mgmt;
+      if (!m || !m.sshKey) { o.push('% No Signature RSA Keys found in configuration.'); return { out: o, changed: false }; }
+      o.push('% All keys will be removed.', '% All router certs issued using these keys will also be removed.', 'Do you really want to remove these keys? [yes/no]: ');
+      S.pending = { fn: (ans, o2) => {
+        S.pending = null;
+        if (!/^y/i.test(ans)) return { out: o2, changed: false };
+        m.sshKey = null;
+        logEvent(getState(), d, 5, 'SSH-5-DISABLED', `SSH ${m.sshVer === 2 ? '2.0' : '1.99'} has been disabled`);
+        return { out: o2, changed: true };
+      } };
+      return { out: o, changed: false };
+    } })],
+    ['ip domain name <name>', ([n]) => { if (!dev().mgmt) return err('這台設備不支援'); dev().mgmt.domain = n; return undefined; }],
+    ['ip domain-name <name>', ([n]) => { if (!dev().mgmt) return err('這台設備不支援'); dev().mgmt.domain = n; return undefined; }],
+    ['no ip domain name [...]', () => { if (dev().mgmt) delete dev().mgmt.domain; }],
+    ['no ip domain-name [...]', () => { if (dev().mgmt) delete dev().mgmt.domain; }],
+    ['ip ssh version <v>', ([v]) => { if (!['1', '2'].includes(v)) return err('用法：ip ssh version 2'); if (v === '2') dev().mgmt.sshVer = 2; else delete dev().mgmt.sshVer; return undefined; }],
+    ['no ip ssh version [...]', () => { delete dev().mgmt.sshVer; }],
+    ['ip ssh time-out <n>', ([n]) => { if (!/^\d+$/.test(n) || +n < 1 || +n > 120) return err('用法：ip ssh time-out <1-120>'); if (+n === 120) delete dev().mgmt.sshTimeout; else dev().mgmt.sshTimeout = +n; return undefined; }],
+    ['ip ssh authentication-retries <n>', ([n]) => { if (!/^\d+$/.test(n) || +n < 0 || +n > 5) return err('用法：ip ssh authentication-retries <0-5>'); if (+n === 3) delete dev().mgmt.sshRetries; else dev().mgmt.sshRetries = Math.max(1, +n); return undefined; }],
     ['crypto isakmp policy <n>', ([n]) => {
       const d = dev();
       if (!d.vpns) return err('這台設備不支援 IPsec VPN');
@@ -974,8 +1071,18 @@ export function iosSession(getDev, getState, who = null) {
         return undefined;
       }],
       ['no access-class [...]', () => { dev().mgmt.allow = ''; }],
-      ['login [...]', () => undefined],
-      ['password <...>', () => undefined],
+      // login local：用 username 建的帳號；login：只問線路密碼；no login：不驗證（非常危險）
+      ['login [...]', ([rest]) => {
+        const m = dev().mgmt;
+        if (!m || S.cur === 'console') return undefined;
+        const r = (rest || '').trim().toLowerCase();
+        if (!r) m.vtyLogin = 'line';
+        else if ('local'.startsWith(r)) m.vtyLogin = 'local';
+        return undefined;
+      }],
+      ['no login', () => { const m = dev().mgmt; if (m && S.cur !== 'console') m.vtyLogin = 'none'; return S.cur === 'console' ? undefined : '（no login：任何人連進來都不用驗證就能下指令，非常危險）'; }],
+      ['password <...>', ([p]) => { const m = dev().mgmt; if (m && S.cur !== 'console') m.vtyPass = readSecret(p.split(/\s+/)); }],
+      ['no password [...]', () => { const m = dev().mgmt; if (m && S.cur !== 'console') delete m.vtyPass; }],
       // 登入之後閒置多久自動登出。預設 10 分鐘；0 0 代表永遠不會
       ['exec-timeout <...>', ([rest]) => {
         const m = dev().mgmt, t = rest.split(/\s+/);
@@ -1095,6 +1202,11 @@ export function iosSession(getDev, getState, who = null) {
     const tok = text.split(/\s+/).filter(Boolean);
     const out = [];
     const done = (changed) => ({ out, changed: !!changed });
+    // ROMMON：找不到可以開機的映像檔，只剩開機程式的命令列
+    const clk = (getState().dyn && getState().dyn.clk && getState().dyn.clk[dev().id]) || {};
+    if (clk.rommon) return rommon(text, tok, out);
+    // copy、delete 的一連串問題
+    if (S.pending && typeof S.pending === 'object') return S.pending.fn(text, out);
     // reload 的兩個確認問題
     if (S.pending === 'save') {
       if (/^y/i.test(text)) { saveStartup(dev()); out.push('Building configuration...', '[OK]'); } else if (!/^n/i.test(text)) { out.push("% Please answer 'yes' or 'no'.", 'System configuration has been modified. Save? [yes/no]:'); return done(false); }
@@ -1118,6 +1230,8 @@ export function iosSession(getDev, getState, who = null) {
         out.push('Building configuration...', '[OK]');
         return done(true);
       }
+      const fileCmd = fileExec(tok, text, out);
+      if (fileCmd) return fileCmd;
       // clock set 14:30:00 5 January 2026（月份和日期的順序兩種都可以）
       const cs = match(tok, 'clock set <...>');
       if (cs) {
@@ -1154,7 +1268,15 @@ export function iosSession(getDev, getState, who = null) {
       S.mode = top ? 'exec' : 'config'; S.cur = null;
       return top ? leave() : done(false);
     }
-    if (t0 === 'do') return { out, changed: false, pass: true, doLine: tok.slice(1).join(' ') };
+    if (t0 === 'do') {
+      // 在設定模式下也可以 do copy …、do dir、do write
+      const inner = tok.slice(1);
+      if (inner.length && /^(copy|dir|del|verify|wr|show)$/i.test(inner[0].replace(/^(cop|cop?y|del(e(te?)?)?|veri(fy?)?|wri(te?)?|wr)$/i, (m) => ({ cop: 'copy', copy: 'copy', del: 'del', dele: 'del', delet: 'del', delete: 'del', veri: 'verify', verif: 'verify', verify: 'verify', wr: 'wr', wri: 'wr', writ: 'wr', write: 'wr' }[m.toLowerCase()] || m)))) {
+        const r = fileExec(inner, inner.join(' '), out) || (/^wr/i.test(inner[0]) ? (saveStartup(dev()), out.push('Building configuration...', '[OK]'), done(true)) : null);
+        if (r) return r;
+      }
+      return { out, changed: false, pass: true, doLine: tok.slice(1).join(' ') };
+    }
     // 介面模式裡單獨一個 sh 是 shutdown；後面還有字（sh ip int br）才是想看 show
     if (tok.length >= 2 && 'show'.startsWith(t0) && t0.length >= 2) { out.push('% 在設定模式要查看狀態請在前面加 do，例如 do show ip interface brief'); return done(false); }
     // ACL 模式的規則是整行一起解析，只有長得像規則的才交給它，其餘當成全域指令（可以直接跳到別的設定）
@@ -1170,6 +1292,7 @@ export function iosSession(getDev, getState, who = null) {
       if (!res.hit || isErr(res.r)) { S.mode = prev; S.cur = prevCur; }
     }
     if (!res.hit) { out.push(err(`Invalid input detected：不認識的指令「${text}」，輸入 ? 查看這個模式可用的指令`)); return done(false); }
+    if (res.r && typeof res.r === 'object' && res.r.delegate) { const r = res.r.delegate(out); if (r.changed) S.touched = true; return r; }
     if (isErr(res.r)) { out.push(res.r); return done(false); }
     for (const x of [].concat(res.r ?? [])) out.push(x);
     S.touched = true;
@@ -1202,10 +1325,237 @@ export function iosSession(getDev, getState, who = null) {
     return { line: common.length > partial.length || done ? [...tok, common].join(' ') + (done ? ' ' : '') : null, options };
   }
 
+  // ───────────────────────── 檔案：copy、dir、delete、verify ─────────────────────────
+
+  /** copy 的來源與目的：running-config、startup-config、flash:檔名、tftp:、tftp://IP/檔名、ftp://帳號:密碼@IP/檔名 */
+  function loc(s) {
+    const t = String(s || '').trim(), low = t.toLowerCase();
+    if (low.length >= 3 && ('running-config'.startsWith(low) || low === 'system:running-config')) return { kind: 'run' };
+    if (low.length >= 3 && ('startup-config'.startsWith(low) || low === 'nvram:startup-config')) return { kind: 'start' };
+    const u = t.match(/^(tftp|ftp):(?:\/\/(?:([^:@/]+)(?::([^@/]*))?@)?([^/]+)(?:\/(.*))?)?$/i);
+    if (u) return { kind: u[1].toLowerCase(), user: u[2] || null, pass: u[3] ?? null, host: u[4] || null, file: u[5] || null };
+    const f = t.match(/^(boot)?flash:\/?(.*)$/i);
+    if (f) return { kind: 'flash', file: f[2] || null };
+    return null;
+  }
+  const remoteKind = (x) => x.kind === 'tftp' || x.kind === 'ftp';
+  const urlOf = (x, ip, file) => `${x.kind}://${ip}/${file}`;
+  /** 問一個問題，答案交給 next；直接按 Enter 就用中括號裡的預設值 */
+  const ask = (out, q, def, next) => {
+    out.push(`${q} [${def || ''}]? `);
+    S.pending = { fn: (text, o) => { S.pending = null; const r = next(text.trim() || def || '', o); return r || { out: o, changed: false }; } };
+    return { out, changed: false };
+  };
+  const confirm = (out, q, next) => {
+    out.push(`${q} [confirm]`);
+    S.pending = { fn: (text, o) => { S.pending = null; if (text && !/^y/i.test(text)) { o.push('%Aborted'); return { out: o, changed: false }; } return next(o) || { out: o, changed: false }; } };
+    return { out, changed: false };
+  };
+  const bang = (bytes) => '!'.repeat(Math.max(1, Math.min(60, Math.round(bytes / 400000))));
+  const copied = (r) => `${r.bytes} bytes copied in ${r.secs.toFixed(3)} secs (${r.rate} bytes/sec)`;
+
+  /** dir、delete、verify、copy、show flash / boot；不是這幾個就回傳 null */
+  function fileExec(tok, text, out) {
+    const d = dev(), c0 = (tok[0] || '').toLowerCase();
+    const isFs = (s) => /^(boot)?flash:/i.test(s || '');
+    if ((c0 === 'dir' && (!tok[1] || isFs(tok[1]))) || (c0.length >= 2 && 'show'.startsWith(c0) && /^(boot)?flash:?$/i.test(tok[1] || ''))) {
+      ensureFlash(d);
+      if (!d.flash) { out.push('% 這台設備沒有 flash 檔案系統'); return { out, changed: false }; }
+      out.push(...dirLines(d));
+      return { out, changed: false };
+    }
+    if (c0.length >= 2 && 'show'.startsWith(c0) && /^boot(var)?$/i.test(tok[1] || '')) {
+      out.push(`BOOT variable = ${(d.bootSys || []).map((b) => b + ',1').join(';')}${(d.bootSys || []).length ? ';' : ''}`, 'CONFIG_FILE variable = ', 'Config register is 0x2102',
+        ...(!(d.bootSys || []).length ? ['（沒有設定 boot system：開機時會用 flash 裡第一個能開機的映像檔）'] : []));
+      return { out, changed: false };
+    }
+    if (c0.length >= 3 && 'delete'.startsWith(c0)) {
+      ensureFlash(d);
+      const force = tok.includes('/force');
+      const arg = tok.slice(1).find((x) => !x.startsWith('/'));
+      const name = flashPath(arg);
+      if (!arg || !isFs(arg) || !name) { out.push('% 用法：delete flash:<檔名>'); return { out, changed: false }; }
+      const go = (o) => {
+        if (!d.flash.files[name]) { o.push(`%Error deleting ${fsName(d)}:/${name} (No such file or directory)`); return { out: o, changed: false }; }
+        delete d.flash.files[name];
+        if (d.fw && d.fw.image === name) o.push('（注意：刪掉的是現在正在執行的映像檔。設備照常運作，但下次開機就不能再用它了）');
+        return { out: o, changed: true };
+      };
+      if (force) return go(out);
+      return ask(out, 'Delete filename', name, (n, o) => confirm(o, `Delete ${fsName(d)}:/${flashPath(n)}?`, go));
+    }
+    if (c0.length >= 4 && 'verify'.startsWith(c0)) {
+      ensureFlash(d);
+      const arg = tok.find((x) => isFs(x)), name = flashPath(arg), want = tok[tok.indexOf(arg) + 1];
+      if (!tok.includes('/md5') || !arg) { out.push('% 用法：verify /md5 flash:<檔名> [原廠公布的 MD5]'); return { out, changed: false }; }
+      const f = d.flash.files[name];
+      if (!f) { out.push(`%Error opening ${fsName(d)}:/${name} (No such file or directory)`); return { out, changed: false }; }
+      out.push('.'.repeat(Math.min(70, Math.max(5, Math.round(f.size / 10000000)))) + 'Done!');
+      if (!want) out.push(`verify /md5 (${fsName(d)}:${name}) = ${f.md5}`);
+      else if (want.toLowerCase() === f.md5) out.push(`Verified (${fsName(d)}:${name}) = ${f.md5}`);
+      else out.push(`%Error verifying ${fsName(d)}:${name}`, `Computed signature  = ${f.md5}`, `Submitted signature = ${want.toLowerCase()}`, '（MD5 不一樣：檔案傳輸不完整或被竄改，不要拿它開機）');
+      return { out, changed: false, wait: Math.round(f.size / 40000000) };
+    }
+    if (c0.length >= 3 && 'copy'.startsWith(c0) && tok.length >= 3) {
+      const src = loc(tok[1]), dst = loc(tok[2]);
+      if (!src || !dst) return null;
+      if (src.kind === 'run' && dst.kind === 'start') return null; // write memory，前面已經處理
+      if ((remoteKind(src) && remoteKind(dst)) || (!remoteKind(src) && !remoteKind(dst))) {
+        out.push('% 這個模擬支援的 copy：running-config / startup-config / flash:檔案 ↔ tftp: / ftp:');
+        return { out, changed: false };
+      }
+      const job = { src, dst };
+      return copyStep(job, out);
+    }
+    return null;
+  }
+
+  function dirLines(d) {
+    const fs = fsName(d);
+    const two = (n) => String(n).padStart(2, '0');
+    const when = (t) => {
+      if (t < 0) return 'Nov 12 2025 10:22:41 +00:00';
+      const x = new Date(Date.UTC(2026, 0, 5, 1, 0, 0) + t * 1000);
+      return `${['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'][x.getUTCMonth()]} ${String(x.getUTCDate()).padStart(2)} ${x.getUTCFullYear()} ${two(x.getUTCHours())}:${two(x.getUTCMinutes())}:${two(x.getUTCSeconds())} +00:00`;
+    };
+    const o = [`Directory of ${fs}:/`, ''];
+    Object.entries(d.flash.files).forEach(([n, f], k) => o.push(`${String(k + 2).padStart(6)}  ${f.kind === 'dir' ? 'drwx' : '-rwx'} ${String(f.size).padStart(12)}  ${when(f.t)}  ${n}`));
+    o.push('', `${d.flash.size} bytes total (${flashFree(d)} bytes free)`);
+    return o;
+  }
+
+  /** copy 的每一步：缺什麼就問什麼，問完就開始傳 */
+  function copyStep(job, out) {
+    const d = dev(), { src, dst } = job, rem = remoteKind(src) ? src : dst;
+    if (!rem.host) return ask(out, 'Address or name of remote host', '', (v, o) => { rem.host = v; return copyStep(job, o); });
+    if (remoteKind(src) && !src.file) return ask(out, 'Source filename', '', (v, o) => { src.file = v; return copyStep(job, o); });
+    if (src.kind === 'flash' && !src.file) return ask(out, 'Source filename', '', (v, o) => { src.file = flashPath(v); return copyStep(job, o); });
+    if (!job.asked) {
+      job.asked = true;
+      const def = remoteKind(dst) ? (src.kind === 'flash' ? src.file : `${hostName(d).toLowerCase()}-confg`) : dst.kind === 'flash' ? (dst.file || src.file) : dst.kind === 'run' ? 'running-config' : 'startup-config';
+      return ask(out, 'Destination filename', dst.file || def, (v, o) => { if (dst.kind !== 'run' && dst.kind !== 'start') dst.file = dst.kind === 'flash' ? flashPath(v) : v; return copyStep(job, o); });
+    }
+    return copyRun(job, out);
+  }
+
+  function copyRun(job, out) {
+    const st = getState(), d = dev(), { src, dst } = job, rem = remoteKind(src) ? src : dst;
+    const ip = parseIp(rem.host);
+    if (ip == null) { out.push(`%Error parsing ${rem.kind}://${rem.host}/ (Invalid IP address)`); return { out, changed: false }; }
+    const creds = rem.kind === 'ftp' ? { user: rem.user || (d.ftpLogin || {}).user || '', pass: rem.pass ?? (d.ftpLogin || {}).pass ?? '' } : {};
+    const url = urlOf(rem, rem.host, rem.file);
+    const failed = (r, verb) => {
+      out.push(`%Error ${verb} ${url} (${r.err})`);
+      if (r.reason) out.push(`（${r.reason}）`);
+      return { out, changed: false, wait: r.secs, xfer: r.res };
+    };
+    if (remoteKind(dst)) {
+      // 上傳：running-config / startup-config / flash 的檔案 → 伺服器
+      let put;
+      if (src.kind === 'run') put = configFile(runningConfig(st, d), st.clock);
+      else if (src.kind === 'start') {
+        const s = startupConfig(st, d);
+        if (!s) { out.push('%Error opening nvram:/startup-config (No such file or directory)'); return { out, changed: false }; }
+        put = configFile(s, st.clock);
+      } else {
+        ensureFlash(d);
+        put = d.flash && d.flash.files[src.file];
+        if (!put) { out.push(`%Error opening ${fsName(d)}:/${src.file} (No such file or directory)`); return { out, changed: false }; }
+      }
+      const r = transfer(st, d.id, { proto: rem.kind, server: ip, file: rem.file, dir: 'put', bytes: put.size, put, blksize: d.tftpBlk, ...creds });
+      if (!r.ok) return failed(r, 'opening');
+      out.push(bang(r.bytes), copied(r));
+      return { out, changed: true, wait: r.secs, xfer: r.res };
+    }
+    // 下載：伺服器 → running-config（合併）/ startup-config（整份換掉）/ flash
+    if (dst.kind === 'flash') {
+      ensureFlash(d);
+      if (!d.flash) { out.push('% 這台設備沒有 flash 檔案系統'); return { out, changed: false }; }
+      const exists = d.flash.files[dst.file];
+      const go = (o) => {
+        out = o;
+        const r = transfer(st, d.id, { proto: rem.kind, server: ip, file: rem.file, dir: 'get', blksize: d.tftpBlk, ...creds });
+        if (!r.ok) return failed(r, 'opening');
+        const need = r.bytes - (exists ? exists.size : 0);
+        if (need > flashFree(d)) {
+          out.push(`Accessing ${url}...`, `%Error copying ${url} (Not enough space on device)`,
+            `（${fsName(d)}: 只剩 ${fmtBytes(flashFree(d))}，這個檔案要 ${fmtBytes(r.bytes)}。先用 dir 看看有哪些檔案，把用不到的舊映像檔 delete 掉；不要刪現在正在跑的那一個）`);
+          return { out, changed: false, wait: 2, xfer: r.res };
+        }
+        d.flash.files[dst.file] = { ...JSON.parse(JSON.stringify(r.file)), t: st.clock };
+        out.push(`Accessing ${url}...`, `Loading ${rem.file} from ${rem.host} (via ${viaIf(r)}): ${bang(r.bytes)}`, `[OK - ${r.bytes} bytes]`, '', copied(r));
+        return { out, changed: true, wait: r.secs, xfer: r.res };
+      };
+      if (exists) { out.push('%Warning:There is a file already existing with this name'); return confirm(out, 'Do you want to over write?', go); }
+      return go(out);
+    }
+    const r = transfer(st, d.id, { proto: rem.kind, server: ip, file: rem.file, dir: 'get', blksize: d.tftpBlk, ...creds });
+    if (!r.ok) return failed(r, 'opening');
+    if (r.file.kind !== 'config') {
+      out.push(`Accessing ${url}...`, `%Error: ${rem.file} 不是設定檔`);
+      return { out, changed: false, wait: r.secs, xfer: r.res };
+    }
+    out.push(`Accessing ${url}...`, `Loading ${rem.file} from ${rem.host} (via ${viaIf(r)}): ${bang(r.bytes)}`, `[OK - ${r.bytes} bytes]`);
+    if (dst.kind === 'start') {
+      const bad = startupFromText(st, d, r.file.lines);
+      out.push('', copied(r));
+      if (bad.length) out.push(`（有 ${bad.length} 行沒有辦法套用，例如：${bad[0]}）`);
+      out.push('（startup-config 已經換成這份檔案。要 reload 之後才會生效；在那之前不要 write memory，否則會被目前的設定蓋掉）');
+      return { out, changed: true, wait: r.secs, xfer: r.res };
+    }
+    // 合併到 running-config：和把每一行貼進設定模式一樣。檔案裡沒有寫到的設定，不會被拿掉
+    const sub = iosSession(getDev, getState, who);
+    sub.exec('configure terminal');
+    let n = 0;
+    for (const l of r.file.lines) {
+      const t = l.trim();
+      if (!t || t === '!' || t === 'end' || /^Building configuration/.test(t) || /^Current configuration/i.test(t)) continue;
+      const x = sub.exec(l);
+      for (const e of x.out) if (e.startsWith('%')) { out.push(`${t}`, e); n++; }
+    }
+    out.push('', copied(r));
+    logEvent(st, d, 5, 'SYS-5-CONFIG_I', `Configured from ${url} by ${who ? who.user + ' on ' + who.line : 'console'}`);
+    if (n) out.push(`（有 ${n} 行套用失敗）`);
+    return { out, changed: true, wait: r.secs, xfer: r.res };
+  }
+  const viaIf = (r) => {
+    const i = dev().ifaces.find((x) => x.rt && x.rt.ip === r.res.srcIp);
+    return i ? (i.bind.t === 'svi' ? 'Vlan' + i.bind.vlan : i.label) : 'unknown';
+  };
+
+  // ───────────────────────── ROMMON ─────────────────────────
+  function rommon(text, tok, out) {
+    const st = getState(), d = dev(), c = st.dyn.clk[d.id], c0 = (tok[0] || '').toLowerCase();
+    const res = (changed, extra) => ({ out, changed: !!changed, ...extra });
+    if (!c0) return res(false);
+    if (c0 === 'dir') {
+      ensureFlash(d);
+      out.push(`File size           Checksum   File name`, ...Object.entries(d.flash.files).filter(([, f]) => f.kind !== 'dir').map(([n, f]) => `${String(f.size).padStart(10)} bytes (0x${f.size.toString(16)})  0x${f.md5.slice(0, 8)}    ${n}`));
+      return res(false);
+    }
+    if (c0 === 'boot') {
+      const name = flashPath(tok[1]);
+      if (!name) { out.push('usage: boot <file>   例如 boot flash:' + (Object.keys(d.flash.files)[0] || 'image.bin')); return res(false); }
+      const f = d.flash.files[name];
+      const img = f && f.img && IMAGES[f.img];
+      if (!f) { out.push(`boot: cannot open "${fsName(d)}:${name}"`, 'boot: cannot determine first file name on device "flash:"'); return res(false); }
+      if (!img || img.platform !== PLATFORM[d.model]) { out.push(`boot: ${name} 不是這台設備（${PLATFORM_NAME[PLATFORM[d.model]]}）可以用的映像檔`); return res(false); }
+      if (f.md5 !== img.md5 || f.size !== img.size) { out.push(`Image validation failed: ${name} 的檔案已經損毀`); return res(false); }
+      d.fw = { image: name, ver: img.ver };
+      delete c.rommon;
+      c.up = st.clock + bootTime(d);
+      out.push(`Loading ${fsName(d)}:${name}...`, '', `${hostName(d)} 開機中，大約 ${bootTime(d)} 秒後完成。（boot system 沒有改：下次 reload 還是會照原本的順序找映像檔）`);
+      return res(true, { reloaded: true });
+    }
+    if (c0 === 'reset') { markReboot(st, d.id); out.push('（重新開機，照 boot system 的順序再找一次映像檔）'); return res(true, { reloaded: true }); }
+    out.push(`monitor: command "${tok[0]}" not found`, '可用的指令：dir flash:（列出檔案）、boot flash:<檔名>（用指定的映像檔開機）、reset（重新開機）', `（為什麼在這裡：${c.rommon.why}）`);
+    return res(false);
+  }
+
   return {
     exec,
     complete,
-    prompt: () => (S.pending ? '' : hostName(dev()) + PROMPT[S.mode]),
+    prompt: () => ((((getState().dyn || {}).clk || {})[dev().id] || {}).rommon ? 'rommon 1 >' : S.pending ? '' : hostName(dev()) + PROMPT[S.mode]),
     get pending() { return S.pending; },
     help: () => HELP[S.mode] || [],
     get mode() { return S.mode; },
@@ -1232,8 +1582,15 @@ export const aclLine = (r) => `${r.action} ${r.proto || 'ip'} ${aclAddr(r.src)} 
 /** 產生等效的 running-config */
 export function runningConfig(state, dev) {
   const o = ['Building configuration...', '', '!', `hostname ${hostName(dev)}`, '!'];
+  if ((dev.bootSys || []).length) o.push(...dev.bootSys.map((b) => `boot system ${b}`), '!');
+  if (dev.ftpLogin && (dev.ftpLogin.user || dev.ftpLogin.pass)) o.push(...(dev.ftpLogin.user ? [`ip ftp username ${dev.ftpLogin.user}`] : []), ...(dev.ftpLogin.pass ? [`ip ftp password 7 ${hex(dev.ftpLogin.pass)}`] : []), '!');
+  if (+dev.tftpBlk > 512) o.push(`ip tftp blocksize ${+dev.tftpBlk}`, '!');
   const m = dev.mgmt;
   if (m) o.push(`username ${m.user || 'admin'} privilege 15 secret 9 ${secret9(m.pass || '')}`, '!');
+  if (m && (m.domain || m.sshVer === 2 || m.sshTimeout || m.sshRetries)) {
+    o.push(...(m.domain ? [`ip domain name ${m.domain}`] : []), ...(m.sshVer === 2 ? ['ip ssh version 2'] : []),
+      ...(m.sshTimeout ? [`ip ssh time-out ${m.sshTimeout}`] : []), ...(m.sshRetries ? [`ip ssh authentication-retries ${m.sshRetries}`] : []), '!');
+  }
   if (dev.v6routing) o.push('ipv6 unicast-routing', '!');
   if (isSw(dev)) {
     const sw = dev.sw;
@@ -1466,7 +1823,8 @@ export function runningConfig(state, dev) {
     const tr = [m.ssh && 'ssh', m.telnet && 'telnet'].filter(Boolean).join(' ') || 'none';
     const et = m.execTimeout == null || m.execTimeout === '' ? null : +m.execTimeout;
     o.push('line vty 0 4', ` transport input ${tr}`, ...(allow.length ? [` access-class ${an} in`] : []),
-      ...(et != null && et !== 600 ? [` exec-timeout ${Math.floor(et / 60)} ${et % 60}`] : []), ' login local');
+      ...(et != null && et !== 600 ? [` exec-timeout ${Math.floor(et / 60)} ${et % 60}`] : []), ...(m.vtyPass ? [` password 7 ${hex(m.vtyPass)}`] : []),
+      m.vtyLogin === 'local' ? ' login local' : m.vtyLogin === 'none' ? ' no login' : ' login');
   }
   o.push('!', 'end');
   return o;

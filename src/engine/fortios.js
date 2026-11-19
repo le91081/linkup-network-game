@@ -5,7 +5,30 @@ import { parseIp, fmtIp, parseMask, fmtMask, netOf } from './ip.js';
 import { SERVICE_NAMES, accessOf, sessionLog, routeRows, sessionRows, clearSessions, saInfo } from './sim.js';
 import { ntpInfo, plainStamp, logRows, clearLog, syslogStats, vtyRows, markReboot, bootTime } from './ops.js';
 import { counters, startSniff, bpf, dflowOf, fgIfName } from './wire.js';
-import { linkInfo } from './model.js';
+import { linkInfo, cloneState, makeDevice } from './model.js';
+import { recompute } from './sim.js';
+import { transfer, configFile, IMAGES, PLATFORM, PLATFORM_NAME, ensureFlash } from './files.js';
+
+/**
+ * execute restore config：整份設定換掉。FortiGate 沒有 running / startup 之分，
+ * 還原時從出廠狀態開始套用檔案裡的每一行，然後重新開機。回傳套用失敗的行數
+ */
+export function fortiFromText(state, dev, lines) {
+  const s2 = cloneState(state);
+  const fresh = makeDevice(dev.model, dev.id, { name: dev.name, pos: dev.pos });
+  s2.devices[dev.id] = fresh;
+  recompute(s2);
+  const sess = fortiSession(() => s2.devices[dev.id], () => s2);
+  const clear = ['config system interface', ...fresh.ifaces.flatMap((i) => [`edit "${i.id}"`, 'unset allowaccess', 'next']), 'end'];
+  let bad = 0;
+  for (const l of [...clear, ...lines]) { const r = sess.exec(l); if (r.out.some((o) => /parse error|Command fail|not found in datasource|operator error/.test(o))) bad++; }
+  const keep = new Set(['id', 'model', 'kind', 'pos', 'ports', 'locked', 'note', 'fw', 'fwNext', 'rt']);
+  for (const k of Object.keys(dev)) if (!keep.has(k)) delete dev[k];
+  for (const [k, v] of Object.entries(s2.devices[dev.id])) if (!keep.has(k)) dev[k] = v;
+  return bad;
+}
+/** FortiOS 的版本號 7.2.10 → [7, 2, 10] */
+const verOf = (v) => String(v || '0').split('.').map((x) => parseInt(x, 10) || 0);
 
 const ACCESS = ['ping', 'https', 'ssh', 'http', 'telnet'];
 const PROPOSALS = ['aes128-sha1', 'aes128-sha256', 'aes256-sha1', 'aes256-sha256'];
@@ -674,7 +697,9 @@ export function fortiConfig(state, dev) {
 function getInfo(state, d, what) {
   if (what === 'system status') {
     const s = plainStamp(state, d);
-    return [`Version: FortiGate-${d.model === 'fg100f' ? '100F' : '60F'} v7.4（LinkUp 模擬）`, `Hostname: ${hostOf(d)}`, 'Operation Mode: NAT', 'Current virtual domain: root',
+    ensureFlash(d);
+    const img = d.fw && IMAGES[d.fw.image];
+    return [`Version: FortiGate-${d.model === 'fg100f' ? '100F' : '60F'} v${d.fw ? d.fw.ver : '7.4.7'},build${img ? d.fw.image.match(/build(\d+)/)[1] : '2731'} (GA)`, `Hostname: ${hostOf(d)}`, 'Operation Mode: NAT', 'Current virtual domain: root',
       `System time: ${s.day} ${s.mon} ${String(s.dd).padStart(2)} ${s.time} ${s.yyyy}`];
   }
   if (what === 'system info admin status') {
@@ -828,11 +853,13 @@ export function fortiSession(getDev, getState) {
     const r = t.sec.write(dev(), t.key, t.f, t.sub || {}, st(), !!t.isNew);
     return r && r.err ? r.err : null;
   }
+  let pend = null; // 等使用者回答 (y/n)
 
   function exec(line) {
     const out = [];
     let changed = false;
     const res = (extra) => ({ out, changed, ...extra });
+    if (pend) { const p = pend; pend = null; return p(line.trim(), out); }
     const tok = tokenize(line.trim());
     if (!tok.length || tok[0].startsWith('#')) return res();
     const cmd = tok[0].toLowerCase(), t = top(), d = dev();
@@ -949,6 +976,56 @@ export function fortiSession(getDev, getState) {
       if ((tok[1] || '').toLowerCase() === 'ping' && parseIp(tok[2] || '') != null) return res({ ping: tok[2] });
       if ((tok[1] || '').toLowerCase() === 'traceroute' && parseIp(tok[2] || '') != null) return res({ trace: tok[2] });
       const sub = tok.slice(1).join(' ').toLowerCase();
+      // ── 備份與還原：execute backup config tftp <檔名> <伺服器>、execute restore config / image tftp <檔名> <伺服器> ──
+      const bk = tok.slice(1).map((x) => x.toLowerCase());
+      if (bk[0] === 'backup' || bk[0] === 'restore') {
+        const what = bk[1], proto = bk[2], file = tok[3], ip = parseIp(tok[4] || ''), user = tok[5], pass = tok[6];
+        const usage = '用法：execute backup config tftp <檔名> <伺服器 IP>、execute backup config ftp <檔名> <伺服器 IP> <帳號> <密碼>、execute restore config tftp …、execute restore image tftp <檔名> <伺服器 IP>';
+        if (!['config', 'image'].includes(what) || !['tftp', 'ftp'].includes(proto) || !file || ip == null || (bk[0] === 'backup' && what !== 'config')) return fail(usage);
+        const creds = proto === 'ftp' ? { user: user || '', pass: pass || '' } : {};
+        const srvName = `${proto} server ${tok[4]}`;
+        if (bk[0] === 'backup') {
+          const put = configFile(fortiConfig(st(), d), st().clock);
+          const r = transfer(st(), d.id, { proto, server: ip, file, dir: 'put', bytes: put.size, put, ...creds });
+          out.push('Please wait...', '', `Connect to ${srvName} ...`, '#');
+          if (!r.ok) return fail([`Send config file to ${proto} server via vdom root failed.`, `Command fail. Return code -${proto === 'tftp' ? 1 : 3}`, `（${r.reason}）`]);
+          out.push(`Send config file to ${proto} server OK.`);
+          changed = true;
+          return res({ wait: r.secs, xfer: r.res });
+        }
+        out.push(what === 'config' ? 'This operation will overwrite the current setting and could possibly reboot the system!' : 'This operation will replace the current firmware version!', 'Do you want to continue? (y/n)');
+        pend = (ans, o) => {
+          const R = (extra) => ({ out: o, changed: false, ...extra });
+          if (!/^y/i.test(ans)) { o.push('（已取消）'); return R(); }
+          const r = transfer(st(), d.id, { proto, server: ip, file, dir: 'get', ...creds });
+          o.push('Please wait...', '', `Connect to ${srvName} ...`);
+          if (!r.ok) { o.push(`Get ${what === 'config' ? 'config file' : 'image'} from ${proto} server failed.`, 'Command fail. Return code -1', `（${r.reason}）`); return R({ wait: r.secs, xfer: r.res }); }
+          if (what === 'config') {
+            if (r.file.kind !== 'config') { o.push('File check failed.', `（${file} 不是設定檔）`); return R({ wait: r.secs, xfer: r.res }); }
+            const bad = fortiFromText(st(), d, r.file.lines);
+            markReboot(st(), d.id);
+            o.push(`Get config file from ${proto} server OK.`, 'File check OK.', `（設定已經整份換掉${bad ? `，有 ${bad} 行沒有辦法套用` : ''}。設備重新開機中，大約 ${bootTime(d)} 秒）`);
+            return { out: o, changed: true, reloaded: true, wait: r.secs, xfer: r.res };
+          }
+          // 韌體：檢查型號、檔案完整、升級路徑，通過之後重新開機換成新版本
+          const img = r.file.img && IMAGES[r.file.img];
+          o.push(`Get image from ${proto} server OK.`, 'Verifying the integrity of the firmware image.');
+          if (!img || r.file.kind !== 'image') { o.push('Image validation failed: invalid image', `（${file} 不是 FortiGate 的韌體）`); return R({ wait: r.secs, xfer: r.res }); }
+          if (img.platform !== PLATFORM[d.model]) { o.push(`Image validation failed: The image is for ${PLATFORM_NAME[img.platform]}`, `（這台是 ${PLATFORM_NAME[PLATFORM[d.model]]}，要用給它的韌體）`); return R({ wait: r.secs, xfer: r.res }); }
+          if (r.file.md5 !== img.md5 || r.file.size !== img.size) { o.push('Image validation failed: the image is corrupted', '（檔案大小或 MD5 和原廠公布的不一樣：下載不完整或被竄改過）'); return R({ wait: r.secs, xfer: r.res }); }
+          ensureFlash(d);
+          const [a, b] = verOf(d.fw.ver), [x, y] = verOf(img.ver);
+          if (a === x && y - b > 2) {
+            o.push(`Upgrade path check failed: ${d.fw.ver} → ${img.ver}`, `（FortiOS 每次只能往上升一個主要版本：${d.fw.ver} 要先升到 ${a}.${b + 2}.x，再升到 ${img.ver}。跳著升，設定檔的轉換會出問題）`);
+            return R({ wait: r.secs, xfer: r.res });
+          }
+          d.fwNext = { image: r.file.img, ver: img.ver };
+          markReboot(st(), d.id);
+          o.push('Please wait for system to restart.', '', `（新的韌體 ${img.ver} 會在重新開機之後生效，大約 ${bootTime(d)} 秒）`);
+          return { out: o, changed: true, reloaded: true, wait: r.secs, xfer: r.res };
+        };
+        return res();
+      }
       if (sub === 'reboot') {
         // FortiGate 的設定是即時存檔的，重開機不會遺失設定；但記憶體裡的連線、紀錄都會消失
         markReboot(st(), d.id);
@@ -995,7 +1072,7 @@ export function fortiSession(getDev, getState) {
   return {
     exec,
     complete: words,
-    prompt: () => { const t = top(); return `${hostOf(dev())}${!t ? '' : ` (${t.t === 'edit' && !t.single ? t.key : t.label})`} # `; },
+    prompt: () => { if (pend) return ''; const t = top(); return `${hostOf(dev())}${!t ? '' : ` (${t.t === 'edit' && !t.single ? t.key : t.label})`} # `; },
     get depth() { return stack.length; },
   };
 }

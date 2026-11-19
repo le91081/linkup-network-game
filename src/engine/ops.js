@@ -8,6 +8,7 @@ import { parseIp, fmtIp } from './ip.js';
 import { transact, macsBehind, closeFlow } from './sim.js';
 import { isIos } from './ios.js';
 import { linkInfo } from './model.js';
+import { ensureFlash, bootPick, isCiscoOs, IMAGES } from './files.js';
 
 export const SIM_EPOCH = Date.UTC(2026, 0, 5, 1, 0, 0); // 模擬世界開始的那一刻：2026-01-05 09:00（UTC+8）
 const FACTORY = Date.UTC(1993, 2, 1, 0, 0, 0); // 沒有硬體時鐘的 IOS 交換器，每次開機都從這一刻算起
@@ -225,15 +226,17 @@ function flushSyslog(state) {
 }
 
 /** IOS 的 debug 輸出：沒有 %設施-嚴重度-代碼，嚴重度是 7 (debugging)。會進紀錄緩衝區，也會出現在 console */
-export function debugLog(state, d, text) {
+export function debugLog(state, d, text) { rawLog(state, d, 7, text); }
+/** 沒有 %設施-嚴重度-代碼 的訊息（debug、開機過程） */
+export function rawLog(state, d, sev, text) {
   if (!state.dyn || !state.dyn.log || !d || !isIos(d)) return;
   const n = (state.dyn.logSeq = (state.dyn.logSeq || 0) + 1);
   const buf = (state.dyn.log[d.id] ||= []);
   const line = `${iosStamp(state, d)}: ${text}`;
-  buf.push({ n, t: state.clock, sev: 7, line });
+  buf.push({ n, t: state.clock, sev, line });
   if (buf.length > LOG_MAX) buf.shift();
   const srv = d.mgmt && parseIp(d.mgmt.syslog || ''), trap = d.mgmt && d.mgmt.logTrap != null && d.mgmt.logTrap !== '' ? +d.mgmt.logTrap : 6;
-  if (srv != null && trap >= 7) (state.dyn.outbox ||= []).push({ dev: d.id, srv, n, sev: 7, line });
+  if (srv != null && trap >= sev) (state.dyn.outbox ||= []).push({ dev: d.id, srv, n, sev, line });
 }
 
 export const logRows = (state, d) => ((state.dyn && state.dyn.log && state.dyn.log[d.id]) || []);
@@ -267,7 +270,7 @@ function pruneVty(state) {
     if (!d || down[id] || state.rt.off[id]) { delete state.dyn.vty[id]; continue; }
     const lim = idleLimit(d);
     state.dyn.vty[id] = list.filter((v) => {
-      if (!(lim > 0) || now - v.last < lim) return true;
+      if (v.busy || !(lim > 0) || now - v.last < lim) return true;
       closeFlow(state, v.cid);
       logEvent(state, d, 6, '', '', `logid="0100032003" type="event" subtype="system" level="information" vd="root" logdesc="Admin logout successful" user="${v.user}" ui="${v.proto}(${v.ip})" action="logout" status="success" reason="timeout" msg="Administrator ${v.user} timed out on ${v.proto}(${v.ip})"`);
       return false;
@@ -326,8 +329,20 @@ export function opsBefore(state) {
     const c = (dyn.clk[d.id] ||= {});
     if (c.boot == null) c.boot = first ? now - UPTIME0 : now;
     const dead = !!down[d.id];
+    ensureFlash(d);
     // 按下 reload，或剛從關機變成開機：記憶體清空，開始計算開機時間
-    if (!dead && (c.reload || c.off)) { wipe(state, d); c.up = now + bootTime(d); }
+    if (!dead && (c.reload || c.off)) {
+      wipe(state, d);
+      delete c.rommon;
+      if (d.fwNext) { d.fw = d.fwNext; delete d.fwNext; } // FortiGate：新韌體在重新開機時生效
+      // Cisco：依 boot system 的順序找映像檔，都找不到就停在 ROMMON
+      const b = isCiscoOs(d) && d.flash ? bootPick(d) : null;
+      if (b && b.rommon) { c.rommon = { why: b.rommon, notes: b.notes }; c.up = Infinity; }
+      else {
+        if (b) { d.fw = { image: b.image, ver: IMAGES[d.flash.files[b.image].img].ver }; c.bootNotes = b.notes; }
+        c.up = now + bootTime(d);
+      }
+    }
     c.off = dead || undefined;
     if (dead) delete c.up;
     if (c.up != null) {
@@ -491,7 +506,12 @@ export function opsAfter(state) {
     if (!d.mgmt || !(isIos(d) || d.kind === 'firewall')) continue;
     const c = (dyn.clk[d.id] ||= {});
     if (down[d.id] || state.rt.off[d.id]) { delete dyn.ev[d.id]; continue; }
-    if (c.restarted) logEvent(state, d, 5, 'SYS-5-RESTART', 'System restarted --', 'logid="0100032009" type="event" subtype="system" level="information" vd="root" logdesc="System restarted" msg="Fortigate started"');
+    if (c.restarted) {
+      // 開機過程中遇到的問題（指定的映像檔不能用，改用別的）會先印在 console 上
+      for (const n of c.bootNotes || []) rawLog(state, d, 3, n);
+      delete c.bootNotes;
+      logEvent(state, d, 5, 'SYS-5-RESTART', 'System restarted --', `logid="0100032009" type="event" subtype="system" level="information" vd="root" logdesc="System restarted" msg="Fortigate started${d.fw ? ' v' + d.fw.ver : ''}"`);
+    }
     const snap = snapshot(state, d);
     let prev = dyn.ev[d.id];
     if (c.restarted) {

@@ -6,6 +6,8 @@ import { transact, routeRows, isBridgePort, arpRows, clearArp, hitsOf, fmtDur, p
 import { iosClock, deviceTime, ntpInfo, logRows, clearLog, syslogStats, uptimeOf, routerId, longIf, SEVERITY, NTP_POLL, vtyRows, idleLimit } from '../engine/ops.js';
 import { quietLeft } from '../engine/remote.js';
 import { counters, clearCounters, clearedAt, spanDest, debugOf, setDebug, consoleRows } from '../engine/wire.js';
+import { ensureFlash, IMAGES, PLATFORM, fsName, flashUsed } from '../engine/files.js';
+import { hostKey, vtyMode } from '../engine/remote.js';
 import { portByName } from '../engine/ios.js';
 import { isIos } from '../engine/ios.js';
 import { fmtMask } from '../engine/ip.js';
@@ -30,7 +32,20 @@ const SHOW = {
     const c = startupConfig(st, d);
     return c ? c.filter((l) => l !== 'Building configuration...') : ['startup-config is not present'];
   },
-  'show version': (st, d) => [`${CATALOG[d.model].title}`, `${host(d)} uptime is ${upText(uptimeOf(st, d))}`, '（LinkUp 模擬的 IOS 風格介面）'],
+  'show version': (st, d) => versionLines(st, d),
+  'show ip ssh': (st, d) => {
+    const m = d.mgmt || {}, k = m.sshKey;
+    if (!k || k.bits < 768) return [`SSH Disabled - version ${m.sshVer === 2 ? '2.0' : '1.99'}`, '%Please create RSA keys to enable SSH (and of atleast 768 bits for SSH v2).',
+      ...(!m.domain ? ['（還沒有設定 ip domain name：產生金鑰之前要先有網域名稱）'] : []), ...(/^(Router|Switch)$/i.test(host(d)) ? ['（主機名稱還是原廠的預設值：產生金鑰之前要先改掉）'] : [])];
+    return [`SSH Enabled - version ${m.sshVer === 2 ? '2.0' : '1.99'}`, 'Authentication methods:publickey,keyboard-interactive,password',
+      `Authentication timeout: ${m.sshTimeout || 120} secs; Authentication retries: ${m.sshRetries || 3}`, 'Minimum expected Diffie Hellman key size : 2048 bits',
+      `IOS Keys in SECSH format(ssh-rsa, base64 encoded): ${host(d)}.${m.domain}`, `（RSA 金鑰 ${k.bits} 位元，指紋 ${hostKey(d)}；line vty 的登入方式：${{ local: 'login local（本機帳號）', line: 'login（只問線路密碼，SSH 不能用）', none: 'no login（不驗證）' }[vtyMode(d)]}）`];
+  },
+  'show crypto key mypubkey rsa': (st, d) => {
+    const m = d.mgmt || {}, k = m.sshKey;
+    if (!k) return ['% No Signature RSA Keys found in configuration.'];
+    return [`% Key pair was generated at: ${iosClock(st, d)}`, `Key name: ${host(d)}.${m.domain || ''}`, 'Key type: RSA KEYS', ` Storage Device: private-config`, ' Usage: General Purpose Key', ' Key is not exportable.', ' Key Data:', `  ${hostKey(d).replace('SHA256:', '30820122 300D0609 2A864886 F70D0101 ').slice(0, 60)} ...（${k.bits} 位元）`];
+  },
   'show ip interface brief': (st, d) => {
     const o = [pad('Interface', 22) + pad('IP-Address', 17) + pad('Method', 8) + pad('Status', 22) + 'Protocol'];
     for (const i of d.ifaces) {
@@ -354,6 +369,24 @@ const SHOW = {
         + (i.rt.vrrp && i.rt.vrrp.wait > 0 ? `   (Master down，${Math.ceil(i.rt.vrrp.wait)} 秒後接手)` : ''))];
   },
 };
+/** show version：跑的是哪一個版本、從哪一個映像檔開機 */
+function versionLines(st, d) {
+  ensureFlash(d);
+  const p = PLATFORM[d.model], fw = d.fw || {}, fs = fsName(d);
+  const xeVer = (fw.image || '').match(/\.(\d+\.\d+\.\d+\w*)\.SPA/);
+  const codename = { '16.12': 'Gibraltar', '17.3': 'Amsterdam', '17.6': 'Bengaluru', '17.9': 'Cupertino' }[String(fw.ver).split('.').slice(0, 2).join('.')] || 'Cupertino';
+  const head = p === 'n9k'
+    ? ['Cisco Nexus Operating System (NX-OS) Software', `  NXOS: version ${fw.ver}`, `  NXOS image file is: bootflash:///${fw.image}`]
+    : xeVer
+      ? [`Cisco IOS XE Software, Version ${xeVer[1]}`, `Cisco IOS Software [${codename}], ${p === 'isr4300' ? 'ISR' : 'Catalyst L3 Switch'} Software (X86_64_LINUX_IOSD-UNIVERSALK9-M), Version ${fw.ver}, RELEASE SOFTWARE (fc3)`]
+      : [`Cisco IOS Software, C2960CX Software (C2960c405ex-UNIVERSALK9-M), Version ${fw.ver}, RELEASE SOFTWARE (fc2)`];
+  return [...head, 'Technical Support: http://www.cisco.com/techsupport', '', `${host(d)} uptime is ${upText(uptimeOf(st, d))}`, 'System returned to ROM by reload',
+    `System image file is "${fs}:${fw.image}"`, '', `cisco ${CATALOG[d.model].title.replace(/^Cisco /, '')} processor with 4194304K bytes of memory.`,
+    `${d.ports.length} Gigabit Ethernet interfaces`, ...(d.flash ? [`${Math.round(d.flash.size / 1024)}K bytes of ${fs === 'flash' ? 'flash-simulated non-volatile configuration memory' : 'flash memory at bootflash:'}.`] : []), '',
+    'Configuration register is 0x2102', ...(d.flash ? [`（${fs} 已經用了 ${Math.round(flashUsed(d) / 1048576)} MB / ${Math.round(d.flash.size / 1048576)} MB）`] : [])];
+}
+void IMAGES;
+
 /** show monitor [session n] */
 function monitorLines(d, only) {
   const span = (d.sw && d.sw.span) || {};
@@ -551,8 +584,8 @@ function showOrPing(app, devId, line, print) {
  */
 export function iosRun(app, devId, sess, line, print) {
   const text = line.trim(), low = text.toLowerCase();
-  const booting = (app.state.rt.booting || {})[devId];
-  if (booting > 0) { print(`% 設備還在開機中，還要 ${Math.ceil(booting)} 秒才能下指令`, 'warn'); return {}; }
+  const booting = (app.state.rt.booting || {})[devId], rom = (app.state.rt.rommon || {})[devId];
+  if (booting > 0 && !rom) { print(`% 設備還在開機中，還要 ${Math.ceil(booting)} 秒才能下指令`, 'warn'); return {}; }
   const before = app.state.devices[devId].name;
   if (text.length > 1 && text.endsWith('?')) {
     // 指令打到一半加上 ?：列出接下來可以輸入的字
@@ -571,7 +604,7 @@ export function iosRun(app, devId, sess, line, print) {
   r.out.forEach((l) => print(l, l.startsWith('%') ? 'warn' : 'dim'));
   if (r.pass && !showOrPing(app, devId, r.doLine != null ? r.doLine : text, print)) print(`% Invalid input detected：不認識的指令「${text}」，輸入 ? 查看可用指令`, 'warn');
   const d = app.state.devices[devId];
-  return { changed: !!r.changed, reloaded: !!r.reloaded, renamed: !!r.changed && (!!r.reloaded || !d || d.name !== before) };
+  return { changed: !!r.changed, reloaded: !!r.reloaded, renamed: !!r.changed && (!!r.reloaded || !d || d.name !== before), wait: r.wait || 0, xfer: r.xfer || null };
 }
 /** Tab 補齊時要一起列出來的 show 指令 */
 export const IOS_CMDS = CMDS;
@@ -601,6 +634,8 @@ export function buildCli(ctx, body) {
     const r = iosRun(app, dev.id, sess, line, print);
     if (r.clear) logs.length = 0;
     if (r.changed) ctx.commit(false);
+    if (r.xfer) app.showTrace(`${dev.name}# ${line}`, r.xfer.log, r.xfer.hops, r.xfer);
+    if (r.wait > 0) app.tick(Math.ceil(r.wait)); // copy 這類指令要花時間：模擬時間跟著往前走
     follow();
     if (r.renamed) app.renderPanel(); // 設備改名或重新開機了：整個面板要跟著更新
     else draw();

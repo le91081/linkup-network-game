@@ -40,8 +40,8 @@ export function protoName(f) {
   if (f.proto === 'dhcp') return 'DHCP';
   if (f.proto === 'icmp') return 'ICMP';
   if (f.proto === 'esp') return f.ssl ? 'TLSv1.3' : 'ESP';
-  if (f.proto === 'udp') return p(53) ? 'DNS' : p(123) ? 'NTP' : p(514) ? 'Syslog' : p(500) || p(4500) ? 'ISAKMP' : p(1812) ? 'RADIUS' : 'UDP';
-  if (f.proto === 'tcp' && f.data) return p(23) ? 'TELNET' : p(22) ? 'SSHv2' : p(443) || p(10443) ? 'TLSv1.3' : p(80) ? 'HTTP' : 'TCP';
+  if (f.proto === 'udp') return p(53) ? 'DNS' : p(123) ? 'NTP' : p(514) ? 'Syslog' : p(500) || p(4500) ? 'ISAKMP' : p(1812) ? 'RADIUS' : p(69) || (f.data && f.data.kind === 'tftp') ? 'TFTP' : p(161) || p(162) ? 'SNMP' : 'UDP';
+  if (f.proto === 'tcp' && f.data) return p(23) ? 'TELNET' : p(22) ? 'SSHv2' : p(21) ? 'FTP' : p(443) || p(10443) ? 'TLSv1.3' : p(80) ? 'HTTP' : 'TCP';
   return f.proto.toUpperCase();
 }
 const flags = (f) => (f.proto !== 'tcp' ? '' : f.data ? '[PSH, ACK]' : f.ack ? '[ACK]' : f.reply ? '[SYN, ACK]' : '[SYN]');
@@ -62,11 +62,23 @@ export function infoOf(f) {
       return d.kind === 'login' ? `Telnet Data …  使用者名稱：${d.user}　密碼：${d.pass}` : d.kind === 'cmd' ? `Telnet Data …  ${d.text}` : 'Telnet Data …（設備回傳的畫面）';
     }
     if (name === 'SSHv2') return `${f.reply ? 'Server' : 'Client'}: Encrypted packet (len=${f.data.kind === 'out' ? 524 : 52})`;
+    if (name === 'FTP') return f.data.kind === 'ftp' ? `Request: USER ${f.data.user}　Request: PASS ${f.data.pass}　Request: ${f.data.cmd}` : 'Response: 226 Transfer complete';
     return `${f.sport} → ${f.dport} [PSH, ACK] Len=${frameLen(f) - 66}`;
   }
   if (f.proto === 'tcp') return `${f.sport} → ${f.dport} ${flags(f)} Seq=${f.ack ? 1 : 0}${f.ack || f.reply ? ' Ack=1' : ''} Win=64240 Len=0`;
   if (name === 'DNS') return f.reply ? 'Standard query response A' : 'Standard query A';
+  if (name === 'TFTP') return f.data && f.data.kind === 'tftp' ? `${f.data.op === 'RRQ' ? 'Read' : 'Write'} Request, File: ${f.data.file}, Transfer type: octet` : 'Acknowledgement, Block: 1';
+  if (name === 'SNMP') return snmpInfo(f);
   return `${f.sport} → ${f.dport} Len=${frameLen(f) - 42}`;
+}
+
+/** SNMP：v1 / v2c 的 community 是明文；v3 加密之後只看得到使用者名稱 */
+function snmpInfo(f) {
+  const s = f.data && f.data.snmp;
+  if (!s) return f.dport === 162 ? 'snmpV2-trap' : 'get-response';
+  if (s.trap) return `${s.ver === 'v3' ? 'encryptedPDU: privKey Unknown' : `snmpV2-trap  community=${s.community}`}  ${s.trap}`;
+  if (s.ver === 'v3') return `msgUserName=${s.user}  encryptedPDU: privKey Unknown`;
+  return `${f.reply ? 'get-response' : 'get-bulk-request'}  community=${s.community}  1.3.6.1.2.1.31.1.1.1.6 (ifHCInOctets)`;
 }
 
 // ───────────────────────── 介面計數器 ─────────────────────────

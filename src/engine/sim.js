@@ -1298,7 +1298,8 @@ export function recompute(state) {
     }
     if (state.v6) recompute6(state);
     state.rt.booting = booting;
-    for (const id of ids) state.rt.pending.push({ at: state.clock + booting[id], dev: id, kind: 'boot', text: `${state.devices[id].name}：開機中` });
+    for (const id of ids) if (isFinite(booting[id])) state.rt.pending.push({ at: state.clock + booting[id], dev: id, kind: 'boot', text: `${state.devices[id].name}：開機中` });
+    state.rt.rommon = Object.fromEntries(ids.filter((id) => !isFinite(booting[id])).map((id) => [id, state.dyn.clk[id].rommon.why]));
     Object.assign(state.dyn, side);
     opsAfter(state);
     background(state, { isBridge: isBridgePort, ospfOn, uptime0: UPTIME0 });
@@ -1636,6 +1637,11 @@ function deliver(dev, inIf, pkt) {
     } else {
       if (!dev.mgmt[k]) return no(`${dev.name} 沒有開啟 ${name} 管理服務（連線被拒絕）`);
       if (fromWan) return no(`${dev.name} 的管理介面不對 WAN 開放`);
+      // IOS 沒有 RSA 金鑰就沒有 SSH 伺服器在聽
+      const cisco = !dev.locked && CATALOG[dev.model].vendor === 'Cisco' && ['router', 'mswitch', 'l3switch'].includes(dev.kind);
+      if (k === 'ssh' && cisco && !(dev.mgmt.sshKey && dev.mgmt.sshKey.bits >= 768)) {
+        return no(`${dev.name} 的 SSH 沒有啟用（連線被拒絕）：${dev.mgmt.sshKey ? 'RSA 金鑰只有 ' + dev.mgmt.sshKey.bits + ' 位元，SSH 2 至少要 768' : '還沒有 RSA 金鑰。先設定 ip domain name，再 crypto key generate rsa modulus 2048'}`);
+      }
     }
     if (!addrMatch(String(dev.mgmt.allow || '').replace(/[,\s]+/g, ','), pkt.src)) return no(`來源 ${fmtIp(pkt.src)} 不在 ${dev.name} 允許管理的位址範圍內`);
     return ok;
@@ -1654,6 +1660,7 @@ function forward(state, ctx, startId, pkt) {
     return { ok: false, dev: dev.id, reason };
   };
   if ((state.down || {})[dev.id]) return drop(`${dev.name} 已經關機`);
+  if (state.rt.rommon && state.rt.rommon[dev.id]) return drop(`${dev.name} 停在 ROMMON，沒有開機成功：${state.rt.rommon[dev.id]}`);
   if (state.rt.booting && state.rt.booting[dev.id] > 0) return drop(`${dev.name} 還在開機中（還要 ${Math.ceil(state.rt.booting[dev.id])} 秒）`);
   if (state.rt.off[dev.id]) return drop(`${dev.name} 沒有電 — 它需要接在有 PoE 供電的連接埠上`);
   for (let n = 0; n < 48; n++) {
@@ -2098,7 +2105,7 @@ function transactInner(state, fromId, spec) {
   }
   const id = 1000 + (pktSeq++ % 20000);
   const icmp = spec.proto === 'icmp';
-  const pkt = { proto: spec.proto, src: srcIp, dst: spec.dst, sport: icmp ? id : 30000 + id, dport: icmp ? 0 : spec.dport, ttl: 64, reply: false };
+  const pkt = { proto: spec.proto, src: srcIp, dst: spec.dst, sport: icmp ? id : 30000 + id, dport: icmp ? 0 : spec.dport, ttl: 64, reply: false, data: spec.data || null };
   ctx.log.push({ dev: fromId, kind: 'tx', text: `送出 ${pktDesc(pkt)}` });
   const a = forward(state, ctx, fromId, pkt);
   if (!a.ok) {
