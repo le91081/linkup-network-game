@@ -445,7 +445,8 @@ setInterval(() => {
   if (n >= 1) { carry -= n; app.tick(n); }
 }, 250);
 
-window.addEventListener('resize', () => { updateInsets(); app.scene.fit(); });
+// 先讓畫布量到新的大小再對焦（畫布自己的 ResizeObserver 比 resize 事件晚，對焦會用到舊的寬高）
+window.addEventListener('resize', () => { updateInsets(); app.scene.resize(); app.scene.fit(); });
 // 兩側面板的寬度變了（版面斷點、縮放）也要重新對齊時鐘與場景邊界
 if (typeof ResizeObserver === 'function') {
   const ro = new ResizeObserver(() => updateInsets());

@@ -10,7 +10,7 @@ import { parseDscp, dscpName, COS_DSCP_DEFAULT } from './qos.js';
 import { clearOspfProcess, ospfArea } from './ospf.js';
 import { transfer, configFile, ensureFlash, flashFree, flashPath, fsName, IMAGES, PLATFORM, PLATFORM_NAME, imageFile, fmtBytes } from './files.js';
 import { macsBehind, recompute, ospfOn, ikeVer } from './sim.js';
-import { logEvent, markReboot, setClock, deviceTime, SEVERITY, bootTime } from './ops.js';
+import { logEvent, markReboot, setClock, deviceTime, SEVERITY, bootTime, longIf } from './ops.js';
 import { spanDest } from './wire.js';
 import { genKey } from './remote.js';
 
@@ -2617,7 +2617,7 @@ export function runningConfig(state, dev) {
       const nd = portNd(dev, p.id), ndl = [nd.cdp === false ? ' no cdp enable' : null, nd.tx === false ? ' no lldp transmit' : null, nd.rx === false ? ' no lldp receive' : null].filter(Boolean);
       const def = pc.mode === defaultPortMode(dev.model) && pc.vlan === 1 && pc.native === 1 && (!pc.allowed || pc.allowed === 'all') && !pc.voice && !pc.noneg && !pc.qosTrust && !pc.trustDevice && !pc.poe && !ndl.length && !pc.shut && !peer && !pc.trust && !(+pc.lag > 0) && !(pc.ps && pc.ps.on) && !pc.bpduguard && !pc.rootguard && !pc.dot1x && !phy.length && pc.portfast == null && !pc.desc;
       if (def) continue;
-      o.push(`interface ${p.label}`, ...desc, ...phy);
+      o.push(`interface ${longIf(p.label)}`, ...desc, ...phy);
       if (pc.mode === 'routed') {
         const i = dev.ifaces.find((x) => x.bind.t === 'port' && x.bind.port === p.id);
         o.push(' no switchport', ...(i ? l3lines(i) : []), ...ndl);
@@ -2654,12 +2654,12 @@ export function runningConfig(state, dev) {
       const i = dev.ifaces.find((x) => x.bind.t === 'port' && x.bind.port === p.id);
       if (!i) continue;
       const nd = portNd(dev, p.id);
-      o.push(`interface ${p.label}`, ...desc, ...l3lines(i),
+      o.push(`interface ${longIf(p.label)}`, ...desc, ...l3lines(i),
         ...(i.speed && i.speed !== 'auto' ? [` speed ${i.speed}`] : []), ...(i.duplex && i.duplex !== 'auto' ? [` duplex ${i.duplex}`] : []),
         ...(nd.cdp === false ? [' no cdp enable'] : []), ...(nd.tx === false ? [' no lldp transmit'] : []), ...(nd.rx === false ? [' no lldp receive'] : []),
         i.shut ? ' shutdown' : ' no shutdown', '!');
       for (const s of dev.ifaces.filter((x) => x.bind.t === 'sub' && x.bind.port === p.id)) {
-        o.push(`interface ${s.label}`, ...(s.desc ? [` description ${s.desc}`] : []), ` encapsulation dot1Q ${s.bind.vlan}`, ...l3lines(s), '!');
+        o.push(`interface ${longIf(s.label)}`, ...(s.desc ? [` description ${s.desc}`] : []), ` encapsulation dot1Q ${s.bind.vlan}`, ...l3lines(s), '!');
       }
     }
   }
@@ -2681,7 +2681,7 @@ export function runningConfig(state, dev) {
     if (dev.ospfRefBw) o.push(` auto-cost reference-bandwidth ${dev.ospfRefBw}`);
     for (const [a, t] of Object.entries(dev.ospfAreaAuth || {})) o.push(` area ${a} authentication${t === 'md5' ? ' message-digest' : ''}`);
     for (const r of dev.ospfRanges || []) o.push(` area ${r.area} range ${fmtIp(r.net)} ${fmtMask(r.bits)}`);
-    const ifl = (id) => (dev.ifaces.find((x) => x.id === id) || { label: id }).label;
+    const ifl = (id) => longIf((dev.ifaces.find((x) => x.id === id) || { label: id }).label);
     if (dev.ospfPassiveDefault) { o.push(' passive-interface default'); for (const id of dev.ospfNoPassive || []) o.push(` no passive-interface ${ifl(id)}`); }
     else for (const id of dev.ospfPassive || []) o.push(` passive-interface ${ifl(id)}`);
     for (const n of stmts) o.push(` network ${fmtIp(n.net)} ${wild(n.bits)} area ${+(n.area || 0)}`);
@@ -2729,10 +2729,10 @@ export function runningConfig(state, dev) {
   const out = dev.ifaces.filter(natRule);
   // NAT 的範圍：指定的 ACL、圖形介面填的「NAT 例外」（轉成一份 ACL），或預設的 list 1（全部轉換）
   const natList = (i) => i.natAcl || (splitList(i.natSkip).length ? 'NAT-' + i.label.replace(/[^\w.]+/g, '_').toUpperCase() : '1');
-  for (const i of out) o.push(`ip nat inside source list ${natList(i)} interface ${i.label} overload`);
+  for (const i of out) o.push(`ip nat inside source list ${natList(i)} interface ${longIf(i.label)} overload`);
   for (const n of dev.staticNat || []) if (n.pub && n.priv) o.push(`ip nat inside source static ${n.priv} ${n.pub}`);
   for (const f of dev.portForwards || []) {
-    if (f.port && f.toIp && out[0]) o.push(`ip nat inside source static ${f.proto || 'tcp'} ${f.toIp} ${f.toPort || f.port} interface ${out[0].label} ${f.port}`);
+    if (f.port && f.toIp && out[0]) o.push(`ip nat inside source static ${f.proto || 'tcp'} ${f.toIp} ${f.toPort || f.port} interface ${longIf(out[0].label)} ${f.port}`);
   }
   // 改過的 NAT 逾時才會出現在設定裡
   const nt = dev.natTimeout || {};

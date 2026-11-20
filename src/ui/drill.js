@@ -1,7 +1,7 @@
 // 故障演練：拿一個已經完成的關卡，把網路隨機改壞幾個地方，玩家要自己找出來修好
-import { h, icon, button } from './dom.js';
+import { h, icon, button, fill } from './dom.js';
 import { LEVELS, CHAPTERS } from '../levels/index.js';
-import { injectFaults, drillable } from '../engine/faults.js';
+import { injectFaults, drillable, faultCandidates } from '../engine/faults.js';
 import { recompute, settle } from '../engine/sim.js';
 
 const COUNT_NAME = { 1: '一個', 2: '兩個', 3: '三個' };
@@ -38,17 +38,23 @@ export function makeDrill(base, { count = 2, seed = 1, timed = 0 } = {}) {
   };
   return lv;
 }
+/** 有沒有可以改壞的地方（只有 IPv6 的關卡目前挑不到故障）。結果記起來，選單每次打開不用重算 */
+const faultCache = new Map();
+function hasFaults(lv) {
+  if (!faultCache.has(lv.id)) { let n = 0; try { n = faultCandidates(lv.setup()).length; } catch { n = 0; } faultCache.set(lv.id, n > 0); }
+  return faultCache.get(lv.id);
+}
 export const randomSeed = () => (Math.random() * 2 ** 31) >>> 0;
 
 /** 演練的選單：挑關卡、壞幾個地方、要不要限時 */
 export function openDrillPicker(app, { modal, closeModal, levelNo }) {
   const done = app.store.done;
-  const pool = LEVELS.filter(drillable);
+  const pool = LEVELS.filter((l) => drillable(l) && hasFaults(l));
   let count = 2, timed = 0, pick = '';
   const dlg = modal([], { wide: true });
   const draw = () => {
     const doneList = pool.filter((l) => done[l.id]);
-    dlg.replaceChildren(
+    fill(dlg, 
       h('div', { class: 'hero' }, h('div', { class: 'hero-ic' }, icon('bolt', 30)),
         h('div', null, h('h1', { text: '故障演練' }), h('p', { text: '從一個已經做好的網路開始，系統隨機改壞幾個地方：可能是閘道打錯、埠被放錯 VLAN、Trunk 少了 VLAN、介面被關、路由被刪、多了一條 ACL…。每次都不一樣，最接近真實的維運工作。' }))),
       h('div', { class: 'drill-opts' },

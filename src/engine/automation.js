@@ -10,7 +10,7 @@ import { parseIp, parseMask, fmtMask, parseCidr } from './ip.js';
 import { recompute } from './sim.js';
 import { CATALOG, defaultPortMode } from './model.js';
 import { ensureFlash } from './files.js';
-import { vtyRows } from './ops.js';
+import { vtyRows, longIf } from './ops.js';
 
 // ───────────────────────── inventory ─────────────────────────
 
@@ -216,7 +216,7 @@ function ifLine(d, name) {
   const kind = 'gigabitethernet'.startsWith(pre) ? 'Gi' : 'tengigabitethernet'.startsWith(pre) || pre === 'te' ? 'Te' : 'fastethernet'.startsWith(pre) ? 'Fa' : 'ethernet'.startsWith(pre) ? 'Eth' : m[1];
   const [num, sub] = m[2].split('.');
   const p = d.ports.find((x) => x.label.toLowerCase() === (kind + num).toLowerCase());
-  return `interface ${p ? p.label : kind + num}${sub ? '.' + sub : ''}`;
+  return `interface ${longIf(p ? p.label : kind + num)}${sub ? '.' + sub : ''}`;
 }
 
 /** 一條受管設備的連線（network_cli） */
@@ -341,7 +341,7 @@ function resourceCmds(mod, c, args) {
     for (const x of conf) {
       if (!x.name) return { fail: 'missing required arguments: name found in config' };
       const il = ifLine(d, x.name), lbl = il.replace(/^interface /, '');
-      const p = d.ports.find((q) => q.label === lbl);
+      const p = d.ports.find((q) => longIf(q.label) === lbl);
       if (!p) return { fail: `${hostName(d)} 沒有介面 ${x.name}` };
       const pc = d.sw.ports[p.id], sub = [];
       if (state === 'deleted') {

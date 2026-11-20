@@ -333,8 +333,8 @@ h3.sec { font-size: 11.5px; letter-spacing: 0.08em; color: var(--faint); text-tr
 .hero .prog { margin-left: auto; text-align: right; }
 .hero .prog b { font: 800 24px var(--mono); }
 .hero .prog span { display: block; color: var(--muted); font-size: 12px; }
-.chapter h2 { font-size: 15px; display: flex; align-items: baseline; gap: 10px; }
-.chapter h2 small { color: var(--muted); font-weight: 500; font-size: 12.5px; }
+.chapter h2 { font-size: 15px; display: flex; align-items: baseline; gap: 10px; white-space: nowrap; }
+.chapter h2 small { color: var(--muted); font-weight: 500; font-size: 12.5px; white-space: normal; min-width: 0; }
 .lv-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; margin-top: 10px; }
 .lv { display: flex; flex-direction: column; gap: 6px; padding: 13px; border-radius: 14px; background: var(--card); border: 1px solid var(--line); text-align: left; min-height: 124px; transition: transform 0.14s, border-color 0.14s, background 0.14s; }
 .lv:hover { transform: translateY(-2px); border-color: rgba(79, 216, 196, 0.55); background: var(--card-2); }
@@ -665,7 +665,7 @@ textarea.code:focus { outline: none; border-color: var(--accent); }
 .api-line .api-method { width: 96px; flex: none; font-weight: 700; }
 .api-curl { padding: 7px 10px; border-radius: 9px; background: rgba(5, 8, 15, 0.7); border: 1px dashed var(--line-2); color: #a9b8dc; font-size: 11px; overflow-wrap: anywhere; }
 .api-status { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; font-size: 12px; }
-.api-body { margin: 0; max-height: 320px; overflow: auto; padding: 9px 11px; border-radius: 10px; background: #05080f; border: 1px solid var(--line); color: #cfe0ff; font-size: 11.5px; line-height: 1.5; white-space: pre; }
+.api-body { margin: 0; max-height: 360px; overflow: auto; padding: 9px 11px; border-radius: 10px; background: #05080f; border: 1px solid var(--line); color: #cfe0ff; font-size: 11.5px; line-height: 1.5; white-space: pre-wrap; overflow-wrap: anywhere; }
 .api-tpl summary { cursor: pointer; color: var(--muted); font-size: 12px; margin: 2px 0 6px; }
 .api-tpl .chips { margin-top: 4px; }
 .api-hist { display: flex; align-items: center; gap: 8px; width: 100%; padding: 5px 2px; border: 0; border-top: 1px solid var(--line); background: transparent; color: var(--text); text-align: left; font-size: 11.5px; cursor: pointer; }
@@ -739,3 +739,22 @@ textarea.code:focus { outline: none; border-color: var(--accent); }
 textarea.inp.ed-brief { height: auto; min-height: 80px; padding: 7px 10px; line-height: 1.5; resize: vertical; font-family: var(--sans); }
 .ed-hint { display: grid; grid-template-columns: 18px 1fr 26px; gap: 6px; align-items: center; font-size: 12px; }
 .chip.btnchip.on { background: rgba(245, 181, 71, 0.18); border-color: rgba(245, 181, 71, 0.4); color: #ffe2a8; }
+
+/* 場景縮得很小時：標籤只留名稱，滑鼠移上去或選取時才顯示第二行 */
+.scene-labels.compact .dev-label { padding: 2px 8px 2px 6px; border-radius: 8px; }
+.scene-labels.compact .dev-label .nm { font-size: 11px; }
+.scene-labels.compact .dev-label .sub { display: none; }
+.scene-labels.compact .dev-label.sel .sub, .scene-labels.compact .dev-label.hov .sub { display: block; }
+.dev-label.sel, .dev-label.hov { z-index: 100000 !important; }
+.dev-label.hov:not(.sel) { border-color: var(--line-2); background: rgba(14, 20, 38, 0.92); }
+textarea.code.api-hdr { min-height: 52px; height: 52px; }
+.api-meta { font-size: 11px; margin-top: -4px; }
+.ans-bar { display: flex; align-items: center; gap: 8px; }
+.ans-bar .api-curl { flex: 1; min-width: 0; padding: 6px 9px; }
+.ans-bar .btn { flex: none; }
+textarea.code.ans-edit { height: min(46vh, 330px); }
+.ans-out .tl { white-space: pre-wrap; word-break: break-word; }
+.ans-out .tl.recap { white-space: pre; overflow-x: auto; }
+.ans-out .tl.ans-head { display: flex; gap: 6px; white-space: nowrap; overflow: hidden; margin-top: 4px; }
+.ans-out .ans-head .stars { flex: 1; min-width: 24px; overflow: hidden; color: #8a96b8; font-weight: 400; }
+.ans-out .ans-head .stars::after { content: '********************************************************************************************************************************'; }

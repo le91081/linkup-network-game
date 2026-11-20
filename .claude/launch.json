@@ -8,6 +8,12 @@
       "port": 5173
     },
     {
+      "name": "linkup-test",
+      "runtimeExecutable": "npx",
+      "runtimeArgs": ["vite", "--port", "5174", "--strictPort"],
+      "port": 5174
+    },
+    {
       "name": "linkup-dist",
       "runtimeExecutable": "npx",
       "runtimeArgs": ["vite", "preview", "--port", "4173", "--strictPort"],

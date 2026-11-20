@@ -1,5 +1,5 @@
 // 雲端主控台（以 AWS 的 VPC 主控台為藍本）：VPC、子網路、路由表、EC2、安全群組、網路 ACL、NAT 閘道、站對站 VPN
-import { h, button, icon } from './dom.js';
+import { h, button, icon, toast } from './dom.js';
 import { inp, sel, toggle, field, note, kv, del, cardHead, grid2, bind, badge } from './form.js';
 import { parseIp, parseCidr, fmtIp, netOf } from '../engine/ip.js';
 import { transact } from '../engine/sim.js';
@@ -98,8 +98,8 @@ export function rtTab(ctx, body) {
       sel(ctx, ...bind(x, 'target'), targets.some((t) => t[0] === x.target) ? targets : [...targets, [x.target, `${x.target}（不存在）`]], { rerender: true }),
       del(() => { r.routes.splice(k, 1); ctx.commit(true); }))));
     if (r.prop && v.vgw) for (const t of dev.vpns || []) for (const c of String(t.remote || '').split(/[,\s]+/).filter(Boolean)) card.append(h('div', { class: 'cl-route prop' }, h('span', { class: 'mono', text: c }), h('span', { class: 'mono', text: 'vgw（傳播）' }), h('span')));
-    card.append(h('div', { class: 'addrow' }, button('新增路由', { ic: 'plus', small: true, onclick: () => { r.routes.push({ dst: '0.0.0.0/0', target: 'igw' }); ctx.commit(true); } })),
-      v.vgw ? toggle(ctx, ...bind(r, 'prop'), '路由傳播：自動加入 VPN 連線的地端網段 → vgw', { rerender: true }) : null);
+    card.append(h('div', { class: 'addrow' }, button('新增路由', { ic: 'plus', small: true, onclick: () => { r.routes.push({ dst: '0.0.0.0/0', target: 'igw' }); ctx.commit(true); } })));
+    if (v.vgw) card.append(toggle(ctx, ...bind(r, 'prop'), '路由傳播：自動加入 VPN 連線的地端網段 → vgw', { rerender: true }));
     body.append(card);
   });
   body.append(h('div', { class: 'addrow' }, button('建立路由表', { ic: 'plus', kind: 'primary', small: true, onclick: () => { v.rts.push({ id: awsId('rtb'), name: `rtb-${v.rts.length + 1}`, routes: [] }); ctx.commit(true); } })));
@@ -137,7 +137,7 @@ export function ec2Tab(ctx, body) {
     const input = h('input', { class: 'term-input', spellcheck: 'false', autocomplete: 'off', placeholder: 'curl 8.8.8.8:443' });
     input.addEventListener('keydown', (e) => { if (e.key === 'Enter' && input.value.trim()) { run(input.value); input.value = ''; } e.stopPropagation(); });
     const s = subnetOf(v, x);
-    body.append(h('div', { class: 'card' }, cardHead(x.name, badge('on', '執行中'), h('span', { class: 'mono muted cl-small', text: `${x.id} · ${x.type || 't3.micro'}` })),
+    body.append(h('div', { class: 'card' }, cardHead(x.name, badge('on', '執行中')), h('div', { class: 'mono muted cl-small', text: `${x.id} · ${x.type || 't3.micro'}` }),
       grid2(field('子網路', sel(ctx, ...bind(x, 'subnet'), v.subnets.map((q) => [q.id, `${q.name}（${q.cidr}）`]), { rerender: true })),
         field('私有 IPv4', inp(ctx, ...bind(x, 'ip'), { check: (val) => { const ip = parseIp(val), c = s && parseCidr(s.cidr); return ip != null && !!c && netOf(ip, c.bits) === c.net && !reservedWhy(ip, s); } })),
         field('公用 IP（彈性 IP）', v.igw || x.eip ? sel(ctx, () => x.eip || '', (val) => { x.eip = val; }, [['', '（沒有）'], ...free(x).map((e) => [e, e])], { rerender: true })
@@ -242,7 +242,8 @@ export function cloudVpnTab(ctx, body) {
       h('div', { class: 'kv' }, kv('AWS 端的通道外部 IP', igw.ip || '—'), kv('VPC 端的網段', v.cidr), kv('AWS 接受的提案', 'AES128 / AES256、SHA1 / SHA2-256、DH 2 / 14 – 21，第二階段要有 PFS')),
       ctx.live(() => (t.rt && !t.rt.up && t.rt.why ? note('warn', t.rt.why) : null)),
       h('div', { class: 'addrow' }, button(ui.show ? '收起設定檔' : '下載設定檔', { ic: 'save', small: true, onclick: () => { ui.show = !ui.show; ctx.commit(true); } }),
-        ui.show ? sel(ctx, () => ui.vendor, (val) => { ui.vendor = val; }, [['ios', 'Cisco ISR（IOS XE）'], ['forti', 'Fortinet FortiGate']], { rerender: true }) : null),
+        ui.show ? sel(ctx, () => ui.vendor, (val) => { ui.vendor = val; }, [['ios', 'Cisco ISR（IOS XE）'], ['forti', 'Fortinet FortiGate']], { rerender: true }) : null,
+        ui.show ? button('複製', { small: true, onclick: () => navigator.clipboard?.writeText(vpnConfig(dev, t, ui.vendor)).then(() => toast('已複製設定檔：到設備的 CLI（設定模式）直接貼上，會一行一行執行', 'ok', 4000), () => toast('瀏覽器不允許複製，請手動選取', 'bad')) }) : null),
       ui.show ? h('pre', { class: 'api-body mono', text: vpnConfig(dev, t, ui.vendor) }) : null));
     void st;
   });

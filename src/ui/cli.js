@@ -56,20 +56,20 @@ const SHOW = {
     return [`% Key pair was generated at: ${iosClock(st, d)}`, `Key name: ${host(d)}.${m.domain || ''}`, 'Key type: RSA KEYS', ` Storage Device: private-config`, ' Usage: General Purpose Key', ' Key is not exportable.', ' Key Data:', `  ${hostKey(d).replace('SHA256:', '30820122 300D0609 2A864886 F70D0101 ').slice(0, 60)} ...（${k.bits} 位元）`];
   },
   'show ip interface brief': (st, d) => {
-    const o = [pad('Interface', 22) + pad('IP-Address', 17) + pad('Method', 8) + pad('Status', 22) + 'Protocol'];
+    const o = [pad('Interface', 24) + pad('IP-Address', 16) + pad('OK? Method', 11) + pad('Status', 22) + 'Protocol'];
     for (const i of d.ifaces) {
       if (!i.rt || i.rt.active === false) continue;
       const pc = d.sw && i.bind.port && d.sw.ports[i.bind.port];
       const adm = (pc && pc.shut) || i.shut;
-      o.push(pad(i.bind.t === 'svi' ? 'Vlan' + i.bind.vlan : i.label, 22) + pad(i.rt.ip != null ? fmtIp(i.rt.ip) : 'unassigned', 17)
-        + pad(i.mode === 'static' ? 'manual' : i.mode.toUpperCase(), 8) + pad(adm ? 'administratively down' : i.rt.link ? 'up' : 'down', 22) + (i.rt.link ? 'up' : 'down'));
+      o.push(pad(i.bind.t === 'svi' ? 'Vlan' + i.bind.vlan : longIf(i.label), 24) + pad(i.rt.ip != null ? fmtIp(i.rt.ip) : 'unassigned', 16)
+        + pad((i.rt.ip != null ? 'YES ' : 'NO  ') + (i.mode === 'static' ? (i.rt.ip != null ? 'manual' : 'unset') : i.mode.toUpperCase()), 11) + pad(adm ? 'administratively down' : i.rt.link ? 'up' : 'down', 22) + (i.rt.link ? 'up' : 'down'));
     }
     if (isSw(d)) {
       for (const p of d.ports) {
         if (!isBridgePort(d, p.id)) continue;
         const up = !!st.rt.links[d.id + ':' + p.id];
         if (!up && !d.sw.ports[p.id].shut) continue;
-        o.push(pad(p.label, 22) + pad('unassigned', 17) + pad('unset', 8) + pad(d.sw.ports[p.id].shut ? 'administratively down' : 'up', 22) + (up ? 'up' : 'down'));
+        o.push(pad(longIf(p.label), 24) + pad('unassigned', 16) + pad('YES unset', 11) + pad(d.sw.ports[p.id].shut ? 'administratively down' : 'up', 22) + (up ? 'up' : 'down'));
       }
     }
     return o;
@@ -1421,6 +1421,36 @@ export function iosRun(app, devId, sess, line, print) {
     return {};
   }
   if (low === 'cls' || low === 'clear') return { clear: true };
+  // 輸出篩選：show … | include / exclude / begin / section / count <正規表示式>
+  const pipe = text.match(/^((?:do\s+)?sh\S*\s.*?\S)\s+\|\s*(\S+)(?:\s+(.*))?$/i);
+  if (pipe) {
+    const kind = ['include', 'exclude', 'begin', 'section', 'count'].find((k) => k.startsWith(pipe[2].toLowerCase()) && pipe[2].length >= (k === 'count' ? 1 : 1));
+    if (!kind || (kind !== 'count' && !pipe[3])) {
+      print(`% Invalid input detected：| 後面可以接 include、exclude、begin、section、count，再加上要比對的字（例如 show running-config | include ip route）`, 'warn');
+      return {};
+    }
+    const got = [];
+    const res = iosRun(app, devId, sess, pipe[1], (t, c) => got.push([t, c]));
+    let re;
+    try { re = new RegExp((pipe[3] || '.').trim().replace(/^"(.*)"$/, '$1'), 'i'); } catch { re = new RegExp((pipe[3] || '').trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i'); }
+    const body = got.filter(([, c]) => c !== 'hint' && c !== 'cmd');
+    let keep;
+    if (kind === 'include') keep = body.filter(([t]) => re.test(t));
+    else if (kind === 'exclude') keep = body.filter(([t]) => !re.test(t));
+    else if (kind === 'begin') { const k = body.findIndex(([t]) => re.test(t)); keep = k < 0 ? [] : body.slice(k); }
+    else if (kind === 'section') {
+      // 區段：標題（不縮排的那一行）符合就整段列出；只有底下的某幾行符合，就列出標題與那幾行
+      keep = [];
+      const secs = [];
+      for (const x of body) { if (!/^\s/.test(x[0]) || !secs.length) secs.push([x]); else secs[secs.length - 1].push(x); }
+      for (const [head, ...kids] of secs) {
+        if (re.test(head[0])) keep.push(head, ...kids);
+        else { const m = kids.filter(([t]) => re.test(t)); if (m.length) keep.push(head, ...m); }
+      }
+    } else { print(`Number of lines which match regexp = ${body.filter(([t]) => re.test(t)).length}`, 'dim'); return res; }
+    for (const [t, c] of keep) print(t, c);
+    return res;
+  }
   const r = sess.exec(text);
   r.out.forEach((l) => print(l, l.startsWith('%') ? 'warn' : 'dim'));
   if (r.pass && !showOrPing(app, devId, r.doLine != null ? r.doLine : text, print)) print(`% Invalid input detected：不認識的指令「${text}」，輸入 ? 查看可用指令`, 'warn');
@@ -1479,6 +1509,20 @@ export function buildCli(ctx, body) {
     } else if (e.key === 'ArrowUp') { if (hi > 0) { hi--; input.value = hist[hi]; } e.preventDefault(); }
     else if (e.key === 'ArrowDown') { hi = Math.min(hist.length, hi + 1); input.value = hist[hi] || ''; e.preventDefault(); }
     e.stopPropagation();
+  });
+  // 一次貼上好幾行（例如整份設定檔）：和真的 console 一樣一行一行執行；最後一行沒有換行的話留在輸入列
+  input.addEventListener('paste', (e) => {
+    const t = (e.clipboardData && e.clipboardData.getData('text')) || '';
+    if (!/\n/.test(t)) return;
+    e.preventDefault();
+    const lines = t.replace(/\r/g, '').split('\n');
+    const last = lines.pop();
+    const before = input.value;
+    lines[0] = before + lines[0];
+    input.value = '';
+    for (const l of lines) { if (!l.trim()) continue; hist.push(l.trim()); run(l.trim()); }
+    hi = hist.length;
+    input.value = last;
   });
   const quick = ['show running-config', 'show ip interface brief', dev.routing ? 'show ip route' : 'show vlan brief', 'configure terminal', 'end'];
   body.append(h('div', { class: 'term', onclick: () => input.focus() }, out, h('div', { class: 'term-line' }, promptEl, input)),

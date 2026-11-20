@@ -295,7 +295,21 @@ export class Scene3D {
     return { x: (p.x * 0.5 + 0.5) * this.W, y: (-p.y * 0.5 + 0.5) * this.H };
   }
 
+  /** 指標下面的設備標籤（標籤畫在設備上面，所以先看標籤：點標籤、從標籤拖曳接線都算那台設備） */
+  labelAt(e) {
+    let best = null, z = -Infinity;
+    for (const [id, l] of this.labels) {
+      const r = l.el.getBoundingClientRect();
+      if (!r.width || e.clientX < r.left || e.clientX > r.right || e.clientY < r.top || e.clientY > r.bottom) continue;
+      const lz = l.el.classList.contains('hov') || l.el.classList.contains('sel') ? 1e9 : +l.el.style.zIndex || 0;
+      if (lz >= z) { best = id; z = lz; }
+    }
+    return best;
+  }
+
   pick(e) {
+    const lab = this.labelAt(e);
+    if (lab) return { dev: lab };
     this.ray.setFromCamera(this.ndc(e), this.cam);
     const hits = this.ray.intersectObjects([...this.devices.values()].map((g) => g.userData.hit), false);
     if (hits.length) return { dev: hits[0].object.userData.devId };
@@ -410,8 +424,12 @@ export class Scene3D {
 
   setHover(dev, cable = null) {
     if (this.hovered !== dev) {
+      const was = this.hovered && this.labels.get(this.hovered);
+      if (was) was.el.classList.remove('hov');
       this.hovered = dev;
       this.placeRing(this.hovRing, dev && dev !== this.selected ? dev : null);
+      const now = dev && this.labels.get(dev);
+      if (now) now.el.classList.add('hov');
     }
     if (this.hovCable !== cable) {
       if (this.hovCable && this.cables.has(this.hovCable)) { const m = this.cables.get(this.hovCable).mesh; m.material.emissiveIntensity = m.userData.emis; }
@@ -954,13 +972,25 @@ export class Scene3D {
 
     this.renderer.render(this.scene, this.cam);
 
-    // HTML 標籤跟著設備走
+    // HTML 標籤跟著設備走。離鏡頭近的（畫面上比較下面的）疊在上面；畫面縮得很小時只留名稱，避免互相蓋住
     const v = new THREE.Vector3();
+    const compact = this.H / this.view.span < 22;
+    if (compact !== this.compactLabels) { this.compactLabels = compact; this.labelLayer.classList.toggle('compact', compact); }
+    // 標籤不要跑到兩側面板或下方的封包追蹤底下：寬度每隔一段時間量一次（每一格都量會讓瀏覽器一直重新排版）
+    this.frameNo = (this.frameNo || 0) + 1;
+    if (this.frameNo % 15 === 1 || !this.labelW || this.labelW.size !== this.labels.size) { this.labelW = new Map(); for (const [id, l] of this.labels) this.labelW.set(id, l.el.offsetWidth); }
+    const ins = this.insets, xl = ins.left + 6, xr = this.W - ins.right - 6, yb = this.H - ins.bottom - 26;
     for (const [id, l] of this.labels) {
       const g = this.devices.get(id), u = g.userData;
       v.set(g.position.x, 0, g.position.z + u.d / 2 + 0.25);
       const s = this.toScreen(v);
-      l.el.style.transform = `translate(-50%, 0) translate(${s.x.toFixed(1)}px, ${(s.y + 6).toFixed(1)}px)`;
+      const hw = (this.labelW.get(id) || 0) / 2;
+      // 只推回「被切到一部分」的標籤；設備整個移出畫面（使用者自己平移）的標籤就讓它跟著走
+      if (xr - xl > hw * 2 && s.x > xl - hw && s.x < xr + hw) s.x = Math.min(Math.max(s.x, xl + hw), xr - hw);
+      if (yb > ins.top && s.y > yb && s.y < yb + 40) s.y = yb;
+      l.el.style.transform = `translate(-50%, 0) translate(${s.x.toFixed(1)}px, ${(s.y + (compact ? 3 : 6)).toFixed(1)}px)`;
+      const z = String(Math.round(s.y));
+      if (l.el.style.zIndex !== z) l.el.style.zIndex = z;
     }
     for (let i = this.bubbles.length - 1; i >= 0; i--) {
       const b = this.bubbles[i];

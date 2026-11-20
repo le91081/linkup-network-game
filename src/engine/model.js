@@ -169,7 +169,7 @@ export const CATALOG = {
   },
   vpc: {
     kind: 'cloud', shape: 'cloud', vendor: 'AWS', title: 'Amazon VPC',
-    tagline: `公有雲的虛擬私有雲 · ${CLOUD_REGION}（東京）`, ports: [rj('inet', '網際網路')],
+    tagline: '公有雲的虛擬私有雲 · 東京區域', ports: [rj('inet', '網際網路')],
   },
   internet: {
     kind: 'internet', shape: 'globe', vendor: 'ISP', title: '網際網路 (ISP)',

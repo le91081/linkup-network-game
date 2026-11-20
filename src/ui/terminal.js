@@ -451,6 +451,19 @@ export function buildTerminal(ctx, body) {
     }
     e.stopPropagation();
   });
+  // 一次貼上好幾行（例如 SSH 進設備之後貼整份設定）：一行一行送出
+  input.addEventListener('paste', async (e) => {
+    const t = (e.clipboardData && e.clipboardData.getData('text')) || '';
+    if (!/\n/.test(t) || (remote() && remote().stage === 'pass')) return;
+    e.preventDefault();
+    const lines = t.replace(/\r/g, '').split('\n');
+    const last = lines.pop();
+    lines[0] = input.value + lines[0];
+    input.value = '';
+    for (const l of lines) { if (!l.trim()) continue; hist.push(l.trim()); await run(l.trim()); }
+    hi = hist.length;
+    input.value = last;
+  });
   const promptEl = h('span', { class: 'prompt', text: PS });
   const term = h('div', { class: 'term', onclick: () => input.focus() }, out, h('div', { class: 'term-line' }, promptEl, input));
   // 提示字元跟著目前的狀態變：本機、等待輸入密碼，或已經登入對方的命令列

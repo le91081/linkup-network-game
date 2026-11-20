@@ -21,6 +21,13 @@ export function h(tag, attrs, ...kids) {
   return el;
 }
 
+/** 清空再放入子元素：和 h() 一樣略過 null / false、攤平陣列（原生的 replaceChildren 會把 null 變成「null」文字） */
+export function fill(el, ...kids) {
+  el.replaceChildren();
+  append(el, kids);
+  return el;
+}
+
 function append(el, kids) {
   for (const k of kids) {
     if (k == null || k === false) continue;

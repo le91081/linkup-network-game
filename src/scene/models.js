@@ -2,6 +2,7 @@
 import * as THREE from 'three';
 import { RoundedBoxGeometry } from 'three/addons/geometries/RoundedBoxGeometry.js';
 import { CATALOG } from '../engine/model.js';
+import { isPublic, subnetOf } from '../engine/cloud.js';
 
 export const PALETTE = {
   light: 0xe6eaf2, mid: 0x98a3be, dark: 0x3a4564, darker: 0x2a334d, black: 0x141927,
@@ -302,32 +303,39 @@ const BUILDERS = {
     jacks(g, u, dev, 0, 0.3, 0.1, 0.9, 0, 1);
     u.rect = [-0.95, 0.95, -0.95, 0.95];
   },
-  /** 公有雲的 VPC：底座上浮著一朵雲 */
+  /** 公有雲的 VPC：一塊有琥珀色邊界的底板（VPC），上面一排小伺服器（EC2），上方浮著一朵雲 */
   cloud(g, dev, u) {
-    Object.assign(u, { w: 3.0, h: 2.5, d: 2.4 });
-    const base = new THREE.Mesh(new THREE.CylinderGeometry(1.1, 1.2, 0.14, 40), mat(PALETTE.dark, { metal: 0.4 }));
-    base.position.y = 0.07;
-    g.add(base);
-    const ring = new THREE.Mesh(new THREE.TorusGeometry(0.95, 0.03, 8, 48), glow(PALETTE.amber, 1.4));
-    ring.rotation.x = Math.PI / 2;
-    ring.position.y = 0.16;
-    g.add(ring);
+    Object.assign(u, { w: 3.2, h: 2.6, d: 2.5 });
+    const W = 3.0, D = 2.2;
+    box(g, W, 0.16, D, mat(PALETTE.darker, { metal: 0.35, rough: 0.5 }), 0, 0.08, 0, 0.1);
+    // VPC 的邊界：底板上一圈發光的細框
+    const edge = glow(PALETTE.amber, 1.2);
+    for (const [w, d, x, z] of [[W - 0.16, 0.04, 0, D / 2 - 0.08], [W - 0.16, 0.04, 0, -D / 2 + 0.08], [0.04, D - 0.16, W / 2 - 0.08, 0], [0.04, D - 0.16, -W / 2 + 0.08, 0]]) box(g, w, 0.025, d, edge, x, 0.17, z, 0.01);
+    // EC2 執行個體：每台一個小機殼，正面的燈條是公有子網路（琥珀色）或私有子網路（藍色）
+    const list = ((dev.vpc && dev.vpc.instances) || []).slice(0, 5);
+    u.vpcLeds = list.map((x, i) => {
+      const px = (i - (list.length - 1) / 2) * 0.58;
+      box(g, 0.44, 0.5, 0.66, mat(0x323c5c, { metal: 0.35, rough: 0.45 }), px, 0.41, 0.42, 0.05);
+      for (let k = 0; k < 3; k++) box(g, 0.36, 0.012, 0.012, mat(PALETTE.black), px, 0.28 + k * 0.1, 0.756, 0.003);
+      return { m: box(g, 0.32, 0.04, 0.014, glow(PALETTE.screenOff, 0.4), px, 0.59, 0.756, 0.006), id: x.id };
+    });
+    // 雲：幾顆壓扁的球，底部用一個扁圓柱切平
     const puff = new THREE.Group();
-    puff.position.y = 1.35;
+    puff.position.set(0, 1.72, -0.15);
     g.add(puff);
-    const m = new THREE.MeshStandardMaterial({ color: 0xeef3fb, emissive: 0x4a6a9c, emissiveIntensity: 0.32, roughness: 0.65 });
-    for (const [x, y, z, r] of [[-0.75, -0.05, 0, 0.55], [0, 0.22, 0, 0.78], [0.78, -0.02, 0, 0.56], [-0.32, -0.2, 0.38, 0.46], [0.36, -0.18, 0.38, 0.5], [0.05, -0.12, -0.4, 0.52]]) {
+    const m = new THREE.MeshStandardMaterial({ color: 0xf4f7fd, emissive: 0x5d7fb8, emissiveIntensity: 0.2, roughness: 0.8 });
+    for (const [x, y, z, r] of [[-0.78, 0, 0, 0.5], [-0.2, 0.22, 0.02, 0.7], [0.5, 0.12, -0.02, 0.6], [0.98, -0.04, 0, 0.42], [-0.45, -0.06, 0.32, 0.4], [0.25, -0.05, 0.36, 0.44], [0.1, 0.02, -0.38, 0.5]]) {
       const s = new THREE.Mesh(new THREE.SphereGeometry(r, 28, 18), m);
       s.position.set(x, y, z);
+      s.scale.set(1, 0.82, 0.9);
       puff.add(s);
     }
-    // 底下一圈琥珀色的光：VPC 的邊界
-    const halo = new THREE.Mesh(new THREE.TorusGeometry(1.25, 0.018, 6, 64), glow(PALETTE.amber, 1.1));
-    halo.rotation.x = Math.PI / 2;
-    halo.position.y = 0.72;
-    g.add(halo);
-    jacks(g, u, dev, 0, 0.3, 0.1, 1.05, 0, 1);
-    u.rect = [-1.2, 1.2, -1.2, 1.2];
+    const flat = new THREE.Mesh(new THREE.CylinderGeometry(1.0, 0.98, 0.34, 40), m);
+    flat.scale.set(1.25, 1, 0.62);
+    flat.position.set(0.08, -0.2, 0);
+    puff.add(flat);
+    jacks(g, u, dev, -1.1, 0.3, 0.14, 1.1, 0, 1);
+    u.rect = [-W / 2, W / 2, -D / 2, D / 2];
   },
 };
 
@@ -365,6 +373,14 @@ export function refreshDevice(g, dev, led, off) {
     }
   }
   if (u.stripe) u.stripe.visible = !off;
+  // 雲端：EC2 的燈條跟著它所在的子網路是公有（琥珀色）還是私有（藍色）
+  if (u.vpcLeds && dev.vpc) {
+    for (const { m, id } of u.vpcLeds) {
+      const x = dev.vpc.instances.find((i) => i.id === id);
+      const c = off || !x ? PALETTE.screenOff : x.rtWhy ? PALETTE.red : isPublic(dev.vpc, subnetOf(dev.vpc, x)) ? PALETTE.amber : PALETTE.sky;
+      if (m.material.userData.c !== c) { m.material = glow(c, c === PALETTE.screenOff ? 0.4 : 1.6); m.material.userData.c = c; }
+    }
+  }
   const lamp = u.screen || u.led;
   if (lamp) {
     const i = dev.ifaces.find((x) => x.rt && x.rt.ip != null && x.rt.link);

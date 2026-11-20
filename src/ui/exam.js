@@ -1,5 +1,5 @@
 // 模擬考：限時、依考試領域的比重抽題，交卷後依領域計分（題目是自行編寫的練習題，不是實際試題）
-import { h, icon, button } from './dom.js';
+import { h, icon, button, fill } from './dom.js';
 import { QUESTIONS } from '../data/quiz.js';
 import { subnetQuestion } from './quiz.js';
 
@@ -63,7 +63,7 @@ export function openExamPicker(app, { modal, closeModal }) {
   const draw = () => {
     const E = EXAMS[exam], [n, mins] = LENGTHS[len];
     const hist = (app.store.exams || []).filter((x) => x.exam === exam).slice(-5).reverse();
-    dlg.replaceChildren(
+    fill(dlg, 
       h('div', { class: 'hero' }, h('div', { class: 'hero-ic' }, icon('clock', 30)),
         h('div', null, h('h1', { text: '模擬考' }), h('p', { text: '限時作答、依考試領域的比重抽題，交卷後才看答案，並依領域分析強弱。題目是為了練習自行編寫的，不是實際試題；換算的分數只是參考。' }))),
       h('div', { class: 'seg' }, Object.entries(EXAMS).map(([k, x]) => h('button', { type: 'button', class: k === exam ? 'on' : '', onclick: () => { exam = k; draw(); } }, x.name))),
@@ -98,7 +98,7 @@ function runExam(app, ui, exam, n, mins) {
   timer = setInterval(tick, 500);
   const draw = () => {
     const q = qs[cur];
-    dlg.replaceChildren(
+    fill(dlg, 
       h('div', { class: 'qhead' }, h('b', { text: `${E.short} 模擬考` }), h('span', { class: 'muted', text: `第 ${cur + 1} / ${qs.length} 題 · 已作答 ${ans.filter((x) => x != null).length}` }), clock),
       h('div', { class: 'exam-grid' }, qs.map((_, i) => h('button', { type: 'button', class: `eg ${i === cur ? 'cur' : ''} ${ans[i] != null ? 'ans' : ''} ${flag.has(i) ? 'flag' : ''}`, onclick: () => { cur = i; draw(); } }, String(i + 1)))),
       h('h2', { class: 'qq', text: q.q }),
@@ -112,7 +112,7 @@ function runExam(app, ui, exam, n, mins) {
   const confirmSubmit = () => {
     const blank = ans.filter((x) => x == null).length;
     if (!blank && !flag.size) return submit(false);
-    dlg.replaceChildren(h('h2', { text: '確定要交卷嗎？' }),
+    fill(dlg, h('h2', { text: '確定要交卷嗎？' }),
       h('p', { class: 'muted', text: `${blank ? `還有 ${blank} 題沒有作答（算錯）。` : ''}${flag.size ? `有 ${flag.size} 題標記了稍後檢查。` : ''}` }),
       h('div', { class: 'd-actions' }, button('回去檢查', { kind: 'ghost', onclick: draw }), button('交卷', { ic: 'check', kind: 'primary', onclick: () => submit(false) })));
   };
@@ -129,7 +129,7 @@ function runExam(app, ui, exam, n, mins) {
     if (app.store.exams.length > 40) app.store.exams.shift();
     app.saveStore();
     const weak = doms.filter((x) => x.n && x.ok / x.n < 0.7).map((x) => `${x.d}. ${x.t}`);
-    dlg.replaceChildren(
+    fill(dlg, 
       h('div', { class: 'done-top' }, h('div', { class: 'done-ring' + (rec.pass ? '' : ' soft') }, icon(rec.pass ? 'award' : 'book', 32)),
         h('h2', { text: `${scaled} 分　${rec.pass ? '及格' : '未及格'}` }),
         h('p', { class: 'muted', text: `${timeout ? '時間到，自動交卷。' : ''}答對 ${correct} / ${qs.length} 題（${Math.round(pct * 100)}%）· 用了 ${Math.floor(secs / 60)} 分 ${secs % 60} 秒 · 及格標準 ${E.pass}` })),

@@ -92,6 +92,9 @@ npm run build    # 輸出到 dist/
 | 其他 | VLAN 的 `name`、OSPF 的 `network … area`、`router-id`、`passive-interface [default]`、`auto-cost reference-bandwidth`、`maximum-paths`、`area … range`、`area … authentication [message-digest]` 與 `default-information originate`、BGP 的 `bgp router-id`、`network … mask`、`neighbor … remote-as / description / route-map / prefix-list / filter-list / weight / default-originate / shutdown`、route-map 的 `match ip address prefix-list`、`match as-path`、`set local-preference / as-path prepend / metric / weight`、DHCP 位址池的 `network` / `default-router` / `dns-server`、ACL 的 `permit` / `deny`、`line vty` 的 `transport input` / `access-class` |
 
 在設定模式下要看狀態請用 `do show …`。按 Tab 可以補齊指令，指令打到一半加上 `?` 會列出接下來可以輸入的字。
+`show` 的輸出可以用 `| include`、`| exclude`、`| begin`、`| section`、`| count` 加正規表示式篩選（例如 `show run | i http|restconf`、`sh run | sec interface`）。
+一次貼上好幾行（整份設定檔、VPN 的「下載設定檔」）會和真的 console 一樣一行一行執行，SSH 登入設備之後的終端機也一樣。
+`show running-config` 與 `show ip interface brief` 的介面名稱和真的 IOS 一樣是完整名稱（`GigabitEthernet0/0/0`）。
 
 另外還支援：
 

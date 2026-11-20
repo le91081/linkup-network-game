@@ -8,7 +8,7 @@ import { recompute } from '../engine/sim.js';
 import { dev } from './util.js';
 
 export const CHAPTERS9 = [
-  { id: 15, title: '網路自動化', desc: '用程式管理網路：REST API 與 JSON（RESTCONF / YANG）、用 Ansible 一次設定很多台設備，宣告式與冪等。' },
+  { id: 15, title: '網路自動化', desc: '用程式管理網路：REST API 與 JSON（RESTCONF / YANG）、用 Ansible 一次設定很多台設備（宣告式與冪等）、控制器式網路的北向 API 與 AI 分析。' },
 ];
 
 const sub = (d, port, vlan, ip, pool) => {

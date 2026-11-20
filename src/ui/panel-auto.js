@@ -78,7 +78,10 @@ export function sendApi(app, devId, r) {
   const headers = Object.fromEntries(String(r.extra || '').split('\n').map((l) => l.match(/^\s*([\w-]+)\s*:\s*(.*?)\s*$/)).filter(Boolean).map((m) => [m[1].toLowerCase(), m[2]]));
   const res = restconf(st, devId, { method: r.method, url: r.url, user: r.user, pass: r.pass, contentType: HAS_BODY.has(r.method) ? r.ctype : '', accept: r.accept, body: HAS_BODY.has(r.method) ? r.body : '', verify: r.verify, headers });
   const out = { ...res, at: Date.now(), req: { ...r }, ms: res.res ? 12 + (res.res.hops || []).length * 3 + (res.status === 201 || res.status === 204 ? 40 : 0) : 0 };
-  if (res.res) app.showTrace(`${st.devices[devId].name} → ${r.method} ${r.url.replace(/^https:\/\/[^/]+/, '')}`, res.res.log, res.res.hops, res.res.ok && res.status ? { ...res.res, ok: res.status < 400, reason: `HTTP ${res.status} ${res.statusText}` } : res.res);
+  // 封包追蹤的結果：TCP 連上了不代表成功——憑證被拒絕、HTTP 4xx 都算失敗
+  const verdict = !res.res ? null : res.certErr ? { ...res.res, ok: false, reason: 'TCP 連上了，但 TLS 交握時用戶端拒絕了設備自己簽的憑證（SSL certificate problem）', failDev: devId }
+    : res.res.ok && res.status ? { ...res.res, ok: res.status < 400, reason: `HTTP ${res.status} ${res.statusText}`, failDev: res.status >= 400 ? res.dev : undefined } : res.res;
+  if (res.res) app.showTrace(`${st.devices[devId].name} → ${r.method} ${r.url.replace(/^https:\/\/[^/]+/, '')}`, res.res.log, res.res.hops, verdict);
   return out;
 }
 
@@ -101,8 +104,10 @@ export function apiTab(ctx, body) {
     const c = jsonCheck(ui.body);
     lint.replaceChildren(c.ok ? note('ok', 'JSON 格式正確') : note(ui.body.trim() ? 'warn' : 'muted', c.msg));
   };
-  const area = HAS_BODY.has(ui.method) && h('textarea', { class: 'code', rows: 9, spellcheck: 'false', value: ui.body, placeholder: '{\n  "ietf-interfaces:interface": { … }\n}', oninput: (e) => { ui.body = e.target.value; doLint(); } });
-  if (area) area.addEventListener('keydown', (e) => { if (e.key === 'Tab') { e.preventDefault(); insertAt(area, '  '); ui.body = area.value; } e.stopPropagation(); });
+  // 取得 Token 的請求不需要內容（帳號密碼放在 Basic Auth）
+  const tokenReq = /\/auth\/token\/?$/.test(ui.url);
+  const area = HAS_BODY.has(ui.method) && !tokenReq && h('textarea', { class: 'code', rows: 9, spellcheck: 'false', value: ui.body, placeholder: '{\n  "ietf-interfaces:interface": { … }\n}', oninput: (e) => { ui.body = e.target.value; doLint(); } });
+  if (area) area.addEventListener('keydown', (e) => { if (codeKey(area, e)) { ui.body = area.value; doLint(); curl.textContent = curlOf(ui); } e.stopPropagation(); });
   const curl = h('div', { class: 'api-curl mono', text: curlOf(ui) });
   const send = () => {
     if (HAS_BODY.has(ui.method)) { const c = jsonCheck(ui.body); if (!c.ok && ui.body.trim()) { /* 照樣送出：讓設備回 400，和真的一樣 */ } }
@@ -111,6 +116,7 @@ export function apiTab(ctx, body) {
     if (r.status === 200 && r.body && r.body.Token) ui.lastToken = r.body.Token;
     ui.hist.unshift({ method: ui.method, url: ui.url, status: r.status, body: ui.body });
     ui.hist.length = Math.min(ui.hist.length, 8);
+    ui.scrollToResp = true;
     ctx.commit(false);
     rerender();
   };
@@ -121,6 +127,7 @@ export function apiTab(ctx, body) {
     fld('其他標頭（一行一個，例如 X-Auth-Token: …）', (() => { const t = h('textarea', { class: 'code api-hdr', rows: 2, spellcheck: 'false', value: ui.extra || '', placeholder: 'X-Auth-Token: eyJ0eXAi…', oninput: (e) => { ui.extra = e.target.value; curl.textContent = curlOf(ui); } }); t.addEventListener('keydown', (e) => e.stopPropagation()); return t; })()),
     h('label', { class: 'switch' }, h('input', { type: 'checkbox', checked: ui.verify, onchange: (e) => { ui.verify = e.target.checked; rerender(); } }), h('i'), h('span', { text: '驗證 SSL 憑證（設備用的是自己簽的憑證時要關掉，curl 是 -k）' })),
     area && fld('內容 (Body)', area), area && lint,
+    HAS_BODY.has(ui.method) && tokenReq && note('muted', '取得 Token 不需要內容：帳號密碼放在上面的 Basic Auth，回應裡的 Token 之後放在 X-Auth-Token 標頭。'),
     h('div', { class: 'addrow' },
       button('送出', { ic: 'play', kind: 'primary', small: true, onclick: send }),
       area && button('整理 JSON', { small: true, onclick: () => { try { ui.body = JSON.stringify(JSON.parse(ui.body), null, 2); area.value = ui.body; doLint(); } catch { doLint(); } } })),
@@ -135,14 +142,19 @@ export function apiTab(ctx, body) {
   // ── 回應 ──
   const r = ui.last;
   if (r) {
-    const head = r.status
-      ? h('div', { class: 'api-status' }, badge(statusKind(r.status), `${r.status} ${r.statusText}`), h('span', { class: 'muted mono', text: `${r.ms} ms · ${new Blob([r.text || '']).size} B${r.ctype ? ' · ' + r.ctype : ''}` }))
-      : h('div', { class: 'api-status' }, badge('off', r.certErr ? 'SSL 錯誤' : '連線失敗'));
-    body.append(h('div', { class: 'card' }, cardHead('回應'), head,
+    const st = r.status ? badge(statusKind(r.status), `${r.status} ${r.statusText}`) : badge('off', r.certErr ? 'SSL 錯誤' : '連線失敗');
+    const meta = r.status ? h('div', { class: 'muted mono api-meta', text: `${r.ms} ms · ${new Blob([r.text || '']).size} B${r.ctype ? ' · ' + r.ctype : ''}` }) : null;
+    const card = h('div', { class: 'card api-resp' }, cardHead('回應', st), meta,
       r.error && note('warn', r.certErr ? `${r.error}：設備的 HTTPS 憑證是它自己簽的，不是公認的憑證機構簽發。實驗環境可以取消「驗證 SSL 憑證」；正式環境應該替設備換上公司 CA 簽的憑證。` : r.error),
       r.text ? h('pre', { class: 'api-body mono', text: r.text }) : r.status ? h('div', { class: 'muted', text: '（沒有內容）' }) : null,
-      r.status && r.ctype === 'application/yang-data+xml' && note('muted', '回應是 XML：請求沒有說要什麼格式時，IOS XE 預設回 XML。要 JSON 的話，Accept 選 application/yang-data+json。'),
-      r.note && note(r.status >= 400 ? 'warn' : 'muted', r.note)));
+      !!r.status && r.ctype === 'application/yang-data+xml' && note('muted', '回應是 XML：請求沒有說要什麼格式時，IOS XE 預設回 XML。要 JSON 的話，Accept 選 application/yang-data+json。'),
+      r.note && note(r.status >= 400 ? 'warn' : 'muted', r.note));
+    body.append(card);
+    // 剛送出：把回應捲進畫面（面板重畫之後才量得到位置）
+    if (ui.scrollToResp) {
+      ui.scrollToResp = false;
+      requestAnimationFrame(() => { const top = card.getBoundingClientRect().top - body.getBoundingClientRect().top; if (top > body.clientHeight - 120 || top < 0) body.scrollTop += top - 12; });
+    }
   }
   if (ui.hist.length) {
     body.append(h('div', { class: 'card' }, cardHead('最近的請求'), ui.hist.map((x) => h('button', {
@@ -167,6 +179,42 @@ function insertAt(el, s) {
   const a = el.selectionStart, b = el.selectionEnd;
   el.value = el.value.slice(0, a) + s + el.value.slice(b);
   el.selectionStart = el.selectionEnd = a + s.length;
+}
+/**
+ * 程式碼編輯框的按鍵（YAML / JSON 用空白縮排）：
+ * Tab 插入兩個空白，選了好幾行就整段往右縮；Shift + Tab 往左縮；Enter 新的一行沿用目前的縮排（行尾是「:」、「{」、「[」再多縮一層）。
+ * 回傳 true 表示內容有變
+ */
+export function codeKey(el, e) {
+  const v = el.value, a = el.selectionStart, b = el.selectionEnd;
+  const lineStart = (i) => v.lastIndexOf('\n', i - 1) + 1;
+  if (e.key === 'Tab') {
+    e.preventDefault();
+    const s0 = lineStart(a), multi = v.slice(a, b).includes('\n');
+    if (!e.shiftKey && !multi) { insertAt(el, '  '); return true; }
+    const end = b > a && v[b - 1] === '\n' ? b - 1 : b;
+    const lines = v.slice(s0, end).split('\n');
+    let first = 0, total = 0;
+    const out = lines.map((l, i) => {
+      if (!e.shiftKey) { if (i === 0) first = 2; total += 2; return '  ' + l; }
+      const n = Math.min(2, l.match(/^ */)[0].length);
+      if (i === 0) first = -n;
+      total -= n;
+      return l.slice(n);
+    });
+    el.value = v.slice(0, s0) + out.join('\n') + v.slice(end);
+    el.selectionStart = Math.max(s0, a + first);
+    el.selectionEnd = Math.max(el.selectionStart, end + total + (b - end));
+    return true;
+  }
+  if (e.key === 'Enter' && !e.shiftKey && !e.ctrlKey && !e.metaKey && !e.altKey) {
+    const s0 = lineStart(a), cur = v.slice(s0, a);
+    const ind = cur.match(/^ */)[0] + (/[:{[]\s*$/.test(cur) ? '  ' : '') + (/^\s*- /.test(cur) && /:\s*$/.test(cur) ? '  ' : '');
+    e.preventDefault();
+    insertAt(el, '\n' + ind);
+    return true;
+  }
+  return false;
 }
 
 // ───────────────────────── Ansible ─────────────────────────
@@ -217,13 +265,13 @@ export function ansibleTab(ctx, body) {
   const rerender = () => app.renderPanel();
   body.append(h('p', { class: 'tip', text: 'Ansible 控制主機：inventory 列出受管的設備與登入方式，playbook 用 YAML 描述要的結果。執行時會用 SSH 一台一台登入設備下指令，最後的 PLAY RECAP 列出每台的結果。' }));
   const key = ui.file === 'inv' ? 'inventory' : 'playbook';
-  const area = h('textarea', { class: 'code', rows: 16, spellcheck: 'false', value: a[key], wrap: 'off' });
+  const area = h('textarea', { class: 'code ans-edit', rows: 14, spellcheck: 'false', value: a[key], wrap: 'off' });
   const lint = h('div', { class: 'api-lint' });
   const doLint = () => {
     if (ui.file === 'inv') { lint.replaceChildren(); return; }
     try { parseYaml(area.value); lint.replaceChildren(note('ok', 'YAML 語法正確')); } catch (e) { lint.replaceChildren(note('warn', e instanceof YamlError ? `第 ${e.line} 行第 ${e.col} 欄：${e.message}` : e.message)); }
   };
-  area.addEventListener('keydown', (e) => { if (e.key === 'Tab') { e.preventDefault(); insertAt(area, '  '); } e.stopPropagation(); });
+  area.addEventListener('keydown', (e) => { if (codeKey(area, e)) doLint(); e.stopPropagation(); });
   area.addEventListener('input', doLint);
   area.addEventListener('change', () => { a[key] = area.value; ctx.commit(false); });
   const fileBtn = (id, label) => h('button', { type: 'button', class: ui.file === id ? 'on' : '', onclick: () => { a[key] = area.value; ui.file = id; ctx.commit(false); rerender(); } }, label);
@@ -233,21 +281,28 @@ export function ansibleTab(ctx, body) {
     a[key] = area.value;
     const r = ansibleRun(app, dev.id, ui);
     ui.out = { cmd: cmd(), lines: r.lines, rc: r.rc };
+    ui.scrollToOut = true;
     ctx.commit(false);
     rerender();
   };
-  body.append(h('div', { class: 'card' }, h('div', { class: 'seg' }, fileBtn('inv', 'inventory.ini'), fileBtn('pb', a.file)), area, lint,
+  // 執行鈕放在編輯框上面：編輯框很高，放在下面要捲很久才按得到
+  const bar = h('div', { class: 'ans-bar' }, cmdEl, button('執行', { ic: 'play', kind: 'primary', small: true, onclick: run }));
+  body.append(h('div', { class: 'card' }, h('div', { class: 'seg' }, fileBtn('inv', 'inventory.ini'), fileBtn('pb', a.file)), bar, area, lint,
     h('div', { class: 'toggles' },
       h('label', { class: 'switch' }, h('input', { type: 'checkbox', checked: ui.check, onchange: (e) => { ui.check = e.target.checked; cmdEl.textContent = '$ ' + cmd(); } }), h('i'), h('span', { text: '--check：只算出要改什麼，不真的改（乾跑）' })),
       h('label', { class: 'switch' }, h('input', { type: 'checkbox', checked: ui.verbose, onchange: (e) => { ui.verbose = e.target.checked; cmdEl.textContent = '$ ' + cmd(); } }), h('i'), h('span', { text: '-v：顯示每個 task 的結果（例如送出的指令）' }))),
     h('label', { class: 'field' }, h('span', { class: 'f-label', text: '--limit（只對這些主機執行，空白表示全部）' }),
-      h('input', { class: 'inp mono', value: ui.limit, placeholder: '例如 sw-c 或 access', spellcheck: 'false', oninput: (e) => { ui.limit = e.target.value.trim(); cmdEl.textContent = '$ ' + cmd(); }, onkeydown: (e) => e.stopPropagation() })),
-    cmdEl,
-    h('div', { class: 'addrow' }, button('執行', { ic: 'play', kind: 'primary', small: true, onclick: run }))));
+      h('input', { class: 'inp mono', value: ui.limit, placeholder: '例如 sw-c 或 access', spellcheck: 'false', oninput: (e) => { ui.limit = e.target.value.trim(); cmdEl.textContent = '$ ' + cmd(); }, onkeydown: (e) => e.stopPropagation() }))));
   doLint();
   if (ui.out) {
-    body.append(h('div', { class: 'card' }, cardHead('輸出', badge(ui.out.rc === 0 ? 'on' : 'off', `結束代碼 ${ui.out.rc}`)),
-      h('div', { class: 'term ans-out' }, h('div', { class: 'term-out' }, h('div', { class: 'tl cmd', text: '$ ' + ui.out.cmd }), ...ui.out.lines.map((l) => h('div', { class: `tl pre ${CLS[l.c] ?? ''}${l.c === 'head' ? ' ans-head' : ''}`, text: l.t || ' ' }))))));
+    const outCard = h('div', { class: 'card' }, cardHead('輸出', badge(ui.out.rc === 0 ? 'on' : 'off', `結束代碼 ${ui.out.rc}`)),
+      h('div', { class: 'term ans-out' }, h('div', { class: 'term-out' }, h('div', { class: 'tl cmd', text: '$ ' + ui.out.cmd }), ...ui.out.lines.map((l) => (l.c === 'head'
+        // PLAY / TASK 的標題：星號填滿這一行的寬度（終端機是 80 欄，面板比較窄）
+        ? h('div', { class: 'tl ans-head' }, h('span', { text: l.t.replace(/\s*\*+$/, '') }), h('span', { class: 'stars' }))
+        : h('div', { class: `tl ${CLS[l.c] ?? ''}${/^\S+\s+: ok=/.test(l.t) ? ' recap' : ''}`, text: l.t || ' ' }))))));
+    body.append(outCard);
+    // 剛執行完：把輸出捲進畫面
+    if (ui.scrollToOut) { ui.scrollToOut = false; requestAnimationFrame(() => { body.scrollTop += outCard.getBoundingClientRect().top - body.getBoundingClientRect().top - 12; }); }
   }
   body.append(h('details', { class: 'card api-tpl' }, h('summary', { text: '支援的模組' }),
     h('div', { class: 'mono muted ans-mods', text: [
