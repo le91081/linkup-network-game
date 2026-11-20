@@ -33,21 +33,21 @@ README 說明「現在有什麼、怎麼玩」，這份文件說明「整體應�
 | 2. 第二層：交換 | 13 | 0 | 4 |
 | 3. 第三層：路由 | 10 | 0 | 6 |
 | 4. IP 服務 | 9 | 4 | 1 |
-| 5. 網路安全 | 8 | 3 | 5 |
+| 5. 網路安全 | 9 | 4 | 4 |
 | 6. VPN 與廣域網路 | 6 | 3 | 4 |
 | 7. 無線網路 | 5 | 2 | 3 |
 | 8. IPv6 | 3 | 2 | 3 |
-| 9. 高可用 | 5 | 0 | 6 |
+| 9. 高可用 | 6 | 0 | 5 |
 | 10. 時間、效能與流量 | 8 | 2 | 1 |
-| 11. 設備管理與維運 | 12 | 3 | 3 |
+| 11. 設備管理與維運 | 12 | 4 | 2 |
 | 12. 自動化、雲端與虛擬化 | 4 | 0 | 1 |
 | 13. 設備型錄 | 10 | 2 | 1 |
 | 14. 遊戲系統 | 13 | 3 | 6 |
 | 15. 介面與體驗 | 5 | 1 | 8 |
-| 16. 工程品質 | 3 | 0 | 7 |
-| **合計** | **121** | **26** | **65** |
+| 16. 工程品質 | 4 | 0 | 6 |
+| **合計** | **124** | **28** | **61** |
 
-另外：關卡 62 關（第 17 節）、證照條目涵蓋情形（第 18 節）、建議的實作順序（第 19 節）。
+另外：關卡 68 關（第 17 節）、證照條目涵蓋情形（第 18 節）、建議的實作順序（第 19 節）。
 
 ---
 
@@ -141,16 +141,17 @@ README 說明「現在有什麼、怎麼玩」，這份文件說明「整體應�
 | 狀態檢查 | ✅ | TCP 三向交握、連線紀錄，後續封包不重新比對政策 |
 | DMZ 與 VIP | ✅ | |
 | 防火牆紀錄 | ✅ | 每條新連線被哪一條政策放行或拒絕 |
-| 管理介面加固 | 🟡 | SSH 取代 Telnet（要先有主機名稱、網域名稱、RSA 金鑰與 `login local`）、vty `access-class`、`exec-timeout`、`login block-for`、`banner motd`、FortiGate 各介面的 allowaccess 與 `admintimeout`、密碼以雜湊顯示；`enable secret` 會接受但沒有作用（模擬裡沒有 enable 模式） |
+| 管理介面加固 | 🟡 | 多個本機帳號（一人一個，`username` / `no username`）、SSH 取代 Telnet（要先有主機名稱、網域名稱、RSA 金鑰與 `login local`）、vty `access-class`、`exec-timeout`、`login block-for`、`banner motd`、FortiGate 各介面的 allowaccess 與 `admintimeout`、密碼以雜湊顯示；`enable secret` 會接受但沒有作用（模擬裡沒有 enable 模式） |
 | DHCP Snooping、DAI | ✅ | |
 | Port Security | ✅ | 靜態與 sticky MAC、違規時 err-disabled |
+| err-disabled | ✅ | BPDU Guard 與 Port Security 關掉的埠會一直維持，原因排除也不會自己恢復：`shutdown` → `no shutdown`、重新開機，或 `errdisable recovery cause` / `interval`（原因還在就馬上再被關）；`show interfaces status err-disabled`、`show errdisable recovery` |
 | 802.1X / RADIUS | 🟡 | 有線埠與 WPA2-Enterprise 的帳號密碼驗證；沒有憑證 (EAP-TLS) |
 | Wi-Fi 加密 | ✅ | 開放、WEP、WPA2、WPA2 / WPA3 混合、WPA3 |
 | 攻擊情境 | 🟡 | 已有冒牌 DHCP、ARP 欺騙、搶根橋、未授權設備、密碼暴力嘗試（`login block-for`）、側錄 Telnet 明文密碼；用 DTP 偽裝成交換器的 VLAN hopping；還沒有 MAC flooding、雙重標籤、SYN flood |
 | TACACS+ 與 AAA | ⬜ | 授權、稽核、權限等級 |
 | IOS 進階過濾 | ⬜ | Zone-Based Firewall、時間型 ACL、Reflexive ACL |
 | NGFW / UTM | ⬜ | IPS、防毒、網頁過濾、應用程式控管、SSL 檢查 |
-| IPv6 安全 | ⬜ | IPv6 ACL、RA Guard |
+| IPv6 安全 | 🟡 | IPv6 ACL 已完成（見第 8 節）；還沒有 RA Guard |
 | 憑證與 PKI | ⬜ | |
 
 ## 6. VPN 與廣域網路
@@ -206,9 +207,9 @@ README 說明「現在有什麼、怎麼玩」，這份文件說明「整體應�
 | 故障演練 | ✅ | 任務目標可以指定讓某台設備或某條線路故障，再驗證連線 |
 | STP 備援路徑 | ✅ | |
 | EtherChannel 成員故障 | ✅ | |
-| VRRP / HSRP | ✅ | 優先權、搶佔、3 秒接手、虛擬 MAC |
+| VRRP / HSRP | ✅ | 兩種協定分開：群組號碼、preempt 的預設值（VRRP 會搶、HSRP 不會）、接手時間（VRRP 約 3 秒、HSRP holdtime 10 秒）；協定或群組不一致時兩台都當 Active；`show standby [brief]`、`show vrrp brief` |
 | 雙 WAN、Spine-Leaf | ✅ | |
-| 介面追蹤 | ⬜ | VRRP 依上行介面降低優先權 |
+| 物件追蹤與 IP SLA | ✅ | `track` 物件（介面的線路協定、IP SLA 的可達性）；`standby` / `vrrp … track … decrement`；靜態路由的 `track`；IP SLA icmp-echo（source-interface、frequency，依探測的節拍才發現變化，沒有 `start-time now` 會停在 pending）；`show track`、`show ip sla statistics`；網際網路設備可以模擬「業者骨幹故障」 |
 | BFD | ⬜ | |
 | 堆疊、MLAG / vPC | ⬜ | |
 | 防火牆 HA | ⬜ | Active-Passive、連線同步 |
@@ -236,9 +237,9 @@ README 說明「現在有什麼、怎麼玩」，這份文件說明「整體應�
 | 功能 | 狀態 | 說明 |
 | --- | --- | --- |
 | 圖形介面 | ✅ | 每一種設備都有對應的設定頁面與即時狀態 |
-| IOS CLI | ✅ | 模式切換、縮寫、`no`、Tab 補齊、`?` 說明、`do show` |
+| IOS CLI | ✅ | 模式切換（巢狀的子模式 `exit` 一次回一層，不認得的指令先往上一層找）、縮寫、`no`、Tab 補齊、`?` 說明、`do show`、管線過濾（include / exclude / begin / section / count）、一次貼上多行 |
 | IOS 的查看指令 | ✅ | 四十多個 `show` 指令，包含 MAC 位址表、NAT 轉換表、IPsec SA、時鐘、NTP、紀錄、介面計數器、SPAN、登入的使用者、flash、開機設定、SSH、SNMP |
-| 設定可以整份貼回 | ✅ | 測試對 70 台 Cisco 設備、6 台 FortiGate 逐一驗證 |
+| 設定可以整份貼回 | ✅ | 測試對 114 台 Cisco 設備、6 台 FortiGate 逐一驗證 |
 | running / startup-config | ✅ | `write memory`、`reload`、未存檔的提示、斷電後回到上一次存檔 |
 | FortiOS CLI | ✅ | `config` / `edit` / `set` / `next` / `end`、`show`、`get`、`diagnose`、`execute ping` |
 | 主機終端機 | ✅ | `ping`、`ipconfig`、`arp`、`tracert`、`nslookup`、`curl`、`iperf3` |
@@ -249,7 +250,7 @@ README 說明「現在有什麼、怎麼玩」，這份文件說明「整體應�
 | IOS 的診斷指令 | 🟡 | 已有 `traceroute`、`debug ip packet` / `debug ip icmp`、`show interfaces`、`show ip protocols`、`show ip ospf interface brief`；其他 `debug`（OSPF、DHCP、crypto）還沒有 |
 | 設定備份與還原 | ✅ | `copy running-config tftp:` / `ftp:`、`copy tftp: running-config`（合併）與 `startup-config`（取代）；FortiGate 的 `execute backup` / `restore config` |
 | 韌體與開機 | ✅ | flash / bootflash 的檔案與空間、`verify /md5`、`boot system`、開機時跳過不存在 / 損毀 / 平台不符的映像檔、ROMMON；FortiGate 的 `execute restore image` 與升級路徑 |
-| 設定管理進階 | ⬜ | 差異比對 (`show archive config differences`)、`configure replace`、`archive` 自動備份、IOS XE install 模式 |
+| 設定管理進階 | 🟡 | `archive`（path、maximum、write-memory 自動封存）、`show archive`、`show archive config differences`（Contextual Config Diffs）、`configure replace`（list、force）、`archive log config`（誰、從哪條線、打了什麼；notify syslog、hidekeys）；還沒有 `time-period` 的定時封存與 IOS XE install 模式 |
 | 監控 | 🟡 | Syslog 伺服器、SNMP 網管（輪詢、使用率、Trap）；還沒有 NetFlow |
 | 其他廠牌的 CLI | ⬜ | Junos、Aruba、MikroTik、Linux (`ip` / `nmcli`) |
 | 文件產出 | ⬜ | 拓撲圖匯出成圖片、IP 規劃表 |
@@ -334,10 +335,10 @@ README 說明「現在有什麼、怎麼玩」，這份文件說明「整體應�
 | --- | --- | --- |
 | 引擎測試 | ✅ | 關卡重播、負面案例、故障情境、CLI 來回驗證、時鐘、頻寬、資料檢查 |
 | 建置 | ✅ | `vite build` |
-| 瀏覽器端測試 | ⬜ | 目前靠手動在頁面裡把每一關掃過一遍；應該改成 Playwright |
+| 瀏覽器端測試 | ✅ | Playwright（用電腦上已裝的 Chrome，不下載瀏覽器）：每一關每台設備的每個分頁、解完到過關視窗、真的點擊與打字、各種模式，1440×900 與 1024×768 |
 | CI | ⬜ | 還沒有遠端儲存庫，也沒有自動跑測試與建置 |
 | 靜態檢查 | ⬜ | ESLint、型別檢查 |
-| 模組拆分 | ⬜ | `sim.js` 接近 2000 行，應該依層級拆開 |
+| 模組拆分 | ⬜ | `sim.js` 接近 3000 行，應該依層級拆開（新功能已經放在獨立的模組：track、archive） |
 | 打包體積 | ✅ | 分成 three.js、引擎、關卡與題庫、介面四個檔案（各 220 – 520 KB），改關卡時不用重新下載 three.js 與引擎；還沒有依章節延遲載入 |
 | 大型拓撲效能 | ⬜ | 每次變更都全部重算，還沒有量過上百台設備的表現 |
 | 存檔格式遷移 | ⬜ | 設定結構改版時，舊存檔沒有遷移機制 |
@@ -347,7 +348,7 @@ README 說明「現在有什麼、怎麼玩」，這份文件說明「整體應�
 
 ## 17. 關卡規劃
 
-### 現有的 62 關
+### 現有的 68 關
 
 | 章 | 關卡 |
 | --- | --- |
@@ -357,11 +358,11 @@ README 說明「現在有什麼、怎麼玩」，這份文件說明「整體應�
 | 4 資料中心 | 機櫃上線、Spine-Leaf、跨棟連線 |
 | 5 無線網路 | 家裡的 Wi-Fi、辦公室基地台、訪客 Wi-Fi |
 | 6 網路安全 | 誰在發 IP？、不速之客、存取控制清單、管理介面加固、冒牌閘道、搶走根橋、你是誰？、偽裝成交換器 |
-| 7 VPN 與廣域備援 | 站對站 VPN、在家上班、雙線路備援、三個據點，一個中心 |
-| 8 高可用與進階路由 | 迴圈與生成樹、EtherChannel、閘道備援、集中式 DHCP、OSPF 路徑選擇、切蛋糕 |
+| 7 VPN 與廣域備援 | 站對站 VPN、在家上班、雙線路備援、三個據點，一個中心、線路燈還亮著（IP SLA） |
+| 8 高可用與進階路由 | 迴圈與生成樹、EtherChannel、閘道備援、集中式 DHCP、OSPF 路徑選擇、切蛋糕、閘道還活著，但出不去（HSRP 追蹤） |
 | 9 IPv6 | IPv6 初體驗、雙協定、位址從哪裡來？、IPv6 也要動態路由、封了 IPv4，忘了 IPv6 |
-| 10 故障排除 | 誰搶了我的 IP、樓層之間又斷了、分公司的求救電話、明明連得上，為什麼這麼慢 |
-| 11 維運與管理 | 還好有備份、韌體升級、讓 SSH 能用、網路怎麼變慢了 |
+| 10 故障排除 | 誰搶了我的 IP、樓層之間又斷了、分公司的求救電話、明明連得上，為什麼這麼慢、分公司的 OSPF 鄰居起不來、流量為什麼繞去實驗室、VPN 通了，資料卻過不去 |
+| 11 維運與管理 | 還好有備份、韌體升級、讓 SSH 能用、網路怎麼變慢了、是誰動了設定？ |
 | 12 語音與 QoS | 電話接上了，然後呢？、語音斷斷續續 |
 | 13 進階路由 | 誰當 DR？、10G 和 1G 一樣快？、分公司自成一區、兩家 ISP 都要用 |
 | 14 無線控制器與無線環境 | AP 找不到控制器、牆後面收不到、走到另一頭就斷線 |
@@ -374,8 +375,8 @@ README 說明「現在有什麼、怎麼玩」，這份文件說明「整體應�
 
 | 章 | 規劃的關卡 | 需要的功能 |
 | --- | --- | --- |
-| 補進第 11 章 | 對時與紀錄（用 NTP 與 Syslog 把事件順序對起來）、設定被誰改了（差異比對） | 第 4、11 節 |
-| 補進第 13 章 | 路由重分配、iBGP、OSPF 的 stub 區域、IP SLA 追蹤上游 | 第 3、9 節 |
+| 補進第 11 章 | 對時與紀錄（用 NTP 與 Syslog 把事件順序對起來） | 第 4、11 節 |
+| 補進第 13 章 | 路由重分配、iBGP、OSPF 的 stub 區域 | 第 3、9 節 |
 | 補進第 12 章 | 不看圖用 CDP / LLDP 把拓撲畫出來、PoE 預算不夠、雙 WAN 的 QoS | 第 1、2、10 節 |
 | 補進第 14 章 | 訪客入口 (Captive Portal)、分公司的 FlexConnect、控制器備援 (N+1) | 第 7、13 節 |
 | 補進第 15 章 | 用 Catalyst Center 的範本下發設定、NETCONF、用 Git 管理設定 | 第 12 節 |
@@ -383,7 +384,7 @@ README 說明「現在有什麼、怎麼玩」，這份文件說明「整體應�
 | 補進第 6 章 | MAC flooding、雙重標籤、NGFW 設定檔 | 第 2、5 節 |
 | 補進第 7 章 | GRE over IPsec 與 VTI、DMVPN、憑證驗證 | 第 6 節 |
 | 補進第 9 章 | Prefix Delegation、FortiGate 的 IPv6 政策、NAT64 / DNS64 | 第 8 節 |
-| 補進第 10 章 | OSPF 鄰居起不來、VPN 通了但流量不走、Wi-Fi 很慢、STP 選錯根橋（隨機故障已經由故障演練提供） | 第 14 節 |
+| 補進第 10 章 | Wi-Fi 很慢（隨機故障已經由故障演練提供） | 第 7、14 節 |
 
 ## 18. 證照涵蓋
 
@@ -418,4 +419,7 @@ CCNA v2.0 預計在 2027 年 2 月取代 v1.1，改版後整張對照表要重�
 | 7（已完成） | 無線控制器、牆面衰減與熱力圖、漫遊 → 第 14 章 | 補上 CCNA 2.6 |
 | 8（已完成） | RESTCONF、Ansible、Catalyst Center → 第 15 章、AWS 的 VPC → 第 16 章 | 補上 CCNA 第 6 領域、Network+ 1.3 |
 | 9（已完成） | 故障演練、模擬考、評分、關卡編輯器 | 引擎功能齊全之後，重玩價值才撐得起來 |
-| 隨時 | Playwright 測試、CI、拆分 `sim.js`（分塊載入已完成） | Playwright 要下載瀏覽器、CI 要遠端儲存庫，這兩項要另外決定 |
+| 10（進行中） | Playwright 瀏覽器端測試（已完成）；err-disabled 維持與 errdisable recovery、HSRP / VRRP 分開與物件追蹤、IP SLA、設定封存與變更紀錄、多個本機帳號（已完成）；MTU 與 jumbo frame（未做）；第 7、8、10、11 章的補充關卡（已完成六關） | 讓「故障排除」與「維運」更接近真實工作 |
+| 11 | 虛擬化章節（vSwitch、VM、容器、VRF → CCNA 1.12）、DNS 伺服器角色、HTTP(S) 內容與憑證 | 補上 CCNA 1.12 |
+| 12 | 第一次遊玩的導覽、參考解法示範、錯題本、2D 邏輯拓撲圖 | 新手體驗 |
+| 隨時 | CI、拆分 `sim.js`（分塊載入已完成）、存檔格式遷移 | CI 要遠端儲存庫，要另外決定 |
