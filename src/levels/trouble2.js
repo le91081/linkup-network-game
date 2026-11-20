@@ -218,4 +218,66 @@ export const LEVELS15 = [
     },
     recap: ['通道 Up 只代表兩台路由器談好了；流量有沒有進通道，要看 NAT 例外與加密的 ACL。', '新增網段時，兩端的加密範圍要一起改。'],
   },
+
+  // ─────────────────────────────────────────────── TCP 與 UDP
+  {
+    id: 'l69', chapter: 6, title: '只開了 TCP', subtitle: 'TCP 與 UDP 的差別', tags: ['TCP', 'UDP', 'ACL', '封包擷取'],
+    brief: '新來的同事替伺服器區寫了一份 ACL，「只放行需要的服務」：DNS 53、TFTP 69、Syslog 514、內部網站 443。上線之後，打網址開不了內部網站（直接打 IP 卻可以），交換器的紀錄和設定備份也送不出去。他很確定埠號都沒寫錯。請找出問題，ACL 還是要維持最小權限。',
+    given: [
+      ['使用者', '10.10.10.0/24（SW-Floor 的管理位址 10.10.10.2）'], ['DNS 伺服器', '10.10.20.53'], ['內部網站', 'intranet.corp.local = 10.10.20.80（HTTPS）'],
+      ['Syslog 伺服器', '10.10.20.14（只收 SW-Floor 的紀錄）'], ['TFTP 伺服器', '10.10.20.69（只給 SW-Floor 備份設定）'], ['ACL', 'R1 的 TO-SERVERS，套在 Gi0/0/2 的出方向'],
+    ],
+    learn: [
+      { t: 'TCP：先建立連線', d: '傳資料之前先三向交握（SYN → SYN-ACK → ACK），每一段資料都要對方確認 (ACK)，掉了就重送，還會依對方的處理速度調整（流量控制）。適合不能出錯的傳輸：網頁、檔案、SSH、資料庫。' },
+      { t: 'UDP：送出去就算了', d: '沒有交握、沒有確認、沒有重送，標頭只有 8 個位元組。適合一問一答、或寧可丟掉也不要等的東西：DNS 查詢、DHCP、TFTP、Syslog、SNMP、NTP、語音與視訊 (RTP)。' },
+      { t: '埠號是分開的', d: 'TCP 53 和 UDP 53 是兩個不同的埠。ACL 寫 permit tcp … eq 53，UDP 53 的 DNS 查詢一樣會被最後那條隱含的 deny 擋下。DNS 平常用 UDP，回應太大或區域轉送時才改用 TCP。' },
+      { t: '用封包擷取看差別', d: '在 PC 的「封包擷取」分頁開始擷取，再分別 nslookup 和開網頁：TCP 會先看到 SYN、SYN-ACK、ACK，UDP 只有一個查詢和一個回應。' },
+    ],
+    setup() {
+      const s = makeState([
+        D('isr4331', 'rt', {
+          name: 'R1', pos: [0, -5],
+          init(d) { ip4(d, 'Gi0/0/1', '10.10.10.1'); ip4(d, 'Gi0/0/2', '10.10.20.1'); },
+        }),
+        D('c2960', 'sw', {
+          name: 'SW-Floor', pos: [-6, -0.5],
+          init(d) { d.sw.stp.portfastDefault = true; Object.assign(d.ifaces.find((i) => i.id === 'mgmt'), { ip: '10.10.10.2', mask: '255.255.255.0', gateway: '10.10.10.1' }); },
+        }),
+        D('sw8', 'srvsw', { name: 'SW-Server', pos: [6, -0.5] }),
+        D('pc', 'pc1', { name: 'PC-1', pos: [-9.5, 4], ip: '10.10.10.21', gw: '10.10.10.1', dns: '10.10.20.53' }),
+        D('pc', 'pc2', { name: 'PC-2', pos: [-4.5, 4.8], ip: '10.10.10.22', gw: '10.10.10.1', dns: '10.10.20.53' }),
+        D('tower', 'dns', { name: 'DNS 伺服器', pos: [2, 4.8], ip: '10.10.20.53', gw: '10.10.20.1', services: [{ proto: 'udp', port: 53, name: 'DNS' }, { proto: 'tcp', port: 53, name: 'DNS（區域轉送）' }, { proto: 'tcp', port: 22, name: 'SSH' }],
+          init(d) { d.dnsRecords = { 'intranet.corp.local': '10.10.20.80' }; } }),
+        D('tower', 'web', { name: '內部網站', pos: [6, 5.6], ip: '10.10.20.80', gw: '10.10.20.1', services: WEB }),
+        D('tower', 'log', { name: 'Syslog 伺服器', pos: [10, 4.8], ip: '10.10.20.14', gw: '10.10.20.1', services: [{ proto: 'udp', port: 514, name: 'Syslog' }] }),
+        D('tower', 'tftp', { name: 'TFTP 伺服器', pos: [12.5, 1.5], ip: '10.10.20.69', gw: '10.10.20.1', services: [{ proto: 'udp', port: 69, name: 'TFTP' }] }),
+      ], [['rt:Gi0/0/1', 'sw:Gi0/9'], ['rt:Gi0/0/2', 'srvsw:1'], ['pc1:eth0', 'sw:Gi0/1'], ['pc2:eth0', 'sw:Gi0/2'],
+        ['dns:eth0', 'srvsw:2'], ['web:eth0', 'srvsw:3'], ['log:eth0', 'srvsw:4'], ['tftp:eth0', 'srvsw:5']]);
+      recompute(s);
+      typeIn(s, 'rt', ['configure terminal', 'ip access-list extended TO-SERVERS',
+        'permit tcp 10.10.10.0 0.0.0.255 host 10.10.20.80 eq 443', 'permit tcp 10.10.10.0 0.0.0.255 host 10.10.20.53 eq 53',
+        'permit tcp host 10.10.10.2 host 10.10.20.69 eq 69', 'permit tcp host 10.10.10.2 host 10.10.20.14 eq 514', 'exit',
+        'interface Gi0/0/2', 'ip access-group TO-SERVERS out', 'end', 'write memory']);
+      return s;
+    },
+    objectives: [
+      { type: 'tcp', from: 'pc1', name: 'intranet.corp.local', port: 443, label: 'PC-1 用網址打開內部網站（https://intranet.corp.local）' },
+      { type: 'tcp', from: 'pc2', name: 'intranet.corp.local', port: 443, label: 'PC-2 也可以' },
+      { type: 'udp', from: 'sw', to: 'log', port: 514, label: 'SW-Floor 的紀錄送得到 Syslog 伺服器 (UDP 514)' },
+      { type: 'udp', from: 'sw', to: 'tftp', port: 69, label: 'SW-Floor 可以把設定備份到 TFTP 伺服器 (UDP 69)' },
+      { type: 'tcp', from: 'pc1', to: 'dns', port: 22, expect: false, label: '使用者不能 SSH 到 DNS 伺服器（ACL 仍然是最小權限）' },
+      { type: 'udp', from: 'pc1', to: 'tftp', port: 69, expect: false, label: '使用者不能用 TFTP 碰備份伺服器' },
+    ],
+    hints: [
+      'PC-1 的「封包擷取」開始擷取，再到終端機 nslookup intranet.corp.local：送出去的是 UDP 53，沒有 SYN / SYN-ACK / ACK。R1 的 show access-lists TO-SERVERS：放行的是 TCP 53。',
+      'DNS 查詢、TFTP、Syslog 都是 UDP。TCP 53 和 UDP 53 是兩個不同的埠；這些 UDP 的封包被 ACL 最後那條隱含的 deny 擋掉了。',
+      'R1：ip access-list extended TO-SERVERS → permit udp 10.10.10.0 0.0.0.255 host 10.10.20.53 eq domain、permit udp host 10.10.10.2 host 10.10.20.69 eq tftp、permit udp host 10.10.10.2 host 10.10.20.14 eq syslog。TCP 53 可以留著（區域轉送、大的回應）。',
+    ],
+    solve(s) {
+      recompute(s);
+      typeIn(s, 'rt', ['configure terminal', 'ip access-list extended TO-SERVERS',
+        'permit udp 10.10.10.0 0.0.0.255 host 10.10.20.53 eq domain', 'permit udp host 10.10.10.2 host 10.10.20.69 eq tftp', 'permit udp host 10.10.10.2 host 10.10.20.14 eq syslog', 'end', 'write memory']);
+    },
+    recap: ['TCP 先交握、會確認與重送；UDP 不建立連線，送出去就算了。', '寫 ACL 時，每個服務要先查清楚是 TCP、UDP 還是兩個都用。'],
+  },
 ];
