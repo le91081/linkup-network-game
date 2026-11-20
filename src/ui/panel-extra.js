@@ -663,21 +663,3 @@ export function dhcpScopesTab(ctx, body) {
   if (!dev.ifaces.some((i) => i.rt.ip != null)) body.append(note('warn', '這台伺服器自己還沒有 IP。請先到「網路設定」給它一個固定 IP 與閘道。'));
 }
 
-// ───────────────────────── L3 介面的附加區塊 ─────────────────────────
-
-export function vrrpBlock(ctx, i) {
-  const v = (i.vrrp ||= { on: false, vip: '', prio: '100' });
-  return h('div', { class: 'sub' },
-    toggle(ctx, ...bind(v, 'on'), 'VRRP / HSRP 虛擬閘道', { rerender: true }),
-    v.on && grid2(
-      field('虛擬 IP', inp(ctx, ...bind(v, 'vip'), { ph: '例如 10.0.10.1', check: isIp })),
-      field('優先權', inp(ctx, ...bind(v, 'prio'), { ph: '預設 100，越大越優先', check: isNum(1, 254) }))),
-    v.on && ctx.live(() => {
-      const s = i.rt.vrrp;
-      if (!s) return null;
-      if (s.state === 'master') return note('ok', `Master：目前由這台回應虛擬 IP${s.peers ? '' : '（沒有看到其他成員）'}`);
-      if (s.state === 'backup' && s.wait > 0) return note('warn', `Backup：聽不到 Master 的通告，再 ${Math.ceil(s.wait)} 秒接手。這段時間沒有人回應虛擬 IP。`);
-      if (s.state === 'backup') return note('muted', 'Backup：待命中，Master 故障約 3 秒後接手');
-      return note('warn', s.why);
-    }));
-}

@@ -16,6 +16,7 @@ import { onHop, BCAST, spanDest, background, flowTraceStart, debugOf, countBytes
 import { agentOn } from './snmp.js';
 import { remoteOpen, remoteLogin, remoteClose } from './remote.js';
 import { cloudStep, prepCloud, cloudOwns } from './cloud.js';
+import { fhrpProto, fhrpGroup, fhrpPreempt, fhrpDecrement, trackUp, slaTick, trackTick, HSRP_HOLD } from './track.js';
 
 const DROP = Symbol('drop');
 const isVlanSw = (d) => !!d.sw && d.sw.mode === 'vlan';
@@ -1189,40 +1190,60 @@ function prepVrrp(state) {
   const c = [];
   for (const d of Object.values(state.devices)) {
     for (const i of d.ifaces) {
-      if (!i.vrrp || !i.vrrp.on) continue;
-      const vip = parseIp(i.vrrp.vip || '');
-      if (i.rt.ip == null || !i.rt.link) { i.rt.vrrp = { state: 'init', why: '介面沒有 IP 或沒有連線' }; continue; }
-      if (vip == null || !sameNet(vip, i.rt.ip, i.rt.bits)) { i.rt.vrrp = { state: 'init', why: '虛擬 IP 必須和介面位於同一個子網路' }; continue; }
-      c.push({ d, i, vip, key: d.id + '/' + i.id, k: [+i.vrrp.prio || 100, i.rt.ip] });
+      const v = i.vrrp;
+      if (!v || !v.on) continue;
+      const vip = parseIp(v.vip || ''), proto = fhrpProto(v), grp = fhrpGroup(v);
+      const base = { proto, grp, cfgPrio: +v.prio || 100, pre: fhrpPreempt(v) };
+      if (i.rt.ip == null || !i.rt.link) { i.rt.vrrp = { ...base, state: 'init', why: '介面沒有 IP 或沒有連線' }; continue; }
+      if (vip == null || !sameNet(vip, i.rt.ip, i.rt.bits)) { i.rt.vrrp = { ...base, state: 'init', why: '虛擬 IP 必須和介面位於同一個子網路' }; continue; }
+      // track 的物件 Down：優先權扣掉 decrement（最低到 1）
+      const dec = fhrpDecrement(state, d, v), prio = Math.max(1, base.cfgPrio - dec.total);
+      c.push({ ...base, d, i, vip, prio, dec, key: d.id + '/' + i.id, k: [prio, i.rt.ip] });
     }
   }
   const prev = Object.fromEntries(c.map((x) => [x.key, dyn.vrrp[x.key] && dyn.vrrp[x.key].state]));
   const live = new Set(c.map((x) => x.key));
   for (const k of Object.keys(dyn.vrrp)) if (!live.has(k)) delete dyn.vrrp[k];
+  const better = (a, b) => cmp(a.k, b.k) > 0;
   for (const x of c) {
-    const peers = l2Explore(state, x.d.id, x.i).map((e) => c.find((y) => y.i === e.iface && y.vip === x.vip)).filter(Boolean);
-    const top = peers.find((p) => cmp(p.k, x.k) > 0);
+    // 同一個廣播網域裡、同一個協定與群組號碼的才是同一組（VRRP 和 HSRP 彼此聽不懂，群組號碼不同也各做各的）
+    const seen = l2Explore(state, x.d.id, x.i).map((e) => c.find((y) => y.i === e.iface)).filter(Boolean);
+    const peers = seen.filter((y) => y.proto === x.proto && y.grp === x.grp && y.vip === x.vip);
+    const odd = seen.find((y) => y.vip === x.vip && (y.proto !== x.proto || y.grp !== x.grp));
+    const members = [x, ...peers];
+    const best = members.reduce((p, q) => (better(q, p) ? q : p));
     let rec = dyn.vrrp[x.key];
-    if (!rec) rec = dyn.vrrp[x.key] = dyn.boot ? { state: top ? 'backup' : 'master', lost: null } : { state: 'backup', lost: null };
+    if (!rec) rec = dyn.vrrp[x.key] = dyn.boot ? { state: best === x ? 'master' : 'backup', lost: null } : { state: 'backup', lost: null };
+    const master = peers.find((p) => prev[p.key] === 'master'); // 上一刻還在轉送的那一台
+    const downIv = x.proto === 'hsrp' ? HSRP_HOLD : VRRP_DOWN;
     let st, wait = 0;
-    if (top) st = 'backup';
-    else if (rec.state === 'master') st = 'master';
-    else if (peers.some((p) => prev[p.key] === 'master')) st = 'master'; // 原本的 Master 還活著，只是優先權比我低：直接搶回來 (preempt)
-    else {
-      // 聽不到 Master 的通告了：要等 Master_Down_Interval 才接手，這段時間沒有人回應虛擬 IP
+    if (rec.state === 'master') {
+      // 我是 Master / Active：比我優先、而且會搶（或本來也是 Master，例如斷掉的線接回來）的那一台出現了才讓出去
+      st = peers.some((p) => better(p, x) && (p.pre || prev[p.key] === 'master')) ? 'backup' : 'master';
+    } else if (master) {
+      // 已經有人在轉送：比它優先、而且有設定 preempt 的才會搶；好幾台都可以搶的話，最優先的那台搶
+      const takers = members.filter((p) => p !== master && p.pre && better(p, master));
+      const top = takers.reduce((p, q) => (!p || better(q, p) ? q : p), null);
+      st = top === x ? 'master' : 'backup';
+    } else {
+      // 沒有人在轉送：等 Master_Down_Interval（VRRP）/ holdtime（HSRP）之後，優先權最高的接手
       if (rec.lost == null) rec.lost = now;
-      wait = rec.lost + VRRP_DOWN - now;
-      st = wait > 0 ? 'backup' : 'master';
-      if (wait > 0) state.rt.pending.push({ at: rec.lost + VRRP_DOWN, dev: x.d.id, kind: 'vrrp', text: `${x.d.name}：聽不到 VRRP Master，等待接手` });
+      wait = best === x ? rec.lost + downIv - now : 0;
+      st = best === x && wait <= 0 ? 'master' : 'backup';
+      if (best === x && wait > 0) state.rt.pending.push({ at: rec.lost + downIv, dev: x.d.id, kind: 'vrrp', text: `${x.d.name}：聽不到 ${x.proto === 'hsrp' ? 'HSRP Active' : 'VRRP Master'}，等待接手` });
     }
-    if (st === 'master' || top) rec.lost = null;
+    if (st === 'master' || master) rec.lost = null;
     rec.state = st;
-    x.i.rt.vrrp = { state: st, peers: peers.length, wait: wait > 0 ? wait : 0 };
+    x.peers = peers;
+    x.i.rt.vrrp = { state: st, peers: peers.length, wait: wait > 0 ? wait : 0, proto: x.proto, grp: x.grp, prio: x.prio, cfgPrio: x.cfgPrio, pre: x.pre, dec: x.dec,
+      members: peers.map((p) => [p.d.id, p.i.id]), odd: odd ? { dev: odd.d.id, proto: odd.proto, grp: odd.grp } : null };
     if (st === 'master') x.i.rt.vips.push(x.vip);
   }
+  // 這一輪有人接手了：整組的「聽不到 Master」計時歸零（下次 Master 消失才從頭計時）
+  for (const x of c) if ([x, ...(x.peers || [])].some((p) => dyn.vrrp[p.key].state === 'master')) dyn.vrrp[x.key].lost = null;
 }
 
-function buildRoutes(d) {
+function buildRoutes(state, d) {
   const r = [];
   const up = (i) => i.rt.ip != null && i.rt.link;
   for (const i of d.ifaces) {
@@ -1239,6 +1260,7 @@ function buildRoutes(d) {
   for (const s of d.routes || []) {
     const dst = parseIp(s.dst), bits = parseMask(s.mask), via = parseIp(s.via);
     if (dst == null || bits == null || via == null) continue;
+    if (s.track != null && s.track !== '' && !trackUp(state, d, s.track).up) continue; // 追蹤的物件 Down：這條路由從路由表撤掉
     const i = d.ifaces.find((x) => up(x) && sameNet(via, x.rt.ip, x.rt.bits) && via !== x.rt.ip);
     r.push({
       net: netOf(dst, bits), bits, via, iface: i || null, type: 'S', ad: Math.max(1, +s.ad || 1), metric: 0,
@@ -1288,7 +1310,7 @@ export function setOspf(d, i, on) {
 }
 
 function routesAll(state) {
-  for (const d of Object.values(state.devices)) buildRoutes(d);
+  for (const d of Object.values(state.devices)) buildRoutes(state, d);
   computeOspf(state, ospfOn);
   computeBgp(state, { transact, logEvent });
   // show ip route 的「00:03:43」：OSPF / BGP 的路從什麼時候開始在路由表裡
@@ -1612,6 +1634,20 @@ function daiBlock(state, path, srcIf, dstIf) {
 }
 
 /** 設定或接線變動後呼叫：重新計算所有執行期狀態 */
+/** IP SLA 的 icmp-echo：從 source-interface 的位址送一次 ping（不記入封包紀錄） */
+function slaProbe(state, d, op) {
+  const dst = parseIp(op.dst || '');
+  if (dst == null) return { ok: false, rtt: 0, code: 'Format error' };
+  let srcIp;
+  if (op.src) {
+    const i = d.ifaces.find((x) => x.id === op.src);
+    if (!i || i.rt.ip == null || !i.rt.link) return { ok: false, rtt: 0, code: 'No connection' };
+    srcIp = i.rt.ip;
+  }
+  const r = transact(state, d.id, { proto: 'icmp', dst, srcIp, quiet: true });
+  return r.ok ? { ok: true, rtt: Math.max(1, Math.round((r.hops || []).length * 2.5)), code: 'OK' } : { ok: false, rtt: 0, code: 'Timeout' };
+}
+
 export function recompute(state) {
   if (typeof state.clock !== 'number') state.clock = 0;
   if (!state.dyn) state.dyn = { boot: true }; // 第一次計算：目前的狀態當作已經運作很久
@@ -1639,6 +1675,9 @@ export function recompute(state) {
     passes();
     // 輕量型 AP 加入或離開 WLC 之後，它放送的 SSID 跟著改變：用新的狀態再算一輪，用戶端才會連上 / 斷線
     if (capwapTick(state)) { passes(); capwapTick(state); }
+    // IP SLA：用剛算好的路由真的探測一次。結果改變了（追蹤它的靜態路由、HSRP 優先權跟著變），再算一輪
+    for (let k = 0; k < 3 && slaTick(state, (d, op) => slaProbe(state, d, op)); k++) passes();
+    trackTick(state, logEvent);
     if (state.v6) recompute6(state);
     state.rt.booting = booting;
     for (const id of ids) if (isFinite(booting[id])) state.rt.pending.push({ at: state.clock + booting[id], dev: id, kind: 'boot', text: `${state.devices[id].name}：開機中` });
@@ -2087,6 +2126,10 @@ function forward(state, ctx, startId, pkt) {
       }
       if (dev.kind === 'internet' && !pkt.reply && isPrivate(pkt.src)) {
         return drop(`來源 ${fmtIp(pkt.src)} 是私有 IP，ISP 直接丟棄 — 出口路由器沒有做 NAT`);
+      }
+      // 業者內部故障：線路的燈號正常、ISP 那一端的閘道也回應，但封包再也出不去（只看介面狀態的備援偵測不到）
+      if (dev.kind === 'internet' && dev.inet.fault && !dev.ifaces.some((i) => i.rt.ip === pkt.dst)) {
+        return drop(`${dev.name} 的骨幹故障：封包到了業者那一端就出不去（線路燈號正常，介面沒有 down）`);
       }
       if (isLocal(dev, pkt.dst)) {
         T('vf_ip_route_input_common', `find a route: flag=84000000 gw-${fmtIp(pkt.dst)} via root`);
@@ -2676,6 +2719,10 @@ export function runObjective(state, o) {
       const c = s2.cables.find((x) => (x.a.dev === dv && x.a.port === pid) || (x.b.dev === dv && x.b.port === pid));
       if (c) s2.cut[c.id] = true;
       what.push(`${state.devices[dv].name} 的 ${pid} 斷線`);
+    }
+    for (const id of o.ispFail || []) {
+      s2.devices[id].inet = { ...s2.devices[id].inet, fault: true };
+      what.push(`${state.devices[id].name} 的骨幹故障（線路燈號正常）`);
     }
     // 故障發生後要等網路重新收斂（VRRP 換手、OSPF 的 Dead timer…）才測試
     recompute(s2);

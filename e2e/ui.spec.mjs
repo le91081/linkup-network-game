@@ -181,6 +181,35 @@ test('err-disabled：show 指令、安全分頁的自動恢復設定、連接埠
   expect(await scan(page, '#panel', '安全分頁')).toEqual([]);
 });
 
+test('HSRP 與追蹤：面板的追蹤設定、show standby brief、show track', async ({ page }) => {
+  await boot(page);
+  await open(page, 'l64');
+  await clickDevice(page, 'gw-a');
+  // 路由分頁：新增追蹤物件（預設是第一個介面 Gi0/0/0）
+  await page.locator('#panel .tab', { hasText: '路由' }).click();
+  const card = page.locator('#panel .card', { hasText: '物件追蹤與 IP SLA' });
+  await card.getByRole('button', { name: '新增追蹤物件' }).click();
+  await expect(card).toContainText('track 1');
+  await expect(card.locator('.link')).toContainText('Up');
+  expect(await scan(page, '#panel', '路由分頁')).toEqual([]);
+  // 介面分頁：HSRP 加入追蹤
+  await page.locator('#panel .tab', { hasText: '介面' }).click();
+  await page.locator('#panel button', { hasText: '加入追蹤' }).first().click();
+  await expect.poll(() => page.evaluate(() => JSON.stringify(window.linkup.state.devices['gw-a'].ifaces.find((i) => i.id === 'Gi0/0/1').vrrp.track))).toBe('[{"obj":1}]');
+  expect(await scan(page, '#panel', '介面分頁')).toEqual([]);
+  // CLI
+  await page.locator('#panel .tab', { hasText: 'CLI' }).click();
+  await typeCmd(page, 'show standby brief');
+  await expect(page.locator('#panel .term-out')).toContainText(/Gi0\/0\/1\s+1\s+110 P Active\s+local\s+10\.0\.10\.3\s+10\.0\.10\.1/);
+  await typeCmd(page, 'show track');
+  await expect(page.locator('#panel .term-out')).toContainText('Interface GigabitEthernet0/0/0 line-protocol');
+  await expect(page.locator('#panel .term-out')).toContainText('HSRP GigabitEthernet0/0/1 1');
+  await typeCmd(page, 'show running-config | include track|standby');
+  await expect(page.locator('#panel .term-out')).toContainText('track 1 interface GigabitEthernet0/0/0 line-protocol');
+  await expect(page.locator('#panel .term-out')).toContainText('standby 1 track 1');
+  expect(await scan(page, '#panel', 'CLI')).toEqual([]);
+});
+
 test('主機終端機：ipconfig、ping 會在主控台播封包', async ({ page }) => {
   await boot(page);
   await open(page, 'l04', true);

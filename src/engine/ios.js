@@ -13,6 +13,7 @@ import { macsBehind, recompute, ospfOn, ikeVer } from './sim.js';
 import { logEvent, markReboot, setClock, deviceTime, SEVERITY, bootTime, longIf } from './ops.js';
 import { spanDest } from './wire.js';
 import { genKey } from './remote.js';
+import { fhrpProto, fhrpGroup, fhrpPreempt } from './track.js';
 
 // ───────────────────────── running-config 與 startup-config ─────────────────────────
 // IOS 設備改的是記憶體裡的 running-config；要下 write memory 才會存進 startup-config。
@@ -84,7 +85,7 @@ const PROMPT = {
   exec: '#', config: '(config)#', if: '(config-if)#', vlan: '(config-vlan)#', router: '(config-router)#', dhcp: '(dhcp-config)#',
   line: '(config-line)#', acl: '(config-ext-nacl)#', stdacl: '(config-std-nacl)#', radius: '(config-radius-server)#',
   isakmp: '(config-isakmp)#', tset: '(cfg-crypto-trans)#', cmap: '(config-crypto-map)#',
-  ikev2prop: '(config-ikev2-proposal)#', ikev2pol: '(config-ikev2-policy)#', ikev2kr: '(config-ikev2-keyring)#', ikev2peer: '(config-ikev2-keyring-peer)#', ikev2prof: '(config-ikev2-profile)#', bgp: '(config-router)#', rmap: '(config-route-map)#', qcmap: '(config-cmap)#', pmap: '(config-pmap)#', pmapc: '(config-pmap-c)#',
+  ikev2prop: '(config-ikev2-proposal)#', ikev2pol: '(config-ikev2-policy)#', ikev2kr: '(config-ikev2-keyring)#', ikev2peer: '(config-ikev2-keyring-peer)#', ikev2prof: '(config-ikev2-profile)#', track: '(config-track)#', ipsla: '(config-ip-sla)#', slaecho: '(config-ip-sla-echo)#', bgp: '(config-router)#', rmap: '(config-route-map)#', qcmap: '(config-cmap)#', pmap: '(config-pmap)#', pmapc: '(config-pmap-c)#',
 };
 const SERVICE_PORT = { www: 80, http: 80, https: 443, domain: 53, dns: 53, ssh: 22, telnet: 23, ftp: 21, smtp: 25, ntp: 123, snmp: 161, tftp: 69, bgp: 179 };
 
@@ -397,13 +398,13 @@ function parseAclRule(tok) {
 const HELP = {
   exec: ['configure terminal    進入設定模式', 'show ...              查看狀態（輸入 show ? 列出全部）', 'ping <IP>             測試連線',
     'write memory          把 running-config 存成 startup-config（沒存檔的設定重新開機後會消失）', 'reload                重新開機，回到 startup-config'],
-  config: ['hostname <名稱>', 'interface <介面> | interface range <介面> - <n> | interface vlan <ID>', 'vlan <ID>', 'ip route <網段> <遮罩> <下一站> [距離]',
+  config: ['hostname <名稱>', 'interface <介面> | interface range <介面> - <n> | interface vlan <ID>', 'vlan <ID>', 'ip route <網段> <遮罩> <下一站> [距離] [track <物件>]', 'track <編號> interface <介面> line-protocol | track <編號> ip sla <操作> reachability', 'ip sla <編號> → icmp-echo <IP> source-interface <介面> → frequency <秒>；ip sla schedule <編號> life forever start-time now',
     'router ospf 1', 'router bgp <AS>', 'route-map / ip prefix-list / ip as-path access-list', 'ip dhcp pool <名稱> / ip dhcp excluded-address <起> <迄>', 'ip nat inside source list 1 interface <介面> overload',
     'ip nat inside source static <內部 IP> <公用 IP>', 'ip access-list extended <名稱>', 'spanning-tree vlan <清單> priority <值>',
     'ip dhcp snooping / ip arp inspection vlan <清單>', 'line vty 0 4', 'ntp server / logging host / snmp-server community', 'cdp run / no cdp run / lldp run / cdp timer / lldp timer', 'class-map / policy-map（QoS）', 'mls qos（Catalyst 2960）', 'do <show 指令>、end、exit'],
   if: ['ip address <IP> <遮罩> | ip address dhcp', 'shutdown / no shutdown', 'switchport mode access|trunk|dynamic auto|dynamic desirable', 'switchport nonegotiate', 'switchport voice vlan <ID>', 'no cdp enable / no lldp transmit / no lldp receive', 'service-policy input | output <政策>', 'mls qos trust dscp | cos | device cisco-phone', 'auto qos voip cisco-phone', 'power inline auto | never', 'switchport access vlan <ID>',
     'switchport trunk native vlan <ID> / allowed vlan <清單>', 'no switchport（L3 交換器改成 Routed 埠）', 'ip nat inside|outside', 'ip helper-address <IP>',
-    'ip ospf cost <值>', 'ip access-group <名稱> in|out', 'encapsulation dot1q <VLAN>（子介面）', 'vrrp 1 ip <虛擬 IP> / vrrp 1 priority <值>',
+    'ip ospf cost <值>', 'ip access-group <名稱> in|out', 'encapsulation dot1q <VLAN>（子介面）', 'vrrp 1 ip <虛擬 IP> / vrrp 1 priority <值> / vrrp 1 track <物件> decrement <值>', 'standby 1 ip <虛擬 IP> / standby 1 priority <值> / standby 1 preempt / standby 1 track <物件> decrement <值>',
     'channel-group <編號> mode active|passive|on', 'switchport port-security [mac-address <MAC> | violation <模式>]',
     'spanning-tree bpduguard enable / spanning-tree guard root', 'ip dhcp snooping trust', 'ipv6 address <位址/前綴>', 'speed 10|100|1000|auto、duplex auto|full|half'],
   vlan: ['name <名稱>'],
@@ -517,11 +518,35 @@ export function iosSession(getDev, getState, who = null) {
     ['no bandwidth', () => onL3((i) => { delete i.bandwidth; })],
     ['ip access-group <name> <dir>', ([name, dir]) => (['in', 'out'].includes(dir.toLowerCase()) ? onL3((i) => bindAcl(i, name.toUpperCase(), dir.toLowerCase())) : err('方向必須是 in 或 out'))],
     ['no ip access-group <name> <dir>', ([, dir]) => onL3((i) => { i[dir.toLowerCase() === 'in' ? 'aclIn' : 'aclOut'] = []; if (i.aclNames) delete i.aclNames[dir.toLowerCase()]; })],
-    ['vrrp <g> ip <vip>', ([, vip]) => (parseIp(vip) == null ? err('IP 位址的格式不正確') : onL3((i) => { Object.assign((i.vrrp ||= { on: false, vip: '', prio: '100' }), { on: true, vip }); }))],
-    ['vrrp <g> priority <n>', ([, n]) => (+n >= 1 && +n <= 254 ? onL3((i) => { (i.vrrp ||= { on: false, vip: '', prio: '100' }).prio = String(+n); }) : err('priority 必須是 1 – 254'))],
-    ['no vrrp <g>', () => onL3((i) => { if (i.vrrp) i.vrrp.on = false; })],
-    ['standby <g> ip <vip>', ([, vip]) => (parseIp(vip) == null ? err('IP 位址的格式不正確') : onL3((i) => { Object.assign((i.vrrp ||= { on: false, vip: '', prio: '100' }), { on: true, vip }); }))],
-    ['standby <g> priority <n>', ([, n]) => onL3((i) => { (i.vrrp ||= { on: false, vip: '', prio: '100' }).prio = String(+n); })],
+    // FHRP：VRRP（vrrp …，預設會搶回 Master）與 HSRP（standby …，預設不搶，要 standby <g> preempt）
+    ['standby version <n>', () => undefined],
+    ...['vrrp', 'standby'].flatMap((kw) => {
+      const proto = kw === 'vrrp' ? 'vrrp' : 'hsrp', max = proto === 'vrrp' ? 254 : 255;
+      const grpOk = (g) => /^\d+$/.test(g) && +g >= (proto === 'vrrp' ? 1 : 0) && +g <= 255;
+      const G = (g, fn) => (grpOk(g) ? onL3((i) => fn(fhrpOn(i, proto, g), i)) : err(`群組號碼必須是 ${proto === 'vrrp' ? '1' : '0'} – 255`));
+      return [
+        [`${kw} <g> ip <vip>`, ([g, vip]) => (parseIp(vip) == null ? err('IP 位址的格式不正確') : G(g, (v) => { Object.assign(v, { on: true, vip }); }))],
+        [`${kw} <g> priority <n>`, ([g, n]) => (/^\d+$/.test(n) && +n >= 1 && +n <= max ? G(g, (v) => { v.prio = String(+n); }) : err(`priority 必須是 1 – ${max}`))],
+        [`no ${kw} <g> priority [...]`, ([g]) => G(g, (v) => { v.prio = '100'; })],
+        [`${kw} <g> preempt [...]`, ([g]) => G(g, (v) => { if (proto === 'vrrp') delete v.preempt; else v.preempt = true; })],
+        [`no ${kw} <g> preempt [...]`, ([g]) => G(g, (v) => { if (proto === 'vrrp') v.preempt = false; else delete v.preempt; })],
+        [`${kw} <g> track <obj> [...]`, ([g, obj, rest]) => {
+          if (!/^\d+$/.test(obj)) return err(`用法：${kw} ${g} track <物件編號> [decrement <值>]（先用 track <編號> interface … 或 track <編號> ip sla … 定義物件）`);
+          const m = String(rest || '').match(/^decrement\s+(\d+)$/i);
+          if (rest && !m) return err(`用法：${kw} ${g} track ${obj} decrement <1-${max}>`);
+          return G(g, (v) => {
+            const list = (v.track ||= []), cur = list.find((t) => +t.obj === +obj);
+            const dec = m ? +m[1] : undefined;
+            if (cur) { if (dec == null) delete cur.dec; else cur.dec = dec; } else list.push(dec == null ? { obj: +obj } : { obj: +obj, dec });
+          });
+        }],
+        [`no ${kw} <g> track <obj> [...]`, ([g, obj]) => G(g, (v) => { v.track = (v.track || []).filter((t) => +t.obj !== +obj); if (!v.track.length) delete v.track; })],
+        [`no ${kw} <g> ip [...]`, ([g]) => G(g, (v) => { v.on = false; })],
+        [`no ${kw} <g>`, ([g]) => G(g, (v) => { v.on = false; })],
+        [`${kw} <g> <...>`, () => err(`這個模擬支援的 ${kw} 指令：ip、priority、preempt、track（timers、authentication 沒有模擬）`)],
+      ];
+    }),
+
     ['ipv6 address <ll> link-local', ([a]) => (parseIp6(a) != null && isLinkLocal(parseIp6(a)) ? onL3((i) => { i.ll6 = fmtIp6(parseIp6(a)); }) : err('link-local 位址要在 FE80::/10 裡，例如 ipv6 address FE80::1 link-local'))],
     ['no ipv6 address <ll> link-local', () => onL3((i) => { delete i.ll6; })],
     ['ipv6 address <cidr>', ([c]) => {
@@ -902,14 +927,26 @@ export function iosSession(getDev, getState, who = null) {
       return undefined;
     }],
     ['no ip default-gateway [...]', () => { const mg = dev().ifaces.find((x) => x.id === 'mgmt'); if (mg) mg.gateway = ''; }],
-    ['ip route <net> <mask> <via> [...]', ([net, mask, via, ad]) => {
+    ['ip route <net> <mask> <via> [...]', ([net, mask, via, rest]) => {
       const e = needRouting(); if (e) return e;
-      if (parseIp(net) == null || maskBits(mask) == null) return err('用法：ip route <目的網段> <遮罩> <下一站 IP> [管理距離]');
+      if (parseIp(net) == null || maskBits(mask) == null) return err('用法：ip route <目的網段> <遮罩> <下一站 IP> [管理距離] [track <物件>]');
       if (parseIp(via) == null) return err('下一站必須是 IP 位址（這個模擬不支援只寫出口介面）');
+      // 後面可以接：管理距離、name <名稱>、track <物件編號>、permanent
+      const w = String(rest || '').split(/\s+/).filter(Boolean);
+      let ad = '', track = null;
+      for (let k = 0; k < w.length; k++) {
+        if (/^\d+$/.test(w[k]) && !ad) ad = w[k];
+        else if (/^track$/i.test(w[k]) && /^\d+$/.test(w[k + 1] || '')) track = +w[++k];
+        else if (/^name$/i.test(w[k]) && w[k + 1]) k++;
+        else if (/^permanent$/i.test(w[k])) continue;
+        else return err('用法：ip route <目的網段> <遮罩> <下一站 IP> [管理距離] [track <物件>]');
+      }
       if (ad && !(+ad >= 1 && +ad <= 255)) return err('管理距離必須是 1 – 255');
       const d = dev(), cur = d.routes.find((r) => r.dst === net && parseMask(r.mask || '') === maskBits(mask) && r.via === via);
-      if (cur) cur.ad = ad || '';
-      else d.routes.push({ dst: net, mask, via, ad: ad || '' });
+      const r = cur || { dst: net, mask, via };
+      r.ad = ad || '';
+      if (track != null) r.track = track; else delete r.track;
+      if (!cur) d.routes.push(r);
       return undefined;
     }],
     ['no ip route <net> <mask> [...]', ([net, mask, via]) => {
@@ -1204,6 +1241,45 @@ export function iosSession(getDev, getState, who = null) {
     ['ip tftp blocksize <n>', ([n]) => { if (!/^\d+$/.test(n) || +n < 512 || +n > 8192) return err('用法：ip tftp blocksize <512-8192>'); if (+n === 512) delete dev().tftpBlk; else dev().tftpBlk = +n; return undefined; }],
     ['no ip tftp blocksize [...]', () => { delete dev().tftpBlk; }],
     ['line vty [...]', () => { if (!dev().mgmt) return err('這台設備不支援'); enter('line', null); return undefined; }],
+    // 物件追蹤：介面的線路協定，或 IP SLA 的探測結果
+    ['track <n> interface <if> line-protocol', ([n, name]) => {
+      const e = needRouting(); if (e) return e;
+      if (!/^\d+$/.test(n) || +n < 1 || +n > 1000) return err('track 物件的編號是 1 – 1000');
+      const i = ifByName(name);
+      if (isErr(i)) return i;
+      (dev().track ||= {})[+n] = { type: 'iface', iface: i.id };
+      enter('track', +n);
+      return undefined;
+    }],
+    ['track <n> interface <if> <...>', () => err('這個模擬只支援 line-protocol（ip routing 沒有模擬）')],
+    ['track <n> ip sla <m> [...]', ([n, m, rest]) => {
+      const e = needRouting(); if (e) return e;
+      if (!/^\d+$/.test(n) || +n < 1 || +n > 1000) return err('track 物件的編號是 1 – 1000');
+      if (rest && !/^(reachability|state)$/i.test(rest)) return err('用法：track <編號> ip sla <操作編號> reachability');
+      (dev().track ||= {})[+n] = { type: 'sla', sla: +m };
+      enter('track', +n);
+      return undefined;
+    }],
+    ['no track <n>', ([n]) => { if (dev().track) { delete dev().track[+n]; if (!Object.keys(dev().track).length) delete dev().track; } }],
+    ['ip sla schedule <n> [...]', ([n, rest]) => {
+      const op = (dev().sla || {})[+n];
+      if (!op) return err(`%IP SLAs: operation ${n} does not exist（先用 ip sla ${n} 定義）`);
+      // 沒有寫 start-time now 的話，排程是 pending：一直不會開始探測
+      op.sched = /start-time\s+now/i.test(rest || '');
+      op.life = /life\s+forever/i.test(rest || '') ? 'forever' : undefined;
+      return op.sched ? undefined : '（沒有寫 start-time now：這個操作的狀態是 pending，不會開始探測）';
+    }],
+    ['no ip sla schedule <n>', ([n]) => { const op = (dev().sla || {})[+n]; if (op) op.sched = false; }],
+    ['ip sla <n>', ([n]) => {
+      const e = needRouting(); if (e) return e;
+      if (!/^\d+$/.test(n) || +n < 1 || +n > 2147483647) return err('用法：ip sla <操作編號>');
+      const op = (dev().sla ||= {})[+n];
+      if (op && op.sched) return err(`%Entry already being scheduled. Please use "no ip sla ${n}" to delete first.（排程中的 IP SLA 不能直接修改）`);
+      if (!op) dev().sla[+n] = { dst: '', src: '', freq: 60, sched: false };
+      enter('ipsla', +n);
+      return undefined;
+    }],
+    ['no ip sla <n>', ([n]) => { if (dev().sla) { delete dev().sla[+n]; if (!Object.keys(dev().sla).length) delete dev().sla; } }],
     ['line console [...]', () => { enter('line', 'console'); return undefined; }],
     ['restconf', () => {
       const d = dev();
@@ -1872,6 +1948,32 @@ export function iosSession(getDev, getState, who = null) {
       ['description <...>', () => undefined],
       // 在 peer 底下直接輸入下一個 peer：和 IOS 一樣回到 keyring 那一層
       ['peer <name>', ([n]) => { const kr = S.cur.kr; dev().ikev2.krs[kr].peers[n] ||= {}; S.cur = { kr, peer: n }; return undefined; }],
+    ],
+    track: [
+      ['delay <...>', () => err('這個模擬沒有 track 的 delay：狀態一改變就生效')],
+    ],
+    ipsla: [
+      ['icmp-echo <ip> [...]', ([ip, rest]) => {
+        if (parseIp(ip) == null) return err('用法：icmp-echo <目的 IP> [source-interface <介面>]');
+        const op = dev().sla[S.cur];
+        op.dst = ip; op.src = '';
+        const m = String(rest || '').match(/^source-(?:interface|ip)\s+(.+)$/i);
+        if (rest && !m) return err('用法：icmp-echo <目的 IP> [source-interface <介面>]');
+        if (m) {
+          const i = ifByName(m[1]);
+          if (isErr(i)) return i;
+          op.src = i.id;
+        }
+        enter('slaecho', S.cur);
+        return undefined;
+      }],
+      ['<...>', () => err('這個模擬只支援 icmp-echo（udp-jitter、http 等沒有模擬）')],
+    ],
+    slaecho: [
+      ['frequency <n>', ([n]) => (/^\d+$/.test(n) && +n >= 1 && +n <= 604800 ? void (dev().sla[S.cur].freq = +n) : err('frequency 的範圍是 1 – 604800 秒'))],
+      ['no frequency [...]', () => { dev().sla[S.cur].freq = 60; }],
+      ['timeout <n>', () => undefined],
+      ['threshold <n>', () => undefined],
     ],
     ikev2prof: [
       ['match identity remote address <ip> [...]', ([ip]) => { if (parseIp(ip) == null) return err('用法：match identity remote address <對端 IP> 255.255.255.255'); dev().ikev2.profs[S.cur].remote = ip; return undefined; }],
@@ -2625,7 +2727,7 @@ export function runningConfig(state, dev) {
     if (ospfOn(dev, i) && i.ospfCost) l.push(` ip ospf cost ${i.ospfCost}`);
     if (i.aclIn && i.aclIn.length) l.push(` ip access-group ${aclName(i, 'in')} in`);
     if (i.aclOut && i.aclOut.length) l.push(` ip access-group ${aclName(i, 'out')} out`);
-    if (i.vrrp && i.vrrp.on) l.push(` vrrp 1 ip ${i.vrrp.vip || '(未設定)'}`, ` vrrp 1 priority ${i.vrrp.prio || 100}`);
+    if (i.vrrp && (i.vrrp.on || +i.vrrp.prio !== 100 || (i.vrrp.track || []).length)) l.push(...fhrpLines(i.vrrp));
     if (i.ll6) l.push(` ipv6 address ${i.ll6.toUpperCase()} link-local`);
     if (i.ip6) l.push(` ipv6 address ${i.ip6.toUpperCase()}`);
     if (i.raNoAuto) l.push(' ipv6 nd prefix default no-autoconfig');
@@ -2647,6 +2749,10 @@ export function runningConfig(state, dev) {
     if (i.qosOut) l.push(` service-policy output ${i.qosOut}`);
     return l.filter(Boolean);
   };
+  for (const [n, t] of Object.entries(dev.track || {})) {
+    const ti = t.type === 'iface' && dev.ifaces.find((x) => x.id === t.iface);
+    o.push(t.type === 'sla' ? `track ${n} ip sla ${t.sla} reachability` : `track ${n} interface ${longIf(ti ? ti.label : t.iface)} line-protocol`, '!');
+  }
   for (const i of dev.ifaces.filter((x) => x.bind.t === 'loop').sort((a, b) => a.bind.n - b.bind.n)) o.push(`interface Loopback${i.bind.n}`, ...(i.desc ? [` description ${i.desc}`] : []), ...l3lines(i).filter((x) => !/ip nat (inside|outside)/.test(x)), ...(i.shut ? [' shutdown'] : []), '!');
   for (const p of dev.ports) {
     const peer = state.cables.find((c) => (c.a.dev === dev.id && c.a.port === p.id) || (c.b.dev === dev.id && c.b.port === p.id));
@@ -2758,7 +2864,12 @@ export function runningConfig(state, dev) {
   for (const i of dev.ifaces) if (i.mode === 'static' && i.gateway && dev.routing) o.push(`ip route 0.0.0.0 0.0.0.0 ${i.gateway}`);
   for (const r of dev.routes || []) {
     if (!r.dst || !r.via) continue;
-    o.push(`ip route ${r.dst} ${parseMask(r.mask || '') != null ? fmtMask(parseMask(r.mask)) : r.mask} ${r.via}${+r.ad > 1 ? ' ' + r.ad : ''}`);
+    o.push(`ip route ${r.dst} ${parseMask(r.mask || '') != null ? fmtMask(parseMask(r.mask)) : r.mask} ${r.via}${+r.ad > 1 ? ' ' + r.ad : ''}${r.track != null && r.track !== '' ? ' track ' + r.track : ''}`);
+  }
+  for (const [n, op] of Object.entries(dev.sla || {})) {
+    const si = op.src && dev.ifaces.find((x) => x.id === op.src);
+    o.push(`ip sla ${n}`, ...(op.dst ? [` icmp-echo ${op.dst}${si ? ' source-interface ' + longIf(si.label) : ''}`] : []), ...(op.dst && +op.freq !== 60 ? [` frequency ${+op.freq || 60}`] : []));
+    if (op.sched) o.push(`ip sla schedule ${n} life forever start-time now`);
   }
   for (const r of dev.routes6 || []) if (r.dst && r.via) o.push(`ipv6 route ${r.dst.toUpperCase()} ${r.dev ? r.dev + ' ' : ''}${r.via.toUpperCase()}${+r.ad > 1 ? ' ' + r.ad : ''}`);
   if (dev.ospf6) {
@@ -2865,4 +2976,28 @@ export function runningConfig(state, dev) {
   }
   o.push('!', 'end');
   return o;
+}
+
+/** FHRP 的設定行：VRRP 印 vrrp …、HSRP 印 standby …；預設值（priority 100、VRRP 的 preempt）不印 */
+function fhrpLines(v) {
+  const kw = fhrpProto(v) === 'hsrp' ? 'standby' : 'vrrp', g = fhrpGroup(v);
+  const l = [];
+  if (v.on && v.vip) l.push(` ${kw} ${g} ip ${v.vip}`);
+  if (+v.prio && +v.prio !== 100) l.push(` ${kw} ${g} priority ${+v.prio}`);
+  if (kw === 'standby' && fhrpPreempt(v)) l.push(` standby ${g} preempt`);
+  if (kw === 'vrrp' && !fhrpPreempt(v)) l.push(` no vrrp ${g} preempt`);
+  for (const t of v.track || []) l.push(` ${kw} ${g} track ${t.obj}${t.dec != null ? ' decrement ' + t.dec : ''}`);
+  return l;
+}
+/** 把介面設定成某個 FHRP 群組（換協定或群組號碼就是換一組新的設定） */
+function fhrpOn(i, proto, g) {
+  let v = i.vrrp;
+  if (!v || fhrpProto(v) !== proto || fhrpGroup(v) !== +g) {
+    const keep = v && fhrpProto(v) === proto ? { prio: v.prio, track: v.track } : {};
+    v = i.vrrp = { on: false, vip: '', prio: '100', ...keep };
+    if (!v.track) delete v.track;
+  }
+  if (proto === 'hsrp') v.proto = 'hsrp'; else delete v.proto;
+  if (+g !== 1) v.group = +g; else delete v.group;
+  return v;
 }

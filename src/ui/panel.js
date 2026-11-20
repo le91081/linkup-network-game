@@ -18,6 +18,7 @@ import * as DG from './panel-diag.js';
 import * as OPS from './panel-ops.js';
 import * as V from './panel-voice.js';
 import { bgpCard } from './panel-bgp.js';
+import * as TR from './panel-track.js';
 import { isTftp, isFtp } from '../engine/files.js';
 import { buildCli } from './cli.js';
 import { buildFortiCli } from './forticli.js';
@@ -128,7 +129,7 @@ function ifaceCard(ctx, i, o = {}) {
   parts.push(ifaceNote(ctx, i));
   if (o.v6 && ctx.state.v6) parts.push(M.routerV6(ctx, i));
   if (o.dhcp) parts.push(dhcpBlock(ctx, i));
-  if (o.vrrp) parts.push(X.vrrpBlock(ctx, i));
+  if (o.vrrp) parts.push(TR.fhrpBlock(ctx, i));
   return h('div', { class: 'card' + (o.nested ? ' nested' : '') },
     cardHead(o.title || i.label, o.badge, o.port && linkBadge(ctx, o.port), o.onDelete && del(o.onDelete)), parts);
 }
@@ -355,19 +356,24 @@ function loopbackCards(ctx, body) {
 function routesTab(ctx, body) {
   const { dev } = ctx;
   const card = h('div', { class: 'card' }, cardHead('靜態路由'));
+  // 有追蹤物件（或已經有路由用了 track）才多一欄「追蹤」
+  const trk = !!(dev.track && Object.keys(dev.track).length) || dev.routes.some((r) => r.track != null);
+  const cls = 'c-route' + (trk ? ' t' : '');
   if (!dev.routes.length) card.append(note('muted', '還沒有靜態路由。路由器只認識自己直連的網段。'));
-  else card.append(h('div', { class: 'thead c-route' }, h('span', { text: '目的網段' }), h('span', { text: '遮罩' }), h('span', { text: '下一站' }), h('span', { text: '距離' }), h('span')));
+  else card.append(h('div', { class: 'thead ' + cls }, h('span', { text: '目的網段' }), h('span', { text: '遮罩' }), h('span', { text: '下一站' }), h('span', { text: '距離' }), trk && h('span', { text: '追蹤' }), h('span')));
   dev.routes.forEach((r, n) => {
-    card.append(h('div', { class: 'trow c-route' },
+    card.append(h('div', { class: 'trow ' + cls },
       inp(ctx, ...bind(r, 'dst'), { ph: '10.2.0.0', check: isIp }),
       inp(ctx, ...bind(r, 'mask'), { ph: '255.255.255.0', check: isMask }),
       inp(ctx, ...bind(r, 'via'), { ph: '172.16.0.2', check: isIp }),
       inp(ctx, ...bind(r, 'ad'), { ph: '1', check: isNum(1, 255) }),
+      trk && TR.routeTrackInput(ctx, r),
       del(() => { dev.routes.splice(n, 1); ctx.commit(true); })));
   });
   card.append(h('div', { class: 'addrow' }, button('新增路由', { ic: 'plus', small: true, onclick: () => { dev.routes.push({ dst: '', mask: '', via: '', ad: '' }); ctx.commit(true); } }),
     h('span', { class: 'muted', text: '預設路由：0.0.0.0 / 0.0.0.0。距離越小越優先。' })));
   body.append(card);
+  if (dev.kind === 'l3switch' || dev.kind === 'router') body.append(TR.trackCard(ctx));
   if (dev.kind === 'l3switch' || dev.kind === 'router') {
     const rangeDraft = (ctx.app.rangeDraft ||= {});
     body.append(h('div', { class: 'card' }, cardHead('OSPF'),
@@ -550,6 +556,11 @@ function inetInfo(ctx, body) {
   }
   body.append(h('div', { class: 'card' }, cardHead('網際網路上的主機'),
     dev.inet.hosts.map((x) => h('div', { class: 'line' }, h('b', { text: x.name }), h('span', { class: 'mono muted', text: x.ip })))),
+  // 故障模擬：和設備的電源鈕一樣，用來測試自己做的備援
+  h('div', { class: 'card' }, cardHead('故障模擬'),
+    h('div', { class: 'toggles' }, toggle(ctx, () => !!dev.inet.fault, (on) => { if (on) dev.inet.fault = true; else delete dev.inet.fault; }, '業者骨幹故障（線路燈號照常亮著，但封包出不去）', { rerender: true })),
+    dev.inet.fault ? note('warn', '故障中：到這家業者閘道的 ping 還會通，再往外就全部丟掉。只看介面狀態的備援（浮動靜態路由）偵測不到這種故障。')
+      : note('muted', '用來測試備援設計：線路斷掉（拔線）和業者內部故障，對路由器來說是兩回事。')),
   h('p', { class: 'tip', text: '這是電信業者與外面的世界，無法設定。私有 IP（10.x、172.16–31.x、192.168.x）在這裡無法路由。' }));
 }
 

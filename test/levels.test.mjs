@@ -2108,6 +2108,94 @@ console.log('\nerr-disabled：會一直維持、errdisable recovery、shutdown �
   }
 }
 
+console.log('\nHSRP / VRRP、物件追蹤與 IP SLA');
+{
+  const { iosSession, runningConfig } = await import('../src/engine/ios.js');
+  const sim = await import('../src/engine/sim.js');
+  const ok = (cond, title) => (cond ? console.log('  ✔ ' + title) : fail(title));
+  const ios = (s, id, lines) => { const sess = iosSession(() => s.devices[id], () => s); const out = []; for (const l of lines) out.push(...sess.exec(l).out); recomputeNow(s); return out; };
+  const st = (s, id) => s.devices[id].ifaces.find((i) => i.label === 'Gi0/0/1').rt.vrrp;
+  const logs = (s, id) => ((s.dyn.log || {})[id] || []).map((x) => x.line).join('\n');
+  const l25 = LEVELS.find((l) => l.id === 'l25');
+  const hsrp = (preB) => {
+    const s = l25.setup(); settle(s);
+    for (const id of ['pc-1', 'pc-2']) s.devices[id].ifaces[0].gateway = '10.0.10.1';
+    ios(s, 'gw-a', ['conf t', 'interface gi0/0/1', 'standby 1 ip 10.0.10.1', 'standby 1 priority 110', 'standby 1 preempt', 'end']);
+    ios(s, 'gw-b', ['conf t', 'interface gi0/0/1', 'standby 1 ip 10.0.10.1', ...(preB ? ['standby 1 preempt'] : []), 'end']);
+    settle(s);
+    return s;
+  };
+  {
+    const s = hsrp(false);
+    const rc = runningConfig(s, s.devices['gw-a']).join('\n');
+    ok(st(s, 'gw-a').state === 'master' && st(s, 'gw-b').state === 'backup' && / standby 1 ip 10\.0\.10\.1\n standby 1 priority 110\n standby 1 preempt/.test(rc) && !/ vrrp /.test(rc),
+      'HSRP：standby 1 ip / priority / preempt，GW-A 是 Active，running-config 印 standby 而不是 vrrp');
+    ok(evaluate(s, l25.objectives).every((r) => r.pass), 'HSRP 也能完成「閘道備援」的全部目標');
+    // 介面追蹤：上行斷了扣 20，優先權 90 < 100，但 GW-B 沒有 preempt，不會搶
+    ios(s, 'gw-a', ['conf t', 'track 1 interface Gi0/0/0 line-protocol', 'exit', 'interface gi0/0/1', 'standby 1 track 1 decrement 20', 'end']);
+    ios(s, 'gw-a', ['conf t', 'interface gi0/0/0', 'shutdown', 'end']); settle(s);
+    ok(st(s, 'gw-a').state === 'master' && st(s, 'gw-a').prio === 90 && /TRACK-6-STATE: 1 interface Gi0\/0\/0 line-protocol Up -> Down/.test(logs(s, 'gw-a')),
+      'track 1 的上行 down：GW-A 的優先權降到 90，但 GW-B 沒有 preempt，GW-A 還是 Active（真實世界常見的陷阱）');
+    ios(s, 'gw-b', ['conf t', 'interface gi0/0/1', 'standby 1 preempt', 'end']); settle(s);
+    ok(st(s, 'gw-b').state === 'master' && st(s, 'gw-a').state === 'backup' && /HSRP-5-STATECHANGE: GigabitEthernet0\/0\/1 Grp 1 state Standby -> Active/.test(logs(s, 'gw-b')),
+      'GW-B 加上 standby 1 preempt：馬上搶成 Active，紀錄裡有 %HSRP-5-STATECHANGE');
+    ios(s, 'gw-a', ['conf t', 'interface gi0/0/0', 'no shutdown', 'end']); settle(s);
+    ok(st(s, 'gw-a').state === 'master' && st(s, 'gw-a').prio === 110, '上行恢復：GW-A 回到 110，靠自己的 preempt 搶回 Active');
+  }
+  {
+    // HSRP 預設不搶：GW-A 重開機回來之後還是 Standby
+    const s = l25.setup(); settle(s);
+    ios(s, 'gw-a', ['conf t', 'interface gi0/0/1', 'standby 1 ip 10.0.10.1', 'standby 1 priority 110', 'end']);
+    ios(s, 'gw-b', ['conf t', 'interface gi0/0/1', 'standby 1 ip 10.0.10.1', 'end']);
+    settle(s);
+    s.down = { 'gw-a': true }; recomputeNow(s);
+    const pend = sim.pendingOf(s).find((p) => p.kind === 'vrrp');
+    ok(pend && Math.round(pend.at - s.clock) === 10, 'HSRP 的 holdtime 是 10 秒：GW-A 斷電後 GW-B 要等 10 秒才接手');
+    settle(s);
+    delete s.down; settle(s); sim.advance(s, 200); settle(s);
+    ok(st(s, 'gw-b').state === 'master' && st(s, 'gw-a').state === 'backup', 'HSRP 預設沒有 preempt：優先權比較高的 GW-A 開機回來，還是 Standby');
+  }
+  {
+    // 群組號碼不同：兩台各做各的，同時當 Active
+    const s = l25.setup(); settle(s);
+    ios(s, 'gw-a', ['conf t', 'interface gi0/0/1', 'standby 1 ip 10.0.10.1', 'end']);
+    ios(s, 'gw-b', ['conf t', 'interface gi0/0/1', 'standby 2 ip 10.0.10.1', 'end']);
+    settle(s);
+    ok(st(s, 'gw-a').state === 'master' && st(s, 'gw-b').state === 'master' && st(s, 'gw-a').odd && st(s, 'gw-a').odd.grp === 2, '群組號碼不一致：兩台都是 Active，並指出對方用的群組');
+    const bad = ios(s, 'gw-a', ['conf t', 'interface gi0/0/1', 'vrrp 0 ip 10.0.10.1', 'standby 1 priority 300', 'end']).join('\n');
+    ok(/1 – 255/.test(bad) && /1 – 255/.test(bad), 'VRRP 群組從 1 開始、HSRP 的 priority 最大 255');
+  }
+  {
+    // IP SLA + 靜態路由的 track：業者內部故障也能切換
+    const l22 = LEVELS.find((l) => l.id === 'l22');
+    const s = l22.setup(); l22.solve(s); settle(s);
+    // 探測目標用一條主機路由綁在 ISP-A 上（Cisco 文件的建議做法）：預設路由撤掉之後，探測也不會改走 ISP-B
+    const out = ios(s, 'rt', ['conf t', 'ip route 1.1.1.1 255.255.255.255 203.0.113.1', 'ip sla 1', 'icmp-echo 1.1.1.1 source-interface Gi0/0/0', 'frequency 10', 'exit', 'ip sla schedule 1 life forever start-time now',
+      'track 1 ip sla 1 reachability', 'exit', 'no ip route 0.0.0.0 0.0.0.0 203.0.113.1', 'ip route 0.0.0.0 0.0.0.0 203.0.113.1 track 1', 'end']);
+    settle(s);
+    const rc = runningConfig(s, s.devices.rt).join('\n');
+    const dflt = () => s.devices.rt.rt.routes.filter((r) => r.bits === 0 && !r.bad).sort((a, b) => a.ad - b.ad)[0];
+    ok(!out.some((l) => /^%|Invalid/.test(l)) && /track 1 ip sla 1 reachability/.test(rc) && /ip route 0\.0\.0\.0 0\.0\.0\.0 203\.0\.113\.1 track 1/.test(rc)
+      && /ip sla 1\n icmp-echo 1\.1\.1\.1 source-interface GigabitEthernet0\/0\/0\n frequency 10\nip sla schedule 1 life forever start-time now/.test(rc), 'ip sla、track、ip route … track 都出現在 running-config');
+    ok(dflt().via === parseIp('203.0.113.1') && s.dyn.sla['rt/1'].ok, 'IP SLA 探測成功：預設路由走 ISP-A');
+    s.devices['isp-a'].inet.fault = true; recomputeNow(s);
+    const p = sim.pendingOf(s).find((x) => x.kind === 'sla');
+    ok(dflt().via === parseIp('203.0.113.1') && p && p.at - s.clock <= 10, '業者內部故障：介面還是 up，要等下一次探測（10 秒內）才會發現');
+    settle(s);
+    ok(dflt().via === parseIp('198.51.100.1') && !s.dyn.sla['rt/1'].ok && /TRACK-6-STATE: 1 ip sla 1 reachability Up -> Down/.test(logs(s, 'rt')), '探測失敗 → track 1 Down → 追蹤的路由撤掉，改走 ISP-B（浮動靜態路由）');
+    sim.advance(s, 60); settle(s);
+    ok(dflt().via === parseIp('198.51.100.1'), '探測目標綁在 ISP-A：改走 ISP-B 之後探測還是失敗，不會來回跳');
+    ok(sim.runObjective(s, { type: 'tcp', from: 'pc-1', name: 'www.example.com', port: 443 }).pass, 'ISP-A 骨幹故障時 PC-1 還是能開網站（探測目標 1.1.1.1 不是使用者的 DNS，綁在 ISP-A 也不影響上網）');
+    delete s.devices['isp-a'].inet.fault; settle(s); sim.advance(s, 11); settle(s);
+    ok(dflt().via === parseIp('203.0.113.1'), '業者修好之後，下一次探測成功就切回 ISP-A');
+    // 沒有 start-time now：排程是 pending，track 一直是 Down
+    const s2 = l22.setup(); l22.solve(s2); settle(s2);
+    const o2 = ios(s2, 'rt', ['conf t', 'ip sla 2', 'icmp-echo 8.8.8.8', 'exit', 'ip sla schedule 2 life forever', 'track 2 ip sla 2 reachability', 'end']);
+    settle(s2);
+    ok(o2.some((l) => /pending/.test(l)) && !s2.dyn.sla['rt/2'], 'ip sla schedule 沒寫 start-time now：操作是 pending，不會開始探測');
+  }
+}
+
 console.log('\nCatalyst Center：Token、設備清單、AI 問題');
 {
   const { restconf } = await import('../src/engine/restconf.js');

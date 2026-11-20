@@ -12,6 +12,7 @@ import { ospfArea, ospfCost, ospfPassive, ospfHello, ospfDead, ospfPrio, ospfNet
 import { bgpCfg } from '../engine/bgp.js';
 import { ikeVer, errdisRows, ERR_CAUSES } from '../engine/sim.js';
 import { ERR_RECOVERY_CAUSES } from '../engine/ios.js';
+import { fhrpProto, fhrpGroup, trackUp, trackText, trackUsers, slaKey, SLA_FREQ } from '../engine/track.js';
 import { iosClock, deviceTime, ntpInfo, logRows, clearLog, syslogStats, uptimeOf, routerId, longIf, SEVERITY, NTP_POLL, vtyRows, idleLimit } from '../engine/ops.js';
 import { quietLeft } from '../engine/remote.js';
 import { counters, clearCounters, clearedAt, spanDest, debugOf, setDebug, consoleRows } from '../engine/wire.js';
@@ -721,11 +722,83 @@ const SHOW = {
     return ['   Cos-dscp map:', '        cos:   0  1  2  3  4  5  6  7', '     --------------------------------', '       dscp: ' + m.map((x) => String(x).padStart(2)).join(' ')];
   },
   'show vrrp brief': (st, d) => {
-    const v = d.ifaces.filter((i) => i.vrrp && i.vrrp.on);
-    if (!v.length) return ['沒有設定 VRRP'];
-    return [pad('Interface', 16) + pad('Grp', 5) + pad('Pri', 5) + pad('State', 9) + 'Group addr',
-      ...v.map((i) => pad(i.label, 16) + pad(1, 5) + pad(i.vrrp.prio || 100, 5) + pad(i.rt.vrrp ? { master: 'Master', backup: 'Backup', init: 'Init' }[i.rt.vrrp.state] : 'Init', 9) + (i.vrrp.vip || '')
-        + (i.rt.vrrp && i.rt.vrrp.wait > 0 ? `   (Master down，${Math.ceil(i.rt.vrrp.wait)} 秒後接手)` : ''))];
+    const v = fhrpIfs(d, 'vrrp');
+    if (!v.length) return ['（這台沒有設定 VRRP）'];
+    const o = [pad('Interface', 19) + pad('Grp', 4) + pad('Pri', 4) + pad('Time', 6) + pad('Own', 4) + pad('Pre', 4) + pad('State', 8) + pad('Master addr', 16) + 'Group addr'];
+    for (const i of v) {
+      const r = i.rt.vrrp || { state: 'init' }, m = fhrpView(st, d, i);
+      const pri = r.prio != null ? r.prio : +i.vrrp.prio || 100;
+      o.push(pad(i.label, 19) + pad(fhrpGroup(i.vrrp), 4) + pad(pri, 4) + pad(3000 + Math.round(((256 - pri) * 1000) / 256), 6) + pad(i.vrrp.vip && i.rt.ip != null && i.vrrp.vip === fmtIp(i.rt.ip) ? 'Y' : '', 4) + pad(r.pre ? 'Y' : '', 4)
+        + pad({ master: 'Master', backup: 'Backup', init: 'Init' }[r.state], 8) + pad(m.active || 'unknown', 16) + (i.vrrp.vip || ''));
+      if (r.wait > 0) o.push(`（聽不到 Master，${Math.ceil(r.wait)} 秒後接手）`);
+    }
+    return o;
+  },
+  'show standby brief': (st, d) => {
+    const v = fhrpIfs(d, 'hsrp');
+    if (!v.length) return ['（這台沒有設定 HSRP）'];
+    const o = ['                     P indicates configured to preempt.', '                     |',
+      pad('Interface', 12) + pad('Grp', 5) + pad('Pri', 4) + pad('P', 2) + pad('State', 8) + pad('Active', 16) + pad('Standby', 16) + 'Virtual IP'];
+    for (const i of v) {
+      const r = i.rt.vrrp || { state: 'init' }, m = fhrpView(st, d, i);
+      o.push(pad(i.label, 12) + pad(fhrpGroup(i.vrrp), 5) + pad(r.prio != null ? r.prio : +i.vrrp.prio || 100, 4) + pad(r.pre ? 'P' : '', 2) + pad(m.hsrpState, 8)
+        + pad(m.active || 'unknown', 16) + pad(m.standby || 'unknown', 16) + (i.vrrp.vip || ''));
+    }
+    return o;
+  },
+  'show standby': (st, d) => {
+    const v = fhrpIfs(d, 'hsrp');
+    if (!v.length) return ['（這台沒有設定 HSRP）'];
+    return v.flatMap((i) => {
+      const r = i.rt.vrrp || { state: 'init' }, m = fhrpView(st, d, i), g = fhrpGroup(i.vrrp);
+      const pri = r.prio != null ? r.prio : +i.vrrp.prio || 100;
+      return [`${longIf(i.label)} - Group ${g}`, `  State is ${m.hsrpState}`, `  Virtual IP address is ${i.vrrp.vip || 'unknown'}`,
+        `  Active virtual MAC address is 0000.0c07.ac${g.toString(16).padStart(2, '0')}`, '  Hello time 3 sec, hold time 10 sec',
+        `  Preemption ${r.pre ? 'enabled' : 'disabled'}`, `  Active router is ${m.active || 'unknown'}`, `  Standby router is ${m.standby || 'unknown'}`,
+        `  Priority ${pri} (configured ${+i.vrrp.prio || 100})`,
+        ...(i.vrrp.track || []).map((t) => { const u = trackUp(st, d, t.obj); return `    Track object ${t.obj} state ${u.up ? 'Up' : 'Down'} decrement ${t.dec != null ? t.dec : 10}`; }),
+        ...(r.why ? [`（${r.why}）`] : []), ...(m.odd ? [m.odd] : []), ''];
+    });
+  },
+  'show track': (st, d) => {
+    const T = Object.entries(d.track || {});
+    if (!T.length) return ['（這台沒有設定 track 物件）'];
+    const now = st.clock;
+    return T.flatMap(([n, t]) => {
+      const u = trackUp(st, d, n), rec = ((st.dyn && st.dyn.track) || {})[slaKey(d, n)] || { n: 0, at: now };
+      const ago = Math.max(0, Math.round(now - rec.at)), hms = [Math.floor(ago / 3600), Math.floor(ago / 60) % 60, ago % 60].map((x) => String(x).padStart(2, '0')).join(':');
+      const sla = t.type === 'sla' ? ((st.dyn && st.dyn.sla) || {})[slaKey(d, t.sla)] : null;
+      const users = trackUsers(d, n);
+      return [`Track ${n}`, `  ${trackText(d, t)}`, `  ${t.type === 'sla' ? 'Reachability' : 'Line protocol'} is ${u.up ? 'Up' : 'Down'}`,
+        `    ${rec.n} change${rec.n === 1 ? '' : 's'}, last change ${hms}`,
+        ...(t.type === 'sla' ? [`  Latest operation return code: ${sla ? sla.code : 'Unknown'}`, ...(sla && sla.ok ? [`  Latest RTT (millisecs) ${sla.rtt}`] : [])] : []),
+        ...(users.length ? ['Tracked by:', ...users.map((x) => '  ' + x)] : []), ...(u.why && !u.up ? [`（${u.why}）`] : [])];
+    });
+  },
+  'show ip sla statistics': (st, d) => {
+    const ops = Object.entries(d.sla || {});
+    if (!ops.length) return ['（這台沒有設定 IP SLA）'];
+    const o = ['IPSLAs Latest Operation Statistics', ''];
+    for (const [n, op] of ops) {
+      const r = ((st.dyn && st.dyn.sla) || {})[slaKey(d, n)];
+      o.push(`IPSLA operation id: ${n}`);
+      if (!op.sched || !r) { o.push('        Latest RTT: NoConnection/Busy/Timeout', 'Latest operation start time: Unknown', 'Latest operation return code: Unknown', 'Number of successes: Unknown', 'Number of failures: Unknown', 'Operation time to live: 0', `（還沒有開始探測：${op.sched ? '等下一次計算' : `ip sla schedule ${n} life forever start-time now`}）`, ''); continue; }
+      o.push(`        Latest RTT: ${r.ok ? r.rtt + ' milliseconds' : 'NoConnection/Busy/Timeout'}`, `Latest operation start time: ${iosClock({ ...st, clock: r.last }, d)}`,
+        `Latest operation return code: ${r.code}`, `Number of successes: ${r.okN}`, `Number of failures: ${r.failN}`, 'Operation time to live: Forever',
+        `（每 ${+op.freq || SLA_FREQ} 秒探測一次，下一次在 ${Math.max(0, Math.ceil(r.last + (+op.freq || SLA_FREQ) - st.clock))} 秒後）`, '');
+    }
+    return o;
+  },
+  'show ip sla configuration': (st, d) => {
+    const ops = Object.entries(d.sla || {});
+    if (!ops.length) return ['（這台沒有設定 IP SLA）'];
+    return ops.flatMap(([n, op]) => {
+      const si = op.src && d.ifaces.find((x) => x.id === op.src);
+      return ['IP SLAs Infrastructure Engine-III', `Entry number: ${n}`, 'Type of operation to perform: icmp-echo', `Target address/Source interface: ${op.dst || '(未設定)'}/${si ? longIf(si.label) : '(未設定)'}`,
+        'Operation timeout (milliseconds): 5000', 'Type Of Service parameters: 0x0', 'Request size (ARR data portion): 28', 'Verify data: No', 'Vrf Name: ', 'Schedule:',
+        `   Operation frequency (seconds): ${+op.freq || SLA_FREQ}  (not considered if randomly scheduled)`, `   Next Scheduled Start Time: ${op.sched ? 'Start Time already passed' : 'Pending trigger'}`,
+        `   Life (seconds): ${op.sched ? 'Forever' : '3600'}`, `   Entry Ageout (seconds): never`, ''];
+    });
   },
 };
 // ───────────────────────── CDP / LLDP / switchport ─────────────────────────
@@ -1247,6 +1320,21 @@ function natTable(st, d, verbose) {
   return o;
 }
 
+/** 這台設備上某個協定的 FHRP 介面 */
+const fhrpIfs = (d, proto) => d.ifaces.filter((i) => i.vrrp && (i.vrrp.on || i.vrrp.vip) && fhrpProto(i.vrrp) === proto);
+/** 同一組的成員：誰是 Active / Master、誰是 Standby；HSRP 第三台以後是 Listen */
+function fhrpView(st, d, i) {
+  const r = i.rt.vrrp || { state: 'init', members: [] };
+  const mem = (r.members || []).map(([dv, id]) => { const x = st.devices[dv], j = x && x.ifaces.find((y) => y.id === id); return j && j.rt && j.rt.vrrp ? { ip: fmtIp(j.rt.ip), r: j.rt.vrrp } : null; }).filter(Boolean);
+  const me = { ip: 'local', r }, all = [me, ...mem];
+  const key = (x) => [x.r.prio || 0, x.ip === 'local' ? (i.rt.ip || 0) : 0];
+  const act = all.find((x) => x.r.state === 'master');
+  const backs = all.filter((x) => x.r.state === 'backup').sort((a, b) => (b.r.prio || 0) - (a.r.prio || 0) || (key(b)[1] - key(a)[1]));
+  const sb = backs[0];
+  const hsrpState = r.state === 'init' ? 'Init' : r.state === 'master' ? 'Active' : sb === me ? 'Standby' : 'Listen';
+  const odd = r.odd ? `（同一個網段上的 ${st.devices[r.odd.dev] ? st.devices[r.odd.dev].name : r.odd.dev} 用的是 ${r.odd.proto === 'hsrp' ? 'HSRP' : 'VRRP'} 群組 ${r.odd.grp}：協定或群組號碼不同，彼此不會協調，各自都當 Active）` : '';
+  return { active: act && act.ip, standby: sb && sb.ip, hsrpState, odd };
+}
 const stpState = (d, pid) => (d.rt.wait && d.rt.wait[pid] > 15 ? 'LSN' : d.rt.wait && d.rt.wait[pid] > 0 ? 'LRN' : 'FWD');
 const CMDS = Object.keys(SHOW);
 const match = (tokens, cmd) => {

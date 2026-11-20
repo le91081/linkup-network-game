@@ -410,6 +410,7 @@ function snapshot(state, d) {
 }
 
 const CAP = { init: 'Init', backup: 'Backup', master: 'Master' };
+const HSRP_CAP = { init: 'Init', backup: 'Standby', master: 'Active' };
 
 function diffDevice(state, d, a, b) {
   const ios = isIos(d);
@@ -494,7 +495,11 @@ function diffDevice(state, d, a, b) {
   // VRRP
   for (const [id, st] of Object.entries(b.vrrp)) {
     const was = a.vrrp[id];
-    if (was && was !== st) ev(6, 'VRRP-6-STATECHANGE', `${ifLabel(id)} Grp 1 state ${CAP[was]} -> ${CAP[st]}`);
+    if (!was || was === st) continue;
+    const fi = d.ifaces.find((x) => x.id === id), v = (fi && fi.vrrp) || {};
+    const g = v.group != null && v.group !== '' ? +v.group : 1;
+    if (v.proto === 'hsrp') ev(5, 'HSRP-5-STATECHANGE', `${longIf(ifLabel(id))} Grp ${g} state ${HSRP_CAP[was]} -> ${HSRP_CAP[st]}`);
+    else ev(6, 'VRRP-6-STATECHANGE', `${ifLabel(id)} Grp ${g} state ${CAP[was]} -> ${CAP[st]}`);
   }
   // VPN 通道
   for (const [name, t] of Object.entries(b.tun)) {
