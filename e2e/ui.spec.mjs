@@ -271,6 +271,31 @@ test('虛擬化：在 vSwitch 分頁改連接埠群組的 VLAN、虛擬機器清
   await expect.poll(() => page.evaluate(() => window.linkup.state.cables.some((x) => x.a.dev === 'vm3' && x.b.dev === 'esx' && x.b.port === 'vp3'))).toBe(true);
 });
 
+test('DNS：nslookup 不看快取、ping 用快取、ipconfig /displaydns 與 /flushdns', async ({ page }) => {
+  await boot(page);
+  await open(page, 'l71');
+  await clickDevice(page, 'pc-a');
+  await page.locator('#panel .tab', { hasText: '終端機' }).click();
+  const out = page.locator('#panel .term-out');
+  await typeCmd(page, 'nslookup www.corp.local');
+  await expect(out).toContainText(/名稱:\s+web\.corp\.local/);
+  await expect(out).toContainText(/Address:\s+10\.0\.2\.20/);
+  await expect(out).toContainText(/Aliases:\s+www\.corp\.local/);
+  await typeCmd(page, 'ipconfig /displaydns');
+  await expect(out).toContainText(/A \(主機\) 記錄\s+\. \. \. : 10\.0\.2\.10/);
+  await typeCmd(page, 'ipconfig /flushdns');
+  await expect(out).toContainText('已成功清除 DNS 解析程式快取。');
+  await typeCmd(page, 'nslookup -type=mx corp.local');
+  await expect(out).toContainText('mail exchanger = mail.corp.local');
+  expect(await scan(page, '#panel', '終端機')).toEqual([]);
+  // DNS 伺服器的記錄分頁
+  await page.keyboard.press('Escape'); await page.keyboard.press('Escape');
+  await clickDevice(page, 'dns');
+  await page.locator('#panel .tab', { hasText: 'DNS' }).click();
+  await expect(page.locator('#panel .trow.c-dns')).toHaveCount(5);
+  expect(await scan(page, '#panel', 'DNS 記錄')).toEqual([]);
+});
+
 test('主機終端機：ipconfig、ping 會在主控台播封包', async ({ page }) => {
   await boot(page);
   await open(page, 'l04', true);

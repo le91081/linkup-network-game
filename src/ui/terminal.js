@@ -1,7 +1,8 @@
 // 主機上的終端機：ping / ipconfig / tracert / nslookup / curl
 import { h, ownKeys, escLine } from './dom.js';
 import { fmtIp, fmtMask, parseIp } from '../engine/ip.js';
-import { transact, resolveName, dhcpTrace, arpRows, clearArp, dhcpRelease, dhcpRenew, fmtDur, throughput } from '../engine/sim.js';
+import { transact, resolveName, dnsQuery, dhcpTrace, arpRows, clearArp, dhcpRelease, dhcpRenew, fmtDur, throughput } from '../engine/sim.js';
+import { cacheRows, cacheFlush, ptrName } from '../engine/dns.js';
 import { plainStamp } from '../engine/ops.js';
 import { remoteOpen, remoteLogin, remoteSend, remoteAlive, remoteClose, remoteBusy } from '../engine/remote.js';
 import { iosSession } from '../engine/ios.js';
@@ -29,10 +30,13 @@ const HELP = [
   '  ipconfig /renew         重新向 DHCP 伺服器要一次 IP（播放 DORA 四個步驟）',
   '  ipconfig /release       歸還 DHCP 位址',
   '  ipconfig /renew6        重新向 DHCPv6 要位址或 DNS（依 RA 的 M / O 旗標）',
+  '  ipconfig /displaydns    顯示 DNS 快取（查過的名稱，到期之前不會再問伺服器）',
+  '  ipconfig /flushdns      清除 DNS 快取',
   '  arp -a                  顯示 ARP 快取（IP 對應到哪個 MAC）',
   '  arp -d                  清空 ARP 快取',
   '  tracert <IP 或網域>     顯示封包經過的每一台路由器',
-  '  nslookup <網域>         向 DNS 查詢網域的 IP',
+  '  nslookup <網域>         直接向 DNS 伺服器查詢（不看本機的快取）',
+  '  nslookup -type=mx <網域> 查郵件伺服器；nslookup <IP> 反查名稱 (PTR)',
   '  curl <IP 或網域>[:埠]   測試 TCP 連線（預設 443）',
   '  iperf3 -c <IP>          量測到另一台主機的實際傳輸速率（跑 10 秒）',
   '  ssh <帳號>@<IP>         登入網路設備的命令列（加密）。輸入 exit 登出',
@@ -266,6 +270,29 @@ export function buildTerminal(ctx, body) {
         print('  網際網路位址      實體位址            類型', 'pre');
         rows.forEach((r) => print(`  ${fmtIp(r.ip).padEnd(18)}${r.mac.replace(/:/g, '-').padEnd(20)}動態`, 'pre'));
       }
+    } else if (c === 'ipconfig' && /^\/?displaydns$/i.test(args[0] || '')) {
+      const rows = cacheRows(st(), dev);
+      print('');
+      print('Windows IP 設定');
+      if (!rows.length) print('（DNS 解析程式快取是空的）', 'dim');
+      for (const r of rows) {
+        print('');
+        print(`    ${r.name}`);
+        print('    ----------------------------------------');
+        print(`    記錄名稱 . . . . . . : ${r.name}`);
+        print('    記錄類型 . . . . . . : 1');
+        print(`    存留時間 . . . . . . : ${r.left}`);
+        print('    資料長度 . . . . . . : 4');
+        print('    區段 . . . . . . . . : 回答');
+        if (r.alias) print(`    CNAME 記錄 . . . . . : （經由別名 ${r.alias}）`);
+        print(`    A (主機) 記錄  . . . : ${fmtIp(r.ip)}`, 'ok');
+      }
+    } else if (c === 'ipconfig' && /^\/?flushdns$/i.test(args[0] || '')) {
+      cacheFlush(st(), dev);
+      print('');
+      print('Windows IP 設定');
+      print('');
+      print('已成功清除 DNS 解析程式快取。', 'ok');
     } else if (c === 'ipconfig' || c === 'ifconfig' || (c === 'ip' && args[0])) {
       if (/^\/?release$/i.test(args[0] || '')) { dhcpRelease(st(), dev.id); ctx.commit(false); }
       if (/^\/?renew6$/i.test(args[0] || '')) {
@@ -353,13 +380,40 @@ export function buildTerminal(ctx, body) {
         }
       }
     } else if (c === 'nslookup') {
-      if (!args[0]) print('用法：nslookup <網域>', 'warn');
-      else {
-        const r = resolveName(st(), dev.id, args[0]);
+      const tm = (args.find((a) => /^-(type|q|querytype)=/i.test(a)) || '').split('=')[1];
+      const target = args.find((a) => !a.startsWith('-'));
+      const type = (tm || '').toUpperCase() || (parseIp(target || '') != null ? 'PTR' : 'A');
+      const srvLine = (r) => {
+        const sd = r.server && st().devices[r.server];
+        print(`伺服器:  ${sd ? sd.name.replace(/\s+/g, '-') : 'UnKnown'}`);
+        print(`Address:  ${r.serverIp != null ? fmtIp(r.serverIp) : '—'}`);
+        print('');
+      };
+      if (!target) print('用法：nslookup <網域>、nslookup -type=mx <網域>、nslookup <IP>', 'warn');
+      else if (type === 'A') {
+        // nslookup 自己就是一個 DNS 用戶端：直接問伺服器，不看、也不寫本機的快取
+        const r = resolveName(st(), dev.id, target, 0, { nocache: true });
         app.showTrace(`${dev.name}> ${line}`, r.log, r.hops, r);
-        if (r.ok) { print(`名稱:    ${args[0]}`); print(`Address: ${fmtIp(r.ip)}`, 'ok'); }
-        else print('*** ' + r.reason, 'bad');
-      }
+        if (r.ok) {
+          srvLine(r);
+          if (!r.auth) print('未經授權的回答:');
+          print(`名稱:    ${r.canonical || target}`);
+          print(`Address:  ${fmtIp(r.ip)}`, 'ok');
+          if (r.alias) print(`Aliases:  ${target}`);
+        } else print('*** ' + r.reason, 'bad');
+      } else if (type === 'MX' || type === 'PTR') {
+        const name = type === 'PTR' ? ptrName(parseIp(target)) : target;
+        const r = dnsQuery(st(), dev.id, name, type);
+        app.showTrace(`${dev.name}> ${line}`, r.log, r.hops, r);
+        if (!r.ok) print('*** ' + r.reason, 'bad');
+        else {
+          srvLine(r);
+          for (const x of r.records) {
+            if (type === 'MX') print(`${target}	MX preference = ${x.pref ?? 10}, mail exchanger = ${x.value}`, 'ok');
+            else print(`${name}	name = ${x.value}`, 'ok');
+          }
+        }
+      } else print(`這個模擬支援的查詢類型：A（預設）、MX、PTR`, 'warn');
     } else if (c === 'curl' && isApiCurl(line)) {
       curlApi(app, dev, line.trim(), print);
       ctx.commit(false);

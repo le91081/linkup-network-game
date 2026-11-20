@@ -2228,6 +2228,26 @@ console.log('\n設定封存與變更紀錄：archive、show archive config diffe
   ok(o3.some((l) => /No such file/.test(l)), 'configure replace 不存在的檔案：%Error opening');
 }
 
+console.log('\nDNS：記錄類型、TTL 與用戶端快取');
+{
+  const sim = await import('../src/engine/sim.js');
+  const { cacheRows } = await import('../src/engine/dns.js');
+  const ok = (cond, title) => (cond ? console.log('  ✔ ' + title) : fail(title));
+  const lv = LEVELS.find((l) => l.id === 'l71');
+  const s = lv.setup(); settle(s);
+  const a = sim.resolveName(s, 'pc-a', 'www.corp.local');
+  ok(a.ok && a.cached && fmtIpT(a.ip) === '10.0.2.10', 'PC-A 的快取還沒到期：拿到舊的位址，沒有問伺服器');
+  const n = sim.resolveName(s, 'pc-a', 'www.corp.local', 0, { nocache: true });
+  ok(n.ok && !n.cached && fmtIpT(n.ip) === '10.0.2.20' && n.canonical === 'web.corp.local' && n.alias === 'www.corp.local' && n.auth, 'nslookup 不看快取：問伺服器拿到新的位址，CNAME 追到 web.corp.local');
+  const c = sim.resolveName(s, 'pc-c', 'www.corp.local');
+  ok(c.ok && fmtIpT(c.ip) === '10.0.2.20' && cacheRows(s, s.devices['pc-c']).some((r) => r.name === 'www.corp.local' && r.left === 86400), 'PC-C 查到新的位址，記進快取（TTL 86400 秒）');
+  sim.advance(s, 13 * 3600 + 1); recomputeNow(s);
+  ok(fmtIpT(sim.resolveName(s, 'pc-b', 'www.corp.local').ip) === '10.0.2.20' && fmtIpT(sim.resolveName(s, 'pc-a', 'www.corp.local').ip) === '10.0.2.10', 'TTL 到期之後才重新查詢：PC-B 先到期拿到新的，PC-A 還沒');
+  const mx = sim.dnsQuery(s, 'pc-c', 'corp.local', 'MX'), ptr = sim.dnsQuery(s, 'pc-c', '20.2.0.10.in-addr.arpa', 'PTR');
+  ok(mx.ok && mx.records[0].value === 'mail.corp.local' && ptr.ok && ptr.records[0].value === 'web.corp.local', 'MX 與 PTR（反查）');
+  ok(!sim.resolveName(s, 'pc-c', 'nope.corp.local').ok, '沒有這筆記錄：NXDOMAIN（失敗的結果不會被快取）');
+}
+
 console.log('\nCatalyst Center：Token、設備清單、AI 問題');
 {
   const { restconf } = await import('../src/engine/restconf.js');

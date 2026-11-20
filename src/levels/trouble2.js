@@ -280,4 +280,72 @@ export const LEVELS15 = [
     },
     recap: ['TCP 先交握、會確認與重送；UDP 不建立連線，送出去就算了。', '寫 ACL 時，每個服務要先查清楚是 TCP、UDP 還是兩個都用。'],
   },
+
+  // ─────────────────────────────────────────────── DNS 的 TTL 與快取
+  {
+    id: 'l71', chapter: 10, title: 'DNS 改了，為什麼還連到舊的', subtitle: 'DNS 記錄、TTL 與用戶端快取', tags: ['DNS', 'TTL', 'CNAME', 'ipconfig /flushdns'], noDrill: true,
+    brief: '昨晚把公司網站從舊主機 (10.0.2.10) 搬到新主機 (10.0.2.20)，DNS 也在 23:00 改好了，舊主機已經關機。今天早上 PC-C 打得開網站，PC-A 和 PC-B 卻打不開；IT 用 nslookup 查，明明回答的就是新的位址。請讓大家都連得上，並把 DNS 調整好，下次搬家不要再發生。',
+    given: [
+      ['DNS 伺服器', '10.0.2.53'], ['www.corp.local', 'CNAME → web.corp.local'], ['web.corp.local', '舊 10.0.2.10（已關機）→ 新 10.0.2.20'],
+      ['PC-A / PC-B', '昨天下午開過公司網站'], ['公司規定', '網站相關記錄的 TTL 不超過 300 秒'],
+    ],
+    learn: [
+      { t: '常見的 DNS 記錄', d: 'A：名稱 → IPv4 位址；AAAA：→ IPv6；CNAME：別名，指向另一個名稱；MX：這個網域的郵件伺服器；PTR：反查，IP → 名稱。' },
+      { t: 'TTL 與快取', d: '每一筆回答都帶著 TTL（秒）。用戶端（和中間的 DNS 伺服器）會把答案記在快取裡，TTL 到之前都直接用快取，不會再問。TTL 是一天，改了記錄之後最久要一天大家才會看到。' },
+      { t: 'nslookup 不看快取', d: 'nslookup 自己就是一個 DNS 用戶端，直接問伺服器；ping、瀏覽器用的是作業系統的快取。所以「nslookup 是新的、瀏覽器還是舊的」幾乎都是快取還沒到期。ipconfig /displaydns 看快取、ipconfig /flushdns 清掉。' },
+      { t: '搬家之前先調 TTL', d: '預計要換位址的記錄，前一天先把 TTL 調短（例如 300 秒）。等舊的長 TTL 都過期了再切換，大家幾分鐘內就會看到新的位址；穩定之後再調回來。' },
+    ],
+    setup() {
+      const s = makeState([
+        D('isr4331', 'rt', { name: 'R1', pos: [0, -5], init(d) { ip4(d, 'Gi0/0/1', '10.0.1.1'); ip4(d, 'Gi0/0/2', '10.0.2.1'); } }),
+        D('sw8', 'usw', { name: 'SW-Users', pos: [-6, -0.5] }),
+        D('sw8', 'ssw', { name: 'SW-Servers', pos: [6, -0.5] }),
+        ...[['pc-a', 'PC-A', -10, 4, 21], ['pc-b', 'PC-B', -6, 4.8, 22], ['pc-c', 'PC-C', -2, 4, 23]].map(([id, name, x, z, n]) => D('pc', id, { name, pos: [x, z], ip: `10.0.1.${n}`, gw: '10.0.1.1', dns: '10.0.2.53' })),
+        D('tower', 'dns', {
+          name: 'DNS 伺服器', pos: [3, 4.6], ip: '10.0.2.53', gw: '10.0.2.1', services: [{ proto: 'udp', port: 53, name: 'DNS' }, { proto: 'tcp', port: 53, name: 'DNS（區域轉送）' }],
+          init(d) {
+            d.dnsZone = { records: [
+              { name: 'www.corp.local', type: 'CNAME', value: 'web.corp.local', ttl: 86400 },
+              { name: 'web.corp.local', type: 'A', value: '10.0.2.20', ttl: 86400 },
+              { name: 'mail.corp.local', type: 'A', value: '10.0.2.25', ttl: 3600 },
+              { name: 'corp.local', type: 'MX', value: 'mail.corp.local', pref: 10, ttl: 3600 },
+              { name: '20.2.0.10.in-addr.arpa', type: 'PTR', value: 'web.corp.local', ttl: 3600 },
+            ] };
+          },
+        }),
+        D('tower', 'old', { name: '舊網站主機', pos: [7.5, 5.4], ip: '10.0.2.10', gw: '10.0.2.1', services: WEB }),
+        D('tower', 'new', { name: '新網站主機', pos: [11, 3.4], ip: '10.0.2.20', gw: '10.0.2.1', services: WEB }),
+      ], [['rt:Gi0/0/1', 'usw:1'], ['rt:Gi0/0/2', 'ssw:1'], ['pc-a:eth0', 'usw:2'], ['pc-b:eth0', 'usw:3'], ['pc-c:eth0', 'usw:4'],
+        ['dns:eth0', 'ssw:2'], ['old:eth0', 'ssw:3'], ['new:eth0', 'ssw:4']]);
+      s.down = { old: true }; // 舊主機已經關機
+      // PC-A、PC-B 昨天下午開過網站：快取裡還是舊的位址，TTL 是一天，還有十幾個小時才到期
+      const cached = { 'www.corp.local': { ip: parseIp('10.0.2.10'), exp: 15 * 3600 + 1200, alias: 'www.corp.local', srv: 'dns' } };
+      s.dyn = { boot: true, dnsCache: { 'pc-a': { ...cached }, 'pc-b': { 'www.corp.local': { ...cached['www.corp.local'], exp: 13 * 3600 } } } };
+      return s;
+    },
+    objectives: [
+      { type: 'tcp', from: 'pc-a', name: 'www.corp.local', port: 443, label: 'PC-A 打得開 https://www.corp.local' },
+      { type: 'tcp', from: 'pc-b', name: 'www.corp.local', port: 443, label: 'PC-B 打得開 https://www.corp.local' },
+      { type: 'tcp', from: 'pc-c', name: 'www.corp.local', port: 443, label: 'PC-C 打得開 https://www.corp.local' },
+      {
+        type: 'check', label: 'www 與 web 的 TTL 都不超過 300 秒',
+        test(s) {
+          const rs = ((dev(s, 'dns').dnsZone || {}).records || []).filter((r) => ['www.corp.local', 'web.corp.local'].includes(r.name));
+          const bad = rs.filter((r) => !(+r.ttl <= 300));
+          return !bad.length || `${bad.map((r) => `${r.name} (${r.type}) 的 TTL 是 ${r.ttl} 秒`).join('、')}：超過 300 秒`;
+        },
+      },
+      { type: 'tcp', from: 'pc-c', name: 'www.corp.local', port: 443, via: 'new', label: '大家連到的是新主機' },
+    ],
+    hints: [
+      'PC-A 的終端機：nslookup www.corp.local 回答的是 10.0.2.20（新的），可是 ping www.corp.local 卻是 10.0.2.10。nslookup 直接問伺服器；ping 和瀏覽器用的是本機的 DNS 快取。',
+      'ipconfig /displaydns：www.corp.local → 10.0.2.10，存留時間還有十幾個小時（TTL 86400 秒 = 一天）。在 PC-A、PC-B 上 ipconfig /flushdns。',
+      'DNS 伺服器 →「DNS」分頁：www（CNAME）和 web（A）的 TTL 都改成 300。下次要搬家，前一天先把 TTL 調短。',
+    ],
+    solve(s) {
+      for (const id of ['pc-a', 'pc-b']) delete s.dyn.dnsCache[id];
+      for (const r of dev(s, 'dns').dnsZone.records) if (['www.corp.local', 'web.corp.local'].includes(r.name)) r.ttl = 300;
+    },
+    recap: ['DNS 的答案會被快取到 TTL 結束；nslookup 不看快取，ping 和瀏覽器會。', '要換位址之前先把 TTL 調短，切換之後幾分鐘就生效。'],
+  },
 ];

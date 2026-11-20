@@ -59,7 +59,7 @@ npm run build    # 輸出到 dist/
 - **評分**：過關時依實際作答時間（畫面在前景、沒有開對話框才算；標準時間是 3 分鐘加上每個目標 1.5 分鐘）、看了幾個提示、跑了幾次完整測試給 S / A / B / C 與分數，關卡選單上顯示最佳等級。設定變更的次數只列出來參考。
 - **關卡編輯器**：自由模式的「關卡設計」可以寫關卡名稱、任務說明、提示，指定哪些設備鎖定（玩家看得到、不能設定），然後試玩、存成自訂關卡、或匯出成關卡檔分享；關卡選單的「自訂關卡」可以遊玩、匯出、刪除與匯入。
 
-## 關卡（17 章 70 關）
+## 關卡（17 章 71 關）
 
 | 章節 | 關卡數 | 主題 |
 | --- | --- | --- |
@@ -72,7 +72,7 @@ npm run build    # 輸出到 dist/
 | 7 VPN 與廣域備援 | 5 | 站對站 IPsec、遠端存取 VPN、雙線路浮動靜態路由；業者骨幹故障時介面還是 up，用 IP SLA 與追蹤的靜態路由切換（探測目標要綁在主線、不要用使用者的 DNS）；三個據點的 Hub-and-Spoke 與 IKEv2（版本要一致、PFS 不一致要到重新協商才斷、加密範圍與 NAT 例外要包含另一個分公司） |
 | 8 高可用與進階路由 | 7 | STP、EtherChannel、VRRP / HSRP、DHCP Relay、OSPF Cost、VLSM；HSRP 追蹤上行介面（preempt 預設是關的，兩台都要開） |
 | 9 IPv6 | 5 | Link-local、SLAAC、IPv6 靜態路由、雙協定；RA 的 M / O / A 旗標與 DHCPv6（stateless / stateful，DHCPv6 不給閘道）、OSPFv3（link-local 鄰居、純 IPv6 路由器的 Router ID）、IPv6 ACL 與隱含的 ND 允許規則 |
-| 10 故障排除 | 7 | 網路已經設定好但被改壞了：IP 衝突與 DHCP 保留、Trunk / VLAN / shutdown、閘道 / 回程路由 / NAT / ACL / DNS、ping 會通但傳檔很慢（速率寫死、duplex mismatch、舊 Hub）；OSPF 鄰居起不來（MD5 金鑰、被動介面、network 敘述）；流量繞經實驗室的交換器（根橋位置與 Root Guard）；VPN 通了資料卻過不去（NAT 例外、加密的 ACL 要涵蓋新網段） |
+| 10 故障排除 | 8 | 網路已經設定好但被改壞了：IP 衝突與 DHCP 保留、Trunk / VLAN / shutdown、閘道 / 回程路由 / NAT / ACL / DNS、ping 會通但傳檔很慢（速率寫死、duplex mismatch、舊 Hub）；OSPF 鄰居起不來（MD5 金鑰、被動介面、network 敘述）；流量繞經實驗室的交換器（根橋位置與 Root Guard）；VPN 通了資料卻過不去（NAT 例外、加密的 ACL 要涵蓋新網段）；DNS 改了卻還連到舊的（TTL 與用戶端快取、nslookup 不看快取、`ipconfig /flushdns`） |
 | 11 維運與管理 | 5 | 是誰動了設定（設定封存、差異比對、變更紀錄、只拿掉有問題的那一行、停用帳號）；從 TFTP 還原設定（合併與整份取代的差別）、韌體升級（flash 空間、MD5、`boot system`、TFTP 與 FTP 的速度）、讓原廠交換器能用 SSH（主機名稱、網域、RSA 金鑰、`login local`）、用 SNMPv3 找出滿載的線路（線對斷掉自動降到 100 Mbps） |
 | 12 語音與 QoS | 2 | IP 電話：PoE、語音 VLAN、CDP 與 LLDP-MED、DHCP option 150、CUCM 註冊；線路塞車時用 QoS 保住通話：信任邊界、LLQ、配合營運商合約頻寬的整形 |
 | 13 進階路由 | 4 | OSPF 的 DR / BDR 選舉（不搶位、`clear ip ospf process`）、Router ID 與 Loopback、passive-interface；參考頻寬與 cost、等價多路徑 (ECMP)；多區域 OSPF、ABR 與 `area range` 彙總；用 eBGP 同時接兩家 ISP：local-preference 決定出去走哪家、AS-path prepend 影響進來走哪家、prefix-list 避免變成轉運站 |
@@ -144,6 +144,7 @@ npm run build    # 輸出到 dist/
 - **HSRP / VRRP 與追蹤**：`standby` 是 HSRP、`vrrp` 是 VRRP，群組號碼與 preempt 的預設值和真的設備一樣（VRRP 會搶、HSRP 不會）；`track <n> interface <介面> line-protocol`、`track <n> ip sla <操作> reachability`、`ip route … track <n>`；`show standby [brief]`、`show vrrp brief`、`show track`、`show ip sla statistics | configuration`。
 - **設定封存與變更紀錄**：`archive config`、`show archive`、`show archive config differences [檔案 [檔案]]`（不加參數是 startup 對 running）、`show archive log config all | user <帳號>`、`configure replace flash:<檔案> [list] [force]`。
 - **err-disabled**：BPDU Guard 與 Port Security 關掉的埠會一直維持到 `shutdown` → `no shutdown` 或 `errdisable recovery`；`show interfaces status err-disabled`、`show errdisable recovery`。
+- **主機的 DNS**：`nslookup <名稱>`（直接問伺服器，不看本機快取；顯示 CNAME 的 Aliases 與「未經授權的回答」）、`nslookup -type=mx <網域>`、`nslookup <IP>`（PTR 反查）、`ipconfig /displaydns`、`ipconfig /flushdns`；ping、瀏覽器、curl 用的是本機的 DNS 快取（依 TTL 到期）。DNS 伺服器的「DNS」分頁可以編輯 A / CNAME / MX / PTR 記錄與 TTL。
 - **帳號**：可以有多個本機帳號（`username` / `no username`），SSH、RESTCONF 都可以用；變更紀錄記的是登入的那個帳號。
 - **排除故障**：`traceroute`、`show interfaces [介面]`、`show interfaces counters errors`、`clear counters`、`debug ip packet`、`debug ip icmp`、`undebug all`、`show debugging`、`show ip protocols`、`show ip ospf interface brief`。
 

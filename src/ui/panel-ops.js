@@ -13,6 +13,7 @@ export const isServer = (d) => SERVER_MODELS.has(d.model);
 // ───────────────────────── 伺服器角色 ─────────────────────────
 
 const ROLES = [
+  ['dns', 'DNS 伺服器', 'udp', 53, '把名稱翻譯成 IP 位址（A / CNAME / MX / PTR）'],
   ['tftp', 'TFTP 伺服器', 'udp', 69, '備份設定、放韌體。不用帳號密碼，任何人都能讀寫'],
   ['ftp', 'FTP 伺服器', 'tcp', 21, '要帳號密碼，但帳號密碼和檔案內容都是明文'],
   ['syslog', 'Syslog 伺服器', 'udp', 514, '收集各設備送來的紀錄'],
@@ -31,6 +32,10 @@ export function serverRolesCard(ctx) {
       if (id === 'tftp' || id === 'ftp') dev.files ||= {};
       if (id === 'ftp' && on) dev.ftpUsers ||= [{ user: 'backup', pass: 'Backup#2026' }];
       if (id === 'nms') { if (on) dev.nms ||= { targets: [] }; else delete dev.nms; }
+      if (id === 'dns') {
+        dev.services = dev.services.filter((x) => !(x.proto === 'tcp' && x.port === 53));
+        if (on) { dev.services.push({ proto: 'tcp', port: 53, name: 'DNS（區域轉送）' }); dev.dnsZone ||= { records: [] }; } else { delete dev.dnsZone; delete dev.dnsRecords; }
+      }
     }, `${label}（${proto.toUpperCase()} ${port}）`, { rerender: true, title: hint })),
     toggle(ctx, () => !!dev.cucm, (on) => {
       // CUCM 同時提供 TFTP（電話的設定檔）與 SIP（註冊、撥號）
