@@ -602,6 +602,7 @@ export class Scene3D {
       z0 = Math.min(z0, d.pos[1] - u.d / 2); z1 = Math.max(z1, d.pos[1] + u.d / 2);
       const el = document.createElement('div');
       el.className = 'dev-label k-' + d.kind;
+      el.dataset.dev = d.id;
       el.innerHTML = '<span class="dot"></span><span class="nm"></span><span class="sub"></span>';
       this.labelLayer.append(el);
       this.labels.set(d.id, { el, nm: el.querySelector('.nm'), sub: el.querySelector('.sub') });

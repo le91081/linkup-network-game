@@ -1,5 +1,5 @@
 // FortiGate 的 CLI 分頁：FortiOS 的 config → edit → set → next → end
-import { h } from './dom.js';
+import { h, ownKeys, escLine } from './dom.js';
 import { parseIp, fmtIp } from '../engine/ip.js';
 import { transact } from '../engine/sim.js';
 import { fortiSession } from '../engine/fortios.js';
@@ -105,6 +105,7 @@ export function buildFortiCli(ctx, body) {
   // sniffer 與 debug flow 的輸出：在別的地方產生流量時，也會即時出現在這裡
   app.refreshers.push(() => { if (follow()) draw(); });
   input.addEventListener('keydown', (e) => {
+    if (escLine(e, input)) return;
     if (e.key === 'Enter') {
       const line = input.value.trim();
       input.value = '';
@@ -118,7 +119,7 @@ export function buildFortiCli(ctx, body) {
       if (r.options.length > 1) { print(sess.prompt() + input.value, 'cmd'); print('  ' + r.options.join('   '), 'dim'); draw(); }
     } else if (e.key === 'ArrowUp') { if (hi > 0) { hi--; input.value = hist[hi]; } e.preventDefault(); }
     else if (e.key === 'ArrowDown') { hi = Math.min(hist.length, hi + 1); input.value = hist[hi] || ''; e.preventDefault(); }
-    e.stopPropagation();
+    ownKeys(e);
   });
   const quick = ['show firewall policy', 'get system interface', 'get router info routing-table all', 'diagnose vpn tunnel list', 'config firewall policy', 'end'];
   body.append(h('div', { class: 'term', onclick: () => input.focus() }, out, h('div', { class: 'term-line' }, promptEl, input)),

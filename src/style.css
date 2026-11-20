@@ -145,7 +145,8 @@ h1, h2, h3, p { margin: 0; }
 .chips { display: flex; flex-wrap: wrap; gap: 6px; }
 .chip { display: inline-flex; align-items: center; height: 22px; padding: 0 9px; border-radius: 20px; font-size: 11.5px; font-weight: 600; background: rgba(110, 168, 255, 0.12); color: #b9d3ff; border: 1px solid rgba(110, 168, 255, 0.22); white-space: nowrap; }
 .chip.tiny { height: 19px; font-size: 10.5px; padding: 0 7px; font-family: var(--mono); background: rgba(245, 181, 71, 0.12); color: #ffd995; border-color: rgba(245, 181, 71, 0.25); }
-.btnchip { font-family: var(--mono); font-size: 11px; cursor: pointer; }
+.btnchip { font-family: var(--mono); font-size: 11px; cursor: pointer; max-width: 100%; }
+.btnchip > .ell { overflow: hidden; text-overflow: ellipsis; min-width: 0; }
 .btnchip:hover { background: rgba(110, 168, 255, 0.24); }
 .btnchip.on { background: rgba(79, 216, 196, 0.2); border-color: rgba(79, 216, 196, 0.55); color: #a8f5e9; }
 
@@ -204,7 +205,7 @@ h3.sec { font-size: 11.5px; letter-spacing: 0.08em; color: var(--faint); text-tr
 .card.learn b { color: #c8fff5; font-size: 13.5px; }
 .card.learn p { color: #c3cbe2; line-height: 1.65; font-size: 13px; }
 .card-h { display: flex; align-items: center; gap: 8px; min-height: 26px; }
-.card-h > b { font-size: 13.5px; white-space: nowrap; }
+.card-h > b { font-size: 13.5px; white-space: nowrap; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .card-h > .inp { height: 30px; }
 .link { margin-left: auto; display: inline-flex; align-items: center; gap: 6px; font-size: 11.5px; color: var(--muted); min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .link i { flex: none; width: 7px; height: 7px; border-radius: 50%; background: var(--faint); }

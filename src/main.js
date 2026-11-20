@@ -482,4 +482,5 @@ else if (/^custom-/.test(app.store.last || '')) {
 else app.loadLevel(Math.max(0, LEVELS.findIndex((l) => l.id === app.store.last)));
 hud.openLevels(app);
 app.levelNo = hud.levelNo;
-window.linkup = app; // 方便在主控台除錯
+app.levels = LEVELS;
+window.linkup = app; // 方便在主控台除錯，瀏覽器端測試（e2e/）也從這裡切換關卡

@@ -1,5 +1,5 @@
 // 主機上的終端機：ping / ipconfig / tracert / nslookup / curl
-import { h } from './dom.js';
+import { h, ownKeys, escLine } from './dom.js';
 import { fmtIp, fmtMask, parseIp } from '../engine/ip.js';
 import { transact, resolveName, dhcpTrace, arpRows, clearArp, dhcpRelease, dhcpRenew, fmtDur, throughput } from '../engine/sim.js';
 import { plainStamp } from '../engine/ops.js';
@@ -427,6 +427,7 @@ export function buildTerminal(ctx, body) {
   };
 
   input.addEventListener('keydown', (e) => {
+    if (escLine(e, input)) return;
     const r = remote();
     if (e.key === 'Enter') {
       const secret = r && r.stage === 'pass';
@@ -449,7 +450,7 @@ export function buildTerminal(ctx, body) {
       input.value = hist[hi] || '';
       e.preventDefault();
     }
-    e.stopPropagation();
+    ownKeys(e);
   });
   // 一次貼上好幾行（例如 SSH 進設備之後貼整份設定）：一行一行送出
   input.addEventListener('paste', async (e) => {
@@ -484,7 +485,7 @@ export function buildTerminal(ctx, body) {
   const chips = linux ? ['ls', 'cat inventory.ini', `ansible-playbook -i inventory.ini ${dev.ansible.file}`, `ansible-playbook -i inventory.ini ${dev.ansible.file} --check -v`, 'help']
     : ['ipconfig', 'ping 8.8.8.8', 'tracert 8.8.8.8', 'nslookup www.example.com', 'arp -a', 'help'];
   body.append(term, h('div', { class: 'chips' }, chips.map((x) =>
-    h('button', { class: 'chip btnchip', type: 'button', text: x, onclick: () => { hist.push(x); hi = hist.length; run(x); } }))));
+    h('button', { class: 'chip btnchip', type: 'button', title: x, onclick: () => { hist.push(x); hi = hist.length; run(x); } }, h('span', { class: 'ell', text: x })))));
   draw();
   setTimeout(() => input.focus(), 30);
 }

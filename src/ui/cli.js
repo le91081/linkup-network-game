@@ -1,5 +1,5 @@
 // IOS 風格的 CLI：用 show 指令查看狀態；configure terminal 之後可以直接用指令修改設定
-import { h } from './dom.js';
+import { h, ownKeys, escLine } from './dom.js';
 import { fmtIp, parseIp, parseMask, netOf } from '../engine/ip.js';
 import { fmtIp6, parseIp6, parseCidr6, net6 } from '../engine/ip6.js';
 import { dhcp6Bindings, hits6Of, ACL6_IMPLICIT, DHCP6_PREF, DHCP6_VALID, duidOf } from '../engine/sim6.js';
@@ -1494,6 +1494,7 @@ export function buildCli(ctx, body) {
   // 在別的地方發生的事（介面斷線、debug 的輸出）也會出現在 console 上
   app.refreshers.push(() => { if (follow()) draw(); });
   input.addEventListener('keydown', (e) => {
+    if (escLine(e, input)) return;
     if (e.key === 'Enter') {
       const line = input.value.trim();
       input.value = '';
@@ -1508,7 +1509,7 @@ export function buildCli(ctx, body) {
       if (r.options.length > 1) { print(sess.prompt() + ' ' + input.value, 'cmd'); print('  ' + r.options.join('   '), 'dim'); draw(); }
     } else if (e.key === 'ArrowUp') { if (hi > 0) { hi--; input.value = hist[hi]; } e.preventDefault(); }
     else if (e.key === 'ArrowDown') { hi = Math.min(hist.length, hi + 1); input.value = hist[hi] || ''; e.preventDefault(); }
-    e.stopPropagation();
+    ownKeys(e);
   });
   // 一次貼上好幾行（例如整份設定檔）：和真的 console 一樣一行一行執行；最後一行沒有換行的話留在輸入列
   input.addEventListener('paste', (e) => {

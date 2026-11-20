@@ -87,7 +87,7 @@ export function wlcClientsTab(ctx, body) {
 export function wmiTab(ctx, body) {
   const { dev } = ctx;
   const i = dev.ifaces[0];
-  body.append(h('div', { class: 'card' }, cardHead('無線管理介面 (Wireless Management Interface)'),
+  body.append(h('div', { class: 'card' }, cardHead('無線管理介面 (WMI)'),
     note('muted', 'AP 用 CAPWAP 連到這個位址，管理者也從這裡登入控制器。它是控制器上的一個 SVI，所在的 VLAN 要在上行的 Trunk 裡。'),
     grid2(
       field('VLAN', inp(ctx, () => String(i.bind.vlan), (v) => { if (+v >= 1 && +v <= 4094) i.bind.vlan = +v; }, { check: isNum(1, 4094) })),

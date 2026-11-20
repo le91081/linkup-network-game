@@ -1,5 +1,5 @@
 // 診斷用的頁面：介面計數器、連接埠鏡像 (SPAN)、封包擷取 (Wireshark)
-import { h, button, icon } from './dom.js';
+import { h, button, icon, ownKeys } from './dom.js';
 import { note, cardHead, field, sel } from './form.js';
 import { fmtIp } from '../engine/ip.js';
 import { isBridgePort } from '../engine/sim.js';
@@ -117,7 +117,7 @@ export function captureTab(ctx, body) {
   body.append(h('p', { class: 'tip', text: '像 Wireshark 一樣把這台電腦網路卡收到與送出的訊框記下來。接在交換器上只看得到「給自己的」和「廣播」；接在 Hub 上，或交換器把別的埠鏡像 (SPAN) 過來，才看得到別人的流量。' }));
   const filter = h('input', { class: 'inp mono', value: ui.text, placeholder: '顯示篩選，例如 ip.addr == 192.168.1.10 && icmp', spellcheck: 'false', autocomplete: 'off' });
   filter.addEventListener('input', () => { ui.text = filter.value; app.refreshLive(); });
-  filter.addEventListener('keydown', (e) => e.stopPropagation());
+  filter.addEventListener('keydown', ownKeys);
   body.append(h('div', { class: 'card' },
     cardHead(on ? '擷取中' : '封包擷取',
       button(on ? '停止' : '開始擷取', { small: true, kind: on ? '' : 'primary', ic: on ? 'pause' : 'play', onclick: () => { setCapture(state, dev.id, !on); if (!on) ui.sel = null; app.renderPanel(); } }),

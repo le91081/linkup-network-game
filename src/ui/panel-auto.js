@@ -1,5 +1,5 @@
 // 自動化主機上的工具：API 用戶端（像 Postman）與 Ansible（ansible-playbook）
-import { h, button } from './dom.js';
+import { h, button, ownKeys } from './dom.js';
 import { note, cardHead, badge, toggle } from './form.js';
 import { fmtIp } from '../engine/ip.js';
 import { restconf } from '../engine/restconf.js';
@@ -107,7 +107,7 @@ export function apiTab(ctx, body) {
   // 取得 Token 的請求不需要內容（帳號密碼放在 Basic Auth）
   const tokenReq = /\/auth\/token\/?$/.test(ui.url);
   const area = HAS_BODY.has(ui.method) && !tokenReq && h('textarea', { class: 'code', rows: 9, spellcheck: 'false', value: ui.body, placeholder: '{\n  "ietf-interfaces:interface": { … }\n}', oninput: (e) => { ui.body = e.target.value; doLint(); } });
-  if (area) area.addEventListener('keydown', (e) => { if (codeKey(area, e)) { ui.body = area.value; doLint(); curl.textContent = curlOf(ui); } e.stopPropagation(); });
+  if (area) area.addEventListener('keydown', (e) => { if (codeKey(area, e)) { ui.body = area.value; doLint(); curl.textContent = curlOf(ui); } ownKeys(e); });
   const curl = h('div', { class: 'api-curl mono', text: curlOf(ui) });
   const send = () => {
     if (HAS_BODY.has(ui.method)) { const c = jsonCheck(ui.body); if (!c.ok && ui.body.trim()) { /* 照樣送出：讓設備回 400，和真的一樣 */ } }
@@ -124,7 +124,7 @@ export function apiTab(ctx, body) {
     h('div', { class: 'api-line' }, method, url),
     h('div', { class: 'grid2' }, fld('帳號（Basic Auth）', txt('user', '例如 admin')), fld('密碼', txt('pass', '', 'password')),
       fld('Accept（要什麼格式的回應）', sel('accept', CTYPES)), HAS_BODY.has(ui.method) ? fld('Content-Type（送出的內容格式）', sel('ctype', CTYPES)) : h('span')),
-    fld('其他標頭（一行一個，例如 X-Auth-Token: …）', (() => { const t = h('textarea', { class: 'code api-hdr', rows: 2, spellcheck: 'false', value: ui.extra || '', placeholder: 'X-Auth-Token: eyJ0eXAi…', oninput: (e) => { ui.extra = e.target.value; curl.textContent = curlOf(ui); } }); t.addEventListener('keydown', (e) => e.stopPropagation()); return t; })()),
+    fld('其他標頭（一行一個，例如 X-Auth-Token: …）', (() => { const t = h('textarea', { class: 'code api-hdr', rows: 2, spellcheck: 'false', value: ui.extra || '', placeholder: 'X-Auth-Token: eyJ0eXAi…', oninput: (e) => { ui.extra = e.target.value; curl.textContent = curlOf(ui); } }); t.addEventListener('keydown', ownKeys); return t; })()),
     h('label', { class: 'switch' }, h('input', { type: 'checkbox', checked: ui.verify, onchange: (e) => { ui.verify = e.target.checked; rerender(); } }), h('i'), h('span', { text: '驗證 SSL 憑證（設備用的是自己簽的憑證時要關掉，curl 是 -k）' })),
     area && fld('內容 (Body)', area), area && lint,
     HAS_BODY.has(ui.method) && tokenReq && note('muted', '取得 Token 不需要內容：帳號密碼放在上面的 Basic Auth，回應裡的 Token 之後放在 X-Auth-Token 標頭。'),
@@ -136,7 +136,7 @@ export function apiTab(ctx, body) {
     h('div', { class: 'f-label', text: '等效的 curl 指令（也可以在終端機直接輸入）' }), curl));
   url.addEventListener('input', () => { curl.textContent = curlOf(ui); });
   for (const el of body.querySelectorAll('.api-req input, .api-req select')) el.addEventListener('input', () => { curl.textContent = curlOf(ui); });
-  url.addEventListener('keydown', (e) => { if (e.key === 'Enter') send(); e.stopPropagation(); });
+  url.addEventListener('keydown', (e) => { if (e.key === 'Enter') send(); ownKeys(e); });
   doLint();
 
   // ── 回應 ──
@@ -271,7 +271,7 @@ export function ansibleTab(ctx, body) {
     if (ui.file === 'inv') { lint.replaceChildren(); return; }
     try { parseYaml(area.value); lint.replaceChildren(note('ok', 'YAML 語法正確')); } catch (e) { lint.replaceChildren(note('warn', e instanceof YamlError ? `第 ${e.line} 行第 ${e.col} 欄：${e.message}` : e.message)); }
   };
-  area.addEventListener('keydown', (e) => { if (codeKey(area, e)) doLint(); e.stopPropagation(); });
+  area.addEventListener('keydown', (e) => { if (codeKey(area, e)) doLint(); ownKeys(e); });
   area.addEventListener('input', doLint);
   area.addEventListener('change', () => { a[key] = area.value; ctx.commit(false); });
   const fileBtn = (id, label) => h('button', { type: 'button', class: ui.file === id ? 'on' : '', onclick: () => { a[key] = area.value; ui.file = id; ctx.commit(false); rerender(); } }, label);
@@ -292,7 +292,7 @@ export function ansibleTab(ctx, body) {
       h('label', { class: 'switch' }, h('input', { type: 'checkbox', checked: ui.check, onchange: (e) => { ui.check = e.target.checked; cmdEl.textContent = '$ ' + cmd(); } }), h('i'), h('span', { text: '--check：只算出要改什麼，不真的改（乾跑）' })),
       h('label', { class: 'switch' }, h('input', { type: 'checkbox', checked: ui.verbose, onchange: (e) => { ui.verbose = e.target.checked; cmdEl.textContent = '$ ' + cmd(); } }), h('i'), h('span', { text: '-v：顯示每個 task 的結果（例如送出的指令）' }))),
     h('label', { class: 'field' }, h('span', { class: 'f-label', text: '--limit（只對這些主機執行，空白表示全部）' }),
-      h('input', { class: 'inp mono', value: ui.limit, placeholder: '例如 sw-c 或 access', spellcheck: 'false', oninput: (e) => { ui.limit = e.target.value.trim(); cmdEl.textContent = '$ ' + cmd(); }, onkeydown: (e) => e.stopPropagation() }))));
+      h('input', { class: 'inp mono', value: ui.limit, placeholder: '例如 sw-c 或 access', spellcheck: 'false', oninput: (e) => { ui.limit = e.target.value.trim(); cmdEl.textContent = '$ ' + cmd(); }, onkeydown: ownKeys }))));
   doLint();
   if (ui.out) {
     const outCard = h('div', { class: 'card' }, cardHead('輸出', badge(ui.out.rc === 0 ? 'on' : 'off', `結束代碼 ${ui.out.rc}`)),

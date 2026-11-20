@@ -61,7 +61,8 @@ export const field = (label, control, hint) =>
 export const note = (kind, text) => h('div', { class: 'note ' + kind }, kind === 'ok' ? icon('check', 13) : null, text);
 export const kv = (k, v) => h('div', { class: 'kv-row' }, h('span', { text: k }), h('b', { class: 'mono', text: v }));
 export const del = (onclick, title = '刪除') => h('button', { class: 'mini danger', type: 'button', title, onclick }, icon('trash', 14));
-export const cardHead = (title, ...rest) => h('div', { class: 'card-h' }, h('b', { class: 'mono', text: title }), ...rest);
+// 標題太長時（面板比較窄的螢幕）以「…」截斷，滑鼠移上去看完整文字
+export const cardHead = (title, ...rest) => h('div', { class: 'card-h' }, h('b', { class: 'mono', text: title, title: String(title).length > 18 ? title : undefined }), ...rest);
 export const badge = (kind, text) => h('span', { class: 'link ' + kind }, h('i'), text);
 export const grid2 = (...kids) => h('div', { class: 'grid2' }, kids);
 

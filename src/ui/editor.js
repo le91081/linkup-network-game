@@ -1,6 +1,6 @@
 // 關卡編輯器：在自由模式擺好拓撲與目標之後，寫上任務說明與提示、指定哪些設備不能改，就成了一個關卡。
 // 可以自己試玩、存成自訂關卡、匯出成檔案分享，也可以匯入別人做的關卡。
-import { h, icon, button, toast } from './dom.js';
+import { h, icon, button, toast, ownKeys } from './dom.js';
 import { modal, closeModal } from './hud.js';
 import { cloneState } from '../engine/model.js';
 import { recompute } from '../engine/sim.js';
@@ -51,7 +51,7 @@ export function editorSection(app) {
   const txt = (get, set, ph, multi) => {
     const el = h(multi ? 'textarea' : 'input', { class: 'inp' + (multi ? ' ed-brief' : ''), value: get(), placeholder: ph, spellcheck: 'false', rows: multi ? 4 : undefined });
     el.addEventListener('change', () => { set(el.value); commit(); });
-    el.addEventListener('keydown', (e) => e.stopPropagation());
+    el.addEventListener('keydown', ownKeys);
     return el;
   };
   const devs = Object.values(st.devices);

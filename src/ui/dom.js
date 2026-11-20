@@ -28,6 +28,20 @@ export function fill(el, ...kids) {
   return el;
 }
 
+/**
+ * 自己處理按鍵的輸入框（終端機、程式碼編輯器…）不讓按鍵往外傳，免得觸發全域快捷鍵；
+ * 只有 Esc 例外：讓外層把焦點移開，再按一次就取消選取設備。用 Tab 縮排的編輯器也靠 Esc 才離得開。
+ */
+export const ownKeys = (e) => { if (e.key !== 'Escape') e.stopPropagation(); };
+/** 命令列的 Esc：有打字就先清掉這一行（和 Windows 的命令提示字元一樣），空的才離開輸入框。回傳 true 表示已經處理 */
+export function escLine(e, input) {
+  if (e.key !== 'Escape' || !input.value) return false;
+  input.value = '';
+  e.preventDefault();
+  e.stopPropagation();
+  return true;
+}
+
 function append(el, kids) {
   for (const k of kids) {
     if (k == null || k === false) continue;

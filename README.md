@@ -9,8 +9,22 @@ three.js 負責 3D 場景，設定頁面是 HTML，底層是一套自己寫的�
 npm install
 npm run dev      # http://localhost:5173
 npm test         # 驗證所有關卡、負面案例與題庫資料
+npm run test:e2e # 在真的瀏覽器裡操作一輪（見下方）
 npm run build    # 輸出到 dist/
 ```
+
+### 瀏覽器端測試（Playwright）
+
+`npm run test:e2e` 用電腦上已經安裝的 Google Chrome（`channel: 'chrome'`）跑，不另外下載瀏覽器；
+安裝套件時可以設 `PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1`。測試會自己開一個 4519 埠的開發伺服器，
+和平常玩的 5173 是不同的來源，所以不會動到你的遊戲進度。
+
+- `e2e/levels.spec.mjs`：每一關都打開、每台設備的每個分頁都畫一次，執行目標、套用參考解法、再執行到跳出過關視窗；
+  畫面上不能出現 `undefined`、`NaN`、`[object Object]`，面板不能擠出水平捲軸，頁面不能有例外。1024×768 再檢查一次版面。
+- `e2e/ui.spec.mjs`：用滑鼠點場景上的設備、切分頁、在 Cisco CLI 和主機終端機打指令、上方的每個按鈕、復原與重做。
+- `e2e/modes.spec.mjs`：故障演練（含重新整理後接著做）、模擬考從作答到成績、自由模式拖曳接線並做成自訂關卡試玩。
+
+失敗時的截圖與操作紀錄在 `e2e/.results/`，可以用 `npx playwright show-trace <trace.zip>` 一步一步回放。
 
 ## 玩法
 
@@ -356,6 +370,7 @@ src/data/     題庫與證照對照表
 src/scene/    three.js 場景、設備模型、網路線、無線涵蓋範圍與封包動畫
 src/ui/       設定面板、終端機、CLI、任務面板、測驗、模擬考、故障演練、評分、自由模式與關卡編輯器、對話框
 test/         對每個關卡套用參考解法，並用負面案例確認引擎真的會擋
+e2e/          Playwright 瀏覽器端測試（用已安裝的 Chrome）
 ```
 
 新增關卡：在 `src/levels/` 的 `LEVELS` 加一筆，寫好 `setup()`、`objectives` 與 `solve()`，

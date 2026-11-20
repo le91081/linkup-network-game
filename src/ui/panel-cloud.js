@@ -1,5 +1,5 @@
 // 雲端主控台（以 AWS 的 VPC 主控台為藍本）：VPC、子網路、路由表、EC2、安全群組、網路 ACL、NAT 閘道、站對站 VPN
-import { h, button, icon, toast } from './dom.js';
+import { h, button, icon, toast, ownKeys, escLine } from './dom.js';
 import { inp, sel, toggle, field, note, kv, del, cardHead, grid2, bind, badge } from './form.js';
 import { parseIp, parseCidr, fmtIp, netOf } from '../engine/ip.js';
 import { transact } from '../engine/sim.js';
@@ -135,7 +135,7 @@ export function ec2Tab(ctx, body) {
       draw();
     };
     const input = h('input', { class: 'term-input', spellcheck: 'false', autocomplete: 'off', placeholder: 'curl 8.8.8.8:443' });
-    input.addEventListener('keydown', (e) => { if (e.key === 'Enter' && input.value.trim()) { run(input.value); input.value = ''; } e.stopPropagation(); });
+    input.addEventListener('keydown', (e) => { if (escLine(e, input)) return; if (e.key === 'Enter' && input.value.trim()) { run(input.value); input.value = ''; } ownKeys(e); });
     const s = subnetOf(v, x);
     body.append(h('div', { class: 'card' }, cardHead(x.name, badge('on', '執行中')), h('div', { class: 'mono muted cl-small', text: `${x.id} · ${x.type || 't3.micro'}` }),
       grid2(field('子網路', sel(ctx, ...bind(x, 'subnet'), v.subnets.map((q) => [q.id, `${q.name}（${q.cidr}）`]), { rerender: true })),
