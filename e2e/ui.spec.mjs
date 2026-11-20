@@ -210,6 +210,32 @@ test('HSRP 與追蹤：面板的追蹤設定、show standby brief、show track',
   expect(await scan(page, '#panel', 'CLI')).toEqual([]);
 });
 
+test('設定封存：show archive、差異比對、變更紀錄，Syslog 伺服器收到紀錄', async ({ page }) => {
+  await boot(page);
+  await open(page, 'l65');
+  await clickDevice(page, 'rt');
+  await page.locator('#panel .tab', { hasText: 'CLI' }).click();
+  await typeCmd(page, 'show archive');
+  await expect(page.locator('#panel .term-out')).toContainText('flash:archive-3 <- Most Recent');
+  await typeCmd(page, 'show archive config differences flash:archive-2 flash:archive-3');
+  const out = page.locator('#panel .term-out');
+  await expect(out).toContainText('+ip access-list extended SALES-IN');
+  await expect(out).toContainText('interface GigabitEthernet0/0/1.20');
+  await expect(out).toContainText('+ip access-group SALES-IN in');
+  await expect(out).toContainText('+snmp-server location 3F-IDF-Rack2');
+  await typeCmd(page, 'show archive log config all');
+  await expect(out).toContainText(/bob@vty0\s+\| ip access-group SALES-IN in/);
+  await expect(out).toContainText('username alice privilege 15 secret *****');
+  expect(await scan(page, '#panel', 'CLI')).toEqual([]);
+  // Syslog 伺服器也收到了（設備被重灌也查得到）
+  await page.keyboard.press('Escape'); await page.keyboard.press('Escape');
+  await clickDevice(page, 'log');
+  await page.locator('#panel .tab', { hasText: 'Syslog' }).click();
+  await expect(page.locator('#panel')).toContainText('CFGLOG_LOGGEDCMD');
+  await expect(page.locator('#panel')).toContainText('User:bob');
+  expect(await scan(page, '#panel', 'Syslog 伺服器')).toEqual([]);
+});
+
 test('主機終端機：ipconfig、ping 會在主控台播封包', async ({ page }) => {
   await boot(page);
   await open(page, 'l04', true);

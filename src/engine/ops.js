@@ -371,6 +371,16 @@ export function opsBefore(state) {
 
 // ───────────────────────── 事件：比對前後兩次的狀態 ─────────────────────────
 
+/**
+ * 設備上的本機帳號（username …）：主要帳號是 mgmt.user / mgmt.pass（沒設定過時是 admin / admin），
+ * 其他人的帳號放在 mgmt.users。一人一個帳號，設定變更紀錄才查得出是誰
+ */
+export function localUsers(m) {
+  if (!m) return [];
+  const main = m.user === '' ? [] : [{ user: m.user ?? 'admin', pass: m.pass ?? 'admin' }];
+  return [...main, ...(m.users || [])];
+}
+
 /** Gi0/1 → GigabitEthernet0/1 */
 export const longIf = (s) => String(s).replace(/^Gi(?=\d)/, 'GigabitEthernet').replace(/^Te(?=\d)/, 'TenGigabitEthernet').replace(/^Fa(?=\d)/, 'FastEthernet')
   .replace(/^Eth(?=\d)/, 'Ethernet').replace(/^Po(?=\d)/, 'Port-channel');

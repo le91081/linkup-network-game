@@ -10,10 +10,11 @@ import { parseDscp, dscpName, COS_DSCP_DEFAULT } from './qos.js';
 import { clearOspfProcess, ospfArea } from './ospf.js';
 import { transfer, configFile, ensureFlash, flashFree, flashPath, fsName, IMAGES, PLATFORM, PLATFORM_NAME, imageFile, fmtBytes } from './files.js';
 import { macsBehind, recompute, ospfOn, ikeVer } from './sim.js';
-import { logEvent, markReboot, setClock, deviceTime, SEVERITY, bootTime, longIf } from './ops.js';
+import { logEvent, markReboot, setClock, deviceTime, SEVERITY, bootTime, longIf, localUsers } from './ops.js';
 import { spanDest } from './wire.js';
 import { genKey } from './remote.js';
 import { fhrpProto, fhrpGroup, fhrpPreempt } from './track.js';
+import { archiveNow, archiveLines, cfgLog, cfgDiff, ARCH_MAX_DEFAULT } from './archive.js';
 
 // ───────────────────────── running-config 與 startup-config ─────────────────────────
 // IOS 設備改的是記憶體裡的 running-config；要下 write memory 才會存進 startup-config。
@@ -37,6 +38,12 @@ export function restoreStartup(dev) {
  * copy tftp: startup-config 再 reload，就是「整份換掉」的還原方式。RSA 金鑰存在另一個地方，不受影響
  */
 export function startupFromText(state, dev, lines) {
+  const r = snapFromText(state, dev, lines);
+  dev.startup = r.snap;
+  return r.bad;
+}
+/** 從出廠狀態開始把每一行設定套上去，回傳 { snap：設定快照, bad：套不上去的行 } */
+export function snapFromText(state, dev, lines) {
   const s2 = cloneState(state);
   const fresh = makeDevice(dev.model, dev.id, { name: dev.name, pos: dev.pos });
   for (const k of KEEP) if (k in dev && k !== 'rt' && k !== 'startup') fresh[k] = JSON.parse(JSON.stringify(dev[k]));
@@ -53,9 +60,15 @@ export function startupFromText(state, dev, lines) {
   }
   const key = dev.mgmt && dev.mgmt.sshKey;
   if (key && fresh.mgmt) fresh.mgmt.sshKey = key;
-  dev.startup = snapshot(fresh);
-  return bad;
+  return { snap: snapshot(fresh), bad };
 }
+/** 把設備的設定整份換成一份快照（configure replace） */
+export function applySnap(dev, snap) {
+  for (const k of Object.keys(dev)) if (!KEEP.has(k)) delete dev[k];
+  Object.assign(dev, JSON.parse(snap));
+}
+/** 封存目前的 running-config */
+export function archiveRunning(state, dev) { return archiveNow(state, dev, runningConfig(state, dev), snapshot(dev)); }
 
 /** startup-config 的內容（和 show running-config 同樣的格式） */
 export function startupConfig(state, dev) {
@@ -85,7 +98,7 @@ const PROMPT = {
   exec: '#', config: '(config)#', if: '(config-if)#', vlan: '(config-vlan)#', router: '(config-router)#', dhcp: '(dhcp-config)#',
   line: '(config-line)#', acl: '(config-ext-nacl)#', stdacl: '(config-std-nacl)#', radius: '(config-radius-server)#',
   isakmp: '(config-isakmp)#', tset: '(cfg-crypto-trans)#', cmap: '(config-crypto-map)#',
-  ikev2prop: '(config-ikev2-proposal)#', ikev2pol: '(config-ikev2-policy)#', ikev2kr: '(config-ikev2-keyring)#', ikev2peer: '(config-ikev2-keyring-peer)#', ikev2prof: '(config-ikev2-profile)#', track: '(config-track)#', ipsla: '(config-ip-sla)#', slaecho: '(config-ip-sla-echo)#', bgp: '(config-router)#', rmap: '(config-route-map)#', qcmap: '(config-cmap)#', pmap: '(config-pmap)#', pmapc: '(config-pmap-c)#',
+  ikev2prop: '(config-ikev2-proposal)#', ikev2pol: '(config-ikev2-policy)#', ikev2kr: '(config-ikev2-keyring)#', ikev2peer: '(config-ikev2-keyring-peer)#', ikev2prof: '(config-ikev2-profile)#', track: '(config-track)#', archive: '(config-archive)#', archlog: '(config-archive-log-cfg)#', ipsla: '(config-ip-sla)#', slaecho: '(config-ip-sla-echo)#', bgp: '(config-router)#', rmap: '(config-route-map)#', qcmap: '(config-cmap)#', pmap: '(config-pmap)#', pmapc: '(config-pmap-c)#',
 };
 const SERVICE_PORT = { www: 80, http: 80, https: 443, domain: 53, dns: 53, ssh: 22, telnet: 23, ftp: 21, smtp: 25, ntp: 123, snmp: 161, tftp: 69, bgp: 179 };
 
@@ -401,7 +414,7 @@ const HELP = {
   config: ['hostname <名稱>', 'interface <介面> | interface range <介面> - <n> | interface vlan <ID>', 'vlan <ID>', 'ip route <網段> <遮罩> <下一站> [距離] [track <物件>]', 'track <編號> interface <介面> line-protocol | track <編號> ip sla <操作> reachability', 'ip sla <編號> → icmp-echo <IP> source-interface <介面> → frequency <秒>；ip sla schedule <編號> life forever start-time now',
     'router ospf 1', 'router bgp <AS>', 'route-map / ip prefix-list / ip as-path access-list', 'ip dhcp pool <名稱> / ip dhcp excluded-address <起> <迄>', 'ip nat inside source list 1 interface <介面> overload',
     'ip nat inside source static <內部 IP> <公用 IP>', 'ip access-list extended <名稱>', 'spanning-tree vlan <清單> priority <值>',
-    'ip dhcp snooping / ip arp inspection vlan <清單>', 'line vty 0 4', 'ntp server / logging host / snmp-server community', 'cdp run / no cdp run / lldp run / cdp timer / lldp timer', 'class-map / policy-map（QoS）', 'mls qos（Catalyst 2960）', 'do <show 指令>、end、exit'],
+    'ip dhcp snooping / ip arp inspection vlan <清單>', 'line vty 0 4', 'ntp server / logging host / snmp-server community', 'archive → path flash:<名稱> / maximum <n> / write-memory / log config → logging enable / notify syslog / hidekeys', 'cdp run / no cdp run / lldp run / cdp timer / lldp timer', 'class-map / policy-map（QoS）', 'mls qos（Catalyst 2960）', 'do <show 指令>、end、exit'],
   if: ['ip address <IP> <遮罩> | ip address dhcp', 'shutdown / no shutdown', 'switchport mode access|trunk|dynamic auto|dynamic desirable', 'switchport nonegotiate', 'switchport voice vlan <ID>', 'no cdp enable / no lldp transmit / no lldp receive', 'service-policy input | output <政策>', 'mls qos trust dscp | cos | device cisco-phone', 'auto qos voip cisco-phone', 'power inline auto | never', 'switchport access vlan <ID>',
     'switchport trunk native vlan <ID> / allowed vlan <清單>', 'no switchport（L3 交換器改成 Routed 埠）', 'ip nat inside|outside', 'ip helper-address <IP>',
     'ip ospf cost <值>', 'ip access-group <名稱> in|out', 'encapsulation dot1q <VLAN>（子介面）', 'vrrp 1 ip <虛擬 IP> / vrrp 1 priority <值> / vrrp 1 track <物件> decrement <值>', 'standby 1 ip <虛擬 IP> / standby 1 priority <值> / standby 1 preempt / standby 1 track <物件> decrement <值>',
@@ -1241,6 +1254,9 @@ export function iosSession(getDev, getState, who = null) {
     ['ip tftp blocksize <n>', ([n]) => { if (!/^\d+$/.test(n) || +n < 512 || +n > 8192) return err('用法：ip tftp blocksize <512-8192>'); if (+n === 512) delete dev().tftpBlk; else dev().tftpBlk = +n; return undefined; }],
     ['no ip tftp blocksize [...]', () => { delete dev().tftpBlk; }],
     ['line vty [...]', () => { if (!dev().mgmt) return err('這台設備不支援'); enter('line', null); return undefined; }],
+    // 設定封存
+    ['archive', () => { const d = dev(); if (!d.mgmt) return err('這台設備不支援'); d.archive ||= {}; enter('archive', null); return undefined; }],
+    ['no archive', () => { delete dev().archive; }],
     // 物件追蹤：介面的線路協定，或 IP SLA 的探測結果
     ['track <n> interface <if> line-protocol', ([n, name]) => {
       const e = needRouting(); if (e) return e;
@@ -1444,8 +1460,24 @@ export function iosSession(getDev, getState, who = null) {
       const m = dev().mgmt, t = rest.split(/\s+/);
       const k = t.findIndex((x) => ['secret', 'password'].includes(x.toLowerCase()));
       if (!m || k < 0 || !t[k + 1]) return err('用法：username <帳號> privilege 15 secret <密碼>');
-      m.user = t[0];
-      m.pass = readSecret(t.slice(k + 1));
+      const name = t[0], pass = readSecret(t.slice(k + 1));
+      // 第一個帳號（或同名）是主要帳號，其他人的帳號另外存。
+      // 模擬裡出廠的 admin / admin 只是方便用的預設值（真的 IOS 出廠沒有帳號），建立第一個帳號就取代它
+      const factory = m.user === 'admin' && m.pass === 'admin' && !(m.users || []).length;
+      if (m.user == null || m.user === '' || m.user === name || factory) { m.user = name; m.pass = pass; return undefined; }
+      const list = (m.users ||= []), cur = list.find((u) => u.user === name);
+      if (cur) cur.pass = pass; else list.push({ user: name, pass });
+      return undefined;
+    }],
+    ['no username <name> [...]', ([name]) => {
+      const m = dev().mgmt;
+      if (!m) return err('這台設備不支援');
+      if (!localUsers(m).some((u) => u.user === name)) return err(`% 沒有 ${name} 這個帳號`);
+      if ((m.user ?? 'admin') === name) {
+        const nx = (m.users || []).shift();
+        if (nx) { m.user = nx.user; m.pass = nx.pass; } else { m.user = ''; m.pass = ''; }
+      } else m.users = (m.users || []).filter((u) => u.user !== name);
+      if (m.users && !m.users.length) delete m.users;
       return undefined;
     }],
     ['enable secret <...>', () => undefined],
@@ -1949,6 +1981,36 @@ export function iosSession(getDev, getState, who = null) {
       // 在 peer 底下直接輸入下一個 peer：和 IOS 一樣回到 keyring 那一層
       ['peer <name>', ([n]) => { const kr = S.cur.kr; dev().ikev2.krs[kr].peers[n] ||= {}; S.cur = { kr, peer: n }; return undefined; }],
     ],
+    archive: [
+      ['path <url>', ([u]) => {
+        if (!/^(boot)?flash:\/?[\w.$-]+$/i.test(u)) return err('用法：path flash:<檔名開頭>，例如 path flash:archive（這個模擬只能封存到 flash）');
+        dev().archive.path = u.replace(/\$h/gi, hostName(dev()));
+        return undefined;
+      }],
+      ['no path [...]', () => { delete dev().archive.path; }],
+      ['maximum <n>', ([n]) => {
+        if (!/^\d+$/.test(n) || +n < 1 || +n > 14) return err('maximum 的範圍是 1 – 14');
+        if (!dev().archive.path) return err('%Archive path is not configured（先設定 path）');
+        if (+n === ARCH_MAX_DEFAULT) delete dev().archive.max; else dev().archive.max = +n;
+        return undefined;
+      }],
+      ['no maximum [...]', () => { delete dev().archive.max; }],
+      ['write-memory', () => { dev().archive.wm = true; }],
+      ['no write-memory', () => { delete dev().archive.wm; }],
+      ['time-period <n>', ([n]) => (/^\d+$/.test(n) && +n >= 1 && +n <= 525600 ? void (dev().archive.period = +n) : err('time-period 的範圍是 1 – 525600 分鐘'))],
+      ['no time-period [...]', () => { delete dev().archive.period; }],
+      ['log config', () => { dev().archive.log ||= {}; enter('archlog', null); return undefined; }],
+      ['no log config', () => { delete dev().archive.log; }],
+    ],
+    archlog: [
+      ['logging enable', () => { dev().archive.log.on = true; }],
+      ['no logging enable', () => { delete dev().archive.log.on; }],
+      ['logging size <n>', ([n]) => (/^\d+$/.test(n) && +n >= 1 && +n <= 1000 ? void (dev().archive.log.size = +n) : err('logging size 的範圍是 1 – 1000'))],
+      ['notify syslog [...]', () => { dev().archive.log.notify = true; }],
+      ['no notify syslog [...]', () => { delete dev().archive.log.notify; }],
+      ['hidekeys', () => { dev().archive.log.hide = true; }],
+      ['no hidekeys', () => { delete dev().archive.log.hide; }],
+    ],
     track: [
       ['delay <...>', () => err('這個模擬沒有 track 的 delay：狀態一改變就生效')],
     ],
@@ -1967,7 +2029,7 @@ export function iosSession(getDev, getState, who = null) {
         enter('slaecho', S.cur);
         return undefined;
       }],
-      ['<...>', () => err('這個模擬只支援 icmp-echo（udp-jitter、http 等沒有模擬）')],
+      ...['udp-jitter', 'udp-echo', 'tcp-connect', 'http', 'dns', 'path-echo', 'path-jitter', 'dhcp', 'ethernet'].map((k) => [`${k} [...]`, () => err('這個模擬只支援 icmp-echo（udp-jitter、http 等沒有模擬）')]),
     ],
     slaecho: [
       ['frequency <n>', ([n]) => (/^\d+$/.test(n) && +n >= 1 && +n <= 604800 ? void (dev().sla[S.cur].freq = +n) : err('frequency 的範圍是 1 – 604800 秒'))],
@@ -2187,11 +2249,19 @@ export function iosSession(getDev, getState, who = null) {
       if (match(tok, 'clear cdp table')) { clearNeighbors(getState(), dev(), 'cdp'); return done(false); }
       if (match(tok, 'clear lldp table')) { clearNeighbors(getState(), dev(), 'lldp'); return done(false); }
       if (match(tok, 'clear cdp counters') || match(tok, 'clear lldp counters')) { const c = ((getState().dyn.ndCnt ||= {})[dev().id] ||= {}); const k = tok[1].toLowerCase().startsWith('c') ? 'cdp' : 'lldp'; c[k + 'Out'] = 0; c[k + 'In'] = 0; return done(false); }
+      if (match(tok, 'archive config')) {
+        const r = archiveRunning(getState(), dev());
+        if (r.err) { out.push(r.err); return done(false); }
+        return done(true);
+      }
+      const cr = match(tok, 'configure replace <file> [...]');
+      if (cr) return configReplace(cr[0], cr[1] || '', out);
       if (match(tok, 'configure terminal') || match(tok, 'configure')) { S.mode = 'config'; out.push('Enter configuration commands, one per line.  End with CNTL/Z.'); return done(false); }
       if (match(tok, 'enable') || match(tok, 'disable') || match(tok, 'end') || match(tok, 'terminal <...>')) return done(false);
       if (match(tok, 'write') || match(tok, 'write memory') || match(tok, 'copy running-config startup-config')) {
         saveStartup(dev());
         out.push('Building configuration...', '[OK]');
+        if (dev().archive && dev().archive.wm) { const r = archiveRunning(getState(), dev()); if (r.err) out.push(r.err); }
         return done(true);
       }
       const fileCmd = fileExec(tok, text, out);
@@ -2229,6 +2299,10 @@ export function iosSession(getDev, getState, who = null) {
     if (match(tok, 'end') || t0 === '^z') { S.mode = 'exec'; S.cur = null; return leave(); }
     if (match(tok, 'exit') && S.mode === 'pmapc') { S.mode = 'pmap'; S.cur = { pm: S.cur.pm }; return done(false); }
     if (match(tok, 'exit') && S.mode === 'ikev2peer') { S.mode = 'ikev2kr'; S.cur = S.cur.kr; return done(false); }
+    // 巢狀的子模式：exit 只回到上一層（和真的 IOS 一樣）
+    if (match(tok, 'exit') && S.mode === 'archlog') { S.mode = 'archive'; S.cur = null; return done(false); }
+    if (match(tok, 'exit') && S.mode === 'slaecho') { S.mode = 'ipsla'; return done(false); }
+    if (match(tok, 'exit') && S.mode === 'ikev2peer') { S.mode = 'ikev2kr'; S.cur = S.cur.kr; return done(false); }
     if (match(tok, 'exit')) {
       const top = S.mode === 'config';
       S.mode = top ? 'exec' : 'config'; S.cur = null;
@@ -2249,6 +2323,15 @@ export function iosSession(getDev, getState, who = null) {
     const aclMode = S.mode === 'acl' || S.mode === 'stdacl' || S.mode === 'acl6';
     const trySub = S.mode !== 'config' && (!aclMode || /^(\d+\s+|sequence\s+\d+\s+)?(permit|deny)\b/i.test(text) || /^no\s+(\d+|sequence\s+\d+|permit\b|deny\b)/i.test(text));
     let res = trySub ? run(SUB[S.mode], tok, out) : { hit: false };
+    let viaSub = res.hit;
+    // 巢狀的子模式不認得的指令，先往上一層找（例如貼上設定時 log config 底下接著 archive 的 path）
+    const UP = { archlog: ['archive', () => null], slaecho: ['ipsla', (c) => c], ikev2peer: ['ikev2kr', (c) => c.kr], pmapc: ['pmap', (c) => ({ pm: c.pm })] };
+    if (!res.hit && trySub && UP[S.mode]) {
+      const [pm, pc] = UP[S.mode], prev = S.mode, prevCur = S.cur;
+      S.mode = pm; S.cur = pc(prevCur);
+      res = run(SUB[pm], tok, out);
+      if (!res.hit || isErr(res.r)) { S.mode = prev; S.cur = prevCur; res = { hit: false }; } else viaSub = true;
+    }
     if (!res.hit && S.mode === 'config') res = run(CONFIG, tok, out);
     else if (!res.hit) {
       // 在子模式下輸入全域指令：和真的 IOS 一樣，會直接離開子模式去執行
@@ -2262,7 +2345,46 @@ export function iosSession(getDev, getState, who = null) {
     if (isErr(res.r)) { out.push(res.r); return done(false); }
     for (const x of [].concat(res.r ?? [])) out.push(x);
     S.touched = true;
+    logCfg(text, viaSub);
     return done(true);
+  }
+
+  /** archive log config：記下這一行（子模式裡的指令前面空一格，和 show archive log config 一樣） */
+  function logCfg(text, sub) {
+    const d = dev(), st = getState();
+    if (!d.archive || !d.archive.log || !d.archive.log.on || !st.dyn) return;
+    // 剛打開 logging enable 的那一行本身就是第一筆，上一層（log config）沒有被記到，所以不縮排
+    const indent = sub && !!S.logSess;
+    if (!S.logSess) { const n = (st.dyn.cfgSess ||= {}); n[d.id] = (n[d.id] || 0) + 1; S.logSess = n[d.id]; }
+    cfgLog(st, d, { sess: S.logSess, user: who ? who.user : 'console', line: who ? String(who.line).replace(/\s+/g, '') : 'console', cmd: (indent ? ' ' : '') + text }, logEvent);
+  }
+
+  /** configure replace：整份換成封存檔（或 flash 裡的設定檔）的內容 */
+  function configReplace(file, opts, out) {
+    const d = dev(), st = getState();
+    ensureFlash(d);
+    const f = d.flash && d.flash.files[flashPath(file)];
+    if (!f || f.kind !== 'config') { out.push(`%Error opening ${file} (No such file or directory)`); return { out, changed: false }; }
+    const go = (o) => {
+      const before = runningConfig(st, d);
+      const snap = f.snap || snapFromText(st, d, f.lines).snap;
+      applySnap(d, snap);
+      recompute(st);
+      const after = runningConfig(st, d);
+      if (/\blist\b/i.test(opts)) {
+        const diff = cfgDiff(before, after);
+        o.push('!Pass 1', '', '!List of Commands:', ...(diff.length ? diff : ['（沒有任何差異）']), 'end');
+      }
+      o.push('', 'Total number of passes: 1', 'Rollback Done');
+      logEvent(st, d, 5, 'SYS-5-CONFIG_I', who ? `Configured from ${file} by ${who.user} on ${who.line} (${who.ip})` : `Configured from ${file} by console`);
+      S.mode = 'exec'; S.cur = null;
+      return { out: o, changed: true };
+    };
+    if (/\bforce\b/i.test(opts)) return go(out);
+    out.push('This will apply all necessary additions and deletions', 'to replace the current running configuration with the', 'contents of the specified configuration file, which is',
+      'assumed to be a complete configuration, not a partial', 'configuration. Enter Y if you are sure you want to proceed. ? [no]: ');
+    S.pending = { fn: (ans, o2) => { S.pending = null; if (!/^y/i.test(ans.trim())) return { out: o2, changed: false }; return go(o2); } };
+    return { out, changed: false };
   }
 
   /**
@@ -2380,7 +2502,7 @@ export function iosSession(getDev, getState, who = null) {
     const fs = fsName(d);
     const two = (n) => String(n).padStart(2, '0');
     const when = (t) => {
-      if (t < 0) return 'Nov 12 2025 10:22:41 +00:00';
+      if (t === -1) return 'Nov 12 2025 10:22:41 +00:00';
       const x = new Date(Date.UTC(2026, 0, 5, 1, 0, 0) + t * 1000);
       return `${['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'][x.getUTCMonth()]} ${String(x.getUTCDate()).padStart(2)} ${x.getUTCFullYear()} ${two(x.getUTCHours())}:${two(x.getUTCMinutes())}:${two(x.getUTCSeconds())} +00:00`;
     };
@@ -2552,7 +2674,7 @@ export function runningConfig(state, dev) {
   if (dev.ftpLogin && (dev.ftpLogin.user || dev.ftpLogin.pass)) o.push(...(dev.ftpLogin.user ? [`ip ftp username ${dev.ftpLogin.user}`] : []), ...(dev.ftpLogin.pass ? [`ip ftp password 7 ${hex(dev.ftpLogin.pass)}`] : []), '!');
   if (+dev.tftpBlk > 512) o.push(`ip tftp blocksize ${+dev.tftpBlk}`, '!');
   const m = dev.mgmt;
-  if (m) o.push(`username ${m.user || 'admin'} privilege 15 secret 9 ${secret9(m.pass || '')}`, '!');
+  if (m && localUsers(m).length) o.push(...localUsers(m).map((u) => `username ${u.user} privilege 15 secret 9 ${secret9(u.pass || '')}`), '!');
   if (m && (m.domain || m.sshVer === 2 || m.sshTimeout || m.sshRetries)) {
     o.push(...(m.domain ? [`ip domain name ${m.domain}`] : []), ...(m.sshVer === 2 ? ['ip ssh version 2'] : []),
       ...(m.sshTimeout ? [`ip ssh time-out ${m.sshTimeout}`] : []), ...(m.sshRetries ? [`ip ssh authentication-retries ${m.sshRetries}`] : []), '!');
@@ -2749,6 +2871,7 @@ export function runningConfig(state, dev) {
     if (i.qosOut) l.push(` service-policy output ${i.qosOut}`);
     return l.filter(Boolean);
   };
+  o.push(...archiveLines(dev));
   for (const [n, t] of Object.entries(dev.track || {})) {
     const ti = t.type === 'iface' && dev.ifaces.find((x) => x.id === t.iface);
     o.push(t.type === 'sla' ? `track ${n} ip sla ${t.sla} reachability` : `track ${n} interface ${longIf(ti ? ti.label : t.iface)} line-protocol`, '!');

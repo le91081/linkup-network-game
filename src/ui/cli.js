@@ -13,6 +13,7 @@ import { bgpCfg } from '../engine/bgp.js';
 import { ikeVer, errdisRows, ERR_CAUSES } from '../engine/sim.js';
 import { ERR_RECOVERY_CAUSES } from '../engine/ios.js';
 import { fhrpProto, fhrpGroup, trackUp, trackText, trackUsers, slaKey, SLA_FREQ } from '../engine/track.js';
+import { archiveFiles, nextArchiveName, cfgDiff, ARCH_MAX_DEFAULT } from '../engine/archive.js';
 import { iosClock, deviceTime, ntpInfo, logRows, clearLog, syslogStats, uptimeOf, routerId, longIf, SEVERITY, NTP_POLL, vtyRows, idleLimit } from '../engine/ops.js';
 import { quietLeft } from '../engine/remote.js';
 import { counters, clearCounters, clearedAt, spanDest, debugOf, setDebug, consoleRows } from '../engine/wire.js';
@@ -591,6 +592,17 @@ const SHOW = {
       const cfg = phyConfig(d, p.id);
       const dup = cfg.duplex || (li ? 'a-' + li.duplex : 'auto'), spd = cfg.speed != null ? String(cfg.speed) : li ? 'a-' + li.speed : 'auto';
       o.push(pad(p.label, 14) + pad(status, 14) + pad(vlan, 8) + pad(dup, 9) + pad(spd, 9) + MEDIA[p.media].name);
+    }
+    return o;
+  },
+  'show archive': (st, d) => {
+    const a = d.archive;
+    if (!a || !a.path) return ['Archive feature not enabled（先在 archive 底下設定 path flash:<名稱>）'];
+    const max = +a.max || ARCH_MAX_DEFAULT, list = archiveFiles(d);
+    const o = [`The maximum archive configurations allowed is ${max}.`, `There are currently ${list.length} archive configurations saved.`, `The next archive file will be named ${nextArchiveName(d).replace(/^/, (d.archive.path.match(/^\w+:/) || ['flash:'])[0])}`, ' Archive #  Name'];
+    for (let k = 0; k < max; k++) {
+      const x = list[k];
+      o.push(`   ${String(k + 1).padEnd(9)}${x ? (d.archive.path.match(/^\w+:/) || ['flash:'])[0] + x.name + (k === list.length - 1 ? ' <- Most Recent' : '') : ''}`);
     }
     return o;
   },
@@ -1383,6 +1395,39 @@ function showOrPing(app, devId, line, print) {
     else print(`${what === 'packet' ? 'IP packet' : 'ICMP packet'} debugging is ${isUndebug ? 'off' : 'on'}`);
     if (!isUndebug && what === 'packet') print('（只看得到給這台路由器自己、或它自己送出的封包，以及它丟掉的封包；經過它轉送的封包由 CEF 處理，不會出現在這裡）', 'hint');
     return true;
+  }
+  // show archive config differences [A [B]]、show archive log config all | user <名稱>
+  if (tok[0].length >= 2 && 'show'.startsWith(tok[0]) && (tok[1] || '').length >= 3 && 'archive'.startsWith(tok[1]) && tok[2] && tok[2].length >= 3) {
+    const raw = line.trim().split(/\s+/);
+    if ('config'.startsWith(tok[2]) && tok[3] && tok[3].length >= 3 && 'differences'.startsWith(tok[3])) {
+      const pick = (name) => {
+        if (!name || /^(nvram:)?startup-config$/i.test(name)) return { lines: startupConfig(st, d), label: 'nvram:startup-config' };
+        if (/^(system:)?running-config$/i.test(name)) return { lines: runningConfig(st, d), label: 'system:running-config' };
+        const f = d.flash && d.flash.files[name.replace(/^(boot)?flash:\/?/i, '')];
+        return f && f.kind === 'config' ? { lines: f.lines, label: name } : { err: `%Error opening ${name} (No such file or directory)` };
+      };
+      const A = raw[4] ? pick(raw[4]) : pick(null), B = raw[5] ? pick(raw[5]) : raw[4] ? pick('running-config') : pick('running-config');
+      if (A.err || B.err) { print(A.err || B.err, 'warn'); return true; }
+      if (!A.lines) { print('%Error opening nvram:startup-config (No such file or directory)', 'warn'); return true; }
+      const diff = cfgDiff(A.lines, B.lines);
+      print('', 'pre');
+      print('!Contextual Config Diffs:', 'pre');
+      if (!diff.length) print('!No changes were found', 'pre');
+      diff.forEach((l) => print(l, /^\s*\+/.test(l) ? 'ok' : /^\s*-/.test(l) ? 'bad' : 'pre'));
+      print(`（- 是只在 ${A.label} 裡的，+ 是只在 ${B.label} 裡的）`, 'hint');
+      return true;
+    }
+    if ('log'.startsWith(tok[2]) && tok[3] && 'config'.startsWith(tok[3])) {
+      const all = ((st.dyn && st.dyn.cfglog) || {})[d.id] || [];
+      const L = d.archive && d.archive.log;
+      if (!L || !L.on) { print('（archive log config 沒有開 logging enable：設定變更不會被記錄）', 'hint'); if (!all.length) return true; }
+      const user = tok[4] && 'user'.startsWith(tok[4]) ? (raw[5] || '') : null;
+      const rows = user ? all.filter((e) => e.user === user) : all;
+      print(' idx   sess           user@line      Logged command', 'pre');
+      for (const e of rows) print(`${String(e.n).padStart(5)} ${String(e.sess).padStart(6)} ${(e.user + '@' + e.line).padStart(22)}  |${e.cmd}`, 'pre');
+      if (!rows.length) print(user ? `（${user} 沒有任何設定變更紀錄）` : '（還沒有任何設定變更紀錄）', 'hint');
+      return true;
+    }
   }
   // show interfaces [名稱]、show monitor session <n>
   if (tok[0].length >= 2 && 'show'.startsWith(tok[0]) && tok[1] && tok[1].length >= 3 && 'interfaces'.startsWith(tok[1]) && tok.length >= 4 && tok[tok.length - 1].length >= 2 && 'switchport'.startsWith(tok[tok.length - 1])) {

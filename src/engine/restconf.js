@@ -12,7 +12,7 @@
 import { parseIp, fmtIp, fmtMask, parseMask } from './ip.js';
 import { transact } from './sim.js';
 import { IOS_XE } from './ios.js';
-import { logEvent } from './ops.js';
+import { logEvent, localUsers } from './ops.js';
 import { CATALOG, newIface } from './model.js';
 import { longIf } from './ops.js';
 import { dnacApi } from './dnac.js';
@@ -97,7 +97,7 @@ export function restconf(state, fromId, req) {
   if (!/^\/restconf(\/|$)/.test(path)) return out(reply(404, null, 'RESTCONF 的路徑都在 /restconf/ 底下（資料在 /restconf/data/）'));
   if (!d.mgmt.restconf) return out(reply(404, null, `${d.name} 沒有啟用 RESTCONF（設定模式下輸入 restconf）`));
   // HTTP Basic 驗證：ip http authentication local → 用 username 建立的帳號
-  if ((req.user || '') !== (d.mgmt.user ?? 'admin') || (req.pass || '') !== (d.mgmt.pass ?? 'admin')) return out(reply(401, errBody('access-denied', 'access-denied', 'protocol'), '帳號或密碼錯誤（RESTCONF 用 HTTP Basic 驗證，帳號是 username … privilege 15 建立的那一個）'));
+  if (!localUsers(d.mgmt).some((u) => u.user === (req.user || '') && u.pass === (req.pass || ''))) return out(reply(401, errBody('access-denied', 'access-denied', 'protocol'), '帳號或密碼錯誤（RESTCONF 用 HTTP Basic 驗證，帳號是 username … privilege 15 建立的那一個）'));
   if (path === '/restconf' || path === '/restconf/') return out(reply(200, { 'ietf-restconf:restconf': { data: {}, operations: {}, 'yang-library-version': '2016-06-21' } }));
   const mm = path.match(/^\/restconf\/data\/?(.*)$/);
   if (!mm) return out(reply(404, errBody('invalid-value', 'uri keypath not found')));

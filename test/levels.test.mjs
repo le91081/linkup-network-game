@@ -2196,6 +2196,38 @@ console.log('\nHSRP / VRRP、物件追蹤與 IP SLA');
   }
 }
 
+console.log('\n設定封存與變更紀錄：archive、show archive config differences、archive log config、configure replace');
+{
+  const { iosSession, runningConfig } = await import('../src/engine/ios.js');
+  const { cfgDiff, archiveFiles } = await import('../src/engine/archive.js');
+  const ok = (cond, title) => (cond ? console.log('  ✔ ' + title) : fail(title));
+  const sess = (s, id, who) => iosSession(() => s.devices[id], () => s, who);
+  const run = (S, s, lines) => { const out = []; for (const l of lines) out.push(...S.exec(l).out); recomputeNow(s); return out; };
+  const lv = LEVELS.find((l) => l.id === 'l18');
+  const s = lv.setup(); settle(s);
+  const rt = s.devices.rt, con = sess(s, 'rt');
+  const o1 = run(con, s, ['conf t', 'archive', 'path flash:archive', 'maximum 3', 'write-memory', 'log config', 'logging enable', 'notify syslog contenttype plaintext', 'hidekeys', 'end', 'write memory']);
+  const rc = runningConfig(s, rt).join('\n');
+  ok(!o1.some((l) => /^%|Invalid/.test(l)) && /archive\n log config\n  logging enable\n  notify syslog contenttype plaintext\n  hidekeys\n path flash:archive\n maximum 3\n write-memory/.test(rc), 'archive 與 log config 的設定出現在 running-config（和真的 IOS 一樣的順序）');
+  ok(rt.flash.files['archive-1'] && rt.flash.files['archive-1'].lines.join('\n') === runningConfig(s, rt).join('\n'), 'write memory 時自動封存成 flash:archive-1');
+  const vty = sess(s, 'rt', { user: 'bob', line: 'vty 0', ip: '10.0.0.66' });
+  run(vty, s, ['conf t', 'ip route 10.9.9.0 255.255.255.0 192.0.2.1', 'interface Gi0/0/1', 'description changed-by-bob', 'exit', 'username bob secret Pass#123', 'end']);
+  const diff = cfgDiff(rt.flash.files['archive-1'].lines, runningConfig(s, rt));
+  ok(diff.includes('+ip route 10.9.9.0 255.255.255.0 192.0.2.1') && diff.includes('interface GigabitEthernet0/0/1') && diff.includes(' +description changed-by-bob'),
+    'show archive config differences：+ip route、interface 底下的 +description（Contextual Config Diffs）');
+  const log = s.dyn.cfglog.rt;
+  ok(log.some((e) => e.user === 'bob' && e.line === 'vty0' && e.cmd === ' description changed-by-bob') && log.some((e) => e.cmd === 'username bob secret *****') && log[0].cmd === 'logging enable',
+    'archive log config：記下 bob@vty0 打的每一行（子模式前面空一格），hidekeys 把密碼換成 *****');
+  ok(((s.dyn.log || {}).rt || []).some((x) => /%PARSER-5-CFGLOG_LOGGEDCMD: User:bob  logged command:ip route 10\.9\.9\.0/.test(x.line)), 'notify syslog：每一行設定同時送出 %PARSER-5-CFGLOG_LOGGEDCMD');
+  const o2 = run(con, s, ['configure replace flash:archive-1', 'y']);
+  const rc2 = runningConfig(s, rt).join('\n');
+  ok(o2.some((l) => l === 'Rollback Done') && !/10\.9\.9\.0/.test(rc2) && !/changed-by-bob/.test(rc2), 'configure replace flash:archive-1：整份換回封存的內容（多出來的路由、description 都不見了）');
+  for (let k = 0; k < 4; k++) run(con, s, ['write memory']);
+  ok(archiveFiles(rt).length === 3 && !rt.flash.files['archive-1'] && rt.flash.files['archive-5'], 'maximum 3：只留最近的三份，最舊的自動刪掉');
+  const o3 = run(con, s, ['configure replace flash:nope force']);
+  ok(o3.some((l) => /No such file/.test(l)), 'configure replace 不存在的檔案：%Error opening');
+}
+
 console.log('\nCatalyst Center：Token、設備清單、AI 問題');
 {
   const { restconf } = await import('../src/engine/restconf.js');

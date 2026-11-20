@@ -3,7 +3,7 @@
 // 這是一條長時間保持的 TCP 連線。路上每一台有狀態的設備都要一直記得它；
 // 閒置太久，設備那一端會主動登出 (exec-timeout / admintimeout)，路上的防火牆也可能先把連線忘了。
 import { transact, flowSend, closeFlow } from './sim.js';
-import { logEvent, iosClock, idleLimit, vtyRows } from './ops.js';
+import { logEvent, iosClock, idleLimit, vtyRows, localUsers } from './ops.js';
 import { isIos } from './ios.js';
 import { fmtIp } from './ip.js';
 
@@ -98,7 +98,7 @@ export function remoteLogin(state, conn, pass) {
   const mode = vtyMode(d);
   // SSH 一定要有帳號：line vty 只設 login（線路密碼）的話，SSH 登入不了
   const sshNeedsLocal = conn.proto === 'ssh' && mode !== 'local';
-  const good = !sshNeedsLocal && (mode === 'line' ? pass === (m.vtyPass || '') && !!m.vtyPass : conn.user === (m.user ?? 'admin') && pass === (m.pass ?? 'admin'));
+  const good = !sshNeedsLocal && (mode === 'line' ? pass === (m.vtyPass || '') && !!m.vtyPass : localUsers(m).some((u) => u.user === conn.user && u.pass === pass));
   const at = isIos(d) ? iosClock(state, d) : '';
   if (good) { grant(state, d, conn); return { ok: true }; }
   conn.tries++;
