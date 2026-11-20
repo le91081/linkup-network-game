@@ -442,6 +442,24 @@ function prepPhysical(state) {
       }
       return seen;
     };
+    /** 從 start 走到 target 最少要經過幾段交換器之間的線（不經過 skipDev）；走不到是 Infinity */
+    const hops = (start, skipDev, target) => {
+      if (start.id === target) return 0;
+      const dist = new Map([[start.id, 0]]), q = [start];
+      while (q.length) {
+        const x = q.shift();
+        for (const p of x.ports) {
+          const l = rt.links[x.id + ':' + p.id];
+          if (!l || l.dev === skipDev || dist.has(l.dev)) continue;
+          const y = state.devices[l.dev];
+          if (!swOn(y) || !isBridgePort(x, p.id) || !isBridgePort(y, l.port)) continue;
+          dist.set(y.id, dist.get(x.id) + 1);
+          if (y.id === target) return dist.get(y.id);
+          q.push(y);
+        }
+      }
+      return Infinity;
+    };
     for (let round = 0, again = true; again && round < 16; round++) {
       again = false;
       scan: for (const d of Object.values(state.devices)) {
@@ -454,6 +472,19 @@ function prepPhysical(state) {
           let root = d;
           for (const y of reach(d, null).values()) if (better(bridgeId(y), bridgeId(root))) root = y;
           if (root === d || !reach(x, d.id).has(root.id)) continue; // 自己就是根橋，或對面不會送來根橋的 BPDU
+          // 對面送來的是「更好的」BPDU 才算（這個埠會變成 Root Port）：環狀的拓撲裡，根橋也可能從別的埠更近
+          const viaX = 1 + hops(x, d.id, root.id);
+          let best = Infinity, bestNb = null;
+          for (const p of d.ports) {
+            if (p.id === pid) continue;
+            const l2 = rt.links[d.id + ':' + p.id];
+            if (!l2 || !isBridgePort(d, p.id)) continue;
+            const y = state.devices[l2.dev];
+            if (!swOn(y) || !isBridgePort(y, l2.port)) continue;
+            const c = 1 + hops(y, d.id, root.id);
+            if (c < best || (c === best && bestNb && better(bridgeId(y), bridgeId(bestNb)))) { best = c; bestNb = y; }
+          }
+          if (viaX > best || (viaX === best && bestNb && better(bridgeId(bestNb), bridgeId(x)))) continue;
           d.rt.err[pid] = 'root';
           delete rt.links[d.id + ':' + pid];
           delete rt.links[l.dev + ':' + l.port];
@@ -2768,13 +2799,15 @@ export function runObjective(state, o) {
     if (!pass) return { pass: false, ok: true, reason: `只跑得到 ${t.mbps} Mbps（目標 ${min} Mbps 以上）。最慢的一段：${t.where}`, failDev: t.dev || o.from, log, hops, speed: t };
     return { pass: true, ok: true, reason: '', failDev: null, log, hops, speed: t };
   }
-  if (r.ok && o.via) {
+  if (r.ok && (o.via || o.avoid)) {
     const seen = new Set();
     for (const h of r.hops) if (!h.reply && !h.wave) { seen.add(h.from); seen.add(h.to); }
-    if (!seen.has(o.via)) {
-      const reason = `連線是通的，但封包沒有經過 ${state.devices[o.via].name}`;
+    // via：一定要經過這台；avoid：不能經過這台（例如流量不該繞經實驗室的交換器）
+    const reason = o.via && !seen.has(o.via) ? `連線是通的，但封包沒有經過 ${state.devices[o.via].name}`
+      : o.avoid && seen.has(o.avoid) ? `連線是通的，但封包繞經了 ${state.devices[o.avoid].name}` : '';
+    if (reason) {
       log.push({ dev: o.from, kind: 'drop', text: reason });
-      return { pass: false, ok: true, reason, failDev: o.from, log, hops };
+      return { pass: false, ok: true, reason, failDev: o.avoid && seen.has(o.avoid) ? o.avoid : o.from, log, hops };
     }
   }
   return finish(r.ok, r.reason, r.failDev);

@@ -1,0 +1,221 @@
+// 第 10 章補充：故障排除（OSPF 鄰居、STP 根橋、VPN 通了卻不通）
+import { makeDevice as D, makeState, setLine } from '../engine/model.js';
+import { parseIp, netOf } from '../engine/ip.js';
+import { iosSession } from '../engine/ios.js';
+import { recompute } from '../engine/sim.js';
+import { ospfPassive } from '../engine/ospf.js';
+import { dev, ifc, swp, WEB } from './util.js';
+
+const typeIn = (s, id, lines) => { const S = iosSession(() => s.devices[id], () => s); for (const l of lines) S.exec(l); };
+const ip4 = (d, port, ip, mask = '255.255.255.0') => Object.assign(d.ifaces.find((i) => i.id === port), { ip, mask });
+const ospfNet = (cidr, area) => { const [a, b] = cidr.split('/'); return { net: netOf(parseIp(a), +b), bits: +b, area }; };
+const allow = (name, srcIf, dstIf, o = {}) => ({ name, srcIf, dstIf, src: 'any', dst: 'any', service: 'ALL', action: 'accept', nat: false, ...o });
+const twoLines = [{ id: 'line1', label: '線路 1', media: 'rj45' }, { id: 'line2', label: '線路 2', media: 'rj45' }];
+const PSK = 'Tw!S2S#2026';
+
+export const LEVELS15 = [
+  // ─────────────────────────────────────────────── OSPF 鄰居
+  {
+    id: 'l66', chapter: 10, title: '分公司的 OSPF 鄰居起不來', subtitle: '驗證金鑰、被動介面與 network 敘述', tags: ['OSPF', '鄰居', 'MD5 驗證', 'passive-interface'],
+    brief: '週末換了兩家分公司的路由器，週一早上兩邊都連不到總公司的 ERP。三台路由器都「有設 OSPF」，可是總公司的路由表裡一筆分公司的路由也沒有。請從鄰居關係開始查，讓兩家分公司都回到線上；公司規定 WAN 上的 OSPF 一定要驗證。',
+    given: [
+      ['HQ ↔ BR-1', '10.255.1.0/30（MD5 驗證，key 1）'], ['HQ ↔ BR-2', '10.255.2.0/30'], ['ERP', '10.0.0.10（總公司）'],
+      ['BR-1 / BR-2 的網段', '10.1.0.0/24 / 10.2.0.0/24'], ['OSPF 金鑰', 'key 1：Br@nch#1'],
+    ],
+    learn: [
+      { t: '鄰居起不來的常見原因', d: 'Hello / Dead 計時器不一致、區域不一致、驗證不一致（類型或金鑰）、子網路遮罩不一致、介面被設成被動、根本沒有在那個介面啟用 OSPF。卡在 EXSTART 通常是 MTU。' },
+      { t: '查的順序', d: 'show ip ospf neighbor（有沒有鄰居、卡在哪個狀態）→ show ip ospf interface（介面有沒有在 OSPF 裡、計時器、驗證、是不是被動）→ show ip protocols / show running-config | section router ospf（network 敘述）→ show ip route ospf。' },
+      { t: '驗證金鑰', d: 'MD5 驗證兩端的 key 編號和內容都要一樣，大小寫也算。金鑰在 running-config 裡是加密過的，看不出打錯，只能重新設定一次。' },
+      { t: '被動介面', d: 'passive-interface default 會讓所有介面都不送 Hello；要建立鄰居的 WAN 介面要用 no passive-interface 個別打開。接使用者的 LAN 應該保持被動。' },
+    ],
+    setup() {
+      const rtr = (model, id, name, pos, init) => D(model, id, { name, pos, init });
+      return makeState([
+        rtr('isr4331', 'hq', 'HQ-RT', [0, -5], (d) => {
+          ip4(d, 'Gi0/0/0', '10.255.1.1', '255.255.255.252'); ip4(d, 'Gi0/0/1', '10.0.0.1'); ip4(d, 'Gi0/0/2', '10.255.2.1', '255.255.255.252');
+          d.ospfNets = [ospfNet('10.0.0.0/8', 0)]; d.ospfPassive = ['Gi0/0/1'];
+          Object.assign(d.ifaces.find((i) => i.id === 'Gi0/0/0'), { ospfAuth: 'md5', ospfKey: { id: 1, key: 'Br@nch#1' } });
+        }),
+        rtr('isr4321', 'br1', 'BR-1', [-8, 1], (d) => {
+          ip4(d, 'Gi0/0/0', '10.255.1.2', '255.255.255.252'); ip4(d, 'Gi0/0/1', '10.1.0.1');
+          d.ospfNets = [ospfNet('10.0.0.0/8', 0)]; d.ospfPassive = ['Gi0/0/1'];
+          // 小寫的 l 和數字 1 看起來很像
+          Object.assign(d.ifaces.find((i) => i.id === 'Gi0/0/0'), { ospfAuth: 'md5', ospfKey: { id: 1, key: 'Br@nch#l' } });
+        }),
+        rtr('isr4321', 'br2', 'BR-2', [8, 1], (d) => {
+          ip4(d, 'Gi0/0/0', '10.255.2.2', '255.255.255.252'); ip4(d, 'Gi0/0/1', '10.2.0.1');
+          // 新的範本：所有介面預設被動，但忘了打開 WAN；LAN 的 network 敘述也漏了
+          d.ospfNets = [ospfNet('10.255.2.0/30', 0)]; d.ospfPassiveDefault = true; d.ospfNoPassive = [];
+        }),
+        D('tower', 'erp', { name: 'ERP 伺服器', pos: [0, 1.5], ip: '10.0.0.10', gw: '10.0.0.1', services: WEB }),
+        D('pc', 'pc1', { name: 'BR-1 的 PC', pos: [-8, 6], ip: '10.1.0.10', gw: '10.1.0.1' }),
+        D('pc', 'pc2', { name: 'BR-2 的 PC', pos: [8, 6], ip: '10.2.0.10', gw: '10.2.0.1' }),
+      ], [['hq:Gi0/0/0', 'br1:Gi0/0/0'], ['hq:Gi0/0/2', 'br2:Gi0/0/0'], ['erp:eth0', 'hq:Gi0/0/1'], ['pc1:eth0', 'br1:Gi0/0/1'], ['pc2:eth0', 'br2:Gi0/0/1']]);
+    },
+    objectives: [
+      { type: 'ping', from: 'pc1', to: 'erp', label: 'BR-1 的 PC 連得到 ERP' },
+      { type: 'tcp', from: 'pc2', to: 'erp', port: 443, label: 'BR-2 的 PC 可以使用 ERP (HTTPS)' },
+      {
+        type: 'check', label: 'HQ-RT 和兩台分公司路由器都是 FULL 鄰居',
+        test(s) {
+          const full = (dev(s, 'hq').rt.nbrs || []).filter((n) => n.state === 'full').map((n) => n.dev);
+          const miss = ['br1', 'br2'].filter((id) => !full.includes(id)).map((id) => dev(s, id).name);
+          return !miss.length || `HQ-RT 和 ${miss.join('、')} 還不是 FULL 鄰居（show ip ospf neighbor）`;
+        },
+      },
+      {
+        type: 'check', label: 'HQ ↔ BR-1 的 OSPF 仍然有 MD5 驗證',
+        test: (s) => (['hq', 'br1'].every((id) => ifc(s, id, 'Gi0/0/0').ospfAuth === 'md5') ? true : 'WAN 上的 OSPF 驗證被拿掉了：公司規定要驗證，請把金鑰改成一樣，而不是關掉驗證'),
+      },
+      { type: 'check', label: 'BR-2 接使用者的 LAN 仍然是被動介面', test: (s) => (ospfPassive(dev(s, 'br2'), ifc(s, 'br2', 'Gi0/0/1')) ? true : 'BR-2 的 Gi0/0/1 接的是使用者，應該保持被動（不送 Hello）') },
+    ],
+    hints: [
+      'HQ-RT 的 CLI：show ip ospf neighbor 只看得到… 一台都沒有。到 BR-1 用 show ip ospf interface Gi0/0/0 看驗證；金鑰在設定裡是加密的，直接重設一次：interface Gi0/0/0 → ip ospf message-digest-key 1 md5 Br@nch#1。',
+      'BR-2：show ip ospf interface 會看到 Gi0/0/0 是被動介面（passive-interface default）。router ospf 1 → no passive-interface Gi0/0/0。',
+      '鄰居起來之後，HQ-RT 的 show ip route ospf 還是沒有 10.2.0.0/24：BR-2 的 network 敘述漏了 LAN。router ospf 1 → network 10.2.0.0 0.0.0.255 area 0。',
+    ],
+    solve(s) {
+      recompute(s);
+      typeIn(s, 'br1', ['configure terminal', 'interface Gi0/0/0', 'ip ospf message-digest-key 1 md5 Br@nch#1', 'end']);
+      typeIn(s, 'br2', ['configure terminal', 'router ospf 1', 'no passive-interface Gi0/0/0', 'network 10.2.0.0 0.0.0.255 area 0', 'end']);
+    },
+    recap: ['鄰居起不來：Hello 參數、區域、驗證、被動介面、有沒有啟用，一項一項對。', '鄰居起來了還沒有路由，就去看 network 敘述有沒有包含那個網段。'],
+  },
+
+  // ─────────────────────────────────────────────── STP 根橋
+  {
+    id: 'l67', chapter: 10, title: '流量為什麼繞去實驗室', subtitle: 'STP 根橋位置與 Root Guard', tags: ['STP', '根橋', 'Root Guard', '橋接器優先權'],
+    brief: '這週大家都說 2 樓連伺服器特別慢。追蹤之後發現 2 樓到機房的流量竟然繞經實驗室那台測試用的交換器——它前幾天被人接上了 1 樓和 2 樓的交換器。實驗室的交換器同事還要用，不能拔掉；請讓根橋回到核心交換器，並確保以後實驗室再怎麼設定，也搶不走根橋。',
+    given: [
+      ['SW-Core', '核心交換器（機房），應該是根橋'], ['Lab 測試交換器', '接在 SW-1F 與 SW-2F 的 Gi0/10，設定可以改，但不能拔'],
+      ['伺服器', '192.168.1.10（接在 SW-Core）'], ['網段', '192.168.1.0/24'],
+    ],
+    learn: [
+      { t: '根橋決定了路徑', d: 'STP 從根橋往外長出一棵樹，每台交換器只保留一條往根橋最近的路，其他的備援線路都被封鎖。根橋放錯地方，流量就會繞遠路，甚至穿過不該經過的設備。' },
+      { t: '誰當根橋', d: '橋接器 ID 最小的那一台：先比優先權（預設 32768，以 4096 為單位），一樣的話比 MAC。從別的地方帶來的交換器可能還留著很小的優先權。' },
+      { t: '把根橋固定下來', d: '核心交換器設 spanning-tree vlan 1-4094 priority 4096（或 root primary），備援的核心設 8192（root secondary）。' },
+      { t: 'Root Guard', d: '開在「根橋不應該出現在這個方向」的埠上（例如接實驗室、接客戶的埠）。對面一送來更好的 BPDU，這個埠就進入 root-inconsistent 被擋下，根橋不會被搶走；對方恢復正常後自動解除。' },
+    ],
+    setup() {
+      const sw = (id, name, pos, init) => D('c2960', id, { name, pos, init(d) { d.sw.stp.portfastDefault = true; if (init) init(d); } });
+      return makeState([
+        sw('core', 'SW-Core', [0, -6]),
+        sw('f1', 'SW-1F', [-7, -1]),
+        sw('f2', 'SW-2F', [7, -1]),
+        sw('lab', 'Lab 測試交換器', [0, 3.5], (d) => { d.sw.stp.prio = 4096; }),
+        D('tower', 'srv', { name: '伺服器', pos: [7, -7.5], ip: '192.168.1.10', services: WEB }),
+        D('pc', 'pc1', { name: '1F PC', pos: [-11, 3], ip: '192.168.1.21' }),
+        D('pc', 'pc2', { name: '2F PC', pos: [11, 3], ip: '192.168.1.22' }),
+        D('laptop', 'labpc', { name: '實驗室筆電', pos: [0, 8], ip: '192.168.1.99' }),
+      ], [
+        ['core:Gi0/1', 'f1:Gi0/9'], ['core:Gi0/2', 'f2:Gi0/9'], ['lab:Gi0/1', 'f1:Gi0/10'], ['lab:Gi0/2', 'f2:Gi0/10'],
+        ['srv:eth0', 'core:Gi0/5'], ['pc1:eth0', 'f1:Gi0/1'], ['pc2:eth0', 'f2:Gi0/1'], ['labpc:eth0', 'lab:Gi0/3'],
+      ]);
+    },
+    objectives: [
+      { type: 'check', label: 'SW-Core 是根橋', test: (s) => { const r = (dev(s, 'core').rt.stp || { root: {} }).root[1]; return r === 'core' || `目前的根橋是 ${r ? dev(s, r).name : '（沒有）'}`; } },
+      { type: 'tcp', from: 'pc2', to: 'srv', port: 443, avoid: 'lab', label: '2F PC 到伺服器不再繞經實驗室' },
+      { type: 'tcp', from: 'pc1', to: 'srv', port: 443, avoid: 'lab', label: '1F PC 到伺服器不經過實驗室' },
+      { type: 'tcp', from: 'labpc', to: 'srv', port: 443, label: '實驗室的筆電還是連得到伺服器' },
+      {
+        type: 'check', label: 'SW-1F、SW-2F 接實驗室的埠都開了 Root Guard',
+        test(s) {
+          const miss = [['f1', 'SW-1F'], ['f2', 'SW-2F']].filter(([id]) => !swp(s, id, 'Gi0/10').rootguard).map(([, n]) => n);
+          return !miss.length || `${miss.join('、')} 的 Gi0/10 還沒有開 Root Guard`;
+        },
+      },
+    ],
+    hints: [
+      '任何一台交換器的「安全」分頁（或 CLI 的 show spanning-tree）都看得到：根橋是 Lab 測試交換器，它的優先權被設成 4096。',
+      'SW-Core 的優先權改成 4096（CLI：spanning-tree vlan 1-4094 priority 4096）；Lab 測試交換器改回預設的 32768。',
+      'SW-1F 和 SW-2F 的 Gi0/10 開 Root Guard（連接埠 → 進階設定，或 spanning-tree guard root）。注意：實驗室的優先權如果沒有改回來，Root Guard 會把它整台擋在外面，實驗室的筆電就連不到伺服器了。',
+    ],
+    solve(s) {
+      dev(s, 'core').sw.stp.prio = 4096;
+      dev(s, 'lab').sw.stp.prio = 32768;
+      swp(s, 'f1', 'Gi0/10').rootguard = true;
+      swp(s, 'f2', 'Gi0/10').rootguard = true;
+    },
+    recap: ['根橋要指定，不要讓 MAC 或別人帶來的設定決定。', 'Root Guard 擋的是「搶根橋」，不是擋設備：對方規矩了，埠就自動恢復。'],
+  },
+
+  // ─────────────────────────────────────────────── VPN 通了卻不通
+  {
+    id: 'l68', chapter: 10, title: 'VPN 通了，資料卻過不去', subtitle: 'NAT 例外與加密的 ACL', tags: ['IPsec', 'NAT 例外', 'crypto ACL', 'show crypto'],
+    brief: '分公司把防火牆換成了 Cisco 路由器。設定的同事說「VPN 已經通了」，show crypto isakmp sa 也確實是 QM_IDLE，可是辦公室連不到總公司的 ERP，倉庫新開的網段更是完全沒反應；上網倒是一切正常。請找出原因。',
+    given: [
+      ['總公司 HQ-FW', '203.0.113.18 · 內網 10.1.0.0/24 · ERP 10.1.0.10'], ['分公司 Branch-RT', '198.51.100.34'],
+      ['辦公室', '10.2.0.0/24（Gi0/0/1）'], ['倉庫（新）', '10.2.1.0/24（Gi0/0/2）'], ['預先共用金鑰', PSK],
+    ],
+    learn: [
+      { t: '通道 Up 不代表流量會進去', d: 'IOS 的 crypto map 只加密「符合加密 ACL」的封包。封包在出口介面上先做 NAT、再比對加密的 ACL：來源被換成公用 IP 之後，就不符合了，於是被當成一般的上網流量送出去。' },
+      { t: 'NAT 例外', d: 'NAT 的 ACL 先 deny 往對方內網的流量，再 permit 其他上網的流量：ip access-list extended NAT → deny ip 10.2.0.0 0.0.255.255 10.1.0.0 0.0.0.255 → permit ip 10.2.0.0 0.0.255.255 any。' },
+      { t: '加密的 ACL 要涵蓋所有網段，而且兩端互為鏡像', d: '新開的網段要加進加密的 ACL；對面那一端的「遠端網段」也要跟著加，兩邊保護的範圍不一樣，第二階段就建不起來。' },
+      { t: '查的指令', d: 'show crypto isakmp sa（第一階段）、show crypto ipsec sa（第二階段，以及 encaps / decaps 計數器有沒有在增加）、show ip nat translations（往總公司的流量是不是被 NAT 了）。' },
+    ],
+    setup() {
+      const inet = D('internet', 'inet', { name: '網際網路', pos: [0, -9.5], ports: twoLines });
+      setLine(inet, 'line1', { type: 'static', gw: '203.0.113.17', mask: '255.255.255.248', assign: '203.0.113.18' });
+      setLine(inet, 'line2', { type: 'static', gw: '198.51.100.33', mask: '255.255.255.252', assign: '198.51.100.34' });
+      const s = makeState([
+        inet,
+        D('fg60f', 'hq', {
+          name: 'HQ-FW', pos: [-7, -4.5],
+          init(d) {
+            const g = (x) => d.ifaces.find((i) => i.id === x);
+            Object.assign(g('wan1'), { ip: '203.0.113.18', mask: '255.255.255.248', gateway: '203.0.113.17', ping: false });
+            Object.assign(g('internal'), { ip: '10.1.0.1', mask: '255.255.255.0' });
+            d.vpns.push({ name: 'Branch', peer: '198.51.100.34', psk: PSK, local: '10.1.0.0/24', remote: '10.2.0.0/24', enc: 'aes256', hash: 'sha256', dh: '14' });
+            d.policies.push(allow('內網上網', 'internal', 'wan1', { nat: true }), allow('往分公司', 'internal', 'vpn:Branch'), allow('分公司進來', 'vpn:Branch', 'internal'));
+          },
+        }),
+        D('isr4331', 'br', { name: 'Branch-RT', pos: [7, -4.5] }),
+        D('sw5', 'hq-sw', { name: 'HQ-Switch', pos: [-7, 0.3] }),
+        D('sw5', 'br-sw', { name: 'BR-Switch', pos: [4.5, 0.3] }),
+        D('tower', 'erp', { name: 'ERP 伺服器', pos: [-10.5, 4.8], ip: '10.1.0.10', gw: '10.1.0.1', services: WEB }),
+        D('pc', 'hq-pc', { name: '總公司 PC', pos: [-4, 4.8], ip: '10.1.0.50', gw: '10.1.0.1', dns: '8.8.8.8' }),
+        D('pc', 'br-pc', { name: '辦公室 PC', pos: [4.5, 4.8], ip: '10.2.0.50', gw: '10.2.0.1', dns: '8.8.8.8' }),
+        D('pc', 'pos', { name: '倉庫 POS', pos: [11, 1.5], ip: '10.2.1.50', gw: '10.2.1.1', dns: '8.8.8.8' }),
+      ], [
+        ['inet:line1', 'hq:wan1'], ['inet:line2', 'br:Gi0/0/0'], ['hq:1', 'hq-sw:1'], ['erp:eth0', 'hq-sw:2'], ['hq-pc:eth0', 'hq-sw:3'],
+        ['br:Gi0/0/1', 'br-sw:1'], ['br-pc:eth0', 'br-sw:2'], ['pos:eth0', 'br:Gi0/0/2'],
+      ]);
+      recompute(s);
+      // 同事用 CLI 設定的分公司路由器：VPN 的參數都對，但 NAT 沒有排除往總公司的流量，倉庫的網段也沒有加進加密的 ACL
+      typeIn(s, 'br', ['configure terminal',
+        'interface Gi0/0/0', 'ip address 198.51.100.34 255.255.255.252', 'ip nat outside', 'no shutdown',
+        'interface Gi0/0/1', 'ip address 10.2.0.1 255.255.255.0', 'ip nat inside',
+        'interface Gi0/0/2', 'ip address 10.2.1.1 255.255.255.0', 'ip nat inside', 'exit',
+        'ip route 0.0.0.0 0.0.0.0 198.51.100.33',
+        'access-list 1 permit any', 'ip nat inside source list 1 interface Gi0/0/0 overload',
+        'crypto isakmp policy 10', 'encryption aes 256', 'hash sha256', 'authentication pre-share', 'group 14', 'exit',
+        `crypto isakmp key ${PSK} address 203.0.113.18`,
+        'crypto ipsec transform-set TS esp-aes 256 esp-sha256-hmac', 'mode tunnel', 'exit',
+        'ip access-list extended VPN-HQ', 'permit ip 10.2.0.0 0.0.0.255 10.1.0.0 0.0.0.255', 'exit',
+        'crypto map CMAP 10 ipsec-isakmp', 'set peer 203.0.113.18', 'set transform-set TS', 'match address VPN-HQ', 'exit',
+        'interface Gi0/0/0', 'crypto map CMAP', 'end', 'write memory']);
+      return s;
+    },
+    objectives: [
+      { type: 'tcp', from: 'br-pc', to: 'erp', port: 443, label: '辦公室 PC 可以經由 VPN 使用 ERP' },
+      { type: 'tcp', from: 'pos', to: 'erp', port: 443, label: '倉庫 POS 也可以經由 VPN 使用 ERP' },
+      { type: 'ping', from: 'hq-pc', to: 'br-pc', label: '總公司 PC 可以 ping 到辦公室 PC' },
+      { type: 'tcp', from: 'br-pc', name: 'www.example.com', port: 443, label: '分公司上網不受影響' },
+      { type: 'tcp', from: 'inet', ip: '203.0.113.18', port: 443, expect: false, label: 'ERP 沒有直接暴露在網際網路上' },
+    ],
+    hints: [
+      'Branch-RT 的 CLI：show crypto isakmp sa 是 QM_IDLE（第一階段好的）。從辦公室 PC 連 ERP，封包追蹤會看到它在 Gi0/0/0「先做了 NAT」，來源變成 198.51.100.34 之後就不符合加密的 ACL 了。',
+      'NAT 要排除往總公司的流量：ip access-list extended NAT → deny ip 10.2.0.0 0.0.255.255 10.1.0.0 0.0.0.255 → permit ip 10.2.0.0 0.0.255.255 any；再 no ip nat inside source list 1 interface Gi0/0/0 overload、ip nat inside source list NAT interface Gi0/0/0 overload。',
+      '倉庫的 10.2.1.0/24 不在 VPN-HQ 裡：ip access-list extended VPN-HQ → permit ip 10.2.1.0 0.0.0.255 10.1.0.0 0.0.0.255。HQ-FW 的通道（VPN 分頁）遠端網段也要加上 10.2.1.0/24，兩端要互為鏡像。',
+    ],
+    solve(s) {
+      recompute(s);
+      typeIn(s, 'br', ['configure terminal',
+        'ip access-list extended NAT', 'deny ip 10.2.0.0 0.0.255.255 10.1.0.0 0.0.0.255', 'permit ip 10.2.0.0 0.0.255.255 any', 'exit',
+        'no ip nat inside source list 1 interface Gi0/0/0 overload', 'ip nat inside source list NAT interface Gi0/0/0 overload',
+        'ip access-list extended VPN-HQ', 'permit ip 10.2.1.0 0.0.0.255 10.1.0.0 0.0.0.255', 'end', 'write memory']);
+      dev(s, 'hq').vpns[0].remote = '10.2.0.0/24, 10.2.1.0/24';
+    },
+    recap: ['通道 Up 只代表兩台路由器談好了；流量有沒有進通道，要看 NAT 例外與加密的 ACL。', '新增網段時，兩端的加密範圍要一起改。'],
+  },
+];
