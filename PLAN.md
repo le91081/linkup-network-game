@@ -31,23 +31,23 @@ README 說明「現在有什麼、怎麼玩」，這份文件說明「整體應�
 | --- | --- | --- | --- |
 | 1. 實體層與接線 | 7 | 1 | 6 |
 | 2. 第二層：交換 | 13 | 0 | 4 |
-| 3. 第三層：路由 | 10 | 0 | 6 |
-| 4. IP 服務 | 10 | 3 | 1 |
-| 5. 網路安全 | 9 | 4 | 4 |
+| 3. 第三層：路由 | 12 | 0 | 5 |
+| 4. IP 服務 | 11 | 3 | 0 |
+| 5. 網路安全 | 9 | 5 | 3 |
 | 6. VPN 與廣域網路 | 6 | 3 | 4 |
 | 7. 無線網路 | 5 | 2 | 3 |
 | 8. IPv6 | 3 | 2 | 3 |
 | 9. 高可用 | 6 | 0 | 5 |
 | 10. 時間、效能與流量 | 8 | 2 | 1 |
 | 11. 設備管理與維運 | 12 | 4 | 2 |
-| 12. 自動化、雲端與虛擬化 | 4 | 1 | 0 |
+| 12. 自動化、雲端與虛擬化 | 5 | 1 | 0 |
 | 13. 設備型錄 | 10 | 2 | 1 |
 | 14. 遊戲系統 | 16 | 1 | 5 |
 | 15. 介面與體驗 | 6 | 1 | 7 |
 | 16. 工程品質 | 4 | 0 | 6 |
-| **合計** | **129** | **26** | **58** |
+| **合計** | **133** | **27** | **55** |
 
-另外：關卡 71 關（第 17 節）、證照條目涵蓋情形（第 18 節）、建議的實作順序（第 19 節）。
+另外：關卡 74 關（第 17 節）、證照條目涵蓋情形（第 18 節）、建議的實作順序（第 19 節）。
 
 ---
 
@@ -109,8 +109,9 @@ README 說明「現在有什麼、怎麼玩」，這份文件說明「整體應�
 | BGP（eBGP） | ✅ | TCP 179 的鄰居狀態（Idle / Active / OpenSent / Established）、remote-as 寫錯 (Bad Peer AS)、hold time 180 秒、路徑向量與迴圈偵測、最佳路徑（weight、local-preference、AS path、origin、MED）、route-map / prefix-list / as-path ACL、`default-originate`；雙 ISP 的轉運站問題 |
 | iBGP 與 BGP 進階 | ⬜ | iBGP 與 next-hop-self、route reflector、community、多跳 eBGP (`ebgp-multihop`) |
 | EIGRP、RIP | ⬜ | 優先度低：CCNA v1.1 只要求看得懂 |
-| 路由重分配、PBR、VRF | ⬜ | |
-| IP SLA 與物件追蹤 | ⬜ | 上游故障但介面沒斷的時候切換路由 |
+| VRF（VRF-Lite） | ✅ | `vrf definition`（`rd`、`address-family ipv4`）與舊式的 `ip vrf`；介面的 `vrf forwarding` 會清掉原本的 IP；同一個路由表裡網段重疊會被拒絕（`% … overlaps with …`），不同 VRF 可以重疊；`ip route vrf`、`show vrf`、`show ip route vrf`、`ping vrf`；圖形介面的 VRF 卡片與介面的 VRF 選單。OSPF / BGP 還不分 VRF，沒有 route leaking |
+| 路由重分配、PBR | ⬜ | |
+| IP SLA 與物件追蹤 | ✅ | 見第 9 節 |
 | 多播 | ⬜ | IGMP、PIM |
 
 ## 4. IP 服務
@@ -130,7 +131,7 @@ README 說明「現在有什麼、怎麼玩」，這份文件說明「整體應�
 | Syslog | ✅ | 設備記下介面、OSPF、VRRP、VPN、err-disabled 等事件，用 UDP 514 送到伺服器；`logging trap` 設定門檻；伺服器有收件畫面 |
 | SNMP | ✅ | v2c community（RO / RW、綁標準 ACL）、v3 的 group / user（SHA + AES）、Trap（linkUp / linkDown / coldStart / authenticationFailure）；網管伺服器每 60 秒輪詢、依計數器差值算使用率；FortiGate 的 sysinfo / community / hosts / user 與 allowaccess snmp；沒有 MIB 瀏覽器與 SET |
 | TFTP / FTP / SCP | 🟡 | TFTP（UDP 69，512 位元組區塊，速度看來回時間）與 FTP（帳號密碼、明文）：設定備份與還原、映像檔下載、伺服器的檔案分頁；沒有 SCP / SFTP |
-| HTTP(S) 服務內容與憑證 | ⬜ | `curl` 目前只測 TCP 連線有沒有通 |
+| HTTP(S) 服務內容與憑證 | ✅ | 網站伺服器的「網站」分頁（標題、HTTP 301 轉到 HTTPS、目前的憑證、產生 CSR 交給 CA 簽發）；`curl` 會驗證憑證並給出和真的 curl 一樣的錯誤（`(60)` 過期 / 尚未生效 / 名稱不符 / 自簽 / 不信任的簽發者、`(35)` 沒有憑證），`-k`、`-v`、`-I`、`-L`；任務目標 `https`。網路設備的管理網頁出廠是自簽憑證 |
 
 ## 5. 網路安全
 
@@ -152,7 +153,7 @@ README 說明「現在有什麼、怎麼玩」，這份文件說明「整體應�
 | IOS 進階過濾 | ⬜ | Zone-Based Firewall、時間型 ACL、Reflexive ACL |
 | NGFW / UTM | ⬜ | IPS、防毒、網頁過濾、應用程式控管、SSL 檢查 |
 | IPv6 安全 | 🟡 | IPv6 ACL 已完成（見第 8 節）；還沒有 RA Guard |
-| 憑證與 PKI | ⬜ | |
+| 憑證與 PKI | 🟡 | 公開 CA 與公司內部的 CA（公開 CA 不簽 .local、效期上限）、用戶端的信任清單（加入網域的電腦自動有公司的根憑證，`certutil -addstore root` 匯入）、有效期間用用戶端自己的時鐘判斷（`w32tm`、`timedatectl`、自動設定時間）、SAN 與萬用字元；沒有中繼憑證鏈、CRL / OCSP、ACME 自動續約，也還沒用在 802.1X (EAP-TLS) 與 IPsec |
 
 ## 6. VPN 與廣域網路
 
@@ -263,7 +264,8 @@ README 說明「現在有什麼、怎麼玩」，這份文件說明「整體應�
 | 設定檔與批次部署 | ✅ | Ansible：inventory、YAML、network_cli、cisco.ios 資源模組、ios_config / ios_command、--check、冪等；沒有 roles、Vault、Terraform |
 | 控制器式網路 | ✅ | Catalyst Center：Token 驗證的北向 API、SNMP / SSH 輪詢的設備清單、AI 驅動的問題清單；只有讀取，沒有用 API 下發設定 |
 | 雲端 | ✅ | AWS 的 VPC：子網路與路由表、IGW 與彈性 IP、NAT 閘道、安全群組、網路 ACL、VGW 與站對站 VPN（路由傳播、下載設定檔）；只有一個 VPC |
-| 虛擬化 | 🟡 | VMware ESXi 主機：虛擬交換器、連接埠群組與 VLAN 標籤 (VST)、vmk0 管理介面、虛擬機器（虛擬網卡只能接主機的虛擬埠）、不送 DTP / BPDU；還沒有容器網路、多個上行的 NIC teaming、vMotion |
+| 虛擬化 | 🟡 | VMware ESXi 主機：虛擬交換器、連接埠群組與 VLAN 標籤 (VST)、vmk0 管理介面、虛擬機器（虛擬網卡只能接主機的虛擬埠）、不送 DTP / BPDU；路由器的 VRF 見第 3 節；還沒有多個上行的 NIC teaming、vMotion |
+| 容器 (Docker) | ✅ | Linux 主機上的 Docker：預設的 bridge 網路（docker0、veth、172.17.0.0/16）、`-p [位址:]主機埠:容器埠` 發佈（埠對錯會被重設、只綁 127.0.0.1 別台連不到、同一個埠不能發佈兩次）、改連接埠要重建容器；`docker ps / run / stop / start / rm / port / logs / inspect / images / network ls`、`ip addr` 看得到 docker0 與 veth；主機的「Docker」分頁。沒有自訂網路、Compose、volume |
 
 ## 13. 設備型錄
 
@@ -280,18 +282,18 @@ README 說明「現在有什麼、怎麼玩」，這份文件說明「整體應�
 | 網際網路 | ✅ | ISP、公用 DNS、外部網站與外部使用者 |
 | 語音與監控 | 🟡 | Cisco IP Phone 8841、Yealink SIP-T54W（只有 LLDP-MED）；還沒有 PoE 攝影機 |
 | 無線控制器 | ✅ | Cisco Catalyst 9800-L（WLC）、Catalyst 9120AXI（輕量型 AP，802.3at PoE） |
-| 伺服器角色 | 🟡 | 已有 RADIUS、DHCP、Syslog、NTP、TFTP、FTP、SNMP 網管、CUCM；TFTP / FTP / 網管 / CUCM 可以自己啟用；還沒有 DNS |
+| 伺服器角色 | 🟡 | 已有 RADIUS、DHCP、DNS、Syslog、NTP、TFTP、FTP、SNMP 網管、CUCM、網站（HTTPS 憑證）、Docker 主機；TFTP / FTP / 網管 / CUCM 可以自己啟用；還沒有 AD / LDAP、郵件 |
 | 其他 | ⬜ | 數據機 / ONT、負載平衡器、UPS、其他廠牌（Juniper、Aruba、MikroTik） |
 
 ## 14. 遊戲系統
 
 | 功能 | 狀態 | 說明 |
 | --- | --- | --- |
-| 關卡 | ✅ | 16 章 62 關（清單見第 17 節） |
-| 任務目標 | ✅ | ping、TCP、UDP、DHCP、設定檢查、故障演練、IPv6 ping、傳輸速率、遠端登入（SSH / Telnet 帳號密碼）、IP 電話註冊、通話品質 (MOS) |
+| 關卡 | ✅ | 17 章 74 關（清單見第 17 節） |
+| 任務目標 | ✅ | ping、TCP、UDP、DHCP、設定檢查、故障演練、IPv6 ping、傳輸速率、遠端登入（SSH / Telnet 帳號密碼）、IP 電話註冊、通話品質 (MOS)、HTTPS（連得上之後還要通過憑證驗證）、路徑（一定要經過 / 不能經過某台設備） |
 | 提示與星等 | ✅ | 每關 3 個提示，看一個少一顆星 |
 | 學習卡 | ✅ | 每關 2 到 4 張觀念說明 |
-| 題庫 | ✅ | 139 題觀念題、隨機產生的子網路計算題、過關後的小考 |
+| 題庫 | ✅ | 148 題觀念題、隨機產生的子網路計算題、過關後的小考 |
 | 證照地圖 | ✅ | 三種考試的條目與關卡對照、完成進度 |
 | 故障排除章 | ✅ | 網路已經設定好但被改壞，要自己找出原因 |
 | 自由模式 | ✅ | 自己擺設備、接線、設定；可以存目標、匯出與匯入 |
@@ -348,7 +350,7 @@ README 說明「現在有什麼、怎麼玩」，這份文件說明「整體應�
 
 ## 17. 關卡規劃
 
-### 現有的 71 關
+### 現有的 74 關
 
 | 章 | 關卡 |
 | --- | --- |
@@ -362,13 +364,13 @@ README 說明「現在有什麼、怎麼玩」，這份文件說明「整體應�
 | 8 高可用與進階路由 | 迴圈與生成樹、EtherChannel、閘道備援、集中式 DHCP、OSPF 路徑選擇、切蛋糕、閘道還活著，但出不去（HSRP 追蹤） |
 | 9 IPv6 | IPv6 初體驗、雙協定、位址從哪裡來？、IPv6 也要動態路由、封了 IPv4，忘了 IPv6 |
 | 10 故障排除 | 誰搶了我的 IP、樓層之間又斷了、分公司的求救電話、明明連得上，為什麼這麼慢、分公司的 OSPF 鄰居起不來、流量為什麼繞去實驗室、VPN 通了，資料卻過不去、DNS 改了，為什麼還連到舊的 |
-| 11 維運與管理 | 還好有備份、韌體升級、讓 SSH 能用、網路怎麼變慢了、是誰動了設定？ |
+| 11 維運與管理 | 還好有備份、韌體升級、讓 SSH 能用、網路怎麼變慢了、是誰動了設定？、你的連線不是私人連線 |
 | 12 語音與 QoS | 電話接上了，然後呢？、語音斷斷續續 |
 | 13 進階路由 | 誰當 DR？、10G 和 1G 一樣快？、分公司自成一區、兩家 ISP 都要用 |
 | 14 無線控制器與無線環境 | AP 找不到控制器、牆後面收不到、走到另一頭就斷線 |
 | 15 網路自動化 | 用 API 管理路由器、一次設定四台交換器、控制器說哪裡有問題 |
 | 16 雲端網路 | 把網站搬上雲端、私有子網路與混合雲 |
-| 17 虛擬化 | 一台主機，三個網段 |
+| 17 虛擬化 | 一台主機，三個網段、兩家公司，同一個網段（VRF）、容器跑起來了，網頁卻打不開 |
 
 ### 規劃中的關卡
 
@@ -377,7 +379,7 @@ README 說明「現在有什麼、怎麼玩」，這份文件說明「整體應�
 | 章 | 規劃的關卡 | 需要的功能 |
 | --- | --- | --- |
 | 補進第 11 章 | 對時與紀錄（用 NTP 與 Syslog 把事件順序對起來） | 第 4、11 節 |
-| 補進第 13 章 | 路由重分配、iBGP、OSPF 的 stub 區域 | 第 3、9 節 |
+| 補進第 13 章 | 路由重分配、iBGP、OSPF 的 stub 區域、VRF 裡跑 OSPF 與路由洩漏 | 第 3、9 節 |
 | 補進第 12 章 | 不看圖用 CDP / LLDP 把拓撲畫出來、PoE 預算不夠、雙 WAN 的 QoS | 第 1、2、10 節 |
 | 補進第 14 章 | 訪客入口 (Captive Portal)、分公司的 FlexConnect、控制器備援 (N+1) | 第 7、13 節 |
 | 補進第 15 章 | 用 Catalyst Center 的範本下發設定、NETCONF、用 Git 管理設定 | 第 12 節 |
@@ -393,7 +395,7 @@ README 說明「現在有什麼、怎麼玩」，這份文件說明「整體應�
 | --- | --- | --- |
 | Cisco CCNA 200-301 v1.1 | 53 條中的 52 條 | 見下表 |
 | CompTIA Network+ N10-009 | 25 條全部有對應 | — |
-| CompTIA Security+ SY0-701 | 網路相關的 11 條，全部有對應 | — |
+| CompTIA Security+ SY0-701 | 網路相關的 12 條（加上 1.4 密碼學與 PKI），全部有對應 | — |
 
 CCNA 還沒有關卡的 1 條，以及補上的方式：
 
@@ -419,6 +421,6 @@ CCNA v2.0 預計在 2027 年 2 月取代 v1.1，改版後整張對照表要重�
 | 8（已完成） | RESTCONF、Ansible、Catalyst Center → 第 15 章、AWS 的 VPC → 第 16 章 | 補上 CCNA 第 6 領域、Network+ 1.3 |
 | 9（已完成） | 故障演練、模擬考、評分、關卡編輯器 | 引擎功能齊全之後，重玩價值才撐得起來 |
 | 10（進行中） | Playwright 瀏覽器端測試（已完成）；err-disabled 維持與 errdisable recovery、HSRP / VRRP 分開與物件追蹤、IP SLA、設定封存與變更紀錄、多個本機帳號（已完成）；MTU 與 jumbo frame（未做）；第 7、8、10、11 章的補充關卡（已完成六關） | 讓「故障排除」與「維運」更接近真實工作 |
-| 11（進行中） | 虛擬化章節（已完成 vSwitch、連接埠群組、VM → 17-1；容器、VRF 還沒有）、DNS 伺服器角色（已完成：A / CNAME / MX / PTR、TTL 與用戶端快取 → 10-8）、HTTP(S) 內容與憑證 | 補上 CCNA 1.12（已補上） |
+| 11（已完成） | 虛擬化章節：vSwitch、連接埠群組、VM → 17-1；VRF-Lite → 17-2；Docker 的橋接網路與連接埠發佈 → 17-3。DNS 伺服器角色（A / CNAME / MX / PTR、TTL 與用戶端快取 → 10-8）。HTTP(S) 內容與憑證：信任、有效期間（用戶端的時鐘）、SAN、內部 CA → 11-6 | 補上 CCNA 1.12（伺服器虛擬化、容器、VRF 都有關卡）、Security+ 1.4 |
 | 12（已完成） | 第一次遊玩的導覽、參考解法示範、錯題本、2D 邏輯拓撲圖 | 新手體驗 |
 | 隨時 | CI、拆分 `sim.js`（分塊載入已完成）、存檔格式遷移 | CI 要遠端儲存庫，要另外決定 |

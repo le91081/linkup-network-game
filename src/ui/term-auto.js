@@ -26,7 +26,8 @@ export function shellWords(s) {
 }
 
 /** 這一行 curl 要不要當成 API 呼叫（有 -X、-u、-H、-d 這類參數，或網址是 /restconf） */
-export const isApiCurl = (line) => /(^|\s)(-[XuHdkiv]+|--(request|user|header|data|data-raw|insecure|include|verbose))(\s|$)/.test(line) || /\/(restconf|dna)\b/.test(line);
+// 帶著 -X / -u / -H / -d 的才是呼叫 API；-k、-v、-I 這些一般的網頁也會用，交給一般的 curl
+export const isApiCurl = (line) => /(^|\s)(-[XuHd][a-zA-Z]*|--(request|user|header|data|data-raw))(\s|$)/.test(line) || /\/(restconf|dna)\b/.test(line);
 
 const b64 = (s) => (typeof btoa === 'function' ? btoa(unescape(encodeURIComponent(s))) : Buffer.from(s).toString('base64'));
 

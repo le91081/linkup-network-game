@@ -2248,6 +2248,110 @@ console.log('\nDNS：記錄類型、TTL 與用戶端快取');
   ok(!sim.resolveName(s, 'pc-c', 'nope.corp.local').ok, '沒有這筆記錄：NXDOMAIN（失敗的結果不會被快取）');
 }
 
+console.log('\nVRF：重疊的網段、vrf forwarding、show vrf、ping vrf');
+{
+  const { iosSession, runningConfig } = await import('../src/engine/ios.js');
+  const { iosRun } = await import('../src/ui/cli.js');
+  const sim = await import('../src/engine/sim.js');
+  const ok = (cond, title) => (cond ? console.log('  ✔ ' + title) : fail(title));
+  const lv = LEVELS.find((l) => l.id === 'l72');
+  const s = lv.setup(); settle(s);
+  const sess = iosSession(() => s.devices.rt, () => s);
+  const app = { state: s, showTrace() {} };
+  const run = (...lines) => { const out = []; for (const line of lines) { const r = iosRun(app, 'rt', sess, line, (l) => out.push(l)); if (r.changed) settle(s); } return out; };
+  const rt = s.devices.rt, ifc = (id) => rt.ifaces.find((i) => i.id === id);
+  const o1 = run('configure terminal', 'interface gi0/0/1', 'ip address 192.168.1.1 255.255.255.0', 'end');
+  ok(o1.some((l) => /192\.168\.1\.0 overlaps with GigabitEthernet0\/0\/0/.test(l)) && !ifc('Gi0/0/1').ip, '全域路由表裡設定重疊的網段：% 192.168.1.0 overlaps with GigabitEthernet0/0/0，位址沒有存進去');
+  // GUI 直接填重疊的位址：介面上看得到原因，位址不生效
+  ifc('Gi0/0/1').ip = '192.168.1.1'; ifc('Gi0/0/1').mask = '255.255.255.0'; settle(s);
+  ok(ifc('Gi0/0/1').rt.ip == null && /重疊/.test(ifc('Gi0/0/1').rt.note), '從介面分頁填重疊的位址：沒有生效，介面上寫著和哪個介面重疊');
+  delete ifc('Gi0/0/1').ip; settle(s);
+  const o2 = run('configure terminal', 'interface gi0/0/1', 'vrf forwarding TENANT-B');
+  ok(o2.some((l) => /% VRF TENANT-B not configured/.test(l)) && !ifc('Gi0/0/1').vrf, '介面放進還沒有建立的 VRF：% VRF TENANT-B not configured.');
+  const o2b = run('exit', 'vrf definition TENANT-B', 'rd 65000:2', 'interface gi0/0/1', 'vrf forwarding TENANT-B', 'ip address 192.168.1.1 255.255.255.0');
+  ok(o2b.some((l) => /還沒有啟用 IPv4/.test(l)) && !ifc('Gi0/0/1').ip, 'vrf definition 沒有 address-family ipv4：介面的 IPv4 位址設不上去');
+  const o3 = run('exit', 'vrf definition TENANT-B', 'address-family ipv4', 'exit-address-family', 'interface gi0/0/1', 'ip address 192.168.1.1 255.255.255.0', 'no shutdown', 'end');
+  ok(!o3.some((l) => /overlaps/.test(l)) && ifc('Gi0/0/1').rt.ip != null, '放進 TENANT-B 之後，一樣的 192.168.1.1/24 就設得上去（不同的路由表可以重疊）');
+  const o4 = run('configure terminal', 'vrf definition TENANT-A', 'rd 65000:1', 'address-family ipv4', 'exit-address-family', 'interface gi0/0/0', 'vrf forwarding TENANT-A', 'end');
+  ok(o4.some((l) => /IPv4 disabled and address\(es\) removed due to enabling VRF TENANT-A/.test(l)) && !ifc('Gi0/0/0').ip, 'vrf forwarding 會把介面原本的 IP 清掉（和真的 IOS 一樣的訊息）');
+  run('configure terminal', 'interface gi0/0/0', 'ip address 192.168.1.1 255.255.255.0', 'interface gi0/0/2.10', 'vrf forwarding TENANT-A', 'ip address 10.1.0.1 255.255.255.0', 'interface gi0/0/2.20', 'vrf forwarding TENANT-B', 'ip address 10.1.0.1 255.255.255.0', 'end');
+  const sv = run('show vrf').join('\n');
+  ok(/TENANT-A\s+65000:1\s+ipv4\s+Gi0\/0\/0/.test(sv) && /TENANT-B\s+65000:2/.test(sv), 'show vrf：名稱、RD、Protocols 與介面');
+  const glob = run('show ip route').join('\n'), rta = run('show ip route vrf TENANT-A').join('\n');
+  ok(!/192\.168\.1\.0/.test(glob) && /Routing Table: TENANT-A/.test(rta) && /C\s+10\.1\.0\.0\/24 is directly connected/.test(rta) && /L\s+192\.168\.1\.1\/32/.test(rta), 'show ip route 只有全域的路由；show ip route vrf TENANT-A 才看得到客戶的網段（含 L 路由）');
+  ok(/% IP routing table NOPE does not exist/.test(run('show ip route vrf NOPE').join('\n')), 'show ip route vrf 不存在的 VRF：% IP routing table NOPE does not exist');
+  s.devices.swdc.sw.ports['Gi0/1'].allowed = '10,20'; settle(s);
+  const pa = sim.transact(s, 'pca', { proto: 'tcp', dst: parseIp('10.1.0.10'), dport: 443 }), pb = sim.transact(s, 'pcb', { proto: 'tcp', dst: parseIp('10.1.0.10'), dport: 443 });
+  ok(pa.ok && pa.responder === 'srva' && pb.ok && pb.responder === 'srvb', '兩家公司連同一個 10.1.0.10，各自到自己的伺服器');
+  const pg = run('ping 10.1.0.10').join('\n'), pv = run('ping vrf TENANT-B 10.1.0.10').join('\n');
+  ok(!/!!!!!/.test(pg) && /!!!!!|Success rate is 100/.test(pv), '路由器上 ping 10.1.0.10 走全域（不通）；ping vrf TENANT-B 才通');
+  run('configure terminal', 'ip route vrf TENANT-B 172.16.0.0 255.255.0.0 10.1.0.254', 'end');
+  const rc = runningConfig(s, rt).join('\n');
+  ok(/vrf definition TENANT-A\n rd 65000:1\n !\n address-family ipv4\n exit-address-family\n!/.test(rc) && /interface GigabitEthernet0\/0\/0\n( description [^\n]*\n)? vrf forwarding TENANT-A\n ip address 192\.168\.1\.1/.test(rc) && /ip route vrf TENANT-B 172\.16\.0\.0 255\.255\.0\.0 10\.1\.0\.254/.test(rc),
+    'running-config：vrf definition 區塊、介面第一行是 vrf forwarding、ip route vrf');
+  ok(sim.routeRows(rt, 'TENANT-B').some((r) => r.dst === '172.16.0.0/16') && !sim.routeRows(rt).some((r) => r.dst === '172.16.0.0/16'), 'VRF 的靜態路由只出現在那個 VRF 的路由表裡');
+  run('configure terminal', 'no vrf definition TENANT-B', 'end');
+  ok(!ifc('Gi0/0/1').vrf && !ifc('Gi0/0/1').ip && !rt.routes.some((r) => r.vrf === 'TENANT-B'), 'no vrf definition：成員介面的位址清掉、VRF 的路由一起刪掉');
+}
+
+console.log('\n容器：連接埠發佈、只綁 127.0.0.1、埠對錯、停止的容器');
+{
+  const sim = await import('../src/engine/sim.js');
+  const dk = await import('../src/engine/docker.js');
+  const ok = (cond, title) => (cond ? console.log('  ✔ ' + title) : fail(title));
+  const lv = LEVELS.find((l) => l.id === 'l73');
+  const s = lv.setup(); settle(s);
+  const d = s.devices.dk, tcp = (port) => sim.transact(s, 'pc', { proto: 'tcp', dst: parseIp('10.0.50.20'), dport: port });
+  const w = tcp(8080), g = tcp(3000), m = tcp(3306), x = tcp(9000);
+  ok(!w.ok && /連線被重設/.test(w.reason) && /聽的是 80/.test(w.reason), '-p 8080:8080 但 nginx 聽 80：連得上主機，馬上被重設');
+  ok(!g.ok && /127\.0\.0\.1/.test(g.reason), '-p 127.0.0.1:3000:3000：別台連不進來');
+  ok(m.ok, '資料庫發佈在 0.0.0.0:3306：從辦公室就連得到（弱點）');
+  ok(!x.ok && /沒有在/.test(x.reason), '沒有發佈的埠：主機沒有在聽');
+  ok(dk.dockerDeliver(d, { proto: 'tcp', dport: 3000, src: 0x7f000001 }, true).ok, '主機自己 curl localhost:3000：連得到');
+  ok(/Bind for 0\.0\.0\.0:8080 failed: port is already allocated/.test(dk.addContainer(s, d, { name: 'web2', image: 'nginx', publish: [dk.parsePublish('8080:80')] }).err || ''), '同一個主機埠發佈兩次：port is already allocated');
+  ok(/Conflict\. The container name "\/web" is already in use/.test(dk.addContainer(s, d, { name: 'web', image: 'nginx' }).err || ''), '名稱重複：Conflict');
+  ok(/pull access denied for nginxx/.test(dk.addContainer(s, d, { name: 'n', image: 'nginxx' }).err || ''), '映像檔名稱打錯：pull access denied');
+  ok(dk.parsePublish('127.0.0.1:3000:3000').hostIp === '127.0.0.1' && dk.parsePublish('5353:53/udp').proto === 'udp' && !dk.parsePublish('80'), '-p 的寫法：位址:主機埠:容器埠、/udp');
+  dk.findCtr(d, 'db').state = 'exited'; settle(s);
+  ok(!tcp(3306).ok && /沒有在執行/.test(tcp(3306).reason), '容器停止之後，發佈的埠也就連不到了');
+  ok(dk.portsText(dk.findCtr(d, 'web')) === '0.0.0.0:8080->8080/tcp, 80/tcp', 'docker ps 的 PORTS 欄：發佈的埠，加上映像檔聽、但沒有發佈的埠');
+  const c2 = cloneState(s);
+  ok(c2.devices.dk.docker.containers.length === 3 && c2.devices.dk.docker.containers.find((c) => c.name === 'grafana').publish[0].hostIp === '127.0.0.1', '容器的設定可以存檔、讀檔');
+}
+
+console.log('\nHTTPS 憑證：信任、有效期間（用戶端的時鐘）、SAN、自簽');
+{
+  const web = await import('../src/engine/web.js');
+  const { SIM_EPOCH, deviceTime } = await import('../src/engine/ops.js');
+  const ok = (cond, title) => (cond ? console.log('  ✔ ' + title) : fail(title));
+  const lv = LEVELS.find((l) => l.id === 'l74');
+  const s = lv.setup(); settle(s);
+  const D = s.devices, srv = D.web, DAY = 86400000;
+  const t1 = web.tlsCheck(s, D.pc1, srv, 'intranet.corp.local');
+  ok(!t1.ok && t1.code === 60 && /has expired/.test(t1.msg), '昨天到期的憑證：certificate has expired');
+  srv.web.cert = web.issueCert(s, { cn: 'intranet.corp.local', san: ['intranet.corp.local'], issuer: web.CORP_CA });
+  ok(web.tlsCheck(s, D.pc1, srv, 'intranet.corp.local').ok, '換了新憑證：加入網域的 PC-1 通過');
+  const t2 = web.tlsCheck(s, D.pc1, srv, 'portal.corp.local');
+  ok(!t2.ok && /no alternative certificate subject name matches target host name 'portal\.corp\.local'/.test(t2.msg), 'CNAME 來的名稱不在 SAN 裡：瀏覽器比對的是網址上的名稱');
+  const t3 = web.tlsCheck(s, D.byod, srv, 'intranet.corp.local');
+  ok(!t3.ok && /unable to get local issuer certificate/.test(t3.msg), '沒有加入網域的筆電不信任 Corp Root CA：unable to get local issuer certificate');
+  const t4 = web.tlsCheck(s, D.meet, srv, 'intranet.corp.local');
+  ok(!t4.ok && /not yet valid/.test(t4.msg) && deviceTime(s, D.meet).ms < SIM_EPOCH - 300 * DAY, '時鐘回到 2024 年的電腦：certificate is not yet valid');
+  ok(web.nameMatch('*.corp.local', 'portal.corp.local') && !web.nameMatch('*.corp.local', 'a.b.corp.local') && !web.nameMatch('*.corp.local', 'corp.local'), '萬用字元只比對一層：*.corp.local 不含 a.b.corp.local 和 corp.local 本身');
+  srv.web.cert = web.issueCert(s, { cn: 'intranet.corp.local', issuer: 'intranet.corp.local' });
+  ok(/self-signed certificate/.test(web.tlsCheck(s, D.pc1, srv, 'intranet.corp.local').msg), '自簽憑證：self-signed certificate');
+  delete srv.web.cert;
+  ok(web.tlsCheck(s, D.pc1, srv, 'intranet.corp.local').code === 35, '網站有在聽 443 但沒有憑證：TLS 交握失敗（curl 35）');
+  ok(/self-signed/.test(web.tlsCheck(s, D.pc1, D.rt, '10.0.2.1').msg), '路由器的 HTTPS 管理網頁出廠就是自簽憑證');
+  ok(web.tlsCheck(s, D.byod, { kind: 'internet', name: 'ISP' }, 'www.example.com').ok, '網際網路上的網站：公開 CA，每台都信任');
+  lv.solve(s); settle(s);
+  const r = evaluate(s, lv.objectives);
+  ok(r.every((x) => x.pass) && r[0].log.some((l) => /TLS 交握成功/.test(l.text)), '解法之後每台都通過 TLS 交握（https 目標會記下是誰簽的）');
+  D.byod.trust = []; settle(s);
+  const r2 = evaluate(s, lv.objectives);
+  ok(!r2[2].pass && /憑證錯誤/.test(r2[2].reason), 'https 目標：TCP 連得上但憑證不被信任，一樣算失敗');
+}
+
 console.log('\n參考解法與錯題本');
 {
   const { solutionChanges } = await import('../src/ui/solution.js');

@@ -13,6 +13,9 @@ import { fortiRun } from './forticli.js';
 import { transact6, dhcp6Trace, duidOf, iaidOf } from '../engine/sim6.js';
 import { parseIp6, fmtIp6 } from '../engine/ip6.js';
 import { isApiCurl, curlApi, ansibleCmd, fileCmd } from './term-auto.js';
+import { dockerCmd } from './term-docker.js';
+import { dockerDeliver } from '../engine/docker.js';
+import { tlsCheck, fmtDate, certSelf, CORP_CA, PUBLIC_CAS } from '../engine/web.js';
 
 const V6SRC = { slaac: '（SLAAC）', dhcp6: '（DHCPv6）' };
 const v6Lines = (rt, i) => (rt.v6 && rt.v6.ll != null
@@ -37,21 +40,37 @@ const HELP = [
   '  tracert <IP 或網域>     顯示封包經過的每一台路由器',
   '  nslookup <網域>         直接向 DNS 伺服器查詢（不看本機的快取）',
   '  nslookup -type=mx <網域> 查郵件伺服器；nslookup <IP> 反查名稱 (PTR)',
-  '  curl <IP 或網域>[:埠]   測試 TCP 連線（預設 443）',
+  '  curl https://<網域>     開網頁：HTTPS 會驗證憑證（-k 略過、-v 看憑證、-I 只看標頭、-L 跟著轉址）',
+  '  date                    看這台電腦的時間（憑證的有效期間用它判斷）',
   '  iperf3 -c <IP>          量測到另一台主機的實際傳輸速率（跑 10 秒）',
   '  ssh <帳號>@<IP>         登入網路設備的命令列（加密）。輸入 exit 登出',
   '  telnet <IP>             登入網路設備的命令列（明文，帳號密碼在線路上看得到）',
   '  telnet <IP> <埠>        測試某個 TCP 連接埠通不通',
   '  netstat -e              網路卡收送了多少封包、有沒有錯誤',
-  '  date                    顯示目前的日期與時間',
+  '  w32tm /resync           立刻和時間伺服器對時（「自動設定時間」要開著）',
+  '  certutil -store root    列出信任的根憑證；certutil -addstore root <檔名>.cer 匯入',
   '  cls                     清除畫面',
+];
+/** Linux 主機（Ansible 控制主機、Docker 主機）的說明 */
+const HELP_LINUX = [
+  '可用指令：',
+  '  ping <IP 或網域>        測試連線（會在場景中播放封包動畫）',
+  '  ip addr / ip route      網路介面的位址 / 路由表',
+  '  traceroute <IP 或網域>  顯示封包經過的每一台路由器',
+  '  nslookup <網域>         直接向 DNS 伺服器查詢',
+  '  curl http(s)://<主機>[:埠]   開網頁：-k 略過憑證檢查、-v 看憑證、-I 只看標頭、-L 跟著轉址',
+  '  ssh <帳號>@<IP>         登入網路設備的命令列。輸入 exit 登出',
+  '  telnet <IP> <埠>        測試某個 TCP 連接埠通不通',
+  '  timedatectl             時間與 NTP 同步的狀態（timedatectl set-ntp true 打開自動校時）',
+  '  date                    顯示目前的日期與時間',
+  '  clear                   清除畫面',
 ];
 
 export function buildTerminal(ctx, body) {
   const { app, dev } = ctx;
   // Ansible 的控制主機跑的是 Linux（Ansible 不能裝在 Windows 上）
-  const linux = !!dev.ansible;
-  const PS = linux ? `netops@${dev.name.replace(/[^\w-]+/g, '-').replace(/^-+|-+$/g, '').toLowerCase() || 'ansible'}:~$` : 'C:\\>';
+  const linux = !!dev.ansible || !!dev.docker;
+  const PS = linux ? `${dev.ansible ? 'netops' : 'admin'}@${dev.name.replace(/[^\w-]+/g, '-').replace(/^-+|-+$/g, '').toLowerCase() || 'ansible'}:~$` : 'C:\\>';
   const logs = (app.termLog[dev.id] ||= [{ t: `${dev.name} 終端機 — 輸入 help 查看指令`, c: 'dim' }]);
   const hist = (app.termHist[dev.id] ||= []);
   let hi = hist.length;
@@ -222,9 +241,15 @@ export function buildTerminal(ctx, body) {
     const [cmd, ...args] = line.trim().split(/\s+/);
     const c = (cmd || '').toLowerCase();
     if (c === 'help' || c === '?') {
-      HELP.forEach((x) => print(x, 'dim'));
+      (linux ? HELP_LINUX : HELP).forEach((x) => print(x, 'dim'));
       if ((dev.apps || []).includes('api')) print('  curl -k -u 帳號:密碼 -H "Accept: application/yang-data+json" https://<IP>/restconf/data/…   呼叫 REST API（-X 方法、-d 內容、-i 顯示標頭）', 'dim');
-      if (linux) { print('  ansible-playbook -i inventory.ini <playbook> [--check] [-v] [--limit 主機]   執行 playbook', 'dim'); print('  ls / cat <檔名>          列出 / 顯示控制主機上的檔案', 'dim'); }
+      if (dev.ansible) { print('  ansible-playbook -i inventory.ini <playbook> [--check] [-v] [--limit 主機]   執行 playbook', 'dim'); print('  ls / cat <檔名>          列出 / 顯示控制主機上的檔案', 'dim'); }
+      if (dev.docker) {
+        print('  docker ps [-a]          列出容器；PORTS 欄是發佈的連接埠（主機:埠->容器埠）', 'dim');
+        print('  docker run -d --name <名稱> -p [位址:]主機埠:容器埠 <映像檔>   建立並啟動容器', 'dim');
+        print('  docker stop / start / restart / rm [-f] / port / logs / inspect <容器>', 'dim');
+        print('  docker images、docker network ls', 'dim');
+      }
     }
     else if (c === 'ssh' || (c === 'telnet' && args[0] && (args[1] == null || args[1] === '23') && !args[0].includes(':'))) {
       // ssh admin@10.0.99.1、ssh -l admin 10.0.99.1、telnet 10.0.99.1
@@ -260,7 +285,7 @@ export function buildTerminal(ctx, body) {
         if (x.imc) print(`  ↳ 收到的非單點傳送封包大多是交換器的 STP BPDU（每 2 秒一個）`, 'hint');
       }
     }
-    else if (c === 'date' || c === 'time') { const t = plainStamp(st(), dev); print(`${t.date} ${t.time}（電腦的時間由作業系統自動校正，這裡當作是準的）`); }
+    else if (c === 'date' || c === 'time') { const t = plainStamp(st(), dev); const off = dev.clock && !dev.clock.sync; print(`${t.date} ${t.time}${off ? '' : '（電腦的時間由作業系統自動校正）'}`, off ? 'warn' : ''); if (off) print('（這台電腦的自動校時是關的：時間可能不準，HTTPS 憑證的有效期間也是用這個時間判斷。「網路設定」分頁可以打開自動校時）', 'hint'); }
     else if (c === 'arp' && /^-d/i.test(args[0] || '')) { clearArp(st(), dev); app.refreshLive(); }
     else if (c === 'arp') {
       const rows = arpRows(st(), dev);
@@ -270,6 +295,49 @@ export function buildTerminal(ctx, body) {
         print('  網際網路位址      實體位址            類型', 'pre');
         rows.forEach((r) => print(`  ${fmtIp(r.ip).padEnd(18)}${r.mac.replace(/:/g, '-').padEnd(20)}動態`, 'pre'));
       }
+    } else if (linux && (c === 'ipconfig' || c === 'w32tm' || c === 'certutil' || c === 'cls')) {
+      print(`${cmd}: command not found`, 'warn');
+      print(`  ↳ 這台是 Linux：${{ ipconfig: '用 ip addr 看位址、ip route 看路由', w32tm: '用 timedatectl 看時間同步', certutil: '根憑證放進 /usr/local/share/ca-certificates/ 再 update-ca-certificates', cls: '用 clear' }[c]}`, 'hint');
+    } else if (linux && (c === 'ip' || c === 'ifconfig')) {
+      linuxIp(c === 'ifconfig' ? 'addr' : args[0] || '');
+    } else if (!linux && c === 'w32tm') {
+      const a = args.join(' ').toLowerCase(), off = !!(dev.clock && dev.clock.sync === false);
+      if (/\/resync/.test(a)) {
+        print('正在傳送重新同步命令到本機電腦');
+        if (off) { print('發生下列錯誤: 服務尚未啟動。 (0x80070426)', 'bad'); print('  ↳ 「自動設定時間」是關的，Windows Time 服務沒有在跑：到「網路設定」分頁打開自動設定時間', 'hint'); }
+        else print('命令已順利完成。', 'ok');
+      } else if (/\/query/.test(a) && /\/status/.test(a)) {
+        if (off) print('發生下列錯誤: 服務尚未啟動。 (0x80070426)', 'bad');
+        else { const t = plainStamp(st(), dev); ['躍點數: 4 (次要參照 - 以 (S)NTP 同步)', '精確度: -23 (每個刻度 119.209ns)', '來源: time.windows.com,0x9', `上次成功同步處理時間: ${t.date} ${t.time}`, '輪詢間隔: 10 (1024s)'].forEach((x) => print(x, 'pre')); }
+      } else print('用法：w32tm /resync、w32tm /query /status', 'warn');
+    } else if (linux && c === 'timedatectl') {
+      const off = !!(dev.clock && dev.clock.sync === false);
+      if (args[0] === 'set-ntp') { dev.clock = { ...(dev.clock || {}), sync: /^(true|yes|on|1)$/i.test(args[1] || '') }; ctx.commit(true); }
+      else {
+        const t = plainStamp(st(), dev);
+        [`               Local time: ${t.day} ${t.date} ${t.time} CST`, '                Time zone: Asia/Taipei (CST, +0800)', `System clock synchronized: ${off ? 'no' : 'yes'}`, `              NTP service: ${off ? 'inactive' : 'active'}`, '          RTC in local TZ: no'].forEach((x) => print(x, x.includes(': no') && off ? 'warn' : 'pre'));
+        if (off) print('（NTP 沒有開：timedatectl set-ntp true）', 'hint');
+      }
+    } else if (!linux && c === 'certutil') {
+      const a = args.map((x) => x.toLowerCase());
+      const trust = (dev.trust ||= []);
+      if (a[0] === '-store' && a[1] === 'root') {
+        print('Root "受信任的根憑證授權單位"');
+        [...PUBLIC_CAS, ...trust].forEach((n, k) => { print(`================ 憑證 ${k} ================`, 'dim'); print(`主體: CN=${n}`, 'pre'); print(`簽發者: CN=${n}`, 'pre'); });
+        print('CertUtil: -store 命令已順利完成。', 'ok');
+      } else if (a[0] === '-addstore' || (a[0] === '-f' && a[1] === '-addstore')) {
+        const rest = args.filter((x) => !/^-/.test(x));
+        const store = (rest[0] || '').toLowerCase(), file = rest[1] || '';
+        if (store !== 'root') print(`CertUtil: -addstore 命令失敗: 0x80092004 (-2146885628 CRYPT_E_NOT_FOUND)${store ? '' : '（用法：certutil -addstore root <檔名>.cer）'}`, 'bad');
+        else if (!/corp-root-ca\.(cer|crt)$/i.test(file)) { print(`CertUtil: -addstore 命令失敗: 0x80070002 (WIN32: 2 ERROR_FILE_NOT_FOUND)`, 'bad'); print('  ↳ IT 放在桌面上的是 corp-root-ca.cer', 'hint'); }
+        else {
+          print('Root "受信任的根憑證授權單位"');
+          print('簽章符合公開金鑰', 'dim');
+          print(trust.includes(CORP_CA) ? `憑證 "${CORP_CA}" 已經在存放區中。` : `憑證 "${CORP_CA}" 已新增到存放區。`);
+          print('CertUtil: -addstore 命令已順利完成。', 'ok');
+          if (!trust.includes(CORP_CA)) { dev.trust = [...trust, CORP_CA]; ctx.commit(true); }
+        }
+      } else print('用法：certutil -store root、certutil -addstore root corp-root-ca.cer（要用系統管理員身分）', 'warn');
     } else if (c === 'ipconfig' && /^\/?displaydns$/i.test(args[0] || '')) {
       const rows = cacheRows(st(), dev);
       print('');
@@ -414,6 +482,8 @@ export function buildTerminal(ctx, body) {
           }
         }
       } else print(`這個模擬支援的查詢類型：A（預設）、MX、PTR`, 'warn');
+    } else if (c === 'docker' && dev.docker) {
+      dockerCmd(app, dev, args, print, () => ctx.commit(false));
     } else if (c === 'curl' && isApiCurl(line)) {
       curlApi(app, dev, line.trim(), print);
       ctx.commit(false);
@@ -422,11 +492,12 @@ export function buildTerminal(ctx, body) {
       ctx.commit(false);
     } else if (dev.ansible && ['ls', 'cat', 'less', 'more', 'ansible', 'ansible-galaxy'].includes(c) && fileCmd(dev, c, args, print)) {
       // 控制主機上的檔案
-    } else if ((c === 'curl' || c === 'telnet') && /^(https?:\/\/)?\[|^[0-9a-f]*:[0-9a-f:]*:/i.test(args[0] || '')) {
-      const raw = (args[0] || '').replace(/^https?:\/\//, '');
+    } else if ((c === 'curl' || c === 'telnet') && /^(https?:\/\/)?\[|^[0-9a-f]*:[0-9a-f:]*:/i.test(args.find((x) => !x.startsWith('-')) || '')) {
+      const url6 = args.find((x) => !x.startsWith('-')) || '';
+      const raw = url6.replace(/^https?:\/\//, '');
       const m6 = raw.match(/^\[([^\]]+)\](?::(\d+))?/);
       const addr = m6 ? m6[1] : raw.replace(/\/.*$/, '');
-      let port = m6 && m6[2] ? +m6[2] : /^http:/.test(args[0] || '') ? 80 : 443;
+      let port = m6 && m6[2] ? +m6[2] : /^http:/.test(url6) ? 80 : 443;
       if (args[1] && /^\d+$/.test(args[1])) port = +args[1];
       const d6 = parseIp6(addr);
       if (d6 == null) print('IPv6 位址的格式不正確（網址裡的 IPv6 位址要加中括號，例如 curl http://[2001:db8::10]/）', 'bad');
@@ -436,7 +507,9 @@ export function buildTerminal(ctx, body) {
         if (res.ok) print(c === 'telnet' ? `已連線到 [${fmtIp6(d6)}]:${port}` : `已連線到 [${fmtIp6(d6)}]:${port} — HTTP/1.1 200 OK`, 'ok');
         else { print(`${c}: 無法連線到 [${fmtIp6(d6)}] 埠 ${port}`, 'bad'); print('  ↳ ' + res.reason, 'hint'); }
       }
-    } else if (c === 'curl' || c === 'telnet') {
+    } else if (c === 'curl') {
+      webCurl(args);
+    } else if (c === 'telnet') {
       let t = (args[0] || '').replace(/^https?:\/\//, '').replace(/\/.*$/, '');
       let port = /^http:/.test(args[0] || '') ? 80 : 443;
       const m = t.match(/^(.*):(\d+)$/);
@@ -445,12 +518,13 @@ export function buildTerminal(ctx, body) {
       if (!t) print(`用法：${c} <IP 或網域>[:埠]`, 'warn');
       else {
         const r = resolve(t);
-        if (!r.ok) print(`curl: (6) 無法解析主機 ${t} — ${r.reason}`, 'bad');
+        if (!r.ok) { print(linux ? `telnet: could not resolve ${t}/${port}: Name or service not known` : '正在連線到 ' + t + '...無法開啟到主機的連線，在連接埠 ' + port + ': 連線失敗', 'bad'); print('  ↳ ' + r.reason, 'hint'); }
         else {
           const res = transact(st(), dev.id, { proto: 'tcp', dst: r.ip, dport: port });
           app.showTrace(`${dev.name}> ${line}`, [...r.log, ...res.log], [...r.hops, ...res.hops], res);
-          if (res.ok) print(`已連線到 ${fmtIp(r.ip)}:${port} — HTTP/1.1 200 OK`, 'ok');
-          else { print(`curl: (7) 無法連線到 ${fmtIp(r.ip)} 埠 ${port}`, 'bad'); print('  ↳ ' + res.reason, 'hint'); }
+          if (res.ok && linux) { print(`Trying ${fmtIp(r.ip)}...`); print(`Connected to ${t}.`, 'ok'); print("Escape character is '^]'.", 'dim'); }
+          else if (res.ok) print(`已連線到 ${fmtIp(r.ip)}:${port}（TCP 三向交握完成，畫面一片空白是正常的）`, 'ok');
+          else { print(linux ? `telnet: Unable to connect to remote host: ${/拒絕|沒有在/.test(res.reason || '') ? 'Connection refused' : 'Connection timed out'}` : `正在連線到 ${fmtIp(r.ip)}...無法開啟到主機的連線，在連接埠 ${port}: 連線失敗`, 'bad'); print('  ↳ ' + res.reason, 'hint'); }
         }
       }
     } else if (c === 'iperf3' || c === 'iperf') {
@@ -479,6 +553,105 @@ export function buildTerminal(ctx, body) {
     } else if (c) print(linux ? `${cmd}: command not found（輸入 help 查看可用指令）` : `'${cmd}' 不是內部或外部命令。輸入 help 查看可用指令。`, 'warn');
     draw();
   };
+
+  /** Linux 的 ip addr / ip route（Docker 主機多了 docker0 與每個容器的 veth） */
+  function linuxIp(sub) {
+    const ctrs = dev.docker ? dev.docker.containers.filter((x) => x.state === 'running') : [];
+    const bc = (ip, bits) => fmtIp((ip | (bits >= 32 ? 0 : 0xffffffff >>> bits)) >>> 0);
+    if (/^r/.test(sub)) {
+      for (const i of dev.ifaces) if (i.rt && i.rt.ip != null && i.rt.gw != null) print(`default via ${fmtIp(i.rt.gw)} dev ${i.label} proto ${i.mode === 'dhcp' ? 'dhcp' : 'static'}`, 'pre');
+      for (const i of dev.ifaces) if (i.rt && i.rt.ip != null) print(`${fmtIp((i.rt.ip & (i.rt.bits ? 0xffffffff << (32 - i.rt.bits) : 0)) >>> 0)}/${i.rt.bits} dev ${i.label} proto kernel scope link src ${fmtIp(i.rt.ip)}`, 'pre');
+      if (dev.docker) print(`172.17.0.0/16 dev docker0 proto kernel scope link src 172.17.0.1${ctrs.length ? '' : ' linkdown'}`, 'pre');
+      return;
+    }
+    if (sub && !/^a/.test(sub) && sub !== 'link') { print(`Object "${sub}" is unknown, try "ip help".`, 'bad'); return; }
+    let n = 1;
+    print('1: lo: <LOOPBACK,UP,LOWER_UP> mtu 65536 qdisc noqueue state UNKNOWN group default qlen 1000', 'pre');
+    print('    link/loopback 00:00:00:00:00:00 brd 00:00:00:00:00:00', 'pre');
+    if (sub !== 'link') print('    inet 127.0.0.1/8 scope host lo', 'pre');
+    for (const i of dev.ifaces) {
+      const rt = i.rt || {}, up = !!rt.link;
+      print(`${++n}: ${i.label}: <BROADCAST,MULTICAST${up ? ',UP,LOWER_UP' : ',UP'}> mtu 1500 qdisc fq_codel state ${up ? 'UP' : 'DOWN'} group default qlen 1000`, up ? 'pre' : 'warn');
+      print(`    link/ether ${String(rt.mac || '').toLowerCase()} brd ff:ff:ff:ff:ff:ff`, 'pre');
+      if (sub !== 'link' && rt.ip != null) print(`    inet ${fmtIp(rt.ip)}/${rt.bits} brd ${bc(rt.ip, rt.bits)} scope global ${i.mode === 'dhcp' ? 'dynamic ' : ''}${i.label}`, 'pre');
+    }
+    if (dev.docker) {
+      print(`${++n}: docker0: <BROADCAST,MULTICAST,UP${ctrs.length ? ',LOWER_UP' : ''}> mtu 1500 qdisc noqueue state ${ctrs.length ? 'UP' : 'DOWN'} group default`, 'pre');
+      print('    link/ether 02:42:5e:9a:1c:07 brd ff:ff:ff:ff:ff:ff', 'pre');
+      if (sub !== 'link') print('    inet 172.17.0.1/16 brd 172.17.255.255 scope global docker0', 'pre');
+      for (const x of ctrs) {
+        print(`${++n}: veth${x.id.slice(1, 8)}@if${2 * n}: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500 qdisc noqueue master docker0 state UP group default`, 'pre');
+        print(`    link/ether ${x.id.slice(0, 2)}:${x.id.slice(2, 4)}:${x.id.slice(4, 6)}:1e:0b:${x.ip.split('.')[3].padStart(2, '0').slice(-2)} brd ff:ff:ff:ff:ff:ff`, 'pre');
+      }
+      print('（容器的 172.17.0.x 只存在主機裡的 docker0 橋接網路：每個容器用一條 veth 接上去。外面要連，靠的是發佈的連接埠，docker ps 的 PORTS 欄）', 'hint');
+    }
+  }
+
+  /** curl：HTTP 會跟著 301 轉到 HTTPS（加 -L）、HTTPS 會驗證憑證（-k 略過）、-I 只看標頭、-v 看 TLS 的細節 */
+  function webCurl(args) {
+    const flags = new Set(args.filter((a) => a.startsWith('-')).flatMap((a) => (a.startsWith('--') ? [a] : a.slice(1).split('').map((x) => '-' + x))));
+    const k = flags.has('-k') || flags.has('--insecure'), head = flags.has('-I') || flags.has('--head'), verbose = flags.has('-v') || flags.has('--verbose'), follow = flags.has('-L') || flags.has('--location');
+    const url = args.find((a) => !a.startsWith('-'));
+    if (!url) { print('用法：curl [-k] [-I] [-v] [-L] http(s)://<主機>[:埠]/', 'warn'); return; }
+    const one = (u, hop) => {
+      const https = /^https:\/\//i.test(u); // 和真的 curl 一樣：沒寫 https:// 就是 HTTP
+      let host = u.replace(/^https?:\/\//i, '').replace(/\/.*$/, ''), port = https ? 443 : 80;
+      const m = host.match(/^(.*):(\d+)$/);
+      if (m) { host = m[1]; port = +m[2]; }
+      // Docker 主機自己連自己：看發佈的連接埠
+      if (/^(localhost|127\.0\.0\.1)$/i.test(host)) {
+        const dk = dev.docker ? dockerDeliver(dev, { proto: 'tcp', dport: port, src: 0x7f000001 }, true) : null;
+        if (dk && dk.ok) { print('HTTP/1.1 200 OK', 'ok'); print(`Server: ${dk.ctr.image.split(':')[0] === 'nginx' ? 'nginx/1.27.3' : dk.ctr.image}`, 'pre'); print(`（${dk.text}）`, 'hint'); }
+        else if (dk && dk.reset) { print('curl: (56) Recv failure: Connection reset by peer', 'bad'); print('  ↳ ' + dk.reason, 'hint'); }
+        else if (dk) { print(`curl: (7) Failed to connect to ${host} port ${port}: Connection refused`, 'bad'); print('  ↳ ' + dk.reason, 'hint'); }
+        else print(`curl: (7) Failed to connect to ${host} port ${port}: Connection refused`, 'bad');
+        return;
+      }
+      const r = resolve(host);
+      if (!r.ok) { print(`curl: (6) Could not resolve host: ${host}`, 'bad'); print('  ↳ ' + r.reason, 'hint'); return; }
+      const res = transact(st(), dev.id, { proto: 'tcp', dst: r.ip, dport: port });
+      app.showTrace(`${dev.name}> curl ${u}`, [...r.log, ...res.log], [...r.hops, ...res.hops], res);
+      if (!res.ok) {
+        const reset = /連線被重設/.test(res.reason || ''), refused = /拒絕|沒有在/.test(res.reason || '');
+        print(reset ? 'curl: (56) Recv failure: Connection reset by peer' : `curl: (${refused ? 7 : 28}) ${refused ? `Failed to connect to ${host} port ${port}: Connection refused` : `Failed to connect to ${host} port ${port} after 21032 ms: Timed out`}`, 'bad');
+        print('  ↳ ' + res.reason, 'hint');
+        return;
+      }
+      const srv = st().devices[res.responder], web = (srv && srv.web) || {};
+      if (verbose) print(`*   Trying ${fmtIp(r.ip)}:${port}...`, 'dim'), print(`* Connected to ${host} (${fmtIp(r.ip)}) port ${port}`, 'dim');
+      // 協定和連接埠對不上：明文的 HTTP 送到 443、TLS 送到 80
+      if (!https && port === 443) { print('HTTP/1.1 400 Bad Request', 'warn'); print('<center>The plain HTTP request was sent to HTTPS port</center>', 'pre'); print('  ↳ 443 是 HTTPS：網址要寫 https://', 'hint'); return; }
+      if (https && port === 80) { print('curl: (35) OpenSSL/3.0.13: error:0A00010B:SSL routines::wrong version number', 'bad'); print('  ↳ 80 是明文的 HTTP：要用 https:// 就連 443，或把網址改成 http://', 'hint'); return; }
+      if (https) {
+        const t = tlsCheck(st(), dev, srv, host);
+        if (verbose && t.cert) {
+          print('* SSL connection using TLSv1.3 / TLS_AES_256_GCM_SHA384', 'dim');
+          print('* Server certificate:', 'dim');
+          print(`*  subject: CN=${t.cert.cn}`, 'dim');
+          print(`*  start date: ${fmtDate(t.cert.from)}`, 'dim');
+          print(`*  expire date: ${fmtDate(t.cert.to)}`, 'dim');
+          print(`*  subjectAltName: ${(t.cert.san || [t.cert.cn]).map((n) => 'DNS:' + n).join(', ')}`, 'dim');
+          print(`*  issuer: CN=${certSelf(t.cert) ? t.cert.cn : t.cert.issuer}`, 'dim');
+        }
+        if (!t.ok && !k) {
+          print(`curl: (${t.code}) ${t.msg}`, 'bad');
+          if (t.code === 60) print('More details here: https://curl.se/docs/sslcerts.html', 'dim');
+          print('  ↳ ' + t.why, 'hint');
+          return;
+        }
+        if (!t.ok) print(`（-k：略過憑證檢查。真正的問題還在：${t.why}）`, 'warn');
+      } else if (web.redirect && hop < 3) {
+        print('HTTP/1.1 301 Moved Permanently', 'ok');
+        print(`Location: https://${host}/`, 'pre');
+        if (follow) { print(''); one(`https://${host}/`, hop + 1); } else print('（網站把 HTTP 轉到 HTTPS：加 -L 會跟著轉過去）', 'hint');
+        return;
+      }
+      print('HTTP/1.1 200 OK', 'ok');
+      if (head || verbose) { print(`Server: ${srv.kind === 'internet' ? 'ECAcc (sec/96EE)' : web.server || 'nginx'}`, 'pre'); print('Content-Type: text/html; charset=UTF-8', 'pre'); if (https) print('Strict-Transport-Security: max-age=31536000', 'pre'); }
+      if (!head) print(`<title>${srv.kind === 'internet' ? 'Example Domain' : web.title || srv.name}</title>`, 'pre');
+    };
+    one(url, 0);
+  }
 
   input.addEventListener('keydown', (e) => {
     if (escLine(e, input)) return;
@@ -536,7 +709,7 @@ export function buildTerminal(ctx, body) {
     if (!a.ok) { lost(r, a); draw(); return; }
     if ((r.kind !== 'ios' || r.monitor) && consoleFollow(app, r.conn.to, 'vty:' + r.conn.cid, print)) draw();
   });
-  const chips = linux ? ['ls', 'cat inventory.ini', `ansible-playbook -i inventory.ini ${dev.ansible.file}`, `ansible-playbook -i inventory.ini ${dev.ansible.file} --check -v`, 'help']
+  const chips = dev.docker ? ['docker ps -a', 'docker port web', 'curl http://localhost:8080', 'ip addr', 'help'] : linux ? ['ls', 'cat inventory.ini', `ansible-playbook -i inventory.ini ${dev.ansible.file}`, `ansible-playbook -i inventory.ini ${dev.ansible.file} --check -v`, 'help']
     : ['ipconfig', 'ping 8.8.8.8', 'tracert 8.8.8.8', 'nslookup www.example.com', 'arp -a', 'help'];
   body.append(term, h('div', { class: 'chips' }, chips.map((x) =>
     h('button', { class: 'chip btnchip', type: 'button', title: x, onclick: () => { hist.push(x); hi = hist.length; run(x); } }, h('span', { class: 'ell', text: x })))));

@@ -21,6 +21,9 @@ import { bgpCard } from './panel-bgp.js';
 import * as TR from './panel-track.js';
 import * as VZ from './panel-virt.js';
 import { dnsTab } from './panel-dns.js';
+import { vrfField, vrfCard } from './panel-vrf.js';
+import { webTab, clientTlsCard } from './panel-web.js';
+import { dockerTab } from './term-docker.js';
 import { isDnsServer } from '../engine/dns.js';
 import { isTftp, isFtp } from '../engine/files.js';
 import { buildCli } from './cli.js';
@@ -112,6 +115,7 @@ function ifaceCard(ctx, i, o = {}) {
       field('上網帳號', inp(ctx, ...bind(i, 'user'), { ph: '例如 12345678@hinet.net' })),
       field('上網密碼', inp(ctx, ...bind(i, 'pass'), { ph: '密碼' }))));
   }
+  if (ctx.dev.kind === 'router' && i.bind.t !== 'loop') { const vf = vrfField(ctx, i); if (vf) parts.unshift(vf); }
   const toggles = [
     o.nat && toggle(ctx, ...bind(i, 'nat'), 'NAT（從此介面出去時偽裝成本介面 IP）', { rerender: true }),
     o.ospf && toggle(ctx, () => ospfOn(ctx.dev, i), (v) => setOspf(ctx.dev, i, v), 'OSPF（在此介面啟用動態路由）', { rerender: true }),
@@ -165,6 +169,8 @@ function hostNet(ctx, body) {
       h('div', { class: 'chips' }, dev.services.map((s) => h('span', { class: 'chip', text: `${s.name ? s.name + ' · ' : ''}${s.proto.toUpperCase()} ${s.port}` })))));
   }
   if (OPS.isServer(dev)) body.append(OPS.serverRolesCard(ctx));
+  // 這一關有內部的 HTTPS 網站：電腦要信任公司的 CA、時鐘要準
+  if (!dev.web && (dev.trust || dev.clock || Object.values(ctx.state.devices).some((x) => x.web))) body.append(clientTlsCard(ctx));
   body.append(OPS.flowsCard(ctx));
 }
 
@@ -377,6 +383,7 @@ function routesTab(ctx, body) {
     h('span', { class: 'muted', text: '預設路由：0.0.0.0 / 0.0.0.0。距離越小越優先。' })));
   body.append(card);
   if (dev.kind === 'l3switch' || dev.kind === 'router') body.append(TR.trackCard(ctx));
+  if (dev.kind === 'router') body.append(vrfCard(ctx));
   if (dev.kind === 'l3switch' || dev.kind === 'router') {
     const rangeDraft = (ctx.app.rangeDraft ||= {});
     body.append(h('div', { class: 'card' }, cardHead('OSPF'),
@@ -587,6 +594,7 @@ function baseTabs(dev) {
     case 'host': if (CATALOG[dev.model].phone) return [['phone', '電話', V.phoneTab], ['pnet', '網路設定', V.phoneNetTab]];
       return [T.net, dev.vpnClient && ['vpn', 'VPN', X.vpnClientTab], dev.dhcpScopes && ['dhcp', 'DHCP 服務', X.dhcpScopesTab],
       dev.radiusServer && ['radius', 'RADIUS', M.radiusServerTab], isDnsServer(dev) && ['dns', 'DNS', dnsTab],
+      dev.web && ['web', '網站', webTab], dev.docker && ['docker', 'Docker', dockerTab],
       (dev.services || []).some((s) => s.proto === 'udp' && s.port === 514) && ['syslog', 'Syslog', M.syslogTab],
       (isTftp(dev) || isFtp(dev)) && ['files', '檔案', OPS.filesTab], dev.nms && ['nms', '網管', OPS.nmsTab], dev.cucm && ['cucm', 'CUCM', V.cucmTab],
       (dev.apps || []).includes('api') && ['api', 'API', AUTO.apiTab], ((dev.apps || []).includes('ansible') || dev.ansible) && ['ansible', 'Ansible', AUTO.ansibleTab],

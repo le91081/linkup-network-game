@@ -98,7 +98,7 @@ const PROMPT = {
   exec: '#', config: '(config)#', if: '(config-if)#', vlan: '(config-vlan)#', router: '(config-router)#', dhcp: '(dhcp-config)#',
   line: '(config-line)#', acl: '(config-ext-nacl)#', stdacl: '(config-std-nacl)#', radius: '(config-radius-server)#',
   isakmp: '(config-isakmp)#', tset: '(cfg-crypto-trans)#', cmap: '(config-crypto-map)#',
-  ikev2prop: '(config-ikev2-proposal)#', ikev2pol: '(config-ikev2-policy)#', ikev2kr: '(config-ikev2-keyring)#', ikev2peer: '(config-ikev2-keyring-peer)#', ikev2prof: '(config-ikev2-profile)#', track: '(config-track)#', archive: '(config-archive)#', archlog: '(config-archive-log-cfg)#', ipsla: '(config-ip-sla)#', slaecho: '(config-ip-sla-echo)#', bgp: '(config-router)#', rmap: '(config-route-map)#', qcmap: '(config-cmap)#', pmap: '(config-pmap)#', pmapc: '(config-pmap-c)#',
+  ikev2prop: '(config-ikev2-proposal)#', ikev2pol: '(config-ikev2-policy)#', ikev2kr: '(config-ikev2-keyring)#', ikev2peer: '(config-ikev2-keyring-peer)#', ikev2prof: '(config-ikev2-profile)#', track: '(config-track)#', vrfdef: '(config-vrf)#', vrfaf: '(config-vrf-af)#', ipvrf: '(config-vrf)#', archive: '(config-archive)#', archlog: '(config-archive-log-cfg)#', ipsla: '(config-ip-sla)#', slaecho: '(config-ip-sla-echo)#', bgp: '(config-router)#', rmap: '(config-route-map)#', qcmap: '(config-cmap)#', pmap: '(config-pmap)#', pmapc: '(config-pmap-c)#',
 };
 const SERVICE_PORT = { www: 80, http: 80, https: 443, domain: 53, dns: 53, ssh: 22, telnet: 23, ftp: 21, smtp: 25, ntp: 123, snmp: 161, snmptrap: 162, tftp: 69, bgp: 179, syslog: 514, isakmp: 500, bootps: 67, bootpc: 68, 'non500-isakmp': 4500 };
 
@@ -411,7 +411,7 @@ function parseAclRule(tok) {
 const HELP = {
   exec: ['configure terminal    進入設定模式', 'show ...              查看狀態（輸入 show ? 列出全部）', 'ping <IP>             測試連線',
     'write memory          把 running-config 存成 startup-config（沒存檔的設定重新開機後會消失）', 'reload                重新開機，回到 startup-config'],
-  config: ['hostname <名稱>', 'interface <介面> | interface range <介面> - <n> | interface vlan <ID>', 'vlan <ID>', 'ip route <網段> <遮罩> <下一站> [距離] [track <物件>]', 'track <編號> interface <介面> line-protocol | track <編號> ip sla <操作> reachability', 'ip sla <編號> → icmp-echo <IP> source-interface <介面> → frequency <秒>；ip sla schedule <編號> life forever start-time now',
+  config: ['hostname <名稱>', 'interface <介面> | interface range <介面> - <n> | interface vlan <ID>', 'vlan <ID>', 'ip route <網段> <遮罩> <下一站> [距離] [track <物件>]', 'vrf definition <名稱> → rd / address-family ipv4；介面上 vrf forwarding <名稱>；ip route vrf <名稱> …', 'track <編號> interface <介面> line-protocol | track <編號> ip sla <操作> reachability', 'ip sla <編號> → icmp-echo <IP> source-interface <介面> → frequency <秒>；ip sla schedule <編號> life forever start-time now',
     'router ospf 1', 'router bgp <AS>', 'route-map / ip prefix-list / ip as-path access-list', 'ip dhcp pool <名稱> / ip dhcp excluded-address <起> <迄>', 'ip nat inside source list 1 interface <介面> overload',
     'ip nat inside source static <內部 IP> <公用 IP>', 'ip access-list extended <名稱>', 'spanning-tree vlan <清單> priority <值>',
     'ip dhcp snooping / ip arp inspection vlan <清單>', 'line vty 0 4', 'ntp server / logging host / snmp-server community', 'archive → path flash:<名稱> / maximum <n> / write-memory / log config → logging enable / notify syslog / hidekeys', 'cdp run / no cdp run / lldp run / cdp timer / lldp timer', 'class-map / policy-map（QoS）', 'mls qos（Catalyst 2960）', 'do <show 指令>、end、exit'],
@@ -484,11 +484,41 @@ export function iosSession(getDev, getState, who = null) {
     ['ip address <ip> <mask>', ([ip, mask]) => {
       if (parseIp(ip) == null) return err('IP 位址的格式不正確');
       if (maskBits(mask) == null) return err('子網路遮罩的格式不正確，例如 255.255.255.0');
-      const r = onL3((i, t) => { if (t.mgmtVlan) i.bind.vlan = t.mgmtVlan; Object.assign(i, { mode: 'static', ip, mask }); });
+      const r = onL3((i, t) => {
+        // 同一個 VRF（或都在全域）裡，兩個介面的網段不能重疊；放進不同的 VRF 就可以用一樣的位址
+        const v = i.vrf || '', a = parseIp(ip), b = maskBits(mask);
+        const vd = v && (dev().vrfs || {})[v];
+        if (vd && vd.style === 'def' && !vd.af4) return err(`% VRF ${v} 還沒有啟用 IPv4：vrf definition ${v} 底下要有 address-family ipv4`);
+        for (const x of dev().ifaces) {
+          if (x === i || (x.vrf || '') !== v || x.mode !== 'static' || parseIp(x.ip || '') == null || maskBits(x.mask || '') == null) continue;
+          const xb = maskBits(x.mask), m = Math.min(b, xb);
+          if (netOf(a, m) === netOf(parseIp(x.ip), m)) return err(`% ${fmtIp(netOf(a, b))} overlaps with ${longIf(x.label)}${v ? '' : '（要讓兩個介面用重疊的網段，就把它們放進不同的 VRF）'}`);
+        }
+        if (t.mgmtVlan) i.bind.vlan = t.mgmtVlan;
+        Object.assign(i, { mode: 'static', ip, mask });
+        return undefined;
+      });
       attachPools(dev());
       return r;
     }],
     ['no ip address', () => onL3((i) => { Object.assign(i, { mode: 'static', ip: '', mask: '' }); })],
+    ...[['vrf forwarding <v>', 'def'], ['ip vrf forwarding <v>', 'ip']].map(([pat, style]) => [pat, ([v], out) => {
+      const vd = (dev().vrfs || {})[v];
+      if (!vd) return err(`% VRF ${v} not configured.（先用 ${style === 'def' ? 'vrf definition' : 'ip vrf'} ${v} 建立）`);
+      if (vd.style !== style) return err(`% ${v} 是用 ${vd.style === 'def' ? 'vrf definition' : 'ip vrf'} 建立的，介面上要用 ${vd.style === 'def' ? 'vrf forwarding' : 'ip vrf forwarding'}`);
+      return onL3((i) => {
+        if ((i.vrf || '') === v) return undefined;
+        if (i.ip) out.push(`% Interface ${longIf(i.label)} IPv4 disabled and address(es) removed due to enabling VRF ${v}`);
+        Object.assign(i, { vrf: v, ip: '', mask: '' });
+        return undefined;
+      });
+    }]),
+    ...['no vrf forwarding [...]', 'no ip vrf forwarding [...]'].map((pat) => [pat, (_, out) => onL3((i) => {
+      if (!i.vrf) return undefined;
+      if (i.ip) out.push(`% Interface ${longIf(i.label)} IPv4 disabled and address(es) removed due to disabling VRF ${i.vrf}`);
+      delete i.vrf; Object.assign(i, { ip: '', mask: '' });
+      return undefined;
+    })]),
     ['pppoe-client [...]', () => onL3((i) => { i.mode = 'pppoe'; }) || 'PPPoE 的帳號與密碼請到「介面」分頁填寫'],
     ['ip nat outside', () => {
       syncNat();
@@ -827,6 +857,22 @@ export function iosSession(getDev, getState, who = null) {
   const ifByName = (name) => { const t = resolveIf(dev(), name); return isErr(t) ? t : t.iface || err(`${t.name} 不是第三層介面`); };
   const addUnique = (list, item) => { if (!list.some((x) => same(x, item))) list.push(item); };
 
+  /** ip route 後面的參數：管理距離、name、track、permanent。回傳 { ad, track } 或錯誤 */
+  const routeCmd = (net, mask, via, rest) => {
+    if (parseIp(net) == null || maskBits(mask) == null) return err('用法：ip route [vrf <名稱>] <目的網段> <遮罩> <下一站 IP> [管理距離] [track <物件>]');
+    if (parseIp(via) == null) return err('下一站必須是 IP 位址（這個模擬不支援只寫出口介面）');
+    const w = String(rest || '').split(/\s+/).filter(Boolean);
+    let ad = '', track = null;
+    for (let k = 0; k < w.length; k++) {
+      if (/^\d+$/.test(w[k]) && !ad) ad = w[k];
+      else if (/^track$/i.test(w[k]) && /^\d+$/.test(w[k + 1] || '')) track = +w[++k];
+      else if (/^name$/i.test(w[k]) && w[k + 1]) k++;
+      else if (/^permanent$/i.test(w[k])) continue;
+      else return err('用法：ip route [vrf <名稱>] <目的網段> <遮罩> <下一站 IP> [管理距離] [track <物件>]');
+    }
+    if (ad && !(+ad >= 1 && +ad <= 255)) return err('管理距離必須是 1 – 255');
+    return { ad, track };
+  };
   const CONFIG = [
     ['hostname <name>', ([name]) => { dev().name = name; }],
     ['mls qos', () => { if (dev().kind !== 'mswitch') return err('mls qos 是 Catalyst 2960 這類交換器的指令（路由器用 class-map / policy-map）'); const sw = dev().sw; sw.qos = { ...(sw.qos || {}), on: true }; return '（開了 mls qos 之後，沒有設定 trust 的埠會把收到的 DSCP 與 CoS 全部改成 0）'; }],
@@ -940,31 +986,67 @@ export function iosSession(getDev, getState, who = null) {
       return undefined;
     }],
     ['no ip default-gateway [...]', () => { const mg = dev().ifaces.find((x) => x.id === 'mgmt'); if (mg) mg.gateway = ''; }],
+    // ip route vrf … 要排在一般的 ip route 前面，不然「vrf」會被當成目的網段
+    ['ip route vrf <v> <net> <mask> <via> [...]', ([v, net, mask, via, rest]) => {
+      const e0 = needRouting(); if (e0) return e0;
+      if (!(dev().vrfs || {})[v]) return err(`% VRF ${v} not configured.`);
+      const r = routeCmd(net, mask, via, rest);
+      if (isErr(r)) return r;
+      const d = dev(), cur = d.routes.find((x) => (x.vrf || '') === v && x.dst === net && parseMask(x.mask || '') === maskBits(mask) && x.via === via);
+      const e = cur || { dst: net, mask, via, vrf: v };
+      e.ad = r.ad || '';
+      if (r.track != null) e.track = r.track; else delete e.track;
+      if (!cur) d.routes.push(e);
+      return undefined;
+    }],
+    ['no ip route vrf <v> <net> <mask> [...]', ([v, net, mask, via]) => {
+      const d = dev(), n = d.routes.length;
+      d.routes = d.routes.filter((x) => !((x.vrf || '') === v && x.dst === net && parseMask(x.mask || '') === maskBits(mask) && (!via || x.via === via)));
+      return d.routes.length < n ? undefined : err('路由表裡沒有這一筆靜態路由');
+    }],
     ['ip route <net> <mask> <via> [...]', ([net, mask, via, rest]) => {
       const e = needRouting(); if (e) return e;
-      if (parseIp(net) == null || maskBits(mask) == null) return err('用法：ip route <目的網段> <遮罩> <下一站 IP> [管理距離] [track <物件>]');
-      if (parseIp(via) == null) return err('下一站必須是 IP 位址（這個模擬不支援只寫出口介面）');
       // 後面可以接：管理距離、name <名稱>、track <物件編號>、permanent
-      const w = String(rest || '').split(/\s+/).filter(Boolean);
-      let ad = '', track = null;
-      for (let k = 0; k < w.length; k++) {
-        if (/^\d+$/.test(w[k]) && !ad) ad = w[k];
-        else if (/^track$/i.test(w[k]) && /^\d+$/.test(w[k + 1] || '')) track = +w[++k];
-        else if (/^name$/i.test(w[k]) && w[k + 1]) k++;
-        else if (/^permanent$/i.test(w[k])) continue;
-        else return err('用法：ip route <目的網段> <遮罩> <下一站 IP> [管理距離] [track <物件>]');
-      }
-      if (ad && !(+ad >= 1 && +ad <= 255)) return err('管理距離必須是 1 – 255');
-      const d = dev(), cur = d.routes.find((r) => r.dst === net && parseMask(r.mask || '') === maskBits(mask) && r.via === via);
+      const rc = routeCmd(net, mask, via, rest);
+      if (isErr(rc)) return rc;
+      const { ad, track } = rc;
+      const d = dev(), cur = d.routes.find((r) => !r.vrf && r.dst === net && parseMask(r.mask || '') === maskBits(mask) && r.via === via);
       const r = cur || { dst: net, mask, via };
       r.ad = ad || '';
       if (track != null) r.track = track; else delete r.track;
       if (!cur) d.routes.push(r);
       return undefined;
     }],
+    ['vrf definition <v>', ([v]) => {
+      const e = needRouting(); if (e) return e;
+      const vs = (dev().vrfs ||= {});
+      if (vs[v] && vs[v].style !== 'def') return err(`% ${v} 已經用 ip vrf 建立了`);
+      vs[v] ||= { style: 'def' };
+      enter('vrfdef', v);
+      return undefined;
+    }],
+    ['ip vrf <v>', ([v]) => {
+      const e = needRouting(); if (e) return e;
+      if (/^forwarding$/i.test(v)) return err('ip vrf forwarding 是介面模式的指令');
+      const vs = (dev().vrfs ||= {});
+      if (vs[v] && vs[v].style !== 'ip') return err(`% ${v} 已經用 vrf definition 建立了`);
+      vs[v] ||= { style: 'ip', af4: true };
+      enter('ipvrf', v);
+      return undefined;
+    }],
+    ...['no vrf definition <v>', 'no ip vrf <v>'].map((pat) => [pat, ([v]) => {
+      const d = dev();
+      if (!(d.vrfs || {})[v]) return err(`% VRF ${v} not configured.`);
+      const n = d.ifaces.filter((i) => i.vrf === v);
+      for (const i of n) { delete i.vrf; Object.assign(i, { ip: '', mask: '' }); }
+      d.routes = d.routes.filter((r) => r.vrf !== v);
+      delete d.vrfs[v];
+      if (!Object.keys(d.vrfs).length) delete d.vrfs;
+      return n.length ? `% IPv4 addresses from all interfaces in VRF ${v} have been removed` : undefined;
+    }]),
     ['no ip route <net> <mask> [...]', ([net, mask, via]) => {
       const d = dev(), n = d.routes.length;
-      const hit = (r) => r.dst === net && parseMask(r.mask || '') === maskBits(mask) && (!via || r.via === via);
+      const hit = (r) => !r.vrf && r.dst === net && parseMask(r.mask || '') === maskBits(mask) && (!via || r.via === via);
       d.routes = d.routes.filter((r) => !hit(r));
       let gw = false;
       if (parseIp(net) === 0 && maskBits(mask) === 0) for (const i of d.ifaces) if (i.gateway && (!via || i.gateway === via)) { i.gateway = ''; gw = true; }
@@ -2011,6 +2093,24 @@ export function iosSession(getDev, getState, who = null) {
       ['hidekeys', () => { dev().archive.log.hide = true; }],
       ['no hidekeys', () => { delete dev().archive.log.hide; }],
     ],
+    vrfdef: [
+      ['rd <rd>', ([rd]) => (/^(\d+|\d+\.\d+\.\d+\.\d+):\d+$/.test(rd) ? void (dev().vrfs[S.cur].rd = rd) : err('用法：rd <ASN:編號> 或 rd <IP:編號>，例如 rd 65000:1'))],
+      ['no rd [...]', () => { delete dev().vrfs[S.cur].rd; }],
+      ['description <...>', ([t]) => { dev().vrfs[S.cur].desc = t; }],
+      ['address-family ipv4 [...]', () => { dev().vrfs[S.cur].af4 = true; enter('vrfaf', S.cur); return undefined; }],
+      ['no address-family ipv4 [...]', () => { delete dev().vrfs[S.cur].af4; }],
+      ['address-family ipv6 [...]', () => err('這個模擬的 VRF 只支援 IPv4')],
+    ],
+    vrfaf: [
+      ['exit-address-family', () => { enter('vrfdef', S.cur); return undefined; }],
+      ['route-target <...>', () => undefined],
+    ],
+    ipvrf: [
+      ['rd <rd>', ([rd]) => (/^(\d+|\d+\.\d+\.\d+\.\d+):\d+$/.test(rd) ? void (dev().vrfs[S.cur].rd = rd) : err('用法：rd <ASN:編號>，例如 rd 65000:1'))],
+      ['no rd [...]', () => { delete dev().vrfs[S.cur].rd; }],
+      ['description <...>', ([t]) => { dev().vrfs[S.cur].desc = t; }],
+      ['route-target <...>', () => undefined],
+    ],
     track: [
       ['delay <...>', () => err('這個模擬沒有 track 的 delay：狀態一改變就生效')],
     ],
@@ -2301,6 +2401,7 @@ export function iosSession(getDev, getState, who = null) {
     if (match(tok, 'exit') && S.mode === 'ikev2peer') { S.mode = 'ikev2kr'; S.cur = S.cur.kr; return done(false); }
     // 巢狀的子模式：exit 只回到上一層（和真的 IOS 一樣）
     if (match(tok, 'exit') && S.mode === 'archlog') { S.mode = 'archive'; S.cur = null; return done(false); }
+    if (match(tok, 'exit') && S.mode === 'vrfaf') { S.mode = 'vrfdef'; return done(false); }
     if (match(tok, 'exit') && S.mode === 'slaecho') { S.mode = 'ipsla'; return done(false); }
     if (match(tok, 'exit') && S.mode === 'ikev2peer') { S.mode = 'ikev2kr'; S.cur = S.cur.kr; return done(false); }
     if (match(tok, 'exit')) {
@@ -2325,7 +2426,7 @@ export function iosSession(getDev, getState, who = null) {
     let res = trySub ? run(SUB[S.mode], tok, out) : { hit: false };
     let viaSub = res.hit;
     // 巢狀的子模式不認得的指令，先往上一層找（例如貼上設定時 log config 底下接著 archive 的 path）
-    const UP = { archlog: ['archive', () => null], slaecho: ['ipsla', (c) => c], ikev2peer: ['ikev2kr', (c) => c.kr], pmapc: ['pmap', (c) => ({ pm: c.pm })] };
+    const UP = { vrfaf: ['vrfdef', (c) => c], archlog: ['archive', () => null], slaecho: ['ipsla', (c) => c], ikev2peer: ['ikev2kr', (c) => c.kr], pmapc: ['pmap', (c) => ({ pm: c.pm })] };
     if (!res.hit && trySub && UP[S.mode]) {
       const [pm, pc] = UP[S.mode], prev = S.mode, prevCur = S.cur;
       S.mode = pm; S.cur = pc(prevCur);
@@ -2830,6 +2931,7 @@ export function runningConfig(state, dev) {
   const stp0 = (dev.sw && dev.sw.stp) || {};
   const l3lines = (i) => {
     const l = [];
+    if (i.vrf) l.push(((dev.vrfs || {})[i.vrf] || {}).style === 'ip' ? ` ip vrf forwarding ${i.vrf}` : ` vrf forwarding ${i.vrf}`);
     if (i.mode === 'dhcp') l.push(' ip address dhcp');
     else if (i.mode === 'pppoe') l.push(' pppoe-client dial-pool-number 1', ` ! PPPoE 帳號 ${i.user || '(未設定)'}`);
     else if (i.ip && parseMask(i.mask) != null) l.push(` ip address ${i.ip} ${fmtMask(parseMask(i.mask))}`);
@@ -2871,6 +2973,10 @@ export function runningConfig(state, dev) {
     if (i.qosOut) l.push(` service-policy output ${i.qosOut}`);
     return l.filter(Boolean);
   };
+  for (const [n, v] of Object.entries(dev.vrfs || {})) {
+    if (v.style === 'ip') o.push(`ip vrf ${n}`, ...(v.desc ? [` description ${v.desc}`] : []), ...(v.rd ? [` rd ${v.rd}`] : []), '!');
+    else o.push(`vrf definition ${n}`, ...(v.desc ? [` description ${v.desc}`] : []), ...(v.rd ? [` rd ${v.rd}`] : []), ...(v.af4 ? [' !', ' address-family ipv4', ' exit-address-family'] : []), '!');
+  }
   o.push(...archiveLines(dev));
   for (const [n, t] of Object.entries(dev.track || {})) {
     const ti = t.type === 'iface' && dev.ifaces.find((x) => x.id === t.iface);
@@ -2987,7 +3093,7 @@ export function runningConfig(state, dev) {
   for (const i of dev.ifaces) if (i.mode === 'static' && i.gateway && dev.routing) o.push(`ip route 0.0.0.0 0.0.0.0 ${i.gateway}`);
   for (const r of dev.routes || []) {
     if (!r.dst || !r.via) continue;
-    o.push(`ip route ${r.dst} ${parseMask(r.mask || '') != null ? fmtMask(parseMask(r.mask)) : r.mask} ${r.via}${+r.ad > 1 ? ' ' + r.ad : ''}${r.track != null && r.track !== '' ? ' track ' + r.track : ''}`);
+    o.push(`ip route ${r.vrf ? 'vrf ' + r.vrf + ' ' : ''}${r.dst} ${parseMask(r.mask || '') != null ? fmtMask(parseMask(r.mask)) : r.mask} ${r.via}${+r.ad > 1 ? ' ' + r.ad : ''}${r.track != null && r.track !== '' ? ' track ' + r.track : ''}`);
   }
   for (const [n, op] of Object.entries(dev.sla || {})) {
     const si = op.src && dev.ifaces.find((x) => x.id === op.src);

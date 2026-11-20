@@ -19,6 +19,11 @@ import { cloudStep, prepCloud, cloudOwns } from './cloud.js';
 import { fhrpProto, fhrpGroup, fhrpPreempt, fhrpDecrement, trackUp, slaTick, trackTick, HSRP_HOLD } from './track.js';
 import { syncVsw } from './virt.js';
 import { cacheGet, cachePut, isDnsServer, serverAnswer, INET_TTL } from './dns.js';
+import { dockerDeliver } from './docker.js';
+import { tlsCheck } from './web.js';
+
+/** 介面屬於哪一個 VRF（'' 是全域的路由表） */
+export const vrfOf = (i) => (i && i.vrf) || '';
 
 const DROP = Symbol('drop');
 const isVlanSw = (d) => !!d.sw && d.sw.mode === 'vlan';
@@ -1280,13 +1285,13 @@ function buildRoutes(state, d) {
   const r = [];
   const up = (i) => i.rt.ip != null && i.rt.link;
   for (const i of d.ifaces) {
-    if (up(i)) r.push({ net: netOf(i.rt.ip, i.rt.bits), bits: i.rt.bits, via: null, iface: i, type: 'C', ad: 0, metric: 0 });
+    if (up(i)) r.push({ net: netOf(i.rt.ip, i.rt.bits), bits: i.rt.bits, via: null, iface: i, type: 'C', ad: 0, metric: 0, vrf: vrfOf(i) });
   }
   for (const i of d.ifaces) {
     if (!up(i) || i.rt.gw == null) continue;
     const ok = sameNet(i.rt.gw, i.rt.ip, i.rt.bits) && i.rt.gw !== i.rt.ip;
     r.push({
-      net: 0, bits: 0, via: i.rt.gw, iface: i, type: i.rt.src === 'static' ? 'S' : 'D', ad: 1, metric: 0,
+      net: 0, bits: 0, via: i.rt.gw, iface: i, type: i.rt.src === 'static' ? 'S' : 'D', ad: 1, metric: 0, vrf: vrfOf(i),
       bad: ok ? null : `預設閘道 ${fmtIp(i.rt.gw)} 和 ${fmtIp(i.rt.ip)}/${i.rt.bits} 不在同一個子網路`,
     });
   }
@@ -1294,10 +1299,12 @@ function buildRoutes(state, d) {
     const dst = parseIp(s.dst), bits = parseMask(s.mask), via = parseIp(s.via);
     if (dst == null || bits == null || via == null) continue;
     if (s.track != null && s.track !== '' && !trackUp(state, d, s.track).up) continue; // 追蹤的物件 Down：這條路由從路由表撤掉
-    const i = d.ifaces.find((x) => up(x) && sameNet(via, x.rt.ip, x.rt.bits) && via !== x.rt.ip);
+    // ip route vrf X …：下一站要在同一個 VRF 的直連網段上
+    const v = s.vrf || '';
+    const i = d.ifaces.find((x) => up(x) && vrfOf(x) === v && sameNet(via, x.rt.ip, x.rt.bits) && via !== x.rt.ip);
     r.push({
-      net: netOf(dst, bits), bits, via, iface: i || null, type: 'S', ad: Math.max(1, +s.ad || 1), metric: 0,
-      bad: i ? null : `下一站 ${fmtIp(via)} 不在任何已連線的直連網段上`,
+      net: netOf(dst, bits), bits, via, iface: i || null, type: 'S', ad: Math.max(1, +s.ad || 1), metric: 0, vrf: v,
+      bad: i ? null : `下一站 ${fmtIp(via)} 不在${v ? ` VRF ${v} 的` : '任何已連線的'}直連網段上`,
     });
   }
   d.rt.routes = r;
@@ -1307,11 +1314,11 @@ function buildRoutes(state, d) {
  * 最長相符，再比管理距離、metric。好幾條一樣好的路（等價多路徑）：依來源與目的位址雜湊挑一條，
  * 同一對位址永遠走同一條（CEF 的 per-destination load sharing），不同的主機會分散到不同的路
  */
-export function lookupRoute(d, ip, src) {
+export function lookupRoute(d, ip, src, vrf = '') {
   let best = null;
   const ties = [];
   for (const r of d.rt.routes) {
-    if (r.bad || netOf(ip, r.bits) !== r.net) continue;
+    if (r.bad || (r.vrf || '') !== vrf || netOf(ip, r.bits) !== r.net) continue;
     if (!best || r.bits > best.bits || (r.bits === best.bits && (r.ad < best.ad || (r.ad === best.ad && r.metric < best.metric)))) { best = r; ties.length = 0; ties.push(r); }
     else if (r.bits === best.bits && r.ad === best.ad && r.metric === best.metric && r.via !== best.via) ties.push(r);
   }
@@ -1319,9 +1326,9 @@ export function lookupRoute(d, ip, src) {
   return best;
 }
 /** 某個目的地所有等價的路（給 show ip route 與 traceroute 用） */
-export function routesTo(d, ip) {
-  const best = lookupRoute(d, ip);
-  return best ? d.rt.routes.filter((r) => !r.bad && r.net === best.net && r.bits === best.bits && r.ad === best.ad && r.metric === best.metric) : [];
+export function routesTo(d, ip, vrf = '') {
+  const best = lookupRoute(d, ip, undefined, vrf);
+  return best ? d.rt.routes.filter((r) => !r.bad && (r.vrf || '') === vrf && r.net === best.net && r.bits === best.bits && r.ad === best.ad && r.metric === best.metric) : [];
 }
 
 /**
@@ -1765,6 +1772,14 @@ function computePass(state, auth) {
       if (ip == null || bits == null) continue;
       const prob = hostAddrProblem(ip, bits);
       if (prob) { i.rt.note = prob; continue; }
+      // 路由器、L3 交換器、防火牆：同一個路由表 (VRF) 裡不能有重疊的網段，IOS 會直接拒絕這個位址
+      if (d.kind === 'router' || d.kind === 'l3switch' || d.kind === 'firewall') {
+        const clash = d.ifaces.find((x) => x !== i && x.rt.ip != null && vrfOf(x) === vrfOf(i) && sameNet(ip, x.rt.ip, Math.min(bits, x.rt.bits)));
+        if (clash) {
+          i.rt.note = `${fmtIp(netOf(ip, bits))}/${bits} 和 ${clash.label} 的網段重疊，這個位址沒有生效（IOS：% ${fmtIp(netOf(ip, bits))} overlaps with ${clash.label}）。同一個路由表裡網段不能重疊；真的要重疊，就把它們放進不同的 VRF`;
+          continue;
+        }
+      }
       Object.assign(i.rt, { ip, bits, src: 'static', gw: parseIp(i.gateway), dns: dnsList(i.dns) });
     }
   }
@@ -1918,8 +1933,8 @@ function pktDesc(p) {
   return `${what}　${fmtIp(p.src)} → ${fmtIp(p.dst)}`;
 }
 
-function isLocal(dev, ip) {
-  if (dev.ifaces.some((i) => i.rt.ip === ip || i.rt.vips.includes(ip))) return true;
+function isLocal(dev, ip, vrf) {
+  if (dev.ifaces.some((i) => (vrf == null || vrfOf(i) === vrf) && (i.rt.ip === ip || i.rt.vips.includes(ip)))) return true;
   if (dev.rt.tunnels.some((t) => t.vip === ip)) return true;
   if (dev.kind === 'cloud') return cloudOwns(dev, ip);
   return dev.kind === 'internet' && dev.inet.hosts.some((h) => parseIp(h.ip) === ip);
@@ -2084,6 +2099,7 @@ function deliver(dev, inIf, pkt) {
     if (!addrMatch(String(dev.mgmt.allow || '').replace(/[,\s]+/g, ','), pkt.src)) return no(`來源 ${fmtIp(pkt.src)} 不在 ${dev.name} 允許管理的位址範圍內`);
     return ok;
   }
+  if (dev.docker) { const dk = dockerDeliver(dev, pkt); if (dk) return dk.ok ? ok : no(dk.reason); }
   if (pkt.proto === 'tcp' && pkt.dport === 5201 && dev.kind === 'host') return ok; // 每台主機都當作有跑 iperf3 -s，可以拿來測速
   if ((dev.services || []).some((s) => s.proto === pkt.proto && s.port === pkt.dport)) return ok;
   return no(`${dev.name} 沒有在 ${PROTO}/${pkt.dport} 提供服務（連線被拒絕）`);
@@ -2165,7 +2181,7 @@ function forward(state, ctx, startId, pkt) {
       if (dev.kind === 'internet' && dev.inet.fault && !dev.ifaces.some((i) => i.rt.ip === pkt.dst)) {
         return drop(`${dev.name} 的骨幹故障：封包到了業者那一端就出不去（線路燈號正常，介面沒有 down）`);
       }
-      if (isLocal(dev, pkt.dst)) {
+      if (isLocal(dev, pkt.dst, vrfOf(inIf))) {
         T('vf_ip_route_input_common', `find a route: flag=84000000 gw-${fmtIp(pkt.dst)} via root`);
         const r = deliver(dev, inIf, pkt);
         if (!r.ok) { log.push({ dev: dev.id, kind: 'drop', text: r.reason }); T('fw_local_in_handler', 'iprope_in_check() check failed on policy 0, drop'); }
@@ -2178,7 +2194,7 @@ function forward(state, ctx, startId, pkt) {
       if (!dev.routing) return drop(`${dev.name} 收到不是給自己的封包（目的 ${fmtIp(pkt.dst)}），它不是路由器所以直接丟棄`);
       if (--pkt.ttl <= 0) return drop('TTL 歸零，封包被丟棄（可能有路由迴圈）');
       if (!pkt.reply && !pkt.ack && pkt.proto !== 'esp') ctx.l3.push({ dev: dev.id, ip: inIf.rt.ip });
-    } else if (!cloud && isLocal(dev, pkt.dst)) {
+    } else if (!cloud && isLocal(dev, pkt.dst, dev.id === ctx.vrfDev ? ctx.vrf : '')) {
       return { ok: true, dev: dev.id };
     }
 
@@ -2233,7 +2249,8 @@ function forward(state, ctx, startId, pkt) {
       return drop(`${fmtIp(pkt.dst)} 是私有 IP，在網際網路上無法路由（上一台路由器把它交給了預設路由 — 是不是少了通往這個網段的路由或 VPN？）`);
     }
 
-    const route = cloud ? cloud.out : lookupRoute(dev, pkt.dst, pkt.src);
+    // 自己送出的封包：ping vrf X 指定的 VRF 只套用在發出 ping 的那一台（回應的那一台用它自己的全域路由表）
+    const route = cloud ? cloud.out : lookupRoute(dev, pkt.dst, pkt.src, inIf ? vrfOf(inIf) : dev.id === ctx.vrfDev ? ctx.vrf : '');
     if (!route) {
       D('packet', `IP: s=${fmtIp(pkt.src)} (${inIf ? longIf(inIf.label) : 'local'}), d=${fmtIp(pkt.dst)}, len ${ipLen(pkt)}, unroutable`);
       return drop(noRouteReason(state, dev, pkt.dst));
@@ -2535,17 +2552,17 @@ export function closeFlow(state, cid) {
 }
 
 function transactInner(state, fromId, spec) {
-  const ctx = { ct: {}, log: [], hops: [], l3: [], cid: spec.keep || null };
+  const ctx = { ct: {}, log: [], hops: [], l3: [], cid: spec.keep || null, vrf: spec.vrf || '', vrfDev: fromId };
   const src = state.devices[fromId];
   const done = (r) => ({ ...r, log: ctx.log, hops: ctx.hops, l3: ctx.l3 });
   let srcIp = spec.srcIp;
   if (srcIp == null) {
-    if (isLocal(src, spec.dst)) {
+    if (isLocal(src, spec.dst, spec.vrf || '')) {
       ctx.log.push({ dev: fromId, kind: 'ok', text: `${fmtIp(spec.dst)} 就是自己，本機迴路成功` });
       return done({ ok: true, responder: fromId });
     }
     const t = src.rt.tunnels.find((x) => x.up && x.vip != null && selMatch(x.remote, spec.dst));
-    const r = t ? null : lookupRoute(src, spec.dst);
+    const r = t ? null : lookupRoute(src, spec.dst, undefined, spec.vrf || '');
     if (!t && !r) {
       const reason = state.rt.off[fromId] ? `${src.name} 沒有電` : noRouteReason(state, src, spec.dst);
       ctx.log.push({ dev: fromId, kind: 'drop', text: reason });
@@ -2820,7 +2837,7 @@ export function runObjective(state, o) {
     dst = i.rt.ip;
   }
   const srcIp = o.srcIp ? parseIp(o.srcIp) : from.kind === 'internet' ? parseIp(from.inet.client) : undefined;
-  const proto = o.type === 'ping' ? 'icmp' : o.type === 'speed' ? 'tcp' : o.type;
+  const proto = o.type === 'ping' ? 'icmp' : o.type === 'speed' || o.type === 'https' ? 'tcp' : o.type;
   const r = transact(state, o.from, { proto, dst, dport: o.type === 'speed' ? 5201 : o.port ?? 443, srcIp });
   log.push(...r.log); hops.push(...r.hops);
   if (r.ok && o.type === 'speed') {
@@ -2829,6 +2846,15 @@ export function runObjective(state, o) {
     log.push({ dev: pass ? o.from : t.dev || o.from, kind: pass ? 'ok' : 'drop', text: `iperf3：${t.mbps} Mbps${t.retr ? `，重傳 ${t.retr} 次` : ''}。最慢的一段是 ${t.where}` });
     if (!pass) return { pass: false, ok: true, reason: `只跑得到 ${t.mbps} Mbps（目標 ${min} Mbps 以上）。最慢的一段：${t.where}`, failDev: t.dev || o.from, log, hops, speed: t };
     return { pass: true, ok: true, reason: '', failDev: null, log, hops, speed: t };
+  }
+  if (r.ok && o.type === 'https') {
+    // HTTPS：TCP 連得上之後還要 TLS 交握，用戶端用自己的信任清單與時鐘驗證憑證
+    const t = tlsCheck(state, from, state.devices[r.responder], o.name || fmtIp(dst));
+    if (!t.ok) {
+      log.push({ dev: o.from, kind: 'drop', text: `TLS 交握失敗：${t.msg}（${t.why}）` });
+      return finish(false, `憑證錯誤：${t.why}`, o.from);
+    }
+    log.push({ dev: o.from, kind: 'ok', text: `TLS 交握成功：憑證是「${t.cert.issuer}」簽給 ${(t.cert.san || [t.cert.cn]).join('、')} 的` });
   }
   if (r.ok && (o.via || o.avoid)) {
     const seen = new Set();
@@ -3006,10 +3032,10 @@ export function evaluate(state, objectives) {
 }
 
 /** 給「狀態」分頁用的路由表文字 */
-export function routeRows(dev) {
+export function routeRows(dev, vrf = '') {
   const name = { C: '直連', S: '靜態', D: '自動', O: 'OSPF', B: 'BGP' };
   return dev.rt.routes
-    .slice()
+    .filter((r) => (r.vrf || '') === vrf)
     .sort((a, b) => a.ad - b.ad || a.net - b.net)
     .map((r) => ({
       type: r.type, typeName: name[r.type], sub: r.sub || '',

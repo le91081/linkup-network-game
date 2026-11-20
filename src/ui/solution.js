@@ -6,6 +6,7 @@ import { cloneState } from '../engine/model.js';
 import { settle } from '../engine/sim.js';
 import { isIos, runningConfig } from '../engine/ios.js';
 import { cfgDiff } from '../engine/archive.js';
+import { certSelf, fmtDate } from '../engine/web.js';
 
 const SKIP = new Set(['rt', 'pos', 'ports', 'startup', 'flash', 'fw', 'fwNext', 'note', 'locked', 'model', 'kind', 'id', 'seq', 'files', 'sshKey']);
 const LABEL = {
@@ -60,6 +61,41 @@ function diffVal(path, a, b, out) {
   out.push({ path, from: a, to: b });
 }
 
+/**
+ * 主機上幾個有自己說法的設定，用玩家實際會做的動作來描述（處理完就從比對用的副本拿掉）：
+ * 容器 → docker 指令（發佈的埠改不了，要 rm 再 run）、網站的憑證、信任的根憑證、自動校時
+ */
+function hostLines(a, b) {
+  const out = [];
+  if (a.docker || b.docker) {
+    const ca = (a.docker || {}).containers || [], cb = (b.docker || {}).containers || [];
+    const same = (x, y) => x.image === y.image && JSON.stringify(x.publish) === JSON.stringify(y.publish);
+    const pub = (c) => c.publish.map((p) => ` -p ${p.hostIp !== '0.0.0.0' ? p.hostIp + ':' : ''}${p.host}:${p.ctr}${p.proto !== 'tcp' ? '/' + p.proto : ''}`).join('');
+    for (const n of [...new Set([...ca, ...cb].map((c) => c.name))]) {
+      const x = ca.find((c) => c.name === n), y = cb.find((c) => c.name === n);
+      if (x && y && same(x, y)) { if (x.state !== y.state) out.push(`docker ${y.state === 'running' ? 'start' : 'stop'} ${n}`); continue; }
+      if (x) out.push(`docker rm -f ${n}`);
+      if (y) out.push(`docker run -d --name ${n}${pub(y)} ${y.image}`);
+    }
+    delete a.docker; delete b.docker;
+  }
+  if (a.web || b.web) {
+    const wa = a.web || {}, wb = b.web || {}, c = wb.cert;
+    if (JSON.stringify(wa.cert) !== JSON.stringify(c)) out.push(c ? `網站的憑證：換成${certSelf(c) ? '自簽憑證' : ` ${c.issuer} 簽發的新憑證`}（SAN：${(c.san && c.san.length ? c.san : [c.cn]).join('、')}；${fmtDate(c.from)} ～ ${fmtDate(c.to)}）` : '網站的憑證：移除');
+    if (!!wa.redirect !== !!wb.redirect) out.push(`HTTP 轉到 HTTPS：${wb.redirect ? '關 → 開' : '開 → 關'}`);
+    if ((wa.title || '') !== (wb.title || '')) out.push(`網頁標題：${wa.title || '（無）'} → ${wb.title || '（無）'}`);
+    delete a.web; delete b.web;
+  }
+  const ta = a.trust || [], tb = b.trust || [];
+  for (const x of tb) if (!ta.includes(x)) out.push(`受信任的根憑證：匯入 ${x}`);
+  for (const x of ta) if (!tb.includes(x)) out.push(`受信任的根憑證：移除 ${x}`);
+  delete a.trust; delete b.trust;
+  const sa = !a.clock || a.clock.sync !== false, sb = !b.clock || b.clock.sync !== false;
+  if (sa !== sb) out.push(`自動設定時間：${sb ? '關 → 開' : '開 → 關'}`);
+  delete a.clock; delete b.clock;
+  return out;
+}
+
 /** 參考解法改了什麼：{ cables: [文字], devs: [{ name, ios, lines }] } */
 export function solutionChanges(lv) {
   const s0 = lv.setup();
@@ -88,8 +124,10 @@ export function solutionChanges(lv) {
       continue;
     }
     const out = [];
+    const pre = b.kind === 'host' ? hostLines(c0.devices[id], c1.devices[id]) : [];
     diffVal([], c0.devices[id], c1.devices[id], out);
-    if (out.length) devs.push({ name: b.name, ios: false, lines: out.map((x) => `${x.path.join(' › ')}${x.add !== undefined ? '：新增 ' + show(x.add) : x.del !== undefined ? '：移除 ' + show(x.del) : `：${show(x.from)} → ${show(x.to)}`}`) });
+    const lines = [...pre, ...out.map((x) => `${x.path.join(' › ')}${x.add !== undefined ? '：新增 ' + show(x.add) : x.del !== undefined ? '：移除 ' + show(x.del) : `：${show(x.from)} → ${show(x.to)}`}`)];
+    if (lines.length) devs.push({ name: b.name, ios: false, lines });
   }
   if (JSON.stringify(s0.down || {}) !== JSON.stringify(s1.down || {})) devs.push({ name: '電源', ios: false, lines: [`關機中的設備：${Object.keys(s1.down || {}).map((id) => name(s1, id)).join('、') || '（無）'}`] });
   return { cables, devs };

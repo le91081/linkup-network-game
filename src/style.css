@@ -832,3 +832,17 @@ body.view2d #stage .scene-labels, body.view2d #stage canvas { visibility: hidden
 #coach .co-bar i { display: block; height: 100%; background: #4fd8c4; transition: width 0.3s; }
 .coach-hl { outline: 2px solid #4fd8c4 !important; outline-offset: 3px; animation: coachpulse 1.4s ease-in-out infinite; }
 @keyframes coachpulse { 50% { outline-color: rgba(79, 216, 196, 0.25); outline-offset: 6px; } }
+
+/* ───────── VRF ───────── */
+.sub.vrf { margin-top: 8px; }
+.vrf-rt { font-size: 11.5px; color: #9fd8ff; padding: 6px 8px; border-radius: 8px; background: rgba(150, 170, 225, 0.06); display: flex; flex-direction: column; gap: 2px; overflow-wrap: anywhere; }
+
+/* ───────── Docker ───────── */
+.ctr-row { padding: 8px 0; border-top: 1px solid rgba(150, 170, 225, 0.1); display: flex; flex-direction: column; gap: 4px; }
+.ctr-row:first-of-type { border-top: 0; }
+.ctr-top { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.ctr-top .muted { font-size: 11.5px; }
+.ctr-top .link { margin-left: auto; }
+.ctr-ports { font-size: 11.5px; overflow-wrap: anywhere; }
+.ctr-new { display: grid; grid-template-columns: 1fr 1fr; gap: 6px 10px; margin: 6px 0; }
+.ctr-new .addrow { margin: 0; }

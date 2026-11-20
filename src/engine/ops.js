@@ -52,9 +52,11 @@ export function ensureInetNtp(d) {
 export function deviceTime(state, d, depth = 0) {
   const now = state.clock || 0, wall = SIM_EPOCH + now * 1000;
   const c = (state.dyn && state.dyn.clk && state.dyn.clk[d.id]) || {};
-  const tz = (d.mgmt && d.mgmt.tz) || { name: 'UTC', off: 0 };
+  // 網路設備出廠是 UTC；一般的電腦裝好就是台北時間 (UTC+8)
+  const tz = (d.mgmt && d.mgmt.tz) || (d.mgmt ? { name: 'UTC', off: 0 } : { name: 'CST', off: 8 });
   const out = (ms, src, auth, sync) => ({ ms, src, auth, sync, tz });
-  if (!d.mgmt) return out(wall, 'os', true, true);
+  // 一般的電腦：作業系統自動校時；關掉自動校時（或主機板電池沒電）的電腦，時鐘差多少就是多少
+  if (!d.mgmt) return d.clock && !d.clock.sync ? out(wall + (+d.clock.skew || 0) * 1000, 'os', true, false) : out(wall, 'os', true, true);
   const n = c.ntp;
   if (n && n.synced && depth < 6) {
     // 對時對的是「上游那一台的時間」：上游自己的時鐘是錯的，下游就跟著錯

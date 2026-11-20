@@ -10,7 +10,7 @@ import { cdpCfg, lldpCfg, cdpOn, lldpTxOn, lldpRxOn, neighbors, ndCounters, cdpC
 import { dscpName, COS_DSCP_DEFAULT, portTrust, egressOf, classify, QLIMIT } from '../engine/qos.js';
 import { ospfArea, ospfCost, ospfPassive, ospfHello, ospfDead, ospfPrio, ospfNetType, isLoopback } from '../engine/ospf.js';
 import { bgpCfg } from '../engine/bgp.js';
-import { ikeVer, errdisRows, ERR_CAUSES } from '../engine/sim.js';
+import { ikeVer, errdisRows, ERR_CAUSES, vrfOf } from '../engine/sim.js';
 import { ERR_RECOVERY_CAUSES } from '../engine/ios.js';
 import { fhrpProto, fhrpGroup, trackUp, trackText, trackUsers, slaKey, SLA_FREQ } from '../engine/track.js';
 import { archiveFiles, nextArchiveName, cfgDiff, ARCH_MAX_DEFAULT } from '../engine/archive.js';
@@ -595,6 +595,8 @@ const SHOW = {
     }
     return o;
   },
+  'show vrf': (st, d) => vrfTable(d, true),
+  'show ip vrf': (st, d) => vrfTable(d, false),
   'show archive': (st, d) => {
     const a = d.archive;
     if (!a || !a.path) return ['Archive feature not enabled（先在 archive 底下設定 path flash:<名稱>）'];
@@ -922,8 +924,8 @@ const routeCode = (r) => { const t = r.type === 'D' ? 'S' : r.type, def = r.bits
  * 真正放進路由表的路：每個網段只留管理距離（再來是 metric）最好的那一種，等價的全部留下；再加上每個介面自己的 /32 (L)。
  * 沒放進去的（下一站不通的靜態路由、管理距離比較大的備援路由）另外列出來，畫面上用提示說明原因
  */
-function ribOf(d) {
-  const all = d.rt.routes || [], key = (r) => r.net + '/' + r.bits, best = {};
+function ribOf(d, vrf = '') {
+  const all = (d.rt.routes || []).filter((r) => (r.vrf || '') === vrf), key = (r) => r.net + '/' + r.bits, best = {};
   for (const r of all) {
     if (r.bad) continue;
     const b = best[key(r)];
@@ -931,7 +933,7 @@ function ribOf(d) {
   }
   const rib = [], out = [];
   for (const r of all) { const b = best[key(r)]; (!r.bad && b && b.ad === r.ad && b.metric === r.metric && b.type === r.type ? rib : out).push(r); }
-  for (const i of d.ifaces) if (i.rt && i.rt.ip != null && i.rt.link && i.rt.bits < 32) rib.push({ net: i.rt.ip, bits: 32, via: null, iface: i, type: 'L', ad: 0, metric: 0 });
+  for (const i of d.ifaces) if (i.rt && i.rt.ip != null && i.rt.link && i.rt.bits < 32 && vrfOf(i) === vrf) rib.push({ net: i.rt.ip, bits: 32, via: null, iface: i, type: 'L', ad: 0, metric: 0 });
   rib.sort((a, b) => a.net - b.net || a.bits - b.bits); // 穩定排序：等價的路維持原本的順序
   return { rib, out };
 }
@@ -942,16 +944,16 @@ const routeTail = (st, r) => {
   if (r.type === 'B') return `${m}, ${rtAge(st, r)}`; // BGP 的下一站要再查一次路由表（遞迴），所以不寫介面
   return m; // 靜態路由只寫下一站
 };
-function routeLines(st, d, keep) {
+function routeLines(st, d, keep, vrf = '') {
   if (!d.routing) {
     // L2 交換器沒有路由表：只有管理用的預設閘道
     const gw = d.ifaces.find((i) => i.rt && i.rt.gw != null);
     return [gw ? `Default gateway is ${fmtIp(gw.rt.gw)}` : 'Default gateway is not set', '', 'Host               Gateway           Last Use    Total Uses  Interface', 'ICMP redirect cache is empty',
       '（這是一台 L2 交換器，沒有啟用 ip routing：它只有管理用的預設閘道，不會替別人轉送封包）'];
   }
-  const { rib, out } = ribOf(d);
+  const { rib, out } = ribOf(d, vrf);
   const def = rib.filter((r) => r.bits === 0).sort((a, b) => a.ad - b.ad)[0];
-  const o = [...ROUTE_CODES, def ? `Gateway of last resort is ${fmtIp(def.via)} to network 0.0.0.0` : 'Gateway of last resort is not set', ''];
+  const o = [...(vrf ? ['', `Routing Table: ${vrf}`] : []), ...ROUTE_CODES, def ? `Gateway of last resort is ${fmtIp(def.via)} to network 0.0.0.0` : 'Gateway of last resort is not set', ''];
   // 依主網段分組；比主網段還大的（預設路由、supernet）自己一組、不印標題
   const groups = [];
   for (const r of rib.filter(keep)) {
@@ -1332,6 +1334,18 @@ function natTable(st, d, verbose) {
   return o;
 }
 
+/** show vrf（IOS XE，有 Protocols 欄）與 show ip vrf */
+function vrfTable(d, xe) {
+  const vs = Object.entries(d.vrfs || {});
+  if (!vs.length) return ['（這台沒有設定任何 VRF：所有介面都在全域的路由表裡）'];
+  const o = [xe ? '  Name                             Default RD            Protocols   Interfaces' : '  Name                             Default RD            Interfaces'];
+  for (const [n, v] of vs) {
+    const ifs = d.ifaces.filter((i) => i.vrf === n).map((i) => i.label);
+    o.push(`  ${pad(n, 33)}${pad(v.rd || '<not set>', 22)}${xe ? pad(v.af4 ? 'ipv4' : '', 12) : ''}${ifs[0] || ''}`);
+    for (const x of ifs.slice(1)) o.push(' '.repeat(xe ? 69 : 57) + x);
+  }
+  return o;
+}
 /** 這台設備上某個協定的 FHRP 介面 */
 const fhrpIfs = (d, proto) => d.ifaces.filter((i) => i.vrrp && (i.vrrp.on || i.vrrp.vip) && fhrpProto(i.vrrp) === proto);
 /** 同一組的成員：誰是 Active / Master、誰是 Standby；HSRP 第三台以後是 Listen */
@@ -1361,11 +1375,18 @@ function showOrPing(app, devId, line, print) {
   const st = app.state, d = st.devices[devId];
   if (!tok.length || !d) return true;
   if ('ping'.startsWith(tok[0]) && tok[0].length >= 2) {
+    // ping vrf <名稱> <IP>：從那個 VRF 的路由表送出去
+    let vrf = '';
+    if (tok[1] === 'vrf') {
+      vrf = line.trim().split(/\s+/)[2] || '';
+      if (!(d.vrfs || {})[vrf]) { print(`% VRF ${vrf || '<名稱>'} does not have a usable source address`, 'warn'); return true; }
+      tok.splice(1, 2);
+    }
     const ip = parseIp(tok[1] || '');
     if (ip == null) print('% 用法：ping <IPv4 位址>', 'warn');
     else if (!d.ifaces.some((i) => i.rt && i.rt.ip != null)) print('% 這台設備沒有任何 IP 位址，無法送出封包', 'warn');
     else {
-      const r = transact(st, d.id, { proto: 'icmp', dst: ip });
+      const r = transact(st, d.id, { proto: 'icmp', dst: ip, vrf });
       app.showTrace(`${d.name}# ${line}`, r.log, r.hops, r);
       print(`Sending 5, 100-byte ICMP Echos to ${fmtIp(ip)}, timeout is 2 seconds:`);
       print(r.ok ? '!!!!!' : '.....', r.ok ? 'ok' : 'bad');
@@ -1473,6 +1494,12 @@ function showOrPing(app, devId, line, print) {
     const i = lo ? d.ifaces.find((x) => isLoopback(x) && x.bind.n === +lo[1]) : (() => { const p = portByName(d, name.replace(/\.\d+$/, '')); const sub = name.match(/\.(\d+)$/); return p && d.ifaces.find((x) => x.bind.port === p.id && (sub ? x.bind.t === 'sub' && x.bind.vlan === +sub[1] : x.bind.t === 'port')); })();
     if (!i) { print(`% 找不到介面「${tok.slice(3).join(' ')}」`, 'warn'); return true; }
     ipv6IfLines(st, d, i).forEach((l) => print(l, l.startsWith('（') ? 'hint' : 'pre'));
+    return true;
+  }
+  if (tok[0].length >= 2 && 'show'.startsWith(tok[0]) && tok[1] === 'ip' && (tok[2] || '').length >= 2 && 'route'.startsWith(tok[2]) && tok[3] === 'vrf') {
+    const v = line.trim().split(/\s+/)[4];
+    if (!v || !(d.vrfs || {})[v]) { print(v ? `% IP routing table ${v} does not exist` : '用法：show ip route vrf <名稱>', 'warn'); return true; }
+    routeLines(st, d, () => true, v).forEach((l) => print(l, l.startsWith('（') ? 'hint' : 'pre'));
     return true;
   }
   if (tok[0].length >= 2 && 'show'.startsWith(tok[0]) && tok[1] === 'ip' && (tok[2] || '').length >= 2 && 'route'.startsWith(tok[2]) && tok[3] && parseIp(tok[3]) != null) {
