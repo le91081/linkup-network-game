@@ -385,10 +385,12 @@ export function routerId(d) {
 }
 
 function snapshot(state, d) {
-  const s = { port: {}, nbr: {}, nbr6: {}, norid6: false, vrrp: {}, tun: {}, dup: {}, dupIp: {}, pool: [], auth: {} };
+  const s = { port: {}, errN: {}, nbr: {}, nbr6: {}, norid6: false, vrrp: {}, tun: {}, dup: {}, dupIp: {}, pool: [], auth: {} };
   const shutIf = (pid) => d.ifaces.some((i) => i.shut && i.bind.t === 'port' && i.bind.port === pid);
   for (const p of d.ports) {
     const pc = d.sw && d.sw.ports[p.id], err = d.rt.err && d.rt.err[p.id];
+    const ed = state.dyn.errdis && state.dyn.errdis[d.id + ':' + p.id];
+    if (ed) s.errN[p.id] = ed.n || 1; // 第幾次被關：recovery 打開之後馬上又被關，前後的狀態一樣，要靠這個看出來
     s.port[p.id] = (pc && pc.shut) || shutIf(p.id) ? 'admin' : err === 'root' ? 'rootinc' : err === 'bpdu' ? 'bpdu' : err ? 'psec' : state.rt.links[d.id + ':' + p.id] ? 'up' : 'down';
     const li = state.rt.links[d.id + ':' + p.id] && linkInfo(state, d.id, p.id);
     if (li && li.mismatch) s.dup[p.id] = li.duplex + '|' + li.peerDuplex;
@@ -441,10 +443,17 @@ function diffDevice(state, d, a, b) {
     const all = macsOn(pid), m = all.find((x) => !ok.includes(x)) || all[0];
     return m ? dotMac(m) : 'unknown';
   };
+  const ERR_TXT = { bpdu: 'bpduguard', psec: 'psecure-violation' };
   for (const [pid, now] of Object.entries(b.port)) {
-    const was = a.port[pid];
-    if (was === now || was == null) continue;
+    let was = a.port[pid];
     const L = longIf(label(pid)), S = label(pid);
+    // errdisable recovery 的計時器到了：先試著打開（原因還在的話，下面會再記一次被關掉）
+    const cycled = ERR_TXT[was] && was === now && (a.errN || {})[pid] != null && (a.errN || {})[pid] !== (b.errN || {})[pid];
+    if (ERR_TXT[was] && (cycled || (now !== was && now !== 'admin'))) {
+      ev(4, 'PM-4-ERR_RECOVER', `Attempting to recover from ${ERR_TXT[was]} err-disable state on ${S}`);
+      if (cycled) was = 'down';
+    }
+    if (was === now || was == null) continue;
     const wasUp = was === 'up';
     if (now === 'up') {
       if (was === 'rootinc') { ev(2, 'SPANTREE-2-ROOTGUARD_UNBLOCK', `Root guard unblocking port ${L} on VLAN0001.`); continue; }

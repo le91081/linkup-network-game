@@ -156,6 +156,31 @@ test('Cisco CLI：打指令、管線過濾、設定模式與 running-config', as
   expect(await page.evaluate(() => window.linkup.state.devices.rt.name)).not.toBe('E2E-RT');
 });
 
+test('err-disabled：show 指令、安全分頁的自動恢復設定、連接埠的重新啟用', async ({ page }) => {
+  await boot(page);
+  await open(page, 'l32', true);
+  await clickDevice(page, 'sw-a');
+  await page.locator('#panel .tab', { hasText: 'CLI' }).click();
+  await typeCmd(page, 'show interfaces status err-disabled');
+  await expect(page.locator('#panel .term-out')).toContainText(/Gi0\/5\s+err-disabled bpduguard/);
+  await typeCmd(page, 'enable');
+  await typeCmd(page, 'configure terminal');
+  await typeCmd(page, 'errdisable recovery cause bpduguard');
+  await typeCmd(page, 'errdisable recovery interval 45');
+  await typeCmd(page, 'end');
+  await typeCmd(page, 'show errdisable recovery');
+  await expect(page.locator('#panel .term-out')).toContainText(/bpduguard\s+Enabled/);
+  await expect(page.locator('#panel .term-out')).toContainText('Timer interval: 45 seconds');
+  expect(await scan(page, '#panel', 'CLI')).toEqual([]);
+  // 安全分頁：設定同步過來，列出 err-disabled 的埠
+  await page.locator('#panel .tab', { hasText: '安全' }).click();
+  const card = page.locator('#panel .card', { hasText: 'err-disabled 自動恢復' });
+  await expect(card).toContainText('Gi0/5');
+  await expect(card.locator('input:not([type=checkbox])').first()).toHaveValue('45');
+  await expect(card.locator('input[type=checkbox]').first()).toBeChecked();
+  expect(await scan(page, '#panel', '安全分頁')).toEqual([]);
+});
+
 test('主機終端機：ipconfig、ping 會在主控台播封包', async ({ page }) => {
   await boot(page);
   await open(page, 'l04', true);

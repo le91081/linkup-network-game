@@ -367,19 +367,57 @@ function prepPhysical(state) {
     rt.links[B.id + ':' + c.b.port] = { dev: A.id, port: c.a.port, cable: c.id };
     rt.cable[c.id] = 'up';
   }
-  // Port Security 的 shutdown 模式：發現不認識的 MAC 就把整個埠關掉 (err-disabled)
+  // ── err-disabled ──
+  // 違規一發生埠就被關掉，而且會一直維持：就算原因排除了（拔掉那台設備、改了設定）也不會自己恢復，
+  // 要 shutdown 再 no shutdown；或是設定了 errdisable recovery，計時器到了交換器自己試著打開（原因還在就馬上又被關掉）。
+  // 設備關機、重新開機也會清掉。state.dyn.errdis = { '設備:埠': { cause: 'psec' | 'bpdu', at, n（第幾次被關） } }
+  const ED = (state.dyn.errdis ||= {}), now = state.clock, retry = {};
+  const cutPort = (d, pid, l, why) => {
+    delete rt.links[d.id + ':' + pid];
+    delete rt.links[l.dev + ':' + l.port];
+    rt.cable[l.cable] = 'down';
+    rt.why[l.cable] = why;
+  };
+  const psecBad = (d, pid) => {
+    const pc = d.sw.ports[pid];
+    return !!(rt.links[d.id + ':' + pid] && pc.ps && pc.ps.on && pc.ps.mode === 'shutdown') && macsBehind(state, d, pid).some((m) => !psAllowed(pc, m.mac));
+  };
+  const bpduBad = (d, pid) => {
+    const pc = d.sw.ports[pid], l = rt.links[d.id + ':' + pid];
+    if (!l || !pc.bpduguard) return false;
+    const x = state.devices[l.dev];
+    return isVlanSw(x) && !(x.sw.stp && x.sw.stp.on === false) && isBridgePort(x, l.port);
+  };
+  const what = (c) => (c === 'bpdu' ? 'BPDU Guard 收到 BPDU' : 'Port Security 違規');
+  const markErr = (d, pid, cause) => { d.rt.err[pid] = cause === 'bpdu' ? 'bpdu' : true; };
+  for (const [key, e] of Object.entries(ED)) {
+    const k = key.indexOf(':'), d = state.devices[key.slice(0, k)], pid = key.slice(k + 1);
+    if (!d || !isVlanSw(d) || !d.sw.ports[pid] || down[d.id] || shut(d, pid)) { delete ED[key]; continue; }
+    const secs = errRecoverSecs(d, e.cause);
+    // 計時器到了：埠重新打開，下面照常檢查，原因還在就再關一次
+    if (secs && now >= e.at + secs - 1e-9) { retry[key] = e.n || 1; delete ED[key]; continue; }
+    const still = e.cause === 'bpdu' ? bpduBad(d, pid) : psecBad(d, pid);
+    markErr(d, pid, e.cause);
+    const l = rt.links[key];
+    if (l) {
+      cutPort(d, pid, l, still
+        ? `${d.name} 的 ${pid} 處於 err-disabled（${what(e.cause)}），原因還在${secs ? `：errdisable recovery 打開之後會馬上再被關掉` : ''}`
+        : `${d.name} 的 ${pid} 還是 err-disabled：${what(e.cause)}的原因已經排除，但埠不會自己恢復，要 shutdown 再 no shutdown${secs ? `，或等 errdisable recovery（還要 ${Math.ceil(e.at + secs - now)} 秒）` : ''}`);
+    }
+    if (secs && !still) rt.pending.push({ at: e.at + secs, dev: d.id, kind: 'errdis', text: `${d.name} ${pid}：errdisable recovery` });
+  }
+  const errOn = (d, pid, cause, why) => {
+    const key = d.id + ':' + pid, l = rt.links[key];
+    ED[key] = { cause, at: now, n: (retry[key] || 0) + 1 };
+    markErr(d, pid, cause);
+    cutPort(d, pid, l, why + '。排除原因之後要 shutdown 再 no shutdown 才會恢復' + (errRecoverSecs(d, cause) ? '（或等 errdisable recovery 的計時器）' : ''));
+  };
+  // Port Security 的 shutdown 模式：發現不認識的 MAC 就把整個埠關掉
   for (const d of Object.values(state.devices)) {
     if (!isVlanSw(d)) continue;
-    for (const [pid, pc] of Object.entries(d.sw.ports)) {
-      const l = rt.links[d.id + ':' + pid];
-      if (!l || !pc.ps || !pc.ps.on || pc.ps.mode !== 'shutdown') continue;
-      if (macsBehind(state, d, pid).some((m) => !psAllowed(pc, m.mac))) {
-        d.rt.err[pid] = true;
-        delete rt.links[d.id + ':' + pid];
-        delete rt.links[l.dev + ':' + l.port];
-        rt.cable[l.cable] = 'down';
-        rt.why[l.cable] = `${d.name} 的 ${pid} 因為 Port Security 違規而被關閉 (err-disabled)`;
-      }
+    for (const pid of Object.keys(d.sw.ports)) {
+      if (ED[d.id + ':' + pid] || !psecBad(d, pid)) continue;
+      errOn(d, pid, 'psec', `${d.name} 的 ${pid} 因為 Port Security 違規而被關閉 (err-disabled)`);
     }
   }
   // Root Guard：啟用的埠只能是 Designated。如果從這個埠收到「根橋在對面」的 BPDU（superior BPDU），
@@ -429,19 +467,34 @@ function prepPhysical(state) {
   // BPDU Guard：接使用者的埠如果收到 BPDU（對面是一台交換器），就把埠關掉
   for (const d of Object.values(state.devices)) {
     if (!isVlanSw(d)) continue;
-    for (const [pid, pc] of Object.entries(d.sw.ports)) {
-      const l = rt.links[d.id + ':' + pid];
-      if (!l || !pc.bpduguard) continue;
-      const x = state.devices[l.dev];
-      if (!isVlanSw(x) || (x.sw.stp && x.sw.stp.on === false) || !isBridgePort(x, l.port)) continue;
-      d.rt.err[pid] = 'bpdu';
-      delete rt.links[d.id + ':' + pid];
-      delete rt.links[l.dev + ':' + l.port];
-      rt.cable[l.cable] = 'down';
-      rt.why[l.cable] = `${d.name} 的 ${pid} 啟用了 BPDU Guard，偵測到對面是交換器，連接埠已被關閉 (err-disabled)`;
+    for (const pid of Object.keys(d.sw.ports)) {
+      if (ED[d.id + ':' + pid] || !bpduBad(d, pid)) continue;
+      errOn(d, pid, 'bpdu', `${d.name} 的 ${pid} 啟用了 BPDU Guard，偵測到對面是交換器，連接埠已被關閉 (err-disabled)`);
     }
   }
 }
+
+/** errdisable recovery 認得的原因（IOS 的名稱） */
+export const ERR_CAUSES = { psec: 'psecure-violation', bpdu: 'bpduguard' };
+export const ERR_RECOVERY_DEFAULT = 300;
+/** 這個原因有設定 errdisable recovery 的話，回傳計時器的秒數；沒有設定回傳 0 */
+export function errRecoverSecs(d, cause) {
+  const r = d.sw && d.sw.errRec;
+  if (!r || !(r.causes || []).includes(ERR_CAUSES[cause])) return 0;
+  return +r.interval > 0 ? +r.interval : ERR_RECOVERY_DEFAULT;
+}
+/** 交換器上目前 err-disabled 的埠：[{ pid, cause, at, n, left（recovery 還要幾秒，沒設定是 null） }] */
+export function errdisRows(state, d) {
+  const ED = (state.dyn && state.dyn.errdis) || {}, out = [];
+  for (const [key, e] of Object.entries(ED)) {
+    if (!key.startsWith(d.id + ':')) continue;
+    const secs = errRecoverSecs(d, e.cause);
+    out.push({ pid: key.slice(d.id.length + 1), cause: e.cause, at: e.at, n: e.n || 1, left: secs ? Math.max(0, Math.ceil(e.at + secs - state.clock)) : null });
+  }
+  return out;
+}
+/** 圖形介面的「重新啟用」：等於 shutdown 再 no shutdown */
+export function bouncePort(state, d, pid) { if (state.dyn && state.dyn.errdis) delete state.dyn.errdis[d.id + ':' + pid]; }
 
 // ── DTP ──
 // Catalyst 的連接埠預設是 dynamic auto：對面要求 (trunk / desirable) 才變成 Trunk。兩端都是 auto 就維持 Access。

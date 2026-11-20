@@ -10,7 +10,8 @@ import { cdpCfg, lldpCfg, cdpOn, lldpTxOn, lldpRxOn, neighbors, ndCounters, cdpC
 import { dscpName, COS_DSCP_DEFAULT, portTrust, egressOf, classify, QLIMIT } from '../engine/qos.js';
 import { ospfArea, ospfCost, ospfPassive, ospfHello, ospfDead, ospfPrio, ospfNetType, isLoopback } from '../engine/ospf.js';
 import { bgpCfg } from '../engine/bgp.js';
-import { ikeVer } from '../engine/sim.js';
+import { ikeVer, errdisRows, ERR_CAUSES } from '../engine/sim.js';
+import { ERR_RECOVERY_CAUSES } from '../engine/ios.js';
 import { iosClock, deviceTime, ntpInfo, logRows, clearLog, syslogStats, uptimeOf, routerId, longIf, SEVERITY, NTP_POLL, vtyRows, idleLimit } from '../engine/ops.js';
 import { quietLeft } from '../engine/remote.js';
 import { counters, clearCounters, clearedAt, spanDest, debugOf, setDebug, consoleRows } from '../engine/wire.js';
@@ -590,6 +591,29 @@ const SHOW = {
       const dup = cfg.duplex || (li ? 'a-' + li.duplex : 'auto'), spd = cfg.speed != null ? String(cfg.speed) : li ? 'a-' + li.speed : 'auto';
       o.push(pad(p.label, 14) + pad(status, 14) + pad(vlan, 8) + pad(dup, 9) + pad(spd, 9) + MEDIA[p.media].name);
     }
+    return o;
+  },
+  'show interfaces status err-disabled': (st, d) => {
+    if (!d.sw) return ['% Invalid input detected（這台設備沒有交換埠）'];
+    const rows = errdisRows(st, d);
+    const o = [pad('Port', 10) + pad('Name', 19) + pad('Status', 13) + pad('Reason', 21) + 'Err-disabled Vlans'];
+    for (const r of rows) o.push(pad(r.pid, 10) + pad((d.sw.ports[r.pid] || {}).desc || '', 19) + pad('err-disabled', 13) + ERR_CAUSES[r.cause]);
+    if (!rows.length) o.push('（目前沒有 err-disabled 的埠）');
+    return o;
+  },
+  'show errdisable recovery': (st, d) => {
+    if (!d.sw) return ['% Invalid input detected（這台設備沒有交換埠）'];
+    const r = d.sw.errRec || { causes: [] };
+    const o = [pad('ErrDisable Reason', 29) + 'Timer Status', pad('-----------------', 29) + '--------------'];
+    for (const c of ERR_RECOVERY_CAUSES) o.push(pad(c, 29) + ((r.causes || []).includes(c) ? 'Enabled' : 'Disabled'));
+    o.push('', `Timer interval: ${+r.interval || 300} seconds`, '', 'Interfaces that will be enabled at the next timeout:', '');
+    const rows = errdisRows(st, d).filter((x) => x.left != null);
+    if (rows.length) {
+      o.push(pad('Interface', 16) + pad('Errdisable reason', 24) + 'Time left(sec)', pad('---------', 16) + pad('-----------------', 24) + '--------------');
+      for (const x of rows) o.push(pad(x.pid, 16) + pad(ERR_CAUSES[x.cause], 24) + String(x.left).padStart(6));
+    }
+    const stuck = errdisRows(st, d).filter((x) => x.left == null);
+    if (stuck.length) o.push(`（${stuck.map((x) => x.pid).join('、')} 的原因沒有開 recovery：不會自己恢復，要 shutdown 再 no shutdown）`);
     return o;
   },
   'show cdp': (st, d) => {

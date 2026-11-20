@@ -77,6 +77,8 @@ export const aclName = (i, dir) => (i.aclNames && i.aclNames[dir]) || `${i.label
 export const poolName = (i) => (i.dhcp && i.dhcp.pool) || i.label.replace(/[^\w.]+/g, '_').toUpperCase();
 
 const isSw = (d) => !!d.sw && d.sw.mode === 'vlan';
+/** errdisable recovery cause 認得的原因（Catalyst 的清單；模擬裡真的會觸發的是 bpduguard 與 psecure-violation） */
+export const ERR_RECOVERY_CAUSES = ['arp-inspection', 'bpduguard', 'channel-misconfig', 'dhcp-rate-limit', 'dtp-flap', 'gbic-invalid', 'inline-power', 'link-flap', 'loopback', 'mac-limit', 'pagp-flap', 'port-mode-failure', 'psecure-violation', 'security-violation', 'sfp-config-mismatch', 'storm-control', 'udld', 'vmps'];
 const TYPES = { gi: 'gigabitethernet', te: 'tengigabitethernet', fa: 'fastethernet', eth: 'ethernet' };
 const PROMPT = {
   exec: '#', config: '(config)#', if: '(config-if)#', vlan: '(config-vlan)#', router: '(config-router)#', dhcp: '(dhcp-config)#',
@@ -1254,6 +1256,42 @@ export function iosSession(getDev, getState, who = null) {
       return undefined;
     }],
     ['no mac address-table aging-time [...]', () => needSw() || void delete dev().sw.macAge],
+    // errdisable recovery：err-disabled 的埠過一段時間自動試著打開（預設不會，要自己 shutdown → no shutdown）
+    ['errdisable recovery cause <cause>', ([c]) => {
+      const e = needSw();
+      if (e) return e;
+      const names = c.toLowerCase() === 'all' ? ERR_RECOVERY_CAUSES : ERR_RECOVERY_CAUSES.filter((x) => x.startsWith(c.toLowerCase()));
+      if (names.length !== 1 && c.toLowerCase() !== 'all') return err(names.length ? `% Ambiguous command: "${c}"` : `% Invalid input：可以用的原因有 all、${ERR_RECOVERY_CAUSES.join('、')}`);
+      const r = (dev().sw.errRec ||= { causes: [] });
+      for (const n of names) if (!r.causes.includes(n)) r.causes.push(n);
+      return undefined;
+    }],
+    ['no errdisable recovery cause <cause>', ([c]) => {
+      const e = needSw();
+      if (e) return e;
+      const r = dev().sw.errRec;
+      if (!r) return undefined;
+      const names = c.toLowerCase() === 'all' ? ERR_RECOVERY_CAUSES : ERR_RECOVERY_CAUSES.filter((x) => x.startsWith(c.toLowerCase()));
+      r.causes = (r.causes || []).filter((x) => !names.includes(x));
+      if (!r.causes.length && !r.interval) delete dev().sw.errRec;
+      return undefined;
+    }],
+    ['errdisable recovery interval <n>', ([n]) => {
+      const e = needSw();
+      if (e) return e;
+      if (!/^\d+$/.test(n) || +n < 30 || +n > 86400) return err('用法：errdisable recovery interval <30-86400>（秒，預設 300）');
+      const r = (dev().sw.errRec ||= { causes: [] });
+      if (+n === 300) delete r.interval; else r.interval = +n;
+      if (!r.causes.length && !r.interval) delete dev().sw.errRec;
+      return undefined;
+    }],
+    ['no errdisable recovery interval [...]', () => {
+      const e = needSw();
+      if (e) return e;
+      const r = dev().sw.errRec;
+      if (r) { delete r.interval; if (!(r.causes || []).length) delete dev().sw.errRec; }
+      return undefined;
+    }],
     // NAT 轉換表的閒置逾時
     ['ip nat translation <kind> <n>', ([kind, n]) => {
       const d = dev(), k = NAT_TIMER[kind.toLowerCase()];
@@ -2437,6 +2475,12 @@ export function runningConfig(state, dev) {
   if (isSw(dev)) {
     const sw = dev.sw;
     for (const v of sw.vlans.slice().sort((a, b) => a.id - b.id)) if (v.id !== 1) o.push(`vlan ${v.id}`, ` name ${v.name.replace(/\s+/g, '_')}`);
+    // 和真的 Catalyst 一樣，errdisable recovery 印在 spanning-tree 前面
+    const er = sw.errRec;
+    if (er && ((er.causes || []).length || er.interval)) {
+      o.push('!', ...ERR_RECOVERY_CAUSES.filter((c) => er.causes.includes(c)).map((c) => `errdisable recovery cause ${c}`));
+      if (er.interval) o.push(`errdisable recovery interval ${er.interval}`);
+    }
     o.push('!', 'spanning-tree mode rapid-pvst');
     const stp = sw.stp || {};
     if (stp.on === false) o.push('no spanning-tree vlan 1-4094');

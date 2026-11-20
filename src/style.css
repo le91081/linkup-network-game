@@ -218,6 +218,7 @@ h3.sec { font-size: 11.5px; letter-spacing: 0.08em; color: var(--faint); text-tr
 .note .ic { margin-top: 2px; }
 .note.ok { background: rgba(74, 222, 128, 0.09); color: #bdf5d1; }
 .note.warn { background: rgba(245, 181, 71, 0.1); color: #ffdda1; }
+.note.errdis { flex-direction: column; gap: 7px; }
 .live:empty { display: none; }
 .live { display: flex; flex-direction: column; gap: 6px; }
 .kv { display: flex; flex-direction: column; border-radius: 10px; padding: 4px 10px; background: rgba(74, 222, 128, 0.07); border: 1px solid rgba(74, 222, 128, 0.2); }

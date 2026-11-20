@@ -2044,6 +2044,70 @@ console.log('\n自動化：YAML、RESTCONF、Ansible');
     'Gathering Facts、loop 的 item、debug var、when、register 與 assert');
 }
 
+console.log('\nerr-disabled：會一直維持、errdisable recovery、shutdown → no shutdown');
+{
+  const { iosSession, runningConfig } = await import('../src/engine/ios.js');
+  const { removeCable, addCable } = await import('../src/engine/model.js');
+  const sim = await import('../src/engine/sim.js');
+  const ok = (cond, title) => (cond ? console.log('  ✔ ' + title) : fail(title));
+  const ios = (s, id, lines) => { const sess = iosSession(() => s.devices[id], () => s); const out = []; for (const l of lines) out.push(...sess.exec(l).out); recomputeNow(s); return out; };
+  const lv = LEVELS.find((l) => l.id === 'l32');
+  const fresh = () => { const s = lv.setup(); settle(s); lv.solve(s); settle(s); return s; };
+  const logs = (s, id) => ((s.dyn.log || {})[id] || []).map((x) => x.line).join('\n');
+  const rogueCable = (s) => s.cables.find((c) => [c.a, c.b].some((e) => e.dev === 'sw-a' && e.port === 'Gi0/5'));
+  {
+    const s = fresh(), sa = s.devices['sw-a'];
+    ok(sa.rt.err['Gi0/5'] === 'bpdu' && s.dyn.errdis['sw-a:Gi0/5'].cause === 'bpdu' && /BPDU Guard/.test(s.rt.why[rogueCable(s).id]), 'BPDU Guard 把 Gi0/5 關成 err-disabled，並記下來');
+    removeCable(s, rogueCable(s).id); settle(s);
+    ok(sa.rt.err['Gi0/5'] === 'bpdu' && !sim.pendingOf(s).some((p) => p.kind === 'errdis'), '拔掉私接的交換器之後埠不會自己恢復（沒有設定 recovery，也不會出現在收斂中）');
+    ios(s, 'sw-a', ['conf t', 'interface gi0/5', 'shutdown', 'end']);
+    ok(!s.dyn.errdis['sw-a:Gi0/5'] && !sa.rt.err['Gi0/5'], 'shutdown 之後 err-disabled 解除（變成 administratively down）');
+    ios(s, 'sw-a', ['conf t', 'interface gi0/5', 'no shutdown', 'end']);
+    ok(!sa.rt.err['Gi0/5'] && !s.dyn.errdis['sw-a:Gi0/5'], 'no shutdown：原因已經排除，埠正常啟用');
+  }
+  {
+    const s = fresh(), sa = s.devices['sw-a'];
+    const out = ios(s, 'sw-a', ['conf t', 'errdisable recovery cause bpdu', 'errdisable recovery interval 60', 'end']);
+    const rc = runningConfig(s, sa).join('\n');
+    ok(!out.some((l) => /^%/.test(l)) && /errdisable recovery cause bpduguard\nerrdisable recovery interval 60\n!\nspanning-tree mode/.test(rc), 'errdisable recovery cause / interval（縮寫 bpdu 也認得），running-config 印在 spanning-tree 前面');
+    ok(/% Invalid input/.test(ios(s, 'sw-a', ['conf t', 'errdisable recovery cause nope', 'end']).join('\n')) && /<30-86400>/.test(ios(s, 'sw-a', ['conf t', 'errdisable recovery interval 5', 'end']).join('\n')), '不認得的原因、太短的計時器會被拒絕');
+    const n0 = s.dyn.errdis['sw-a:Gi0/5'].n;
+    sim.advance(s, 61);
+    ok(sa.rt.err['Gi0/5'] === 'bpdu' && s.dyn.errdis['sw-a:Gi0/5'].n === n0 + 1 && /PM-4-ERR_RECOVER: Attempting to recover from bpduguard err-disable state on Gi0\/5[\s\S]*ERR_DISABLE: bpduguard error detected on Gi0\/5/.test(logs(s, 'sw-a')),
+      '計時器到了試著打開，對面還是交換器就馬上再被關掉（紀錄裡有 ERR_RECOVER 與再一次 ERR_DISABLE）');
+    removeCable(s, rogueCable(s).id); recomputeNow(s);
+    const p = sim.pendingOf(s).find((x) => x.kind === 'errdis');
+    ok(p && p.at > s.clock && p.at <= s.clock + 60, '原因排除之後，recovery 的計時器出現在「收斂中」');
+    settle(s);
+    ok(!sa.rt.err['Gi0/5'] && !s.dyn.errdis['sw-a:Gi0/5'], '計時器到了，埠自己恢復');
+  }
+  {
+    // Port Security（shutdown 模式）也一樣：違規的設備拔掉之後還是 err-disabled
+    const l17 = LEVELS.find((l) => l.id === 'l17');
+    const s = l17.setup(); settle(s); l17.solve(s); settle(s);
+    s.devices.sw.sw.ports['Gi0/3'].ps.mode = 'shutdown'; settle(s);
+    const was = s.devices.sw.rt.err['Gi0/3'] === true;
+    const c = s.cables.find((x) => [x.a, x.b].some((e) => e.dev === 'sw' && e.port === 'Gi0/3'));
+    removeCable(s, c.id); settle(s);
+    ok(was && s.devices.sw.rt.err['Gi0/3'] === true && s.dyn.errdis['sw:Gi0/3'].cause === 'psec', 'Port Security 違規關掉的埠，拔掉線之後還是 err-disabled');
+    sim.bouncePort(s, s.devices.sw, 'Gi0/3'); settle(s);
+    ok(!s.devices.sw.rt.err['Gi0/3'], '圖形介面的「重新啟用」（shutdown → no shutdown）');
+  }
+  {
+    // 存檔再讀回：err-disabled 的狀態還在
+    const s = fresh();
+    const s2 = cloneState(s); recomputeNow(s2);
+    ok(s2.devices['sw-a'].rt.err['Gi0/5'] === 'bpdu', '存檔再讀回，err-disabled 的狀態還在');
+    // 重新開機會清掉（BPDU Guard 要先存進 startup-config，不然開機之後就沒了）
+    const at0 = s2.dyn.errdis['sw-a:Gi0/5'].at;
+    ios(s2, 'sw-a', ['write memory', 'reload', '']);
+    sim.advance(s2, 5);
+    const during = !s2.dyn.errdis['sw-a:Gi0/5'];
+    sim.advance(s2, 300); settle(s2);
+    ok(during && s2.dyn.errdis['sw-a:Gi0/5'] && s2.dyn.errdis['sw-a:Gi0/5'].at > at0 && s2.devices['sw-a'].rt.err['Gi0/5'] === 'bpdu', '重新開機時清掉；開機後對面還是交換器，重新偵測成新的一筆');
+  }
+}
+
 console.log('\nCatalyst Center：Token、設備清單、AI 問題');
 {
   const { restconf } = await import('../src/engine/restconf.js');
