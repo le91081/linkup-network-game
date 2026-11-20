@@ -5,13 +5,14 @@ import { recompute, runObjective } from '../engine/sim.js';
 import { isIos, saveStartup } from '../engine/ios.js';
 import { editorSection } from './editor.js';
 
-const VENDOR = /^(Cisco|TP-Link|Ubiquiti|Fortinet|NETGEAR|ASUS|Dell|Lenovo|Apple|HP|Synology) /;
-const HOST_NAME = { pc: 'PC', laptop: '筆電', phone: '手機', printer: '印表機', wprinter: '無線印表機', nas: 'NAS', tower: '伺服器', rack1u: '機架伺服器' };
+const VENDOR = /^(Cisco|TP-Link|Ubiquiti|Fortinet|NETGEAR|ASUS|Dell|Lenovo|Apple|HP|Synology|VMware) /;
+const HOST_NAME = { pc: 'PC', laptop: '筆電', phone: '手機', printer: '印表機', wprinter: '無線印表機', nas: 'NAS', tower: '伺服器', rack1u: '機架伺服器', vm: 'VM' };
 const GROUPS = [
   ['終端設備', ['pc', 'laptop', 'phone', 'printer', 'nas', 'tower', 'rack1u']],
   ['交換器', ['hub4', 'sw5', 'sw8', 'c2960', 'c2960p', 'c9300', 'n93180', 'n9332']],
   ['路由器與防火牆', ['homerouter', 'erx', 'isr4321', 'isr4331', 'fg60f', 'fg100f']],
   ['無線與外部線路', ['ap', 'internet']],
+  ['虛擬化', ['esxi', 'vm']],
 ];
 const SERVER_MODELS = ['tower', 'rack1u'];
 const shortName = (model) => (CATALOG[model].kind === 'internet' ? '網際網路 (ISP)' : CATALOG[model].title.replace(VENDOR, ''));

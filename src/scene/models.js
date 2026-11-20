@@ -12,7 +12,7 @@ export const PALETTE = {
 
 export const ACCENT = {
   host: PALETTE.blue, hub: PALETTE.mid, switch: PALETTE.teal, mswitch: PALETTE.teal, l3switch: PALETTE.teal,
-  router: PALETTE.violet, homerouter: PALETTE.violet, firewall: PALETTE.orange, internet: PALETTE.sky, cloud: PALETTE.amber,
+  router: PALETTE.violet, homerouter: PALETTE.violet, firewall: PALETTE.orange, internet: PALETTE.sky, cloud: PALETTE.amber, hypervisor: 0xb48cff,
 };
 
 const matCache = new Map();
@@ -201,6 +201,33 @@ const BUILDERS = {
     // 機架式伺服器的網路卡在背面
     jacks(g, u, dev, 0.5, 0.34, 0.2, -0.75, 0, -1, { w: 0.2, h: 0.1 });
     u.rect = [-1.3, 1.3, -0.8, 0.8];
+  },
+  /** 虛擬化主機：機架伺服器加上一條紫色的燈條；虛擬埠在機身上方（虛擬連線從這裡連到虛擬機器） */
+  esxi(g, dev, u) {
+    BUILDERS.rack1u(g, { ...dev, ports: dev.ports.filter((p) => p.media !== 'virt') }, u);
+    box(g, 2.3, 0.035, 0.05, glow(0xb48cff, 1.4), 0, 0.535, 0.74, 0.01);
+    const vp = dev.ports.filter((p) => p.media === 'virt');
+    vp.forEach((p, i) => {
+      const x = -1.05 + i * 0.3;
+      box(g, 0.16, 0.025, 0.16, glow(0x6b4fd8, 0.6), x, 0.535, -0.25, 0.02);
+      u.ports[p.id] = { x, y: 0.55, z: -0.25, nx: 0, nz: 0, w: 0.12, h: 0.04, media: 'virt' };
+    });
+  },
+  /** 虛擬機器：半透明的紫色方塊（看得到它其實不是一台實體設備） */
+  vm(g, dev, u) {
+    Object.assign(u, { w: 1.5, h: 1.25, d: 1.2 });
+    const shell = new THREE.MeshStandardMaterial({ color: 0xb48cff, transparent: true, opacity: 0.3, roughness: 0.25, metalness: 0.1, emissive: 0x6b4fd8, emissiveIntensity: 0.4, depthWrite: false });
+    const cube = box(g, 1.35, 1.0, 1.05, shell, 0, 0.62, 0, 0.1);
+    cube.castShadow = false;
+    const edges = new THREE.LineSegments(new THREE.EdgesGeometry(new THREE.BoxGeometry(1.35, 1.0, 1.05)), new THREE.LineBasicMaterial({ color: 0xcdb6ff, transparent: true, opacity: 0.8 }));
+    edges.position.set(0, 0.62, 0);
+    g.add(edges);
+    // 裡面的「作業系統」：一塊小螢幕，拿到 IP 之後亮起來
+    u.screen = new THREE.Mesh(new THREE.PlaneGeometry(0.8, 0.46), glow(PALETTE.screenOff, 0.4));
+    u.screen.position.set(0, 0.66, 0.53);
+    g.add(u.screen);
+    u.ports = { [dev.ports[0].id]: { x: 0, y: 0.1, z: 0, nx: 0, nz: 0, w: 0.12, h: 0.04, media: 'virt' } };
+    u.rect = [-0.68, 0.68, -0.53, 0.53];
   },
   phone(g, dev, u) {
     Object.assign(u, { w: 0.95, h: 1.1, d: 0.95 });

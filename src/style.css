@@ -685,6 +685,10 @@ textarea.code:focus { outline: none; border-color: var(--accent); }
 /* ── 雲端主控台 ── */
 .p-head.k-cloud .p-badge { background: rgba(245, 181, 71, 0.14); color: #ffe2a8; border-color: rgba(245, 181, 71, 0.34); }
 .dev-label.k-cloud[data-s='net'] .dot { background: var(--warn); }
+.dev-label.k-hypervisor[data-s='net'] .dot { background: #b48cff; }
+.p-head.k-hypervisor .p-badge { background: rgba(180, 140, 255, 0.14); color: #ddd0ff; border-color: rgba(180, 140, 255, 0.34); }
+.palette .chip.k-hypervisor { background: rgba(180, 140, 255, 0.13); color: #ddd0ff; border-color: rgba(180, 140, 255, 0.3); }
+.c-pg { grid-template-columns: minmax(0, 1fr) 64px 52px 26px; }
 .inp.ro { display: flex; align-items: center; color: var(--muted); background: rgba(6, 10, 22, 0.35); }
 .cl-small { font-size: 11px; }
 .cl-sum { padding: 6px 0; border-top: 1px solid var(--line); }

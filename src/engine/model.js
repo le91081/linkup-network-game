@@ -5,12 +5,15 @@ import { newVpc, CLOUD_REGION } from './cloud.js';
 const rj = (id, label = id, extra) => ({ id, label, media: 'rj45', ...extra });
 const sfp = (id, label = id) => ({ id, label, media: 'sfp' });
 const qsfp = (id, label = id) => ({ id, label, media: 'qsfp' });
+/** 虛擬網卡：只能接在虛擬化主機的虛擬埠上 */
+const virt = (id, label = id) => ({ id, label, media: 'virt' });
 const seq = (n, f, from = 1) => Array.from({ length: n }, (_, i) => f(i + from));
 
 export const MEDIA = {
   rj45: { name: 'RJ45', cable: 'Cat6 網路線', color: 0x4f9cf9 },
   sfp: { name: 'SFP+/SFP28', cable: 'DAC 直連銅纜', color: 0xf5b547 },
   qsfp: { name: 'QSFP28', cable: '100G 光纖', color: 0x35d6c1 },
+  virt: { name: '虛擬網卡', cable: '虛擬連線', color: 0xb48cff },
 };
 
 /** 線材種類：最大傳輸距離（公尺）與適用的接頭 */
@@ -19,9 +22,10 @@ export const CABLES = {
   dac: { name: 'DAC 直連銅纜', max: 5, media: ['sfp', 'qsfp'], color: 0xf5b547 },
   mmf: { name: '多模光纖 (OM4) + SR 收發器', max: 300, media: ['sfp', 'qsfp'], color: 0x35d6c1 },
   smf: { name: '單模光纖 (OS2) + LR 收發器', max: 10000, media: ['sfp', 'qsfp'], color: 0xf7e04a },
+  virtual: { name: '虛擬連線（主機內部）', max: Infinity, media: ['virt'], color: 0xb48cff },
 };
 export const cableKinds = (media) => Object.keys(CABLES).filter((k) => CABLES[k].media.includes(media));
-export const cableKind = (c) => c.kind || ((c.media || 'rj45') === 'rj45' ? 'cat6' : 'dac');
+export const cableKind = (c) => c.kind || ((c.media || 'rj45') === 'rj45' ? 'cat6' : c.media === 'virt' ? 'virtual' : 'dac');
 /** 兩台設備之間的佈線距離（公尺）。關卡沒有特別指定時視為同一個機房內的 3 公尺 */
 export const pairDist = (state, a, b) => (state.dist && state.dist[[a, b].sort().join('|')]) || 3;
 export const cableDist = (state, c) => pairDist(state, c.a.dev, c.b.dev);
@@ -86,6 +90,15 @@ export const CATALOG = {
   rack1u: {
     kind: 'host', shape: 'rack1u', vendor: 'Dell', title: 'Dell PowerEdge R650',
     tagline: '1U 機架伺服器 · 2×25GbE SFP28', ports: [sfp('eth0', 'NIC 1'), sfp('eth1', 'NIC 2')],
+  },
+  esxi: {
+    kind: 'hypervisor', shape: 'esxi', vendor: 'VMware', title: 'VMware ESXi 8',
+    tagline: 'Dell PowerEdge R650 · 1×25GbE 上行 · 8 個虛擬埠', ports: [sfp('vmnic0', 'vmnic0'), ...seq(8, (i) => virt('vp' + i, '虛擬埠 ' + i))],
+    services: [{ proto: 'tcp', port: 443, name: 'ESXi Host Client (HTTPS)' }],
+  },
+  vm: {
+    kind: 'host', shape: 'vm', vendor: 'VM', title: '虛擬機器', vm: true,
+    tagline: '在虛擬化主機上執行 · 1 張虛擬網卡 (vmxnet3)', ports: [virt('eth0', 'vNIC')],
   },
   hub4: {
     kind: 'hub', shape: 'hub', vendor: 'NETGEAR', title: 'NETGEAR EN104TP',
@@ -244,6 +257,16 @@ export function makeDevice(model, id, o = {}) {
       d.mgmt = mgmt();
       d.radius = { ip: '', secret: '' };
       break;
+    case 'hypervisor':
+      // 虛擬化主機：裡面是一台虛擬交換器。實體網卡是 Trunk 上行，虛擬埠的 VLAN 由連接埠群組決定（engine/virt.js）
+      d.sw = {
+        mode: 'vlan', vlans: [{ id: 1, name: 'native' }],
+        ports: Object.fromEntries(d.ports.map((p) => [p.id, p.media === 'virt' ? { mode: 'access', vlan: 1, native: 1, allowed: 'all', shut: false, pg: 'VM Network' } : { mode: 'trunk', vlan: 1, native: 1, allowed: 'all', shut: false }])),
+        stp: { on: false, prio: 32768 }, snoop: { on: false }, dai: { on: false },
+      };
+      d.vsw = { pgs: [{ name: 'VM Network', vlan: 0 }, { name: 'Management Network', vlan: 0 }], vmkPg: 'Management Network' };
+      d.ifaces = [iface('vmk0', 'vmk0', { t: 'svi', vlan: 1 })];
+      break;
     case 'mswitch':
     case 'l3switch':
       d.sw = {
@@ -354,7 +377,7 @@ export function addCable(state, aDev, aPort, bDev, bPort, kind) {
   if (pa.media !== pb.media) return `接頭規格不同（${MEDIA[pa.media].name} ↔ ${MEDIA[pb.media].name}）`;
   if (cableAt(state, aDev, aPort)) return `${A.name} 的 ${pa.label} 已經插了線`;
   if (cableAt(state, bDev, bPort)) return `${B.name} 的 ${pb.label} 已經插了線`;
-  const k = kind && CABLES[kind] && CABLES[kind].media.includes(pa.media) ? kind : pa.media === 'rj45' ? 'cat6' : 'dac';
+  const k = kind && CABLES[kind] && CABLES[kind].media.includes(pa.media) ? kind : pa.media === 'rj45' ? 'cat6' : pa.media === 'virt' ? 'virtual' : 'dac';
   state.cables.push({ id: 'c' + state.seq++, a: { dev: aDev, port: aPort }, b: { dev: bDev, port: bPort }, media: pa.media, kind: k });
   return null;
 }
@@ -384,8 +407,8 @@ export function primaryIp(dev) {
 export const isIp = (s) => parseIp(s) != null;
 
 // ── 連接埠速率 ──
-const MEDIA_SPEED = { rj45: 1000, sfp: 10000, qsfp: 100000 };
-const SFP_SPEED = { rack1u: 25000, n93180: 25000, c2960: 1000, c2960p: 1000 };
+const MEDIA_SPEED = { rj45: 1000, sfp: 10000, qsfp: 100000, virt: 10000 };
+const SFP_SPEED = { rack1u: 25000, esxi: 25000, n93180: 25000, c2960: 1000, c2960p: 1000 };
 export const portSpeed = (dev, p) => (dev.kind === 'hub' ? 10 : p.media === 'sfp' ? SFP_SPEED[dev.model] || 10000 : MEDIA_SPEED[p.media]);
 export const fmtSpeed = (m) => (m >= 1000 ? m / 1000 + ' Gbps' : m + ' Mbps');
 /** 連接埠手動設定的速率與雙工（沒設定就是 null，代表自動協商）。交換器的設定在埠上，路由器在介面上 */

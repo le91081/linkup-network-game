@@ -236,6 +236,41 @@ test('設定封存：show archive、差異比對、變更紀錄，Syslog 伺服�
   expect(await scan(page, '#panel', 'Syslog 伺服器')).toEqual([]);
 });
 
+test('虛擬化：在 vSwitch 分頁改連接埠群組的 VLAN、虛擬機器清單、拖曳 VM 接上主機', async ({ page }, info) => {
+  await boot(page);
+  await open(page, 'l70');
+  await clickDevice(page, 'esx');
+  await expect(page.locator('#panel .tab.on')).toHaveText('虛擬交換器');
+  // DB 群組的 VLAN ID 0 → 20
+  const row = page.locator('#panel .trow.c-pg').nth(1);
+  await expect(row.locator('input').first()).toHaveValue('DB');
+  const vlan = row.locator('input').nth(1);
+  await vlan.fill('20');
+  await vlan.press('Enter');
+  await expect.poll(() => page.evaluate(() => window.linkup.state.devices.esx.vsw.pgs.find((p) => p.name === 'DB').vlan)).toBe(20);
+  expect(await scan(page, '#panel', '虛擬交換器')).toEqual([]);
+  await page.locator('#panel .tab', { hasText: '虛擬機器' }).click();
+  await expect(page.locator('#panel')).toContainText('web-vm');
+  await expect(page.locator('#panel')).toContainText('db-vm');
+  expect(await scan(page, '#panel', '虛擬機器')).toEqual([]);
+  if (info.project.name === '1440x900') await page.screenshot({ path: info.outputPath('l70.png') });
+  // 新的 VM 拖到主機上：自動接到下一個空的虛擬埠
+  await page.evaluate(() => {
+    const app = window.linkup;
+    app.state.devices.vm3 = JSON.parse(JSON.stringify(app.state.devices.web));
+    Object.assign(app.state.devices.vm3, { id: 'vm3', name: 'vm-3', pos: [11, 4] });
+    app.state.devices.vm3.ifaces[0].ip = '10.0.10.11';
+    app.changed();
+    app.scene.load(app.state, { keep: true });
+  });
+  await waitScene(page);
+  const c = async (id) => { const b = await page.locator(`.dev-label[data-dev="${id}"]`).boundingBox(); return [b.x + b.width / 2, b.y + b.height / 2]; };
+  const [x0, y0] = await c('vm3'), [x1, y1] = await c('esx');
+  await page.mouse.move(x0, y0); await page.mouse.down();
+  await page.mouse.move((x0 + x1) / 2, (y0 + y1) / 2, { steps: 6 }); await page.mouse.move(x1, y1, { steps: 6 }); await page.mouse.up();
+  await expect.poll(() => page.evaluate(() => window.linkup.state.cables.some((x) => x.a.dev === 'vm3' && x.b.dev === 'esx' && x.b.port === 'vp3'))).toBe(true);
+});
+
 test('主機終端機：ipconfig、ping 會在主控台播封包', async ({ page }) => {
   await boot(page);
   await open(page, 'l04', true);

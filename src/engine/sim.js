@@ -17,6 +17,7 @@ import { agentOn } from './snmp.js';
 import { remoteOpen, remoteLogin, remoteClose } from './remote.js';
 import { cloudStep, prepCloud, cloudOwns } from './cloud.js';
 import { fhrpProto, fhrpGroup, fhrpPreempt, fhrpDecrement, trackUp, slaTick, trackTick, HSRP_HOLD } from './track.js';
+import { syncVsw } from './virt.js';
 
 const DROP = Symbol('drop');
 const isVlanSw = (d) => !!d.sw && d.sw.mode === 'vlan';
@@ -1688,6 +1689,7 @@ export function recompute(state) {
   for (const k of ['cap', 'con']) if (state.dyn[k]) { side[k] = state.dyn[k]; delete state.dyn[k]; }
   // 還在開機的設備：這一次計算把它當成關機（沒有燈號、不轉送、不回應），算完再把 state.down 還原
   wlcVlans(state);
+  for (const d of Object.values(state.devices)) if (d.kind === 'hypervisor') syncVsw(d); // 連接埠群組 → vSwitch 的 VLAN
   const booting = opsBefore(state), realDown = state.down, ids = Object.keys(booting);
   if (ids.length) state.down = { ...(realDown || {}), ...Object.fromEntries(ids.map((id) => [id, true])) };
   try {

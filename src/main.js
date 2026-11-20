@@ -244,7 +244,8 @@ const app = {
     }
     if (!pair) return toast(`${A.name} 與 ${B.name} 的接頭規格不同，無法直接對接`, 'bad');
     const simple = (d) => d.kind === 'hub' || d.kind === 'switch' || ((d.kind === 'host' || d.kind === 'internet') && d.ports.length === 1);
-    if (simple(A) && simple(B)) return app.connect(a, pair[0].id, b, pair[1].id);
+    // 虛擬機器只有一張虛擬網卡，接在主機的下一個空的虛擬埠上，不用選
+    if ((simple(A) && simple(B)) || pair[0].media === 'virt') return app.connect(a, pair[0].id, b, pair[1].id);
     hud.openPortPick(app, a, b);
   },
 

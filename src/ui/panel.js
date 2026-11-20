@@ -19,6 +19,7 @@ import * as OPS from './panel-ops.js';
 import * as V from './panel-voice.js';
 import { bgpCard } from './panel-bgp.js';
 import * as TR from './panel-track.js';
+import * as VZ from './panel-virt.js';
 import { isTftp, isFtp } from '../engine/files.js';
 import { buildCli } from './cli.js';
 import { buildFortiCli } from './forticli.js';
@@ -590,6 +591,7 @@ function baseTabs(dev) {
       ['cap', '封包擷取', DG.captureTab], T.term].filter(Boolean);
     case 'hub': case 'switch': return [T.ports];
     case 'ap': return dev.lwap ? [['lwap', 'AP', W.lwapTab]] : [['ssid', '無線網路', X.ssidTab], ['radio', '無線電', X.radioTab], T.ports];
+    case 'hypervisor': return [['vsw', '虛擬交換器', VZ.vswTab], ['vms', '虛擬機器', VZ.vmsTab], T.status];
     case 'cloud': return [['vpc', 'VPC', CL.vpcTab], ['sub', '子網路', CL.subnetTab], ['rtb', '路由表', CL.rtTab], ['ec2', 'EC2', CL.ec2Tab], ['sg', '安全群組', CL.sgTab], ['nacl', '網路 ACL', CL.naclTab], ['nat', 'NAT 閘道', CL.natTab], ['cvpn', 'VPN', CL.cloudVpnTab]];
     case 'wlc': return [['wlan', 'WLAN', W.wlanTab], ['aps', 'AP', W.apsTab], ['wcl', '用戶端', W.wlcClientsTab], ['wmi', '管理介面', W.wmiTab], T.swports];
     case 'mswitch': return [T.swports, T.vlan, T.sec, T.mgmt, T.status];
@@ -603,7 +605,7 @@ function baseTabs(dev) {
 
 const KIND_NAME = {
   host: '終端設備', hub: '集線器', switch: '交換器', mswitch: '網管型交換器', l3switch: 'L3 交換器',
-  router: '路由器', homerouter: '家用路由器', firewall: '防火牆', ap: '無線基地台', wlc: '無線控制器', internet: 'ISP', cloud: '公有雲',
+  router: '路由器', homerouter: '家用路由器', firewall: '防火牆', ap: '無線基地台', wlc: '無線控制器', internet: 'ISP', cloud: '公有雲', hypervisor: '虛擬化主機',
 };
 
 /** 把選取的設備畫到面板上；回傳 false 表示沒有選取設備 */
@@ -646,7 +648,7 @@ export function renderDevicePanel(app, root) {
   root.dataset.view = viewKey;
   root.replaceChildren(...[
     h('div', { class: 'p-head k-' + dev.kind },
-      h('div', { class: 'p-badge', text: m.phone ? 'IP 電話' : KIND_NAME[dev.kind] }),
+      h('div', { class: 'p-badge', text: m.phone ? 'IP 電話' : m.vm ? '虛擬機器' : KIND_NAME[dev.kind] }),
       h('div', { class: 'p-title' },
         app.level.sandbox ? inp(ctx, () => dev.name, (v) => { if (v) dev.name = v; }, { mono: false, ph: '設備名稱' }) : h('h2', { text: dev.name }),
         h('p', { text: m.title }), h('p', { class: 'muted', text: m.tagline })),
