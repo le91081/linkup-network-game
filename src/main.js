@@ -12,6 +12,8 @@ import { isIos, iosDirty, saveStartup, restoreStartup } from './engine/ios.js';
 import { makeDrill, openDrillComplete, fmtSecs } from './ui/drill.js';
 import { scoreOf } from './ui/score.js';
 import { customLevel } from './ui/editor.js';
+import { renderTopo, bindTopoView } from './ui/topo2d.js';
+import { tutorialTick } from './ui/tutorial.js';
 
 // 網址加上 ?profile=名稱 就會用另一份獨立的進度（多人共用一台電腦，或測試時不想動到自己的存檔）
 const PROFILE = (new URLSearchParams(location.search).get('profile') || '').replace(/[^\w-]/g, '').slice(0, 24);
@@ -86,7 +88,7 @@ const app = {
     Object.assign(app, {
       level: lv, levelIdx: idx, state: st, results: [], running: false, selected: null,
       hintsShown: app.store.hints[lv.id] || 0, panelTab: {}, pinned: {}, adv: new Set(), termLog: {}, termHist: {}, refreshers: [],
-      undoStack: [], redoStack: [], snap: snapOf(st), cliSess: {}, remote: {}, knownHosts: {}, conSeen: {}, capUi: {},
+      undoStack: [], redoStack: [], snap: snapOf(st), cliSess: {}, remote: {}, knownHosts: {}, conSeen: {}, capUi: {}, lastHops: [], t2: { z: 1, px: 0, py: 0 },
     });
     app.store.last = lv.id;
     // 這一關的作答紀錄：實際花的時間、完整測試的次數、設定變更的次數（重置就重新開始）
@@ -107,6 +109,8 @@ const app = {
     app.scene.load(st);
     app.scene.fast = false;
     hud.updateClock(app);
+    app.render2d();
+    tutorialTick(app);
   },
 
   /** 模擬時間前進 n 秒 */
@@ -116,6 +120,7 @@ const app = {
     app.scene.sync(app.state);
     app.refreshLive();
     hud.updateClock(app);
+    app.render2d();
     // 有東西收斂完成了：之前的測試結果不再準確
     if (pendingOf(app.state).map((p) => p.text + p.at).join('|') !== before) {
       let marked = false;
@@ -145,6 +150,8 @@ const app = {
     recompute(app.state);
     app.scene.sync(app.state);
     hud.updateClock(app);
+    app.render2d();
+    tutorialTick(app);
     const now = snapOf(app.state);
     if (now !== app.snap) {
       if (!app.restoring) {
@@ -217,6 +224,24 @@ const app = {
     app.scene.pulse(id, off ? RED : GREEN, true);
   },
 
+  /** 2D 邏輯拓撲圖：開著的時候每次狀態改變就重畫 */
+  view2d: false,
+  render2d() {
+    const el = topoEl();
+    document.body.classList.toggle('view2d', !!app.view2d);
+    el.root.hidden = !app.view2d;
+    if (!app.view2d || !app.state) return;
+    const ins = app.scene.insets, W = window.innerWidth, H = window.innerHeight;
+    renderTopo(app, el.svg, { x: ins.left, y: ins.top, w: W - ins.left - ins.right, h: H - ins.top - ins.bottom });
+  },
+  toggle2d(on = !app.view2d) {
+    app.view2d = on;
+    app.store.view2d = on;
+    app.saveStore();
+    hud.renderTopbar(app);
+    app.render2d();
+  },
+
   renderPanel() {
     if (!renderDevicePanel(app, app.el.panel)) hud.renderGuide(app, app.el.panel);
   },
@@ -226,6 +251,8 @@ const app = {
     app.selected = id;
     app.scene.select(id);
     app.renderPanel();
+    app.render2d();
+    tutorialTick(app);
   },
 
   /** 從設備 a 拖曳到設備 b */
@@ -304,6 +331,8 @@ const app = {
       app.con.group(`目標 ${i + 1}　${o.label}`);
       app.con.lines(r.log, app.state);
       app.refreshLive();
+      app.lastHops = r.hops;
+      app.render2d();
       await app.scene.playHops(r.hops);
       if (app.runToken !== token) return;
       feedback(o, r);
@@ -315,6 +344,7 @@ const app = {
     app.running = false;
     app.scene.fast = false;
     hud.renderMission(app);
+    tutorialTick(app);
     const all = objs.every((_, i) => app.results[i] && app.results[i].pass && !app.results[i].stale);
     if (all && lv.sandbox) toast(`${objs.length} 個目標全部通過 ✔`, 'ok');
     else if (all) app.complete();
@@ -328,6 +358,8 @@ const app = {
     app.con.group(title);
     app.con.lines(log, app.state);
     app.refreshLive();
+    app.lastHops = hops;
+    app.render2d();
     app.scene.fast = false;
     app.scene.clearBubbles();
     app.scene.playHops(hops).then((finished) => {
@@ -357,6 +389,13 @@ const app = {
       ids.forEach((id, n) => setTimeout(() => app.scene.pulse(id, GREEN, true), n * 70));
       await sleep(900);
       if (app.level === lv) openDrillComplete(app, hud, { secs, late, hints: app.hintsShown });
+      return;
+    }
+    if (app.attempt && app.attempt.demo) {
+      // 參考解法的示範：不記成過關
+      ids.forEach((id, n) => setTimeout(() => app.scene.pulse(id, GREEN, true), n * 70));
+      await sleep(900);
+      if (app.level === lv) hud.openDemoDone(app);
       return;
     }
     const stars = Math.max(1, 3 - app.hintsShown);
@@ -398,6 +437,27 @@ function saveOf(st) {
     for (const k of Object.keys(d.syslog || {})) d.syslog[k] = d.syslog[k].slice(-40);
   }
   return s;
+}
+
+let topo = null;
+function topoEl() {
+  if (topo) return topo;
+  const root = document.createElement('div');
+  root.id = 'topo2d';
+  root.hidden = true;
+  const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+  svg.setAttribute('class', 't2');
+  root.append(svg);
+  document.body.append(root);
+  // 點設備：和 3D 場景一樣打開設定；點空白處取消選取（拖曳平移結束時的那一下不算）
+  svg.addEventListener('click', (e) => {
+    if (svg.__dragged) { svg.__dragged = false; return; }
+    const g = e.target.closest && e.target.closest('[data-dev]');
+    app.select(g ? g.getAttribute('data-dev') : null);
+  });
+  topo = { root, svg };
+  bindTopoView(app, svg, () => app.render2d());
+  return topo;
 }
 
 function updateInsets() {
@@ -447,7 +507,7 @@ setInterval(() => {
 }, 250);
 
 // 先讓畫布量到新的大小再對焦（畫布自己的 ResizeObserver 比 resize 事件晚，對焦會用到舊的寬高）
-window.addEventListener('resize', () => { updateInsets(); app.scene.resize(); app.scene.fit(); });
+window.addEventListener('resize', () => { updateInsets(); app.scene.resize(); app.scene.fit(); app.render2d(); });
 // 兩側面板的寬度變了（版面斷點、縮放）也要重新對齊時鐘與場景邊界
 if (typeof ResizeObserver === 'function') {
   const ro = new ResizeObserver(() => updateInsets());
@@ -483,5 +543,6 @@ else if (/^custom-/.test(app.store.last || '')) {
 else app.loadLevel(Math.max(0, LEVELS.findIndex((l) => l.id === app.store.last)));
 hud.openLevels(app);
 app.levelNo = hud.levelNo;
+if (app.store.view2d) app.toggle2d(true);
 app.levels = LEVELS;
 window.linkup = app; // 方便在主控台除錯，瀏覽器端測試（e2e/）也從這裡切換關卡

@@ -2248,6 +2248,39 @@ console.log('\nDNS：記錄類型、TTL 與用戶端快取');
   ok(!sim.resolveName(s, 'pc-c', 'nope.corp.local').ok, '沒有這筆記錄：NXDOMAIN（失敗的結果不會被快取）');
 }
 
+console.log('\n參考解法與錯題本');
+{
+  const { solutionChanges } = await import('../src/ui/solution.js');
+  const { noteAnswer, dueItems, reviewStats, qKey } = await import('../src/ui/review.js');
+  const { QUESTIONS } = await import('../src/data/quiz.js');
+  const ok = (cond, title) => (cond ? console.log('  ✔ ' + title) : fail(title));
+  const bad = [];
+  for (const lv of LEVELS) {
+    try { const c = solutionChanges(lv); if (!c.cables.length && !c.devs.length) bad.push(lv.id + '（沒有任何變更）'); } catch (e) { bad.push(`${lv.id}：${e.message.split('\n')[0]}`); }
+  }
+  ok(!bad.length, `每一關的參考解法都整理得出「改了哪些地方」${bad.length ? '：' + bad.join('、') : ''}`);
+  const l06 = solutionChanges(LEVELS.find((l) => l.id === 'l06'));
+  ok(l06.devs[0].ios && l06.devs[0].lines.includes('interface GigabitEthernet0/1') && l06.devs[0].lines.includes(' +switchport access vlan 10'), 'Cisco 設備用 running-config 的差異呈現（介面底下 +switchport access vlan 10）');
+  const l01 = solutionChanges(LEVELS.find((l) => l.id === 'l01'));
+  ok(l01.cables.length === 2 && l01.devs.some((d) => d.lines.includes('介面 › eth0 › IP 位址：（無） → 192.168.1.10')), '其他設備列出改了哪些欄位；接線另外列出');
+  // 錯題本的排程
+  const app = { store: {}, saveStore() {} };
+  const q = QUESTIONS.basics[0], DAY = 86400000, t0 = Date.UTC(2026, 10, 20);
+  noteAnswer(app, q, false, t0);
+  ok(app.store.review[qKey(q)].box === 1 && dueItems(app, t0).length === 1 && !app.store.review[qKey(q)].item, '答錯：放進第 1 盒，馬上可以複習（題庫的題目只記代碼）');
+  noteAnswer(app, q, true, t0);
+  ok(app.store.review[qKey(q)].box === 2 && !dueItems(app, t0).length && dueItems(app, t0 + DAY).length === 1, '答對：第 2 盒，一天後才到期');
+  for (const [d, box] of [[1, 3], [4, 4], [11, 5]]) noteAnswer(app, q, true, t0 + d * DAY);
+  ok(app.store.review[qKey(q)].box === 5 && reviewStats(app, t0 + 11 * DAY).next === 14 * DAY, '間隔越拉越長：1 → 3 → 7 → 14 天');
+  noteAnswer(app, q, false, t0 + 30 * DAY);
+  ok(app.store.review[qKey(q)].box === 1 && app.store.review[qKey(q)].wrong === 2, '又答錯：回到第 1 盒，記下答錯兩次');
+  for (let k = 0; k < 5; k++) noteAnswer(app, q, true, t0 + 100 * DAY);
+  ok(!app.store.review[qKey(q)], '一路答對到第 5 盒之後再答對：畢業，從錯題本拿掉');
+  const gen = { q: '10.1.1.1/30 的廣播位址？（隨機題）', a: ['1', '2', '3', '4'], c: 2, e: 'x', r: 'CCNA 1.6' };
+  noteAnswer(app, gen, false, t0);
+  ok(app.store.review[qKey(gen)].item && dueItems(app, t0)[0].item.q === gen.q, '隨機產生的子網路題：整題存下來，之後也考得到');
+}
+
 console.log('\nCatalyst Center：Token、設備清單、AI 問題');
 {
   const { restconf } = await import('../src/engine/restconf.js');

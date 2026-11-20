@@ -296,6 +296,37 @@ test('DNS：nslookup 不看快取、ping 用快取、ipconfig /displaydns 與 /f
   expect(await scan(page, '#panel', 'DNS 記錄')).toEqual([]);
 });
 
+test('2D 邏輯拓撲圖：切換、點設備開設定、測試路徑亮起來、重新整理後記得', async ({ page }, info) => {
+  await boot(page);
+  await open(page, 'l12', true);
+  await page.locator('#btn-view').click();
+  await expect(page.locator('#topo2d')).toBeVisible();
+  await expect(page.locator('#topo2d .t2-dev')).toHaveCount(await page.evaluate(() => Object.keys(window.linkup.state.devices).length));
+  await expect(page.locator('#topo2d .t2-port', { hasText: 'Eth1/49' }).first()).toBeVisible();
+  // 點 2D 圖上的設備：右側面板換成它的設定
+  await page.locator('#topo2d .t2-dev[data-dev="leaf2"]').click();
+  await expect(page.locator('#panel .p-title h2')).toHaveText('Leaf-2');
+  await expect(page.locator('#topo2d .t2-dev.sel')).toHaveCount(1);
+  // 執行一項目標：走過的線亮起來
+  await page.locator('#mission .obj').first().click();
+  await expect(page.locator('#topo2d .t2-link.hot').first()).toBeVisible({ timeout: 20000 });
+  // 2D 圖不能被兩側面板蓋住
+  const hidden = await page.evaluate(() => {
+    const m = document.getElementById('mission').getBoundingClientRect(), p = document.getElementById('panel').getBoundingClientRect();
+    return [...document.querySelectorAll('#topo2d .t2-dev')].filter((g) => { const r = g.getBoundingClientRect(); return r.left < m.right - 2 || r.right > p.left + 2; }).map((g) => g.getAttribute('data-dev'));
+  });
+  expect(hidden, '被面板蓋住的設備方塊').toEqual([]);
+  expect(await scan(page, '#topo2d', '2D 拓撲')).toEqual([]);
+  await page.screenshot({ path: info.outputPath('topo2d.png') });
+  // 記得上次的選擇
+  await page.reload();
+  await page.waitForFunction(() => window.linkup && window.linkup.state);
+  await closeDialog(page);
+  await expect(page.locator('#topo2d')).toBeVisible();
+  await page.locator('#btn-view').click();
+  await expect(page.locator('#topo2d')).toBeHidden();
+});
+
 test('主機終端機：ipconfig、ping 會在主控台播封包', async ({ page }) => {
   await boot(page);
   await open(page, 'l04', true);

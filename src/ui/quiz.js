@@ -5,6 +5,7 @@ import { TOPICS, QUESTIONS, LEVEL_TOPIC } from '../data/quiz.js';
 import { CERTS } from '../data/certs.js';
 import { LEVELS } from '../levels/index.js';
 import { fmtIp, fmtMask, netOf, bcastOf } from '../engine/ip.js';
+import { noteAnswer, dueItems, reviewStats, fmtWait, INTERVAL_DAYS } from './review.js';
 
 const rnd = (n) => Math.floor(Math.random() * n);
 function shuffle(a) {
@@ -84,9 +85,12 @@ function runQuiz(app, { title, key, total, next }) {
       if (after.childNodes.length) return;
       const ok = i === item.c;
       if (ok) score++;
+      const sched = noteAnswer(app, item, ok);
+      updateReviewBadge(app);
       opts.forEach((b, k) => { b.disabled = true; if (k === item.c) b.classList.add('right'); else if (k === i) b.classList.add('wrong'); });
       after.append(
-        h('div', { class: 'qexp ' + (ok ? 'ok' : 'bad') }, h('b', { text: ok ? '答對了！' : '答錯了' }), h('p', { text: item.e }), item.r && h('span', { class: 'chip cert', text: item.r })),
+        h('div', { class: 'qexp ' + (ok ? 'ok' : 'bad') }, h('b', { text: ok ? '答對了！' : '答錯了' }), h('p', { text: item.e }), item.r && h('span', { class: 'chip cert', text: item.r }),
+          h('p', { class: 'qsched', text: !ok ? '已放進錯題本：之後會再考你一次。' : sched ? `錯題本：答對了，${INTERVAL_DAYS[sched.box - 1] || 1} 天後再複習一次（第 ${sched.box} 盒）。` : key === 'review' ? '錯題本：連續答對，這一題畢業了。' : '' })),
         h('div', { class: 'd-actions' },
           !total && button('結束練習', { kind: 'ghost', onclick: finish }),
           button(total && n >= total ? '看結果' : '下一題', { ic: 'chevron', kind: 'primary', onclick: () => (total && n >= total ? finish() : ask()) })));
@@ -108,9 +112,19 @@ export function openQuiz(app) {
     h('div', { class: 'top' }, h('span', { class: 'no', text: meta }), best != null && h('span', { class: 'no', style: { color: best >= 80 ? 'var(--ok)' : 'var(--muted)' }, text: `最佳 ${best}%` })),
     h('b', { text: name }), h('p', { text: desc }));
   const all = Object.values(QUESTIONS).flat();
+  const rs = reviewStats(app);
+  const reviewCard = h('button', { type: 'button', class: 'lv review-card' + (rs.due ? '' : ' quiet'), onclick: () => {
+    const list = dueItems(app);
+    if (!list.length) return;
+    runQuiz(app, { title: '錯題本', key: 'review', total: list.length, next: (n) => list[n] && list[n].item });
+  } },
+  h('div', { class: 'top' }, h('span', { class: 'no' }, icon('flag', 13), ' 錯題本'), h('span', { class: 'no', style: { color: rs.due ? 'var(--warn)' : 'var(--muted)' }, text: rs.due ? `${rs.due} 題到期` : '沒有到期的題目' })),
+  h('b', { text: rs.total ? `${rs.total} 題在排程中` : '還沒有錯題' }),
+  h('p', { text: rs.total ? (rs.due ? '答錯的題目照間隔重複排程：答對了下次間隔拉長（1 → 3 → 7 → 14 → 30 天），又答錯就重來。' : `最近一題 ${fmtWait(rs.next)}後到期。`) : '測驗、小考與模擬考答錯的題目會自動放進來，照間隔重複的方式安排複習。' }));
   modal([
     h('div', { class: 'hero' }, h('div', { class: 'hero-ic' }, icon('book', 30)),
       h('div', null, h('h1', { text: '觀念測驗' }), h('p', { text: '依照 CCNA、Network+、Security+ 的考試範圍編寫的練習題，每一題都有解說與對應的考試條目。' }))),
+    reviewCard,
     h('div', { class: 'lv-grid' },
       card('子網路速算', '隨機出題、無限練習：網路位址、廣播位址、主機數、遮罩。', '無限題', () => runQuiz(app, { title: '子網路速算', key: 'subnet', total: 0, next: () => subnetQuestion() })),
       card('綜合測驗', '從所有主題隨機抽 10 題。', '10 題', () => runQuiz(app, { title: '綜合測驗', key: 'mixed', total: 10, next: fromPool(all, 10) }), app.store.quiz.mixed),
@@ -159,4 +173,16 @@ export function openCerts(app, which = 'ccna') {
     );
   };
   draw(which);
+}
+
+/** 頂端列「測驗」按鈕上的到期題數 */
+export function updateReviewBadge(app) {
+  const b = document.querySelector('#topbar .quiz-btn');
+  if (!b) return;
+  const n = reviewStats(app).due;
+  let dot = b.querySelector('.rv-dot');
+  if (!n) { if (dot) dot.remove(); b.title = '觀念測驗'; return; }
+  if (!dot) { dot = document.createElement('span'); dot.className = 'rv-dot'; b.append(dot); }
+  dot.textContent = n > 99 ? '99+' : String(n);
+  b.title = `觀念測驗 · 錯題本有 ${n} 題到期`;
 }

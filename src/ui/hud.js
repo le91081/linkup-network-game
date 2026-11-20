@@ -6,11 +6,13 @@ import { fmtIp } from '../engine/ip.js';
 import { pendingOf, fmtDur } from '../engine/sim.js';
 import { renderSandbox } from './sandbox.js';
 import { LEVEL_CERTS } from '../data/certs.js';
-import { openQuiz, openCerts, openLevelQuiz, hasLevelQuiz } from './quiz.js';
+import { openQuiz, openCerts, openLevelQuiz, hasLevelQuiz, updateReviewBadge } from './quiz.js';
 import { openDrillPicker, randomSeed } from './drill.js';
 import { openExamPicker } from './exam.js';
 import { openCustomLevels } from './editor.js';
 import { drillable } from '../engine/faults.js';
+import { openSolution } from './solution.js';
+import { startTutorial } from './tutorial.js';
 
 const LOGO =
   '<svg viewBox="0 0 32 32"><rect width="32" height="32" rx="9" fill="#111a38"/><path d="M9 21c5 0 4-10 14-10" stroke="#4fd8c4" stroke-width="3" fill="none" stroke-linecap="round"/><circle cx="9" cy="21" r="3.5" fill="#6ea8ff"/><circle cx="23" cy="11" r="3.5" fill="#4fd8c4"/></svg>';
@@ -27,14 +29,16 @@ export function renderTopbar(app) {
     h('div', { class: 'spacer' }),
     h('div', { class: 'histbtns' },
       h('button', { class: 'btn ghost icon', id: 'btn-undo', type: 'button', title: '復原上一個變更（Ctrl + Z）', disabled: !app.undoStack.length, onclick: () => app.undo() }, icon('undo', 16)),
-      h('button', { class: 'btn ghost icon', id: 'btn-redo', type: 'button', title: '重做（Ctrl + Y）', disabled: !app.redoStack.length, onclick: () => app.redo() }, icon('redo', 16))),
-    button('測驗', { ic: 'book', kind: 'ghost', onclick: () => openQuiz(app) }),
+      h('button', { class: 'btn ghost icon', id: 'btn-redo', type: 'button', title: '重做（Ctrl + Y）', disabled: !app.redoStack.length, onclick: () => app.redo() }, icon('redo', 16)),
+      h('button', { class: 'btn ghost icon' + (app.view2d ? ' on' : ''), id: 'btn-view', type: 'button', title: app.view2d ? '回到 3D 場景' : '切換成 2D 邏輯拓撲圖（埠、VLAN、IP 一目了然）', onclick: () => app.toggle2d() }, icon(app.view2d ? 'cube' : 'topo', 16))),
+    button('測驗', { ic: 'book', kind: 'ghost quiz-btn', onclick: () => openQuiz(app) }),
     button('證照', { ic: 'award', kind: 'ghost', onclick: () => openCerts(app) }),
     button('提示', { ic: 'bulb', kind: 'ghost', onclick: () => openHints(app) }),
     button('重置', { ic: 'reset', kind: 'ghost', onclick: () => confirmReset(app) }),
     button('說明', { ic: 'help', kind: 'ghost', onclick: () => openHelp(app) }),
     button('關卡', { ic: 'grid', onclick: () => openLevels(app) }),
   );
+  updateReviewBadge(app);
 }
 
 /** 復原 / 重做按鈕能不能按 */
@@ -369,7 +373,13 @@ export function openLevels(app) {
         const d = done[lv.id];
         return h('button', {
           type: 'button', class: `lv ${d ? 'done' : ''} ${lv === app.level ? 'cur' : ''}`,
-          onclick: () => { closeModal(); app.loadLevel(LEVELS.indexOf(lv)); if (!app.store.seenHelp) openHelp(app); },
+          onclick: () => {
+            closeModal();
+            if (lv.id === 'l01' && app.store.tutorial == null && !app.store.done.l01) return startTutorial(app);
+            app.loadLevel(LEVELS.indexOf(lv));
+            if (!app.store.seenHelp) openHelp(app);
+            return undefined;
+          },
         },
         h('div', { class: 'top' }, h('span', { class: 'no', text: levelNo(lv) + (d ? '  ✓' : '') + (d && d.best ? `  ${gradeOf(d.best)}` : '') }),
           h('span', { class: 'stars' }, [1, 2, 3].map((s) => { const i = icon('star', 13); if (d && d.stars >= s) i.classList.add('on'); return i; }))),
@@ -391,7 +401,7 @@ export function openHelp(app) {
       step('mouse', '2. 設定', '點一下設備，右側會出現它的管理頁面：IP、DHCP、VLAN、路由、NAT、防火牆政策…'),
       step('play', '3. 測試', '按「執行測試」，看封包沿著網路線一站一站前進。卡住的地方會直接告訴你原因。'),
       step('terminal', '4. 除錯', '打開電腦的「終端機」分頁，用 ping、tracert、ipconfig、nslookup 自己找問題。')),
-    h('div', { class: 'd-actions' }, button('開始', { kind: 'primary', onclick: closeModal })),
+    h('div', { class: 'd-actions' }, button('從第 1-1 關跟著做一次（互動導覽）', { ic: 'mouse', kind: 'ghost', onclick: () => { closeModal(); startTutorial(app); } }), button('開始', { kind: 'primary', onclick: closeModal })),
   ]);
 }
 
@@ -401,10 +411,26 @@ export function openHints(app) {
     h('h2', { text: '提示' }),
     h('p', { class: 'muted', text: app.hintsShown ? '每看一個提示會少一顆星，最少保留一顆。' : '卡住了嗎？建議先按「執行測試」，看封包追蹤卡在哪一站。每看一個提示會少一顆星，最少保留一顆。' }),
     lv.hints.slice(0, app.hintsShown).map((t, i) => h('div', { class: 'hint-item' }, h('b', { text: i + 1 }), h('span', { text: t }))),
+    // 提示都看完了還是卡住：可以看參考解法（演練與自訂關卡沒有參考解法）
+    app.hintsShown >= lv.hints.length && typeof lv.solve === 'function' && !lv.drill && !lv.custom
+      && h('p', { class: 'muted', style: { fontSize: '12.5px' }, text: '提示都看完了。還是卡住的話，可以看參考解法改了哪些地方，或讓它示範一次（示範不計星）。' }),
     h('div', { class: 'd-actions' }, button('關閉', { kind: 'ghost', onclick: closeModal }),
+      app.hintsShown >= lv.hints.length && typeof lv.solve === 'function' && !lv.drill && !lv.custom && button('看參考解法', { ic: 'route', onclick: () => openSolution(app, { modal, closeModal }) }),
       app.hintsShown < lv.hints.length && button(app.hintsShown ? '再給一個提示' : '顯示第一個提示', { ic: 'bulb', kind: 'primary', onclick: () => { app.useHint(); draw(); } })),
   ]);
   draw();
+}
+
+/** 示範跑完：不計星，可以重置後自己做一次 */
+export function openDemoDone(app) {
+  const lv = app.level;
+  modal([
+    h('div', { class: 'done-top' }, h('div', { class: 'done-ring soft' }, icon('route', 32)),
+      h('h2', { text: '示範完成' }), h('p', { class: 'muted', text: `${levelNo(lv)}　${lv.title} · 示範不計星、不計分` })),
+    h('div', { class: 'recap' }, lv.recap.map((t) => h('div', null, icon('check', 14), h('span', { text: t })))),
+    h('div', { class: 'd-actions' }, button('留在這裡看看', { kind: 'ghost', onclick: closeModal }),
+      button('重置，自己做一次', { ic: 'reset', kind: 'primary', onclick: () => { closeModal(); app.openLevel(lv, { fresh: true }); } })),
+  ]);
 }
 
 export function confirmReset(app) {

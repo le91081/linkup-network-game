@@ -1,5 +1,6 @@
 // 模擬考：限時、依考試領域的比重抽題，交卷後依領域計分（題目是自行編寫的練習題，不是實際試題）
 import { h, icon, button, fill } from './dom.js';
+import { noteAnswer } from './review.js';
 import { QUESTIONS } from '../data/quiz.js';
 import { subnetQuestion } from './quiz.js';
 
@@ -120,6 +121,8 @@ function runExam(app, ui, exam, n, mins) {
     clearInterval(timer);
     const secs = Math.min(limit, Math.round((Date.now() - t0) / 1000));
     const ok = qs.map((q, i) => ans[i] === q.c);
+    // 答錯（或沒作答）的題目放進錯題本；原本就在錯題本裡、這次答對的往下一盒移
+    qs.forEach((q, i) => noteAnswer(app, q, ok[i]));
     const correct = ok.filter(Boolean).length;
     const pct = correct / qs.length;
     const scaled = Math.round(E.min + (E.max - E.min) * pct);

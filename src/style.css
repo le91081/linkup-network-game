@@ -769,3 +769,66 @@ textarea.code.ans-edit { height: min(46vh, 330px); }
 .ans-out .tl.ans-head { display: flex; gap: 6px; white-space: nowrap; overflow: hidden; margin-top: 4px; }
 .ans-out .ans-head .stars { flex: 1; min-width: 24px; overflow: hidden; color: #8a96b8; font-weight: 400; }
 .ans-out .ans-head .stars::after { content: '********************************************************************************************************************************'; }
+
+/* ───────── 2D 邏輯拓撲圖 ───────── */
+#topo2d { position: fixed; inset: 0; z-index: 3; background: radial-gradient(circle at 50% 40%, #121a33 0%, #0a0f1f 75%); }
+#topo2d[hidden] { display: none; }
+body.view2d #stage .scene-labels, body.view2d #stage canvas { visibility: hidden; }
+.t2 { width: 100%; height: 100%; display: block; font-family: inherit; }
+.t2-link { stroke-width: 2.2; stroke-linecap: round; }
+.t2-link.up { stroke: #5b9cf6; }
+.t2-link.down { stroke: #4a5470; stroke-dasharray: 5 5; }
+.t2-link.blocked { stroke: #b8892e; stroke-dasharray: 9 6; }
+.t2-link.virt { stroke: #b48cff; stroke-dasharray: 2 4; }
+.t2-link.wifi { stroke: #7dd3fc; stroke-dasharray: 3 5; stroke-width: 1.6; }
+.t2-link.hot { stroke: #7df3ff; stroke-width: 4; stroke-dasharray: 12 8; animation: t2flow 0.8s linear infinite; filter: drop-shadow(0 0 4px rgba(125, 243, 255, 0.7)); }
+@keyframes t2flow { to { stroke-dashoffset: -20; } }
+.t2-vpn { fill: none; stroke: #ffc857; stroke-width: 2; stroke-dasharray: 6 5; opacity: 0.85; }
+.t2-vpntag rect { fill: rgba(255, 200, 87, 0.16); stroke: rgba(255, 200, 87, 0.55); }
+.t2-vpntag text { fill: #ffe2a8; font-size: 10.5px; font-weight: 700; text-anchor: middle; }
+.t2-port rect { fill: #10172c; stroke: rgba(110, 168, 255, 0.35); }
+.t2-port.down rect { stroke: rgba(138, 146, 176, 0.3); }
+.t2-port.blocked rect { stroke: rgba(245, 181, 71, 0.5); }
+.t2-port text { fill: #b9c6e8; font-size: 10.5px; text-anchor: middle; font-family: var(--mono); }
+.t2-dev { cursor: pointer; }
+.t2-box { fill: rgba(22, 30, 54, 0.96); stroke: rgba(150, 170, 225, 0.25); stroke-width: 1.2; }
+.t2-dev:hover .t2-box { stroke: rgba(150, 190, 255, 0.7); }
+.t2-dev.sel .t2-box { stroke: #4fd8c4; stroke-width: 2.2; }
+.t2-dev.off { opacity: 0.45; }
+.t2-name { fill: #e8eeff; font-size: 13px; font-weight: 700; }
+.t2-sub { fill: #8f9bc0; font-size: 11px; }
+.t2-ip { fill: #9fd8ff; font-size: 11px; font-family: var(--mono); }
+.t2-empty { fill: #8f9bc0; font-size: 14px; text-anchor: middle; }
+.t2-hint { fill: #6b7698; font-size: 11px; pointer-events: none; }
+.t2 { cursor: grab; }
+.t2.panning { cursor: grabbing; }
+#btn-view.on { color: #4fd8c4; background: rgba(79, 216, 196, 0.12); }
+
+/* ───────── 參考解法 ───────── */
+.sol-sec { margin: 14px 0 0; }
+.sol-sec h3 { display: flex; align-items: center; gap: 8px; font-size: 14px; margin: 0 0 6px; }
+.sol-list { display: flex; flex-direction: column; gap: 3px; padding: 9px 12px; border-radius: 10px; background: rgba(150, 170, 225, 0.06); font-size: 12.5px; line-height: 1.55; overflow-wrap: anywhere; }
+.sol-list.mono { font-family: var(--mono); font-size: 12px; white-space: pre-wrap; }
+.sol-list .add { color: #8ff0b4; }
+.sol-list .del { color: #ff9aa5; }
+.sol-list .ctx { color: #9fb0d8; }
+
+/* ───────── 錯題本 ───────── */
+.review-card { width: 100%; margin: 0 0 12px; border-color: rgba(245, 181, 71, 0.35) !important; background: rgba(245, 181, 71, 0.06) !important; }
+.review-card.quiet { border-color: var(--line) !important; background: transparent !important; cursor: default; }
+.qsched { margin: 6px 0 0; font-size: 12px; color: var(--muted); }
+.quiz-btn { position: relative; }
+.rv-dot { position: absolute; top: 2px; right: 2px; min-width: 16px; height: 16px; padding: 0 4px; border-radius: 8px; background: #f5b547; color: #1a1305; font-size: 10.5px; font-weight: 800; line-height: 16px; text-align: center; }
+
+/* ───────── 新手導覽 ───────── */
+#coach { position: fixed; top: 118px; left: 50%; translate: -50% 0; z-index: 8; width: min(420px, calc(100vw - 32px)); padding: 12px 14px 12px; border-radius: 14px; border: 1px solid rgba(79, 216, 196, 0.45); box-shadow: 0 10px 30px rgba(0, 0, 0, 0.35); }
+#coach b { display: block; font-size: 14.5px; margin: 4px 0 3px; }
+#coach p { margin: 0; font-size: 12.8px; line-height: 1.55; color: var(--muted); }
+#coach .co-top { display: flex; align-items: center; justify-content: space-between; }
+#coach .co-no { font-size: 11.5px; font-weight: 700; color: #4fd8c4; letter-spacing: 0.03em; }
+#coach .co-skip { background: none; border: 0; color: var(--muted); font-size: 12px; cursor: pointer; padding: 2px 4px; }
+#coach .co-skip:hover { color: var(--text); text-decoration: underline; }
+#coach .co-bar { height: 3px; margin-top: 10px; border-radius: 2px; background: rgba(150, 170, 225, 0.15); overflow: hidden; }
+#coach .co-bar i { display: block; height: 100%; background: #4fd8c4; transition: width 0.3s; }
+.coach-hl { outline: 2px solid #4fd8c4 !important; outline-offset: 3px; animation: coachpulse 1.4s ease-in-out infinite; }
+@keyframes coachpulse { 50% { outline-color: rgba(79, 216, 196, 0.25); outline-offset: 6px; } }
