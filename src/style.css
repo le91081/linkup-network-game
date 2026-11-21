@@ -1,4 +1,5 @@
 :root {
+  color-scheme: dark;
   --bg: #090d1a;
   --panel: rgba(17, 23, 42, 0.84);
   --panel-solid: #121930;
@@ -860,3 +861,14 @@ body.view2d #stage .scene-labels, body.view2d #stage canvas { visibility: hidden
 .pbr-rule .pbr-what { overflow-wrap: anywhere; }
 .sub.pbr .card-h b { flex: none; }
 .sub.pbr .card-h .muted { min-width: 0; overflow-wrap: anywhere; font-size: 11.5px; }
+
+/* ───────── 視窗太窄 ───────── */
+#narrow { display: none; }
+@media (max-width: 899px) {
+  #narrow { display: flex; position: fixed; inset: 0; z-index: 1000; align-items: center; justify-content: center; background: var(--bg); padding: 24px max(16px, env(safe-area-inset-right, 0px)) 24px max(16px, env(safe-area-inset-left, 0px)); }
+  #narrow > div { max-width: 26em; display: flex; flex-direction: column; gap: 10px; text-align: center; }
+  #narrow b { font-size: 18px; color: var(--text); }
+  #narrow p { margin: 0; color: var(--muted, #9aa6c7); line-height: 1.7; }
+}
+/* 匯出：Artifact 裡不能下載，顯示內容讓人複製 */
+.save-text { width: 100%; min-height: 260px; resize: vertical; font-size: 12px; white-space: pre; }

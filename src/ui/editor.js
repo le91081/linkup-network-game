@@ -2,6 +2,7 @@
 // 可以自己試玩、存成自訂關卡、匯出成檔案分享，也可以匯入別人做的關卡。
 import { h, icon, button, toast, ownKeys } from './dom.js';
 import { modal, closeModal } from './hud.js';
+import { saveJson } from './save.js';
 import { cloneState } from '../engine/model.js';
 import { recompute } from '../engine/sim.js';
 import { sandboxObjectives, checkImport } from './sandbox.js';
@@ -89,13 +90,7 @@ export function editorSection(app) {
 
 function downloadLevel(c) {
   const data = { app: 'LinkUp', kind: 'level', version: 1, title: c.title, brief: c.brief, hints: c.hints, lock: c.lock, state: c.state };
-  const url = URL.createObjectURL(new Blob([JSON.stringify(data, null, 1)], { type: 'application/json' }));
-  const a = h('a', { href: url, download: `linkup-level-${(c.title || 'custom').replace(/[\\/:*?"<>|\s]+/g, '-').slice(0, 40)}.json` });
-  document.body.append(a);
-  a.click();
-  a.remove();
-  setTimeout(() => URL.revokeObjectURL(url), 2000);
-  toast(`已匯出關卡「${c.title}」`, 'ok');
+  saveJson(`linkup-level-${(c.title || 'custom').replace(/[\\/:*?"<>|\s]+/g, '-').slice(0, 40)}.json`, data, `已匯出關卡「${c.title}」`);
 }
 
 /** 匯入別人分享的關卡檔 */

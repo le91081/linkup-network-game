@@ -10,7 +10,9 @@
     "preview": "vite preview",
     "test": "node test/levels.test.mjs",
     "test:e2e": "playwright test",
-    "test:all": "node test/levels.test.mjs && playwright test"
+    "test:all": "node test/levels.test.mjs && playwright test",
+    "build:artifact": "vite build --mode artifact",
+    "preview:artifact": "vite preview --mode artifact --port 4520 --strictPort"
   },
   "dependencies": {
     "three": "^0.170.0"

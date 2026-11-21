@@ -1,5 +1,6 @@
 // 自由模式：自己擺設備、自由接線、任意測試連線
 import { h, icon, button, toast } from './dom.js';
+import { saveJson } from './save.js';
 import { CATALOG, makeDevice, makeState, setLine, uniqueId, cloneState } from '../engine/model.js';
 import { recompute, runObjective } from '../engine/sim.js';
 import { isIos, saveStartup } from '../engine/ios.js';
@@ -209,13 +210,7 @@ export function installSandbox(app, hooks) {
   };
   app.sandboxExport = () => {
     const data = { app: 'LinkUp', kind: 'sandbox', version: 1, state: cloneState(app.state) };
-    const url = URL.createObjectURL(new Blob([JSON.stringify(data, null, 1)], { type: 'application/json' }));
-    const a = h('a', { href: url, download: `linkup-topology-${new Date().toISOString().slice(0, 10)}.json` });
-    document.body.append(a);
-    a.click();
-    a.remove();
-    setTimeout(() => URL.revokeObjectURL(url), 2000);
-    toast(`已匯出 ${Object.keys(app.state.devices).length} 台設備的拓撲`, 'ok');
+    saveJson(`linkup-topology-${new Date().toISOString().slice(0, 10)}.json`, data, `已匯出 ${Object.keys(app.state.devices).length} 台設備的拓撲`);
   };
   /** 匯入拓撲：text 是匯出檔的內容。成功回傳 true */
   app.sandboxImport = (text) => {

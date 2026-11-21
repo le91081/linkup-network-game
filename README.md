@@ -13,6 +13,16 @@ npm run test:e2e # 在真的瀏覽器裡操作一輪（見下方）
 npm run build    # 輸出到 dist/
 ```
 
+### 發佈成 Claude 的 Artifact
+
+`npm run build:artifact` 輸出到 `dist-artifact/`：`page.html` 是要發佈的頁面（沒有 `<html>`、`<head>`、`<body>`，Artifact 發佈時會自己包上），`assets/` 底下的 JS 與 CSS 是附帶的檔案。和一般的打包有三個不同：
+
+- three.js 不打包進來，改用 import map 從 jsDelivr 載入（Artifact 只允許幾個 CDN 的外部程式），版本和 `node_modules` 裡的一樣。
+- 「匯出」不能下載檔案，改成把 JSON 顯示出來讓人複製（`src/ui/save.js`）；「匯入」照常用檔案。
+- 進度存在瀏覽者自己的瀏覽器裡，和本機 `localhost:5173` 的進度分開；網址的 `?profile=` 在 Artifact 裡沒有作用。
+
+`npm run preview:artifact` 可以先在本機（4520 埠）看打包出來的樣子。視窗寬度不到 900 像素時，畫面會提示要用電腦或把視窗拉寬。
+
 ### 瀏覽器端測試（Playwright）
 
 `npm run test:e2e` 用電腦上已經安裝的 Google Chrome（`channel: 'chrome'`）跑，不另外下載瀏覽器；
