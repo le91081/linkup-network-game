@@ -32,7 +32,7 @@ export const LEVEL_TOPIC = {
   l55: 'wireless', l56: 'wireless', l57: 'wireless',
   l58: 'auto', l59: 'auto', l60: 'auto', l61: 'auto', l62: 'auto',
   l63: 'routing', l64: 'routing', l65: 'ops', l66: 'routing', l67: 'switching', l68: 'vpn', l69: 'security', l71: 'services',
-  l70: 'auto', l72: 'routing', l73: 'auto', l74: 'security', l75: 'switching', l76: 'vpn',
+  l70: 'auto', l72: 'routing', l73: 'auto', l74: 'security', l75: 'switching', l76: 'vpn', l77: 'routing', l78: 'routing',
 };
 
 export const QUESTIONS = {
@@ -69,6 +69,9 @@ export const QUESTIONS = {
     { q: '兩台交換器用 Trunk 相連，但 VLAN 30 只在其中一台建立。結果會怎樣？', a: ['VLAN 30 的流量過不了 Trunk', '另一台會自動建立 VLAN 30', '整條 Trunk 會斷線', '所有 VLAN 都受影響'], c: 0, e: '交換器只轉送自己認識的 VLAN。VLAN 必須在路徑上每一台交換器都建立。', r: 'CCNA 2.2' },
   ],
   routing: [
+    { q: '在 OSPF 的 ASBR 上 redistribute static subnets 之後，其他 OSPF 路由器的路由表裡，這些網段會顯示成什麼？', a: ['O', 'O IA', 'O E2', 'S'], c: 2, e: '重分配進 OSPF 的路是外部路由 (Type-5 LSA)，預設是 E2：metric 固定（靜態與直連的種子 metric 是 20），不會隨著離 ASBR 的距離增加；改成 metric-type 1 就變成 O E1，會加上內部的 cost。', r: 'CCNA 3.1' },
+    { q: '路由器上設定 redistribute static subnets，下列哪一筆不會被送進 OSPF？', a: ['10.50.0.0/16 的靜態路由', '指向 ISP 的 0.0.0.0/0 靜態預設路由', '192.168.99.0/24 的靜態路由', '浮動靜態路由（管理距離 200，目前在路由表裡）'], c: 1, e: '預設路由不會跟著 redistribute 出去，要另外用 default-information originate。其他在路由表裡的靜態路由都會被送出去，所以通常要搭配 route-map 只挑需要的網段。', r: 'CCNA 3.1' },
+    { q: '想讓分公司 NAS 備份到總公司的流量走寬頻、其他流量照樣走專線，最適合的做法是？', a: ['把專線的 OSPF cost 調高', '政策路由：ACL 選出 NAS 到備份伺服器的流量，route-map set ip next-hop 寬頻那一端，套在分公司 LAN 的介面上', '加一條往備份伺服器的靜態路由', '在 NAS 上設兩個預設閘道'], c: 1, e: '路由表只看目的位址；要依「來源 + 目的 + 應用程式」選路就用 PBR。PBR 套在流量進來的介面（ip policy route-map），只影響那個方向；回程照對方的路由表走。改 cost 會讓所有流量一起改道。', r: 'CCNA 3.2' },
     { q: '路由表裡同時有 10.1.0.0/16 與 10.1.2.0/24。要送往 10.1.2.5 的封包會用哪一條？', a: ['10.1.0.0/16，因為涵蓋範圍大', '10.1.2.0/24，因為前綴最長', '兩條輪流使用', '看哪一條先加入'], c: 1, e: '路由器永遠先選最長相符 (longest prefix match) 的路由，然後才比管理距離與 Metric。', r: 'CCNA 3.2' },
     { q: '同一個網段同時有靜態路由和 OSPF 學到的路由。Cisco 路由器預設會採用哪一條？', a: ['OSPF，因為是動態路由', '靜態路由，因為管理距離比較小', 'Metric 比較小的那一條', '兩條都放進路由表'], c: 1, e: '靜態路由的管理距離是 1，OSPF 是 110。管理距離越小代表越可信。', r: 'CCNA 3.2' },
     { q: '什麼是浮動靜態路由 (floating static route)？', a: ['會自動調整 Metric 的路由', '管理距離被調高、平常不會被使用的備援靜態路由', '指向 Loopback 介面的路由', '只在開機時生效的路由'], c: 1, e: '把備援路由的管理距離設得比主要路由大，主要路由消失時它才會進入路由表。', r: 'CCNA 3.3' },

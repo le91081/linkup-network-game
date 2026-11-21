@@ -1,7 +1,8 @@
 // BGP-4（eBGP）：鄰居關係（TCP 179）、路徑向量的傳遞、最佳路徑選擇、route-map / prefix-list / as-path 過濾
 //
 // 設定（IOS 路由器）：
-//   d.bgp = { asn, rid, log, neighbors: [{ ip, remoteAs, desc, rmIn, rmOut, plIn, plOut, flIn, flOut, shut, defOrig }], networks: [{ net, bits }] }
+//   d.bgp = { asn, rid, log, neighbors: [{ ip, remoteAs, desc, rmIn, rmOut, plIn, plOut, flIn, flOut, shut, defOrig }], networks: [{ net, bits }],
+//             redist: [{ src: 'connected' | 'static' | 'ospf', metric?, rm? }] }
 //   d.routeMaps   = { 名稱: [{ seq, action, match: { pl?, fl? }, set: { lp?, prepend?: [as…], med?, weight? } }] }
 //   d.prefixLists = { 名稱: [{ seq, action, net, bits, ge?, le? }] }
 //   d.asPathAcl   = { 編號: [{ action, re }] }
@@ -10,6 +11,7 @@
 //
 // 執行期：state.dyn.bgp[兩端] = { since, up, last }；d.rt.bgp = { rid, peers: [...], table: [...] }
 import { parseIp, fmtIp, netOf, sameNet } from './ip.js';
+import { plHit, aclRouteHit, rmRoute, ospfInternal } from './policy.js';
 
 export const BGP_UP = 10; // 設定好之後：TCP 三向交握、OPEN、KEEPALIVE，大約十秒進到 Established
 export const BGP_HOLD = 180; // 對方沒有消息（線路沒斷，只是路上不通）：hold time 到了才斷
@@ -42,16 +44,6 @@ export function bgpAccepts(d, src) {
 
 // ───────────────────────── 政策：prefix-list、as-path、route-map ─────────────────────────
 
-function plHit(d, name, r) {
-  const list = ((d.prefixLists || {})[name] || []).slice().sort((a, b) => a.seq - b.seq);
-  for (const e of list) {
-    if (netOf(r.net, e.bits) !== e.net) continue;
-    const lo = e.ge || (e.le ? e.bits : e.bits), hi = e.le || (e.ge ? 32 : e.bits);
-    if (r.bits < lo || r.bits > hi) continue;
-    return e.action === 'permit';
-  }
-  return false; // 隱含的 deny
-}
 function flHit(d, num, r) {
   const path = r.aspath.join(' ');
   for (const e of (d.asPathAcl || {})[num] || []) {
@@ -69,6 +61,7 @@ function applyRm(d, name, r) {
     const m = e.match || {};
     if (m.pl && !plHit(d, m.pl, r)) continue;
     if (m.fl && !flHit(d, m.fl, r)) continue;
+    if (m.acl && !aclRouteHit(d, m.acl, r)) continue;
     if (e.action === 'deny') return null;
     const x = { ...r, aspath: r.aspath.slice() };
     const s = e.set || {};
@@ -103,7 +96,7 @@ export const BEST_REASON = (a, b) => {
  * 每次重新計算路由時呼叫（在 OSPF 之後）。transact 用來確認 TCP 179 通不通，
  * linkUp(d, ip) 判斷通往鄰居的直連介面是不是還亮著（fast-external-fallover）
  */
-export function computeBgp(state, { transact, logEvent }) {
+export function computeBgp(state, { transact, logEvent, ospfOn = () => false }) {
   const dyn = state.dyn, now = state.clock;
   const tbl = (dyn.bgp ||= {});
   const speakers = Object.values(state.devices).filter((d) => bgpCfg(d) && !(state.down || {})[d.id] && !state.rt.off[d.id]);
@@ -194,6 +187,16 @@ export function computeBgp(state, { transact, logEvent }) {
     for (const n of c.networks || []) {
       const has = isInet(d) || d.rt.routes.some((r) => r.net === n.net && r.bits === n.bits && !r.bad && r.type !== 'B');
       if (has) out.push({ net: n.net, bits: n.bits, aspath: [], origin: 'i', local: true, weight: 32768, nh: 0, from: null });
+    }
+    // redistribute：路由表裡那一種的路全部送出去（origin 是 ?，incomplete）；預設路由不會跟著出去
+    for (const rd of (!isInet(d) && c.redist) || []) {
+      for (const r of d.rt.routes) {
+        if (r.bad || r.vrf || r.bits === 0 || out.some((x) => x.net === r.net && x.bits === r.bits)) continue;
+        if (!(rd.src === 'static' ? r.type === 'S' : rd.src === 'connected' ? r.type === 'C' : rd.src === 'ospf' ? ospfInternal(r) || (r.type === 'C' && r.iface && ospfOn(d, r.iface)) : false)) continue; // 跑 OSPF 的直連網段也算 OSPF 的路（和 IOS 一樣）
+        let med = rd.metric != null ? +rd.metric : rd.src === 'ospf' ? r.metric : 0; // 從 OSPF 來的路，MED 是原本的 cost
+        if (rd.rm) { const st = rmRoute(d, rd.rm, r); if (!st) continue; if (st.med != null) med = +st.med; }
+        out.push({ net: r.net, bits: r.bits, aspath: [], origin: '?', local: true, weight: 32768, nh: 0, from: null, med, redist: rd.src });
+      }
     }
   }
   // 3. 路徑向量：一輪一輪地把最佳路徑送給鄰居，直到沒有變化

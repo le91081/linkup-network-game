@@ -10,7 +10,7 @@ import { cdpCfg, lldpCfg, cdpOn, lldpTxOn, lldpRxOn, neighbors, ndCounters, cdpC
 import { dscpName, COS_DSCP_DEFAULT, portTrust, egressOf, classify, QLIMIT } from '../engine/qos.js';
 import { ospfArea, ospfCost, ospfPassive, ospfHello, ospfDead, ospfPrio, ospfNetType, isLoopback } from '../engine/ospf.js';
 import { bgpCfg } from '../engine/bgp.js';
-import { ikeVer, errdisRows, ERR_CAUSES, vrfOf } from '../engine/sim.js';
+import { ikeVer, errdisRows, ERR_CAUSES, vrfOf, pbrHits } from '../engine/sim.js';
 import { ERR_RECOVERY_CAUSES } from '../engine/ios.js';
 import { fhrpProto, fhrpGroup, trackUp, trackText, trackUsers, slaKey, SLA_FREQ } from '../engine/track.js';
 import { archiveFiles, nextArchiveName, cfgDiff, ARCH_MAX_DEFAULT } from '../engine/archive.js';
@@ -455,6 +455,7 @@ const SHOW = {
       ...stmts.map((n) => `    ${fmtIp(n.net)} ${wild(n.bits)} area ${+(n.area || 0)}`),
       ...(d.ifaces.some((i) => ospfPassive(d, i) && !isLoopback(i) && ospfArea(d, i) != null) ? ['  Passive Interface(s):', ...d.ifaces.filter((i) => ospfPassive(d, i) && !isLoopback(i) && ospfArea(d, i) != null).map((i) => '    ' + longIf(i.label))] : []),
       ...on.filter((i) => !stmts.some((n) => (i.rt.ip >>> (32 - n.bits || 0)) === (n.net >>> (32 - n.bits || 0)))).map((i) => `    ${longIf(i.label)}`),
+      ...((d.ospfRedist || []).length ? [`  Redistributing: ${(d.ospfRedist || []).map((r) => r.src + (r.as != null ? ' ' + r.as : '')).join(', ')}`] : []),
       '  Routing Information Sources:', '    Gateway         Distance      Last Update',
       ...(d.rt.nbrs || []).filter((n) => n.state === 'full').map((n) => `    ${pad(fmtIp(routerId(st.devices[n.dev]) ?? n.ip), 16)}${pad(110, 14)}${hms(Math.min(st.clock, 3600))}`),
       '  Distance: (default is 110)'];
@@ -494,8 +495,14 @@ const SHOW = {
   'show route-map': (st, d) => {
     const all = Object.entries(d.routeMaps || {});
     if (!all.length) return ['（沒有任何 route-map）'];
-    return all.flatMap(([n, l]) => l.flatMap((e) => [`route-map ${n}, ${e.action}, sequence ${e.seq}`, '  Match clauses:', ...(e.match.pl ? [`    ip address prefix-lists: ${e.match.pl} `] : []), ...(e.match.fl ? [`    as-path (as-path filter): ${e.match.fl} `] : []),
-      '  Set clauses:', ...(e.set.lp != null ? [`    local-preference ${e.set.lp}`] : []), ...(e.set.prepend ? [`    as-path prepend ${e.set.prepend.join(' ')}`] : []), ...(e.set.med != null ? [`    metric ${e.set.med}`] : []), ...(e.set.weight != null ? [`    weight ${e.set.weight}`] : []), '  Policy routing matches: 0 packets, 0 bytes']));
+    return all.flatMap(([n, l]) => l.flatMap((e) => { const h = pbrHits(e); return [`route-map ${n}, ${e.action}, sequence ${e.seq}`, '  Match clauses:', ...(e.match.pl ? [`    ip address prefix-lists: ${e.match.pl} `] : []), ...(e.match.acl ? [`    ip address (access-lists): ${e.match.acl} `] : []), ...(e.match.fl ? [`    as-path (as-path filter): ${e.match.fl} `] : []), ...(e.match.tag != null ? [`    tag ${e.match.tag} `] : []),
+      '  Set clauses:', ...(e.set.lp != null ? [`    local-preference ${e.set.lp}`] : []), ...(e.set.prepend ? [`    as-path prepend ${e.set.prepend.join(' ')}`] : []), ...(e.set.med != null ? [`    metric ${e.set.med}`] : []), ...(e.set.metricType ? [`    metric-type type-${e.set.metricType}`] : []), ...(e.set.tag != null ? [`    tag ${e.set.tag}`] : []), ...(e.set.weight != null ? [`    weight ${e.set.weight}`] : []),
+      ...((e.set.nh || []).length ? [`    ip next-hop ${e.set.nh.join(' ')}`] : []), ...((e.set.defNh || []).length ? [`    ip default next-hop ${e.set.defNh.join(' ')}`] : []), `  Policy routing matches: ${h.pk} packets, ${h.by} bytes`]; }));
+  },
+  'show ip policy': (st, d) => {
+    const ifs = d.ifaces.filter((i) => i.policyRm);
+    if (!ifs.length && !d.localPolicy) return ['（沒有任何介面套用政策路由：interface 底下 ip policy route-map <名稱>）'];
+    return ['Interface      Route map', ...(d.localPolicy ? [pad('local', 15) + d.localPolicy] : []), ...ifs.map((i) => pad(i.label, 15) + i.policyRm + ((d.routeMaps || {})[i.policyRm] ? '' : '  （這個 route-map 不存在：封包照一般的路由表）'))];
   },
   'show ip as-path-access-list': (st, d) => {
     const all = Object.entries(d.asPathAcl || {});
@@ -509,8 +516,8 @@ const SHOW = {
     return [` Routing Process "ospf 1" with ID ${o2.rid != null ? fmtIp(o2.rid) : '0.0.0.0'}`, ' Start time: 00:00:12.345, Time elapsed: ' + hms(st.clock + 273600),
       ...(o2.pending ? [` （設定了新的 router-id ${d.ospfRid}，但要 clear ip ospf process 才會生效）`] : []),
       ' Supports only single TOS(TOS0) routes', ' Supports opaque LSA', ' Supports Link-local Signaling (LLS)',
-      ...(o2.abr ? [' It is an area border router'] : []), ...(o2.asbr ? [' It is an autonomous system boundary router'] : []),
-      ` Router is not originating router-LSAs with maximum metric`, ' Initial SPF schedule delay 5000 msecs', ' Number of external LSA ' + (st.rt.ospf ? st.rt.ospf.asbrs.length : 0),
+      ...(o2.abr ? [' It is an area border router'] : []), ...(o2.asbr ? [' It is an autonomous system boundary router', ' Redistributing External Routes from,', ...(d.ospfRedist || []).map((r) => `    ${r.src}${r.as != null ? ' ' + r.as : ''}${r.metric != null ? ', metric ' + r.metric : ''}${r.type === 1 ? ', metric-type 1' : ''}, includes subnets in redistribution${r.rm ? ', route-map ' + r.rm : ''}`)] : []),
+      ` Router is not originating router-LSAs with maximum metric`, ' Initial SPF schedule delay 5000 msecs', ' Number of external LSA ' + (st.rt.ospf ? Object.values(st.rt.ospf.exts || {}).reduce((n, l) => n + l.length, 0) : 0),
       ` Number of areas in this router is ${areas.length}. ${areas.length} normal 0 stub 0 nssa`, ` Reference bandwidth unit is ${+d.ospfRefBw || 100} mbps`,
       ...areas.flatMap((a) => {
         const n = Object.values(o2.ifs).filter((x) => x.area === a).length;
@@ -542,7 +549,7 @@ const SHOW = {
       }
       if (sums.length) { o.push('', `\t\tSummary Net Link States (Area ${a})`, '', 'Link ID         ADV Router      Age         Seq#       Checksum'); for (const x of sums) o.push(pad(fmtIp(x.net), 16) + pad(fmtIp(x.rid), 16) + pad(age(x.net), 12) + pad(seq(x.net), 11) + '0x00' + (x.net % 0xffff).toString(16).padStart(4, '0').toUpperCase()); }
     }
-    if (db.asbrs.length) { o.push('', '\t\tType-5 AS External Link States', '', 'Link ID         ADV Router      Age         Seq#       Checksum Tag'); for (const id of db.asbrs) o.push(pad('0.0.0.0', 16) + pad(fmtIp(db.rid[id]), 16) + pad(age(1), 12) + pad(seq(1), 11) + pad('0x00A1B2', 9) + '1'); }
+    if (db.asbrs.length) { o.push('', '\t\tType-5 AS External Link States', '', 'Link ID         ADV Router      Age         Seq#       Checksum Tag'); for (const id of db.asbrs) for (const x of (db.exts || {})[id] || []) o.push(pad(fmtIp(x.net), 16) + pad(fmtIp(db.rid[id]), 16) + pad(age(x.net + 1), 12) + pad(seq(x.net + 1), 11) + pad('0x00' + ((x.net + 7) % 0xffff).toString(16).padStart(4, '0').toUpperCase(), 9) + (x.tag || (x.def ? 1 : 0))); }
     return o;
   },
   'show snmp': (st, d) => {
@@ -1011,8 +1018,8 @@ function routeEntry(st, d, rs) {
     o.push(`  Known via "static", distance ${r.ad}, metric 0${def ? ', candidate default path' : ''}`, '  Routing Descriptor Blocks:');
     rs.forEach((x, k) => o.push(`  ${k ? ' ' : '*'} ${fmtIp(x.via)}`, metricLine(0)));
   } else if (r.type === 'O') {
-    const type = r.sub === 'IA' ? 'inter area' : r.sub === 'E2' ? 'extern 2' : 'intra area';
-    if (r.sub === 'E2') o.push(`  Known via "ospf 1", distance 110, metric ${r.metric}${def ? ', candidate default path' : ''}`, `  Tag 1, type ${type}, forward metric ${r.fwd ?? 1}`);
+    const type = r.sub === 'IA' ? 'inter area' : r.sub === 'E2' ? 'extern 2' : r.sub === 'E1' ? 'extern 1' : 'intra area';
+    if (r.sub === 'E2' || r.sub === 'E1') o.push(`  Known via "ospf 1", distance 110, metric ${r.metric}${def ? ', candidate default path' : ''}`, `  Tag ${r.tag ?? (def ? 1 : 0)}, type ${type}${r.sub === 'E2' ? `, forward metric ${r.fwd ?? 1}` : ''}`);
     else o.push(`  Known via "ospf 1", distance 110, metric ${r.metric}, type ${type}`);
     o.push(`  Last update from ${fmtIp(r.via)} on ${longIf(r.iface.label)}, ${rtAge(st, r)} ago`, '  Routing Descriptor Blocks:');
     rs.forEach((x, k) => o.push(`  ${k ? ' ' : '*'} ${fmtIp(x.via)}, from ${x.adv != null ? fmtIp(x.adv) : fmtIp(x.via)}, ${rtAge(st, x)} ago, via ${longIf(x.iface.label)}`, metricLine(x.metric)));

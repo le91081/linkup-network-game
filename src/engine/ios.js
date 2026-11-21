@@ -428,7 +428,7 @@ const HELP = {
     'channel-group <編號> mode active|passive|on', 'switchport port-security [mac-address <MAC> | violation <模式>]',
     'spanning-tree bpduguard enable / spanning-tree guard root', 'ip dhcp snooping trust', 'ipv6 address <位址/前綴>', 'speed 10|100|1000|auto、duplex auto|full|half'],
   vlan: ['name <名稱>'],
-  router: ['network <網段> <萬用遮罩> area 0', 'default-information originate'],
+  router: ['network <網段> <萬用遮罩> area 0', 'default-information originate', 'redistribute static | connected | bgp <AS> [subnets] [metric <n>] [metric-type 1|2] [route-map <名稱>]'],
   dhcp: ['network <網段> <遮罩>', 'default-router <IP>', 'dns-server <IP> [IP]', 'option 150 ip <TFTP 伺服器>（IP 電話下載設定檔）', 'option 43 hex f104.<WLC 的 IP（十六進位）>（Cisco AP 找無線控制器）', 'lease <天> [小時] [分鐘]', 'host <IP> <遮罩> 加上 hardware-address <MAC>（保留位址）'],
   line: ['transport input ssh | telnet | all | none', 'access-class <名稱> in', 'login local'],
   acl: ['permit|deny <ip|tcp|udp|icmp> <來源> <目的> [eq <埠>]', 'ICMP 可以指定類型：echo、echo-reply、unreachable、packet-too-big、time-exceeded', '來源 / 目的的寫法：any、host <IP>、<網段> <萬用遮罩>', 'no <序號>   刪除一條規則'],
@@ -577,6 +577,8 @@ export function iosSession(getDev, getState, who = null) {
       return undefined;
     }) : err('ip mtu 的範圍是 68 – 9216'))],
     ['no ip mtu', () => onL3((i) => { delete i.mtu; })],
+    ['ip policy route-map <name>', ([name]) => onL3((i) => { i.policyRm = name; })],
+    ['no ip policy route-map [...]', () => onL3((i) => { delete i.policyRm; })],
     ['ip tcp adjust-mss <n>', ([n]) => (/^\d+$/.test(n) && +n >= 500 && +n <= 1460 ? onL3((i) => { i.adjMss = +n; }) : err('% ip tcp adjust-mss 的範圍是 500 – 1460（IPsec 常用 1360、PPPoE 用 1452）'))],
     ['no ip tcp adjust-mss [...]', () => onL3((i) => { delete i.adjMss; })],
     ['mtu <n>', ([n]) => {
@@ -844,6 +846,36 @@ export function iosSession(getDev, getState, who = null) {
     fn(n);
     return undefined;
   }
+  /**
+   * redistribute 的參數：static | connected | bgp <AS> | ospf <程序>，後面可以接 subnets、metric <n>、metric-type 1|2、route-map <名稱>、tag <n>
+   * 回傳 { src, as?, metric?, type?, rm?, tag? } 或錯誤
+   */
+  function redistArgs(src, rest, into) {
+    const t = String(rest || '').split(/\s+/).filter(Boolean);
+    const S2 = ['static', 'connected', into === 'ospf' ? 'bgp' : 'ospf'].find((x) => x.startsWith(String(src).toLowerCase()) && String(src).length >= 2);
+    if (!S2) return err(into === 'ospf' ? '用法：redistribute static | connected | bgp <AS> [subnets] [metric <n>] [metric-type 1|2] [route-map <名稱>]' : '用法：redistribute static | connected | ospf <程序> [metric <n>] [route-map <名稱>]');
+    const o = { src: S2 };
+    let k = 0;
+    if (S2 === 'bgp' || S2 === 'ospf') {
+      if (!/^\d+$/.test(t[0] || '')) return err(`用法：redistribute ${S2} <${S2 === 'bgp' ? 'AS 號碼' : '程序號碼'}> …`);
+      o.as = +t[0]; k = 1;
+      if (S2 === 'bgp' && !(dev().bgp && +dev().bgp.asn === o.as)) return err(`% BGP process ${o.as} not running（這台的 router bgp 是 ${(dev().bgp && dev().bgp.asn) || '還沒有設定'}）`);
+    }
+    for (; k < t.length; k++) {
+      const w = t[k].toLowerCase();
+      if (w === 'subnets') continue; // IOS XE 一律包含子網路，會自己補上 subnets
+      if (w === 'metric' && /^\d+$/.test(t[k + 1] || '')) { o.metric = +t[++k]; continue; }
+      if (w === 'metric-type' && /^[12]$/.test(t[k + 1] || '') && into === 'ospf') { o.type = +t[++k]; continue; }
+      if (w === 'route-map' && t[k + 1]) { o.rm = t[++k]; continue; }
+      if (w === 'tag' && /^\d+$/.test(t[k + 1] || '') && into === 'ospf') { o.tag = +t[++k]; continue; }
+      if (w === 'match' && into === 'bgp') { k = t.length; continue; } // match internal external …：只接受，不改變行為
+      return err(`% 看不懂「${t[k]}」：redistribute 後面可以接 ${into === 'ospf' ? 'subnets、metric <n>、metric-type 1|2、tag <n>、' : 'metric <n>、'}route-map <名稱>`);
+    }
+    if (o.metric != null && into === 'ospf' && !(o.metric >= 0 && o.metric <= 16777214)) return err('% OSPF 的 metric 是 0 – 16777214');
+    if (o.type === 2) delete o.type;
+    return o;
+  }
+  const upsertRedist = (list, o) => { const k = list.findIndex((x) => x.src === o.src); if (k >= 0) list[k] = o; else list.push(o); };
   function rm(fn) {
     const e = (dev().routeMaps[S.cur.name] || []).find((x) => x.seq === S.cur.seq);
     if (!e) return err('找不到目前的 route-map');
@@ -1160,6 +1192,8 @@ export function iosSession(getDev, getState, who = null) {
       return undefined;
     }],
     ['no ip as-path access-list <n>', ([n]) => { const d = dev(); if (d.asPathAcl) delete d.asPathAcl[n]; }],
+    ['ip local policy route-map <name>', ([name]) => { const e = needRouting(); if (e) return e; dev().localPolicy = name; return undefined; }],
+    ['no ip local policy route-map [...]', () => { delete dev().localPolicy; }],
     ['route-map <name> [...]', ([name, rest]) => {
       const t = (rest || '').toLowerCase().split(/\s+/).filter(Boolean);
       const action = ['permit', 'deny'].find((x) => x === t[0]) || 'permit';
@@ -1834,6 +1868,19 @@ export function iosSession(getDev, getState, who = null) {
       }],
       ['default-information originate [...]', () => { dev().ospfDefault = true; }],
       ['no default-information originate', () => { dev().ospfDefault = false; }],
+      ['redistribute <src> [...]', ([src, rest]) => {
+        const o = redistArgs(src, rest, 'ospf');
+        if (isErr(o)) return o;
+        upsertRedist((dev().ospfRedist ||= []), o);
+        const miss = o.rm && !(dev().routeMaps || {})[o.rm];
+        return miss ? `（route-map ${o.rm} 還不存在：在它建立之前，什麼路都不會被重分配）` : undefined;
+      }],
+      ['no redistribute <src> [...]', ([src]) => {
+        const d = dev(), n = (d.ospfRedist || []).length;
+        d.ospfRedist = (d.ospfRedist || []).filter((x) => !x.src.startsWith(String(src).toLowerCase()));
+        if (!d.ospfRedist.length) delete d.ospfRedist;
+        return (d.ospfRedist || []).length < n ? undefined : err('沒有這一條 redistribute');
+      }],
       ['router-id <id>', ([id]) => {
         if (parseIp(id) == null) return err('用法：router-id <A.B.C.D>');
         const d = dev(), cur = ((getState().dyn || {}).rid || {})[d.id];
@@ -2257,15 +2304,39 @@ export function iosSession(getDev, getState, who = null) {
         return has ? undefined : '（路由表裡還沒有一模一樣的這個網段：BGP 的 network 只會通告路由表裡已經有的網段）';
       }],
       ['no network <ip> mask <mask>', ([ip, mask]) => { const n = parseIp(ip), bits = maskBits(mask); const b = dev().bgp; b.networks = b.networks.filter((x) => !(x.net === netOf(n, bits) && x.bits === bits)); }],
+      ['redistribute <src> [...]', ([src, rest]) => {
+        const o = redistArgs(src, rest, 'bgp');
+        if (isErr(o)) return o;
+        upsertRedist((dev().bgp.redist ||= []), o);
+        return o.rm && !(dev().routeMaps || {})[o.rm] ? `（route-map ${o.rm} 還不存在：在它建立之前，什麼路都不會被重分配）` : undefined;
+      }],
+      ['no redistribute <src> [...]', ([src]) => {
+        const b = dev().bgp, n = (b.redist || []).length;
+        b.redist = (b.redist || []).filter((x) => !x.src.startsWith(String(src).toLowerCase()));
+        if (!b.redist.length) delete b.redist;
+        return (b.redist || []).length < n ? undefined : err('沒有這一條 redistribute');
+      }],
     ],
     rmap: [
       ['match ip address prefix-list <name>', ([name]) => rm((e) => { e.match.pl = name; })],
       ['match as-path <n>', ([n]) => rm((e) => { e.match.fl = n; })],
+      ['match ip address <name>', ([name]) => rm((e) => { e.match.acl = /^\d+$/.test(name) ? name : name.toUpperCase(); })],
+      ['match tag <n>', ([n]) => (/^\d+$/.test(n) ? rm((e) => { e.match.tag = +n; }) : err('用法：match tag <數字>'))],
+      ['no match ip address [...]', () => rm((e) => { delete e.match.acl; delete e.match.pl; })],
       ['no match [...]', () => rm((e) => { e.match = {}; })],
       ['set local-preference <n>', ([n]) => (+n >= 0 ? rm((e) => { e.set.lp = +n; }) : err('local-preference 是 0 – 4294967295'))],
       ['set as-path prepend <...>', ([list]) => { const v = list.split(/\s+/).map(Number); return v.every((x) => x >= 1) ? rm((e) => { e.set.prepend = v; }) : err('用法：set as-path prepend <AS> <AS> …'); }],
       ['set metric <n>', ([n]) => rm((e) => { e.set.med = +n; })],
       ['set weight <n>', ([n]) => rm((e) => { e.set.weight = +n; })],
+      ['set metric-type <t>', ([t]) => { const v = /^(type-?1|internal)$/i.test(t) ? 1 : /^(type-?2|external)$/i.test(t) ? 2 : null; return v ? rm((e) => { e.set.metricType = v; }) : err('用法：set metric-type type-1 | type-2'); }],
+      ['set tag <n>', ([n]) => (/^\d+$/.test(n) ? rm((e) => { e.set.tag = +n; }) : err('用法：set tag <數字>'))],
+      ['set ip default next-hop <...>', ([list]) => { const v = list.split(/\s+/); return v.every((x) => parseIp(x) != null) ? rm((e) => { e.set.defNh = v; }) : err('用法：set ip default next-hop <IP> [<IP> …]'); }],
+      ['set ip next-hop <...>', ([list]) => {
+        const v = list.split(/\s+/).filter((x) => !/^(verify-availability|recursive)$/i.test(x));
+        return v.length && v.every((x) => parseIp(x) != null) ? rm((e) => { e.set.nh = v; }) : err('用法：set ip next-hop <IP> [<IP> …]（下一站要是直連網段上的位址）');
+      }],
+      ['no set ip next-hop [...]', () => rm((e) => { delete e.set.nh; })],
+      ['no set ip default next-hop [...]', () => rm((e) => { delete e.set.defNh; })],
       ['no set [...]', () => rm((e) => { e.set = {}; })],
       ['description [...]', () => undefined],
     ],
@@ -2839,6 +2910,8 @@ function aclAddr(spec) {
   const bits = m[2] == null ? 32 : +m[2];
   return bits === 32 ? 'host ' + fmtIp(ip) : `${fmtIp(netOf(ip, bits))} ${wild(bits)}`;
 }
+/** running-config 裡的 redistribute：metric、metric-type、subnets、tag、route-map 的順序和 IOS 一樣 */
+const redistLine = (r, into) => ` redistribute ${r.src}${r.as != null ? ' ' + r.as : ''}${r.metric != null ? ' metric ' + r.metric : ''}${r.type === 1 ? ' metric-type 1' : ''}${into === 'ospf' && r.src !== 'ospf' ? ' subnets' : ''}${r.tag ? ' tag ' + r.tag : ''}${r.rm ? ' route-map ' + r.rm : ''}`;
 export const aclLine = (r) => `${r.action} ${r.proto || 'ip'} ${aclAddr(r.src)}${r.sport ? ' eq ' + r.sport : ''} ${aclAddr(r.dst)}${r.port && r.proto !== 'ip' && r.proto !== 'icmp' ? ' eq ' + r.port : ''}${r.icmp ? ' ' + r.icmp : ''}`;
 
 /** 產生等效的 running-config */
@@ -3014,6 +3087,7 @@ export function runningConfig(state, dev) {
     else l.push(' no ip address');
     if (anyNat) l.push(natOut(i) ? ' ip nat outside' : i.ip || i.mode !== 'static' ? ' ip nat inside' : null);
     if (i.helper) l.push(` ip helper-address ${i.helper}`);
+    if (i.policyRm) l.push(` ip policy route-map ${i.policyRm}`);
     if (+i.bandwidth > 0) l.push(` bandwidth ${i.bandwidth}`);
     if (i.mtu) l.push(isNexus(dev) ? ` mtu ${i.mtu}` : ` ip mtu ${i.mtu}`);
     if (+i.adjMss) l.push(` ip tcp adjust-mss ${+i.adjMss}`);
@@ -3131,9 +3205,10 @@ export function runningConfig(state, dev) {
   const stmts = dev.ospfNets || [];
   const os = dev.ifaces.filter((i) => i.ospf && i.rt && i.rt.ip != null && !stmts.some((n) => netOf(i.rt.ip, n.bits) === n.net))
     .sort((a, b) => netOf(a.rt.ip, a.rt.bits) - netOf(b.rt.ip, b.rt.bits));
-  if (os.length || stmts.length) {
+  if (os.length || stmts.length || (dev.ospfRedist || []).length) {
     o.push('router ospf 1');
     if (dev.ospfRid) o.push(` router-id ${dev.ospfRid}`);
+    for (const r of dev.ospfRedist || []) o.push(redistLine(r, 'ospf'));
     if (dev.ospfRefBw) o.push(` auto-cost reference-bandwidth ${dev.ospfRefBw}`);
     for (const [a, t] of Object.entries(dev.ospfAreaAuth || {})) o.push(` area ${a} authentication${t === 'md5' ? ' message-digest' : ''}`);
     for (const r of dev.ospfRanges || []) o.push(` area ${r.area} range ${fmtIp(r.net)} ${fmtMask(r.bits)}`);
@@ -3155,6 +3230,7 @@ export function runningConfig(state, dev) {
       if (n.shut) o.push(` neighbor ${n.ip} shutdown`);
     }
     for (const x of b.networks) o.push(` network ${fmtIp(x.net)} mask ${fmtMask(x.bits)}`);
+    for (const r of b.redist || []) o.push(redistLine(r, 'bgp'));
     for (const n of b.neighbors) {
       if (n.defOrig) o.push(` neighbor ${n.ip} default-originate`);
       if (n.weight != null) o.push(` neighbor ${n.ip} weight ${n.weight}`);
@@ -3172,6 +3248,7 @@ export function runningConfig(state, dev) {
     if (!r.dst || !r.via) continue;
     o.push(`ip route ${r.vrf ? 'vrf ' + r.vrf + ' ' : ''}${r.dst} ${parseMask(r.mask || '') != null ? fmtMask(parseMask(r.mask)) : r.mask} ${r.via}${+r.ad > 1 ? ' ' + r.ad : ''}${r.track != null && r.track !== '' ? ' track ' + r.track : ''}`);
   }
+  if (dev.localPolicy) o.push(`ip local policy route-map ${dev.localPolicy}`);
   for (const [n, op] of Object.entries(dev.sla || {})) {
     const si = op.src && dev.ifaces.find((x) => x.id === op.src);
     o.push(`ip sla ${n}`, ...(op.dst ? [` icmp-echo ${op.dst}${si ? ' source-interface ' + longIf(si.label) : ''}`] : []), ...(op.dst && +op.freq !== 60 ? [` frequency ${+op.freq || 60}`] : []));
@@ -3242,10 +3319,16 @@ export function runningConfig(state, dev) {
       o.push('!', `route-map ${name} ${e.action} ${e.seq}`);
       if (e.match.pl) o.push(` match ip address prefix-list ${e.match.pl}`);
       if (e.match.fl) o.push(` match as-path ${e.match.fl}`);
+      if (e.match.acl) o.push(` match ip address ${e.match.acl}`);
+      if (e.match.tag != null) o.push(` match tag ${e.match.tag}`);
       if (e.set.lp != null) o.push(` set local-preference ${e.set.lp}`);
       if (e.set.weight != null) o.push(` set weight ${e.set.weight}`);
       if (e.set.med != null) o.push(` set metric ${e.set.med}`);
       if (e.set.prepend) o.push(` set as-path prepend ${e.set.prepend.join(' ')}`);
+      if (e.set.metricType) o.push(` set metric-type type-${e.set.metricType}`);
+      if (e.set.tag != null) o.push(` set tag ${e.set.tag}`);
+      if ((e.set.nh || []).length) o.push(` set ip next-hop ${e.set.nh.join(' ')}`);
+      if ((e.set.defNh || []).length) o.push(` set ip default next-hop ${e.set.defNh.join(' ')}`);
     }
   }
   if (dev.radius && dev.radius.ip) o.push('!', 'radius server AAA', ` address ipv4 ${dev.radius.ip} auth-port 1812 acct-port 1813`, ` key 7 ${hex(dev.radius.secret || '')}`);

@@ -8,8 +8,9 @@ import { bgpAccepts } from '../bgp.js';
 import { cloudOwns, cloudStep } from '../cloud.js';
 import { debugLog, longIf } from '../ops.js';
 import { dockerDeliver } from '../docker.js';
-import { fmtIp, isPrivate, parseIp } from '../ip.js';
-import { PROTO_NUM, QUIET, cidrList, denyLog, fmtDur, hash, hit, ipLen, selMatch, sess, sessId, vrfOf } from './core.js';
+import { fmtIp, isPrivate, parseIp, sameNet } from '../ip.js';
+import { aclRules } from '../policy.js';
+import { PBR_HITS, PROTO_NUM, QUIET, cidrList, denyLog, fmtDur, hash, hit, ipLen, selMatch, sess, sessId, vrfOf } from './core.js';
 import { VRRP_MAC, answerMac, arpTtl, floodPorts, l2Explore, learnPath, learns, macAgeOf, macKnown, reversed } from './l2.js';
 import { daiBlock } from './auth.js';
 import { findTunnel } from './tunnels.js';
@@ -150,6 +151,43 @@ function arpFail(state, dev, outIf, nh, viaGw, eps) {
  * 從 outIf 出去時要不要做 NAT。路由器可以用 ACL 指定哪些流量才轉換（ip nat inside source list），
  * 或在圖形介面填「NAT 例外」的目的網段；兩者都沒有就是全部轉換。
  */
+/**
+ * 政策路由 (PBR)：依 route-map 的順序比對 match ip address <ACL>。
+ * 符合 permit 的那一條：set ip next-hop 是直連而且介面亮著就直接交給它（不查路由表）；
+ * set ip default next-hop 只有在路由表裡沒有更明確的路（只有預設路由）時才用。
+ * 符合 deny、下一站不通、一條都沒有符合：照一般的路由表
+ */
+function pbrRoute(dev, name, pkt, vrf, log) {
+  const rm = (dev.routeMaps || {})[name];
+  if (!rm) return null;
+  const say = (text) => log.push({ dev: dev.id, kind: 'info', text });
+  const conn = (ip) => dev.ifaces.find((i) => i.rt && i.rt.ip != null && i.rt.link && !i.shut && vrfOf(i) === vrf && sameNet(ip, i.rt.ip, i.rt.bits) && ip !== i.rt.ip);
+  const to = (x) => { const ip = parseIp(x), i = ip != null && conn(ip); return i ? { iface: i, via: ip, type: 'P', ad: 0, metric: 0, pbr: name } : null; };
+  for (const e of rm.slice().sort((a, b) => a.seq - b.seq)) {
+    const m = e.match || {};
+    if (m.pl || m.fl) continue; // 封包沒有 prefix-list、AS path 可以比
+    if (m.acl) {
+      const rules = aclRules(dev, m.acl);
+      if (rules && rules.length && aclCheck(rules, pkt) !== null) continue; // ACL 沒有放行：這一條不符合
+    }
+    if (!QUIET) { const c = PBR_HITS.get(e) || { pk: 0, by: 0 }; c.pk++; c.by += ipLen(pkt) + 14; PBR_HITS.set(e, c); }
+    if (e.action === 'deny') { say(`政策路由：符合 route-map ${name} 的 deny ${e.seq}，照一般的路由表轉送`); return null; }
+    const s = e.set || {};
+    for (const x of s.nh || []) {
+      const r = to(x);
+      if (r) { say(`政策路由 (PBR)：符合 route-map ${name} 第 ${e.seq} 條${m.acl ? `（ACL ${m.acl}）` : ''}，不查路由表，直接交給 ${x}`); return r; }
+    }
+    if ((s.defNh || []).length) {
+      const r0 = lookupRoute(dev, pkt.dst, pkt.src, vrf);
+      if (r0 && r0.bits > 0) { say(`政策路由：路由表裡有往 ${fmtIp(pkt.dst)} 的明確路由，set ip default next-hop 不起作用`); return null; }
+      for (const x of s.defNh) { const r = to(x); if (r) { say(`政策路由：路由表裡沒有更明確的路，照 set ip default next-hop 交給 ${x}`); return r; } }
+    }
+    if ((s.nh || []).length || (s.defNh || []).length) say(`政策路由：route-map ${name} 第 ${e.seq} 條指定的下一站 ${[...(s.nh || []), ...(s.defNh || [])].join('、')} 不是直連網段、或那個介面沒有啟用，改照路由表轉送`);
+    return null;
+  }
+  return null;
+}
+
 function natPermits(dev, outIf, pkt) {
   if (selMatch(cidrList(outIf.natSkip), pkt.dst)) return false;
   const rules = outIf.natAcl && (dev.aclDefs || {})[outIf.natAcl];
@@ -426,7 +464,10 @@ export function forward(state, ctx, startId, pkt) {
     }
 
     // 自己送出的封包：ping vrf X 指定的 VRF 只套用在發出 ping 的那一台（回應的那一台用它自己的全域路由表）
-    const route = cloud ? cloud.out : lookupRoute(dev, pkt.dst, pkt.src, inIf ? vrfOf(inIf) : dev.id === ctx.vrfDev ? ctx.vrf : '');
+    const vrfNow = inIf ? vrfOf(inIf) : dev.id === ctx.vrfDev ? ctx.vrf : '';
+    // 政策路由：介面上的 ip policy route-map（路由器自己送出的封包看 ip local policy route-map）先決定下一站，沒有符合才查路由表
+    const pbrName = cloud ? null : inIf ? inIf.policyRm : dev.localPolicy;
+    const route = (pbrName && pbrRoute(dev, pbrName, pkt, vrfNow, log)) || (cloud ? cloud.out : lookupRoute(dev, pkt.dst, pkt.src, vrfNow));
     if (!route) {
       D('packet', `IP: s=${fmtIp(pkt.src)} (${inIf ? longIf(inIf.label) : 'local'}), d=${fmtIp(pkt.dst)}, len ${ipLen(pkt)}, unroutable`);
       return drop(noRouteReason(state, dev, pkt.dst));

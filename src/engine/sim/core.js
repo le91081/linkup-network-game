@@ -91,3 +91,7 @@ export function hit(rule) { if (!QUIET) HITS.set(rule, (HITS.get(rule) || 0) + 1
 
 /** transact 期間暫時不記錄（引擎內部的控制流量）：回傳原本的值，用完要還原 */
 export function setQuiet(v) { const p = QUIET; QUIET = v; return p; }
+
+/** 政策路由 (PBR) 每一條 route-map 符合了幾個封包、多少位元組（show route-map 的 Policy routing matches） */
+export const PBR_HITS = new WeakMap();
+export const pbrHits = (e) => PBR_HITS.get(e) || { pk: 0, by: 0 };

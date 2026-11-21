@@ -171,7 +171,7 @@ export function runObjective(state, o) {
   }
   const srcIp = o.srcIp ? parseIp(o.srcIp) : from.kind === 'internet' ? parseIp(from.inet.client) : undefined;
   const proto = o.type === 'ping' ? 'icmp' : o.type === 'speed' || o.type === 'https' ? 'tcp' : o.type;
-  const r = transact(state, o.from, { proto, dst, dport: o.type === 'speed' ? 5201 : o.port ?? 443, srcIp, ...(o.size ? { size: o.size } : {}), ...(o.df ? { df: true } : {}), ...(o.bulk != null ? { bulk: o.bulk } : o.type === 'speed' ? { bulk: 'up' } : {}) });
+  const r = transact(state, o.from, { proto, dst, dport: o.type === 'speed' ? o.port ?? 5201 : o.port ?? 443, srcIp, ...(o.size ? { size: o.size } : {}), ...(o.df ? { df: true } : {}), ...(o.bulk != null ? { bulk: o.bulk } : o.type === 'speed' ? { bulk: 'up' } : {}) });
   log.push(...r.log); hops.push(...r.hops);
   if (r.ok && o.type === 'speed') {
     // 傳輸速率測試（iperf3）：連得上之後，看路徑上最慢的那一段

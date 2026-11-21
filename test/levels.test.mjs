@@ -2418,6 +2418,75 @@ console.log('\nMTU：分段、DF、PMTUD 黑洞、Jumbo Frame、ip tcp adjust-ms
   ok(r04.pass && r04.log.some((l) => /1492 位元組（MSS 1452/.test(l.text)), '家用路由器的 PPPoE（MTU 1492）：自動把 MSS 改成 1452');
 }
 
+console.log('\n路由重分配與政策路由：redistribute、O E1 / E2、route-map、ip policy route-map');
+{
+  const sim = await import('../src/engine/sim.js');
+  const { iosSession, runningConfig } = await import('../src/engine/ios.js');
+  const { iosRun } = await import('../src/ui/cli.js');
+  const { makeDevice: MD, makeState: MS } = await import('../src/engine/model.js');
+  const ok = (cond, title) => (cond ? console.log('  ✔ ' + title) : fail(title));
+  const cli = (s, id) => { const S = iosSession(() => s.devices[id], () => s); return (...lines) => { const out = []; for (const l of lines) { const r = iosRun({ state: s, showTrace() {} }, id, S, l, (x) => out.push(x)); if (r.changed) settle(s); } return out.join('\n'); }; };
+  const IP = (x) => parseIp(x);
+  const rt = (s, id, net, bits) => s.devices[id].rt.routes.find((r) => r.net === IP(net) && r.bits === bits);
+  // ── 靜態路由進 OSPF（l77）
+  const l77 = LEVELS.find((l) => l.id === 'l77');
+  let s = l77.setup(); settle(s);
+  const edge = cli(s, 'edge'), core = cli(s, 'core');
+  edge('configure terminal', 'ip route 0.0.0.0 0.0.0.0 172.31.0.2', 'router ospf 1', 'redistribute static', 'end');
+  const f = rt(s, 'core', '10.50.0.0', 16), lab = rt(s, 'core', '192.168.99.0', 24);
+  ok(f && f.type === 'O' && f.sub === 'E2' && f.metric === 20 && lab && !rt(s, 'core', '0.0.0.0', 0), 'redistribute static：其他路由器學到 O E2 [110/20]；所有靜態路由都出去了，只有預設路由不會（要 default-information originate）');
+  ok(/redistribute static subnets/.test(runningConfig(s, s.devices.edge).join('\n')) && /It is an autonomous system boundary router/.test(edge('show ip ospf')), 'IOS XE 自動補上 subnets；R-Edge 成為 ASBR');
+  edge('configure terminal', 'router ospf 1', 'redistribute static metric 50 metric-type 1', 'end');
+  const e1 = rt(s, 'core', '10.50.0.0', 16);
+  ok(e1 && e1.sub === 'E1' && e1.metric === 51, 'metric-type 1：O E1，metric 是 50 加上往 ASBR 的內部 cost（1）');
+  edge('configure terminal', 'route-map NONE deny 10', 'exit', 'router ospf 1', 'redistribute static subnets route-map NONE', 'end');
+  ok(!rt(s, 'core', '10.50.0.0', 16) && !rt(s, 'core', '192.168.99.0', 24), 'route-map 只有 deny：什麼都不送');
+  edge('configure terminal', 'router ospf 1', 'redistribute static subnets route-map NOPE', 'end');
+  ok(!rt(s, 'core', '10.50.0.0', 16), '參照不存在的 route-map：什麼都不送');
+  edge('configure terminal', 'access-list 10 permit 10.50.0.0 0.0.255.255', 'route-map STD permit 10', 'match ip address 10', 'set tag 77', 'exit', 'router ospf 1', 'redistribute static subnets route-map STD', 'end');
+  const tg = rt(s, 'core', '10.50.0.0', 16);
+  ok(tg && tg.tag === 77 && !rt(s, 'core', '192.168.99.0', 24) && /Tag 77, type extern 2/.test(core('show ip route 10.50.0.0')), 'route-map 用標準 ACL 挑網段、set tag：show ip route 看得到 Tag 77');
+  edge('configure terminal', 'router ospf 1', 'no redistribute static', 'redistribute connected', 'end');
+  ok(rt(s, 'core', '172.31.0.0', 30) && rt(s, 'core', '172.31.0.0', 30).sub === 'E2' && rt(s, 'core', '10.0.0.0', 30).type === 'C', 'redistribute connected：沒有跑 OSPF 的直連網段變成外部路由，跑 OSPF 的照樣是區域內的');
+  // ── BGP 與 OSPF 互相重分配
+  const t = MS([MD('isr4331', 'a', { name: 'A', pos: [0, 0] }), MD('isr4331', 'b', { name: 'B', pos: [6, 0] }), MD('isr4331', 'c', { name: 'C', pos: [-6, 0] })], [['a:Gi0/0/0', 'b:Gi0/0/0'], ['a:Gi0/0/1', 'c:Gi0/0/0']]);
+  settle(t);
+  const A = cli(t, 'a'), B = cli(t, 'b'), C = cli(t, 'c');
+  A('configure terminal', 'interface gi0/0/0', 'ip address 192.0.2.1 255.255.255.252', 'interface gi0/0/1', 'ip address 10.0.0.1 255.255.255.252', 'exit', 'router ospf 1', 'network 10.0.0.0 0.0.0.3 area 0', 'exit', 'router bgp 65001', 'neighbor 192.0.2.2 remote-as 65002', 'end');
+  B('configure terminal', 'interface gi0/0/0', 'ip address 192.0.2.2 255.255.255.252', 'interface loopback0', 'ip address 203.0.113.1 255.255.255.0', 'exit', 'router bgp 65002', 'neighbor 192.0.2.1 remote-as 65001', 'network 203.0.113.0 mask 255.255.255.0', 'end');
+  C('configure terminal', 'interface gi0/0/0', 'ip address 10.0.0.2 255.255.255.252', 'interface loopback1', 'ip address 10.9.9.1 255.255.255.255', 'exit', 'router ospf 1', 'network 10.0.0.0 0.0.0.3 area 0', 'network 10.9.9.1 0.0.0.0 area 0', 'end');
+  ok(rt(t, 'a', '203.0.113.0', 24) && rt(t, 'a', '203.0.113.0', 24).type === 'B' && !rt(t, 'c', '203.0.113.0', 24), 'A 從 BGP 學到 203.0.113.0/24，C 還不知道');
+  ok(/% BGP process 65009 not running/.test(A('configure terminal', 'router ospf 1', 'redistribute bgp 65009 subnets', 'end')), 'redistribute bgp 的 AS 號碼要是自己的 BGP 程序');
+  A('configure terminal', 'router ospf 1', 'redistribute bgp 65001 subnets', 'end');
+  const cb = rt(t, 'c', '203.0.113.0', 24);
+  ok(cb && cb.type === 'O' && cb.sub === 'E2' && cb.metric === 1, 'redistribute bgp 進 OSPF：C 學到 O E2 203.0.113.0/24 [110/1]（從 BGP 來的種子 metric 是 1）');
+  ok(sim.transact(t, 'c', { proto: 'icmp', dst: IP('203.0.113.1') }).ok === false, '可是 B 還不知道怎麼回到 C 的位址：ping 不通（回程）');
+  A('configure terminal', 'router bgp 65001', 'redistribute ospf 1', 'end');
+  const bb = t.devices.b.rt.routes.find((r) => r.type === 'B' && r.net === IP('10.0.0.0'));
+  ok(bb && t.devices.b.rt.routes.some((r) => r.type === 'B' && r.net === IP('10.9.9.1') && r.bits === 32) && sim.transact(t, 'c', { proto: 'icmp', dst: IP('203.0.113.1') }).ok, 'redistribute ospf 進 BGP：B 學到 C 的網段，雙向都通了');
+  const orig = (t.devices.a.rt.bgp.table.find((r) => r.net === IP('10.9.9.1')) || {}).origin;
+  ok(orig === '?' && /redistribute ospf 1/.test(runningConfig(t, t.devices.a).join('\n')) && /redistribute bgp 65001 subnets/.test(runningConfig(t, t.devices.a).join('\n')), '重分配進 BGP 的路 origin 是 ?（incomplete）；兩條 redistribute 都在 running-config');
+  // ── 政策路由（l78）
+  const l78 = LEVELS.find((l) => l.id === 'l78');
+  const port = (st, from, ip, p) => { const r = sim.transact(st, from, { proto: 'tcp', dst: IP(ip), dport: p }); const h = r.hops.find((x) => x.from === 'br' && !x.reply && !x.wave); return h && h.fromPort; };
+  s = l78.setup(); settle(s);
+  const br = cli(s, 'br');
+  br('configure terminal', 'ip access-list extended BACKUP', 'permit ip host 10.2.0.20 host 10.1.0.20', 'exit', 'route-map PBR permit 10', 'match ip address BACKUP', 'set ip next-hop 10.255.9.9', 'exit', 'interface gi0/0/2', 'ip policy route-map PBR', 'end');
+  const r1 = sim.transact(s, 'nas', { proto: 'tcp', dst: IP('10.1.0.20'), dport: 445 });
+  ok(port(s, 'nas', '10.1.0.20', 445) === 'Gi0/0/0' && r1.log.some((l) => /不是直連網段.*改照路由表/.test(l.text)), 'set ip next-hop 指定的位址不是直連：照一般的路由表（專線）');
+  br('configure terminal', 'route-map PBR permit 10', 'no set ip next-hop', 'set ip default next-hop 10.255.2.1', 'end');
+  ok(port(s, 'nas', '10.1.0.20', 445) === 'Gi0/0/0', 'set ip default next-hop：路由表裡有往總公司的明確路由，所以不起作用');
+  br('configure terminal', 'route-map PBR permit 10', 'no set ip default next-hop', 'set ip next-hop 10.255.2.1', 'end');
+  ok(port(s, 'nas', '10.1.0.20', 445) === 'Gi0/0/1' && port(s, 'pc', '10.1.0.20', 445) === 'Gi0/0/0', 'set ip next-hop 10.255.2.1：只有 NAS 到備份伺服器的流量改走寬頻，其他電腦照樣走專線');
+  br('configure terminal', 'route-map PBR deny 5', 'match ip address BACKUP', 'end');
+  ok(port(s, 'nas', '10.1.0.20', 445) === 'Gi0/0/0', '前面有一條符合的 deny：照一般的路由表');
+  ok(/Policy routing matches: [1-9]\d* packets/.test(br('show route-map')) && /Gi0\/0\/2\s+PBR/.test(br('show ip policy')), 'show route-map 的 Policy routing matches、show ip policy');
+  br('configure terminal', 'no route-map PBR', 'route-map LOCAL permit 10', 'match ip address BACKUP2', 'set ip next-hop 10.255.2.1', 'exit', 'ip access-list extended BACKUP2', 'permit ip any host 10.1.0.20', 'exit', 'ip local policy route-map LOCAL', 'end');
+  const lp = sim.transact(s, 'br', { proto: 'icmp', dst: IP('10.1.0.20') });
+  ok(lp.ok && lp.hops.some((h) => h.from === 'br' && h.fromPort === 'Gi0/0/1' && !h.reply) && /ip local policy route-map LOCAL/.test(runningConfig(s, s.devices.br).join('\n')), 'ip local policy route-map：路由器自己送出的封包也照政策走');
+  ok(/interface GigabitEthernet0\/0\/2[^!]*ip policy route-map PBR/.test(runningConfig(s, s.devices.br).join('\n')), 'running-config：介面下的 ip policy route-map 還在（route-map 刪掉了，封包照一般的路由表）');
+}
+
 console.log('\n參考解法與錯題本');
 {
   const { solutionChanges } = await import('../src/ui/solution.js');

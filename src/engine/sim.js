@@ -27,7 +27,7 @@ import { sessionTtl } from './sim/forward.js';
 import { transact } from './sim/transact.js';
 setCdpCheck((d, pid, x, xp) => cdpOn(d, pid) && cdpOn(x, xp));
 
-export { clearSessionLog, fmtDur, hitsOf, ifaceMac, isTrunk, macOf, sessionLog, vrfOf } from './sim/core.js';
+export { clearSessionLog, fmtDur, hitsOf, ifaceMac, isTrunk, macOf, pbrHits, sessionLog, vrfOf } from './sim/core.js';
 export { MAC_AGE, VRRP_MAC, arpRows, clearArp, clearMac, ifaceActive, isBridgePort, l2Explore, macAgeOf, macRows, macsBehind } from './sim/l2.js';
 export { ERR_CAUSES, ERR_RECOVERY_DEFAULT, bouncePort, dtpSpeaker, errRecoverSecs, errdisRows, poeTable, portfastOn } from './sim/phys.js';
 export { CAPWAP_JOIN, WALL_MATS, WIFI_SEC, apRange, rfAt, ssidsOf, visibleSsids, wallsBetween, wlansOf } from './sim/wifi.js';

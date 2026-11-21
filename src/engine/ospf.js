@@ -23,6 +23,7 @@
 import { netOf, sameNet, fmtIp, parseIp } from './ip.js';
 import { net6, fmtIp6 } from './ip6.js';
 import { linkInfo } from './model.js';
+import { ospfExternals } from './policy.js';
 import { l2Explore } from './sim.js';
 
 export const OSPF_WAIT = 40; // 新的廣播網段：先等 Wait timer（= Dead interval）才選 DR / BDR
@@ -157,6 +158,7 @@ const V4 = (ospfOn) => ({
   netOf,
   routes: (d) => d.rt.routes,
   originates: (d) => !!d.ospfDefault,
+  externals: (d) => ospfExternals(d, ospfOn),
 });
 const V6 = {
   ns: '6', key: 'ospf6', nkey: 'nbrs6', name: 'OSPFv3', zero: 0n,
@@ -182,6 +184,7 @@ const V6 = {
   netOf: net6,
   routes: (d) => d.rt.routes6,
   originates: (d) => !!(d.ospf6 || {}).default,
+  externals: () => [],
 };
 
 // ───────────────────────── 主要的計算 ─────────────────────────
@@ -480,30 +483,45 @@ function computeOspfAf(state, af) {
     }
   }
 
-  // 6. 外部路由：default-information originate 送出的預設路由是 E2，cost 固定 1，往 ASBR 的內部 cost 只用來挑出口
+  // 6. 外部路由（ASBR 送出的 Type-5 LSA）：default-information originate 的預設路由（E2、metric 1），以及 redistribute 進來的路
+  //    E2：metric 固定，不管離 ASBR 多遠；一樣的時候才比往 ASBR 的內部 cost (forward metric)
+  //    E1：metric 再加上往 ASBR 的內部 cost。同一個網段 E1 永遠比 E2 優先；區域內、區域間的路又比外部優先
   const ownDefault = (d) => af.routes(d).some((r) => r.bits === 0 && !r.bad && r.type !== 'O');
-  const asbrs = nodes.filter((d) => af.originates(d) && ownDefault(d));
+  const extsOf = (d) => [...(af.originates(d) && ownDefault(d) ? [{ net: af.zero, bits: 0, metric: 1, type: 2, tag: 0, def: true }] : []), ...af.externals(d)];
+  const extList = new Map(nodes.map((d) => [d, extsOf(d)]));
+  const asbrs = nodes.filter((d) => extList.get(d).length);
+  /** 往某台 ASBR 的內部 cost 與第一站：同一個區域就看 SPF；在別的區域就經過 ABR（ASBR summary） */
+  const toAsbr = (d, a) => {
+    let c = null, hops = [];
+    const cand = (x, h) => { if (h && h.length && (c == null || x < c)) { c = x; hops = h.slice(); } else if (h && c === x) for (const y of h) if (!hops.some((z) => z.via === y.via && z.iface === y.iface)) hops.push(y); };
+    for (const area of areasOf(d.id)) {
+      const sp = spf[d.id][area];
+      if (sp.dist[a.id] != null) { cand(sp.dist[a.id], sp.first[a.id]); continue; }
+      for (const b of abrs) {
+        if (sp.dist[b] == null || !spf[b]) continue;
+        for (const v of Object.values(spf[b])) if (v.dist[a.id] != null) cand(sp.dist[b] + v.dist[a.id], sp.first[b]);
+      }
+    }
+    return c == null ? null : { c, hops };
+  };
+  const extCmp = (x, y) => x.type - y.type || x.metric - y.metric || (x.type === 2 ? x.fwd - y.fwd : 0);
   for (const d of nodes) {
-    // 往每一台 ASBR 的內部 cost：它任何一個網段的最佳路由
-    let best = null;
+    const ext = {};
     for (const a of asbrs) {
       if (a === d) continue;
-      // 往 ASBR 的內部 cost：同一個區域就看 SPF；在別的區域就經過 ABR（ASBR summary）
-      let c = null, hops = [];
-      const cand = (x, h) => { if (h && h.length && (c == null || x < c)) { c = x; hops = h; } };
-      for (const area of areasOf(d.id)) {
-        const sp = spf[d.id][area];
-        if (sp.dist[a.id] != null) { cand(sp.dist[a.id], sp.first[a.id]); continue; }
-        for (const b of abrs) {
-          if (sp.dist[b] == null || !spf[b]) continue;
-          for (const v of Object.values(spf[b])) if (v.dist[a.id] != null) cand(sp.dist[b] + v.dist[a.id], sp.first[b]);
-        }
+      const p = toAsbr(d, a);
+      if (!p) continue;
+      for (const e of extList.get(a)) {
+        if (e.def && ownDefault(d)) continue;
+        const k = e.net + '/' + e.bits;
+        if ((intra[d.id] || {})[k] || (inter[d.id] || {})[k]) continue;
+        const cand = { net: e.net, bits: e.bits, type: e.type, metric: e.type === 1 ? p.c + e.metric : e.metric, fwd: p.c, hops: p.hops.slice(), asbr: a.id, tag: e.tag };
+        const cur = ext[k], c = cur ? extCmp(cand, cur) : -1;
+        if (c < 0) ext[k] = cand;
+        else if (c === 0) for (const h of cand.hops) if (!cur.hops.some((x) => x.via === h.via && x.iface === h.iface)) cur.hops.push(h);
       }
-      if (c == null) continue;
-      if (!best || c < best.fwd) best = { fwd: c, hops: hops.slice(), asbr: a.id };
-      else if (c === best.fwd) for (const h of hops) if (!best.hops.some((x) => x.via === h.via)) best.hops.push(h);
     }
-    if (best && !ownDefault(d)) O(d).ext = best;
+    O(d).exts = ext;
   }
 
   // 7. 裝進路由表：每個等價的第一站各一筆（最多 maximum-paths 條）
@@ -513,16 +531,15 @@ function computeOspfAf(state, af) {
       const hops = r.hops.filter((h) => h.iface).slice(0, maxPaths(d));
       // adv：發布這筆 LSA 的路由器（show ip route <網段> 的 from），E2 另外記往 ASBR 的內部 cost (forward metric)
       const adv = r.owner != null ? rid[r.owner] : null;
-      for (const h of hops) af.routes(d).push({ net: r.net, bits: r.bits, via: h.via, iface: h.iface, type: 'O', sub, ad: 110, metric: r.metric, adv, ...(r.fwd != null ? { fwd: r.fwd } : {}) });
+      for (const h of hops) af.routes(d).push({ net: r.net, bits: r.bits, via: h.via, iface: h.iface, type: 'O', sub, ad: 110, metric: r.metric, adv, ...(r.fwd != null ? { fwd: r.fwd } : {}), ...(r.tag ? { tag: r.tag } : {}) });
     };
     for (const r of Object.values(intra[d.id] || {})) if (r.hops.length) put(r, '');
     for (const r of Object.values(inter[d.id] || {})) put(r, 'IA');
-    const ext = O(d).ext;
-    if (ext) put({ net: af.zero, bits: 0, metric: 1, hops: ext.hops, owner: ext.asbr, fwd: ext.fwd }, 'E2');
+    for (const e of Object.values(O(d).exts || {})) put({ net: e.net, bits: e.bits, metric: e.metric, hops: e.hops, owner: e.asbr, fwd: e.fwd, tag: e.tag }, e.type === 1 ? 'E1' : 'E2');
     O(d).abr = abrs.has(d.id);
     O(d).asbr = asbrs.includes(d);
     O(d).areas = areasOf(d.id);
   }
   // 給 show ip ospf database 用
-  state.rt[af.key] = { stubs, abrs: [...abrs], sumInto0, sumOut, rid, asbrs: asbrs.map((d) => d.id) };
+  state.rt[af.key] = { stubs, abrs: [...abrs], sumInto0, sumOut, rid, asbrs: asbrs.map((d) => d.id), exts: Object.fromEntries(asbrs.map((d) => [d.id, extList.get(d)])) };
 }

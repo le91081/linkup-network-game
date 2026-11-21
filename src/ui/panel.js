@@ -24,6 +24,7 @@ import { dnsTab } from './panel-dns.js';
 import { vrfField, vrfCard } from './panel-vrf.js';
 import { webTab, clientTlsCard } from './panel-web.js';
 import { hostMtuField, routerMtuBlock, switchMtuCard, nexusPortMtu } from './panel-mtu.js';
+import { redistCard, pbrCard } from './panel-policy.js';
 import { dockerTab } from './term-docker.js';
 import { isDnsServer } from '../engine/dns.js';
 import { isTftp, isFtp } from '../engine/files.js';
@@ -414,6 +415,7 @@ function routesTab(ctx, body) {
   }
   const bc = bgpCard(ctx);
   if (bc) body.append(bc);
+  for (const c of [redistCard(ctx), pbrCard(ctx)]) if (c) body.append(c);
   body.append(routeTable(ctx));
   if (ctx.state.v6 && dev.kind === 'router') M.v6Routes(ctx, body);
 }

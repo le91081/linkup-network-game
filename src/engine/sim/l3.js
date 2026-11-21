@@ -327,7 +327,13 @@ export function setOspf(d, i, on) {
 export function routesAll(state) {
   for (const d of Object.values(state.devices)) buildRoutes(state, d);
   computeOspf(state, ospfOn);
-  computeBgp(state, { transact, logEvent });
+  computeBgp(state, { transact, logEvent, ospfOn });
+  // OSPF 先算的時候還沒有 BGP 的路：有設備把 BGP 重分配進 OSPF，就留著 BGP 的路、把 OSPF 的路拿掉再算一次
+  const devs = Object.values(state.devices);
+  if (devs.some((d) => (d.ospfRedist || []).some((r) => r.src === 'bgp') && d.rt && d.rt.routes.some((r) => r.type === 'B'))) {
+    for (const d of devs) if (d.rt && d.rt.routes) d.rt.routes = d.rt.routes.filter((r) => r.type !== 'O');
+    computeOspf(state, ospfOn);
+  }
   // show ip route 的「00:03:43」：OSPF / BGP 的路從什麼時候開始在路由表裡
   const since = (state.dyn.rtSince ||= {});
   for (const d of Object.values(state.devices)) {

@@ -24,6 +24,7 @@ npm run build    # 輸出到 dist/
 - `e2e/ui.spec.mjs`：用滑鼠點場景上的設備、切分頁、在 Cisco CLI 和主機終端機打指令、上方的每個按鈕、復原與重做。
 - `e2e/modes.spec.mjs`：故障演練（含重新整理後接著做）、模擬考從作答到成績、自由模式拖曳接線並做成自訂關卡試玩。
 - `e2e/ui-learn.spec.mjs`：新手導覽、參考解法與示範、錯題本。
+- `e2e/ui-policy.spec.mjs`：在路由分頁設定路由重分配（搭配 CLI 寫的 prefix-list 與 route-map）、新增政策路由，並用 show 指令與 tracert 確認。
 - `e2e/ui-mtu.spec.mjs`：`ping -f -l` 找出 MTU、交換器的 giants 與 2960 的 Jumbo MTU（存檔、重新開機）、PMTUD 黑洞與 TCP MSS 調整。
 - `e2e/ui-stage11.spec.mjs`：VRF 的 CLI 與路由分頁、Docker 主機的終端機與分頁、HTTPS 憑證錯誤的排除（curl、換憑證、匯入根憑證、打開自動校時）。
 
@@ -63,7 +64,7 @@ npm run build    # 輸出到 dist/
 - **評分**：過關時依實際作答時間（畫面在前景、沒有開對話框才算；標準時間是 3 分鐘加上每個目標 1.5 分鐘）、看了幾個提示、跑了幾次完整測試給 S / A / B / C 與分數，關卡選單上顯示最佳等級。設定變更的次數只列出來參考。
 - **關卡編輯器**：自由模式的「關卡設計」可以寫關卡名稱、任務說明、提示，指定哪些設備鎖定（玩家看得到、不能設定），然後試玩、存成自訂關卡、或匯出成關卡檔分享；關卡選單的「自訂關卡」可以遊玩、匯出、刪除與匯入。
 
-## 關卡（17 章 76 關）
+## 關卡（17 章 78 關）
 
 | 章節 | 關卡數 | 主題 |
 | --- | --- | --- |
@@ -79,7 +80,7 @@ npm run build    # 輸出到 dist/
 | 10 故障排除 | 8 | 網路已經設定好但被改壞了：IP 衝突與 DHCP 保留、Trunk / VLAN / shutdown、閘道 / 回程路由 / NAT / ACL / DNS、ping 會通但傳檔很慢（速率寫死、duplex mismatch、舊 Hub）；OSPF 鄰居起不來（MD5 金鑰、被動介面、network 敘述）；流量繞經實驗室的交換器（根橋位置與 Root Guard）；VPN 通了資料卻過不去（NAT 例外、加密的 ACL 要涵蓋新網段）；DNS 改了卻還連到舊的（TTL 與用戶端快取、nslookup 不看快取、`ipconfig /flushdns`） |
 | 11 維運與管理 | 6 | 是誰動了設定（設定封存、差異比對、變更紀錄、只拿掉有問題的那一行、停用帳號）；從 TFTP 還原設定（合併與整份取代的差別）、韌體升級（flash 空間、MD5、`boot system`、TFTP 與 FTP 的速度）、讓原廠交換器能用 SSH（主機名稱、網域、RSA 金鑰、`login local`）、用 SNMPv3 找出滿載的線路（線對斷掉自動降到 100 Mbps）；HTTPS 憑證錯誤（過期、新網址不在 SAN 裡、沒有加入網域的筆電不信任公司的 CA、時鐘回到兩年前變成「尚未生效」） |
 | 12 語音與 QoS | 2 | IP 電話：PoE、語音 VLAN、CDP 與 LLDP-MED、DHCP option 150、CUCM 註冊；線路塞車時用 QoS 保住通話：信任邊界、LLQ、配合營運商合約頻寬的整形 |
-| 13 進階路由 | 4 | OSPF 的 DR / BDR 選舉（不搶位、`clear ip ospf process`）、Router ID 與 Loopback、passive-interface；參考頻寬與 cost、等價多路徑 (ECMP)；多區域 OSPF、ABR 與 `area range` 彙總；用 eBGP 同時接兩家 ISP：local-preference 決定出去走哪家、AS-path prepend 影響進來走哪家、prefix-list 避免變成轉運站 |
+| 13 進階路由 | 6 | OSPF 的 DR / BDR 選舉（不搶位、`clear ip ospf process`）、Router ID 與 Loopback、passive-interface；參考頻寬與 cost、等價多路徑 (ECMP)；多區域 OSPF、ABR 與 `area range` 彙總；用 eBGP 同時接兩家 ISP：local-preference 決定出去走哪家、AS-path prepend 影響進來走哪家、prefix-list 避免變成轉運站；把靜態路由重分配進 OSPF（ASBR、O E2、用 prefix-list + route-map 只送工廠的網段）；政策路由讓 NAS 的備份改走寬頻（ACL + route-map set ip next-hop，套在進來的介面上） |
 | 14 無線控制器與無線環境 | 3 | 輕量型 AP 與無線控制器（CAPWAP、DHCP option 43、Local 模式的流量經控制器放進 VLAN、RRM 自動分頻道）、牆面衰減與訊號熱力圖、漫遊（同一個 VLAN、sticky client 與 802.11k/v/r） |
 | 15 網路自動化 | 3 | RESTCONF：只走 HTTPS、HTTP Basic 驗證、YANG 路徑（`ietf-interfaces`、`Cisco-IOS-XE-native`）、JSON 與 XML、狀態碼、名稱裡的 `/` 要寫成 `%2F`、自簽憑證；Ansible：INI 格式的 inventory、YAML、`network_cli`、資源模組、`--check`、PLAY RECAP 與冪等；Catalyst Center：Token 驗證的北向 API、用 SNMP / SSH 輪詢的設備清單、AI 驅動的問題清單（DHCP 失敗率偏離基準、雙工不一致、設備連不到） |
 | 16 雲端網路 | 2 | AWS 的 VPC：公有 / 私有子網路與路由表、網際網路閘道與彈性 IP（一對一 NAT）、安全群組（有狀態）、NAT 閘道、網路 ACL（無狀態、臨時連接埠）、站對站 VPN 與路由傳播（混合雲），「下載設定檔」貼到公司的路由器 |
@@ -104,7 +105,7 @@ npm run build    # 輸出到 dist/
 
 沒有關卡的條目（安全計畫）是觀念題，題庫裡有對應的題目。
 條目編號依公開的考試大綱，標題是中文摘要。CCNA v2.0 預計在 2027 年 2 月取代 v1.1，改版後需要重新對照。
-題庫（152 題觀念題加上隨機產生的子網路計算題）是自行編寫的練習題，不是實際試題。
+題庫（155 題觀念題加上隨機產生的子網路計算題）是自行編寫的練習題，不是實際試題。
 
 ## CLI 設定指令
 
@@ -140,6 +141,7 @@ npm run build    # 輸出到 dist/
 - **紀錄**：`show logging`、`logging host`、`logging trap <等級>`、`clear logging`。
 - **OSPF**：`show ip ospf`、`show ip ospf neighbor`（Pri、FULL/DR、2WAY/DROTHER、EXSTART）、`show ip ospf interface [brief | <介面>]`、`show ip ospf database`、`clear ip ospf process`（Router ID 改了要清除程序才會生效）。
 - **路由表**：`show ip route` 和真的 IOS 一樣依主網段分組（`is subnetted` / `is variably subnetted`）、列出介面自己的位址 (L)、動態路由的存在時間與 Gateway of last resort；可以篩選 `show ip route ospf | bgp | static | connected`，也可以查單一網段 `show ip route <位址> [遮罩]`（Known via、distance、metric、from、等價的每一條路）。沒放進路由表的路（下一站不通的靜態路由、管理距離比較大的備援路由）會在最後用提示說明原因。
+- **路由重分配與政策路由**：`router ospf 1` 底下的 `redistribute static | connected | bgp <AS> [subnets] [metric <n>] [metric-type 1|2] [tag <n>] [route-map <名稱>]`、`router bgp` 底下的 `redistribute static | connected | ospf <程序> [metric <n>] [route-map <名稱>]`；route-map 的 `match ip address prefix-list <名稱>` / `match ip address <ACL>`、`match tag`、`set metric`、`set metric-type type-1`、`set tag`、`set ip next-hop`、`set ip default next-hop`；介面的 `ip policy route-map`、全域的 `ip local policy route-map`；`show route-map`（政策路由比對到幾個封包）、`show ip policy`、`show ip ospf`（ASBR 與重分配的來源）、`show ip ospf database`（每一筆 Type-5）、`show ip route <網段>`（type extern 1 / 2、Tag）。
 - **BGP**：`show ip bgp`、`show ip bgp summary`、`show ip bgp neighbors [<IP> [advertised-routes | received-routes | routes]]`、`show ip prefix-list`、`show route-map`、`show ip as-path-access-list`、`clear ip bgp *`。
 - **IPv6**：`show ipv6 route [ospf | static | connected | local | <位址或前綴>]`（IOS 原樣的格式，含 L 與 FF00::/8）、`show ipv6 interface [brief | <介面>]`（加入的多點傳送群組、RA 的設定、主機要用 SLAAC 還是 DHCPv6）、`show ipv6 ospf [neighbor | interface brief]`、`show ipv6 dhcp pool | binding | interface`、`show ipv6 access-list`（命中次數與序號）、`clear ipv6 ospf process`、`clear ipv6 dhcp binding *`；`ipv6 route` 可以寫「出口介面 + link-local 下一站」與管理距離。主機上有 `ipconfig /renew6`，`tracert`、`curl`、`telnet` 都可以用 IPv6 位址（網址寫成 `http://[2001:db8::10]/`）。
 - **ACL 的來源埠**：`permit tcp any eq 179 any`（回應的封包、或對方主動連過來時的來源埠）。
@@ -337,6 +339,7 @@ npm run build    # 輸出到 dist/
 - IPsec 有 IKEv1 與 IKEv2，只用預先共用金鑰（沒有憑證、EAP、NAT-T）；IOS 的 IKEv2 smart defaults 簡化成 AES-CBC-128/256、SHA-1/256、DH 2/5/14/19 的組合；沒有 GRE、VTI、DMVPN。圖形介面建立的 FortiGate 通道會自動帶出通往對端的路由（相當於用精靈建立）。SSL-VPN 的加密流量在引擎內部仍然當成一層封裝來處理。
 - Wi-Fi 的訊號依距離估算再扣掉沿路穿過的牆，沒有反射、多路徑與樓層；牆只能由關卡預先放好，自由模式還不能畫牆。802.11r 只是設定，沒有模擬漫遊所花的時間。無線控制器沒有 DNS 探索、DTLS、映像檔下載、AP group / tag 與跨控制器漫遊 (Mobility Group)，只能用圖形介面設定。
 - 802.1X 只驗證帳號密碼（沒有憑證）。
+- 路由重分配只有 OSPF 與 BGP 之間、以及靜態與直連；沒有 EIGRP / RIP，所以也沒有雙向重分配造成的迴圈。OSPF 沒有 stub / NSSA 區域，外部路由一律是 Type-5。政策路由只有 `set ip next-hop` 與 `set ip default next-hop`（沒有 `set interface`、`verify-availability` 搭配 track），FortiGate 的政策路由還沒有做。
 - MTU：TCP 用一個裝滿的資料區段代表一次大量傳輸，PMTUD 的結果不會被記住（每次連線都重新發現）；IPsec 的額外負擔固定算 73 位元組（實際依加密演算法與填充大約 50 – 73），SSL-VPN 與雲端的 VPN 沒有算；FortiGate 的介面 MTU 與 `tcp-mss` 還不能改；Windows 用 `netsh` 設定 MTU，沒有分網卡驅動的 Jumbo Packet 與 IP 的 MTU 兩層。
 - HTTPS 只模擬憑證驗證的結果（信任的 CA、有效期間、SAN）：沒有中繼憑證鏈、CRL / OCSP 撤銷檢查、TLS 版本與加密套件的協商、ACME 自動續約；憑證由 CA 直接簽發，不分產生 CSR、送審、安裝幾個步驟。網頁內容只有標題。
 - VRF 只有 VRF-Lite：介面、直連與靜態路由、`show`、`ping vrf`；OSPF / BGP 還不分 VRF，也沒有 VRF 之間的路由洩漏 (route leaking) 與 MPLS VPN。
@@ -353,7 +356,7 @@ npm run build    # 輸出到 dist/
 
 完整的功能規劃（每個領域已完成、部分完成、尚未開始的項目，以及建議的實作順序）在 [PLAN.md](PLAN.md)。以下是最接近的幾項：
 
-1. 路由重分配與 PBR、VRF 裡跑 OSPF / BGP 與路由洩漏、GRE 與 VTI（通道介面上的 ip mtu）。
+1. VRF 裡跑 OSPF / BGP 與路由洩漏、GRE 與 VTI（通道介面上的 ip mtu）、iBGP 與 OSPF 的 stub 區域。
 2. FortiGate 的 IPv6 政策、DHCPv6 Prefix Delegation、GRE / VTI / DMVPN、TACACS+、IOS 的 Dialer 介面。
 3. iBGP、OSPF 的 stub / NSSA 區域、自由模式畫牆、訪客入口 (Captive Portal)。
 4. 802.1X 與 IPsec 的憑證驗證（EAP-TLS、RSA 簽章）、中繼憑證鏈與撤銷檢查。
@@ -397,13 +400,14 @@ src/engine/   模擬引擎（不依賴瀏覽器，可直接用 Node 測試）
   automation.js   Ansible：inventory、Jinja 變數、network_cli 與 cisco.ios 模組、PLAY RECAP
   cloud.js        公有雲的 VPC：子網路與路由表、IGW 與彈性 IP、NAT 閘道、安全群組、網路 ACL、VPN 設定檔
   faults.js       故障演練：可能的故障清單、在副本上驗證、依種子重現
+  policy.js       路由政策：prefix-list、route-map 套在路由上（重分配進 OSPF / BGP 時的比對與 set）
   mtu.js          MTU：每個介面的 IP MTU、交換器能收的訊框、IPsec 的額外負擔、TCP MSS 的調整
   virt.js         虛擬化主機：vSwitch、連接埠群組與 VLAN 標籤
   docker.js       容器：映像檔、bridge 網路、連接埠發佈（只綁 127.0.0.1、埠對錯會被重設）
   web.js          網站與 HTTPS 憑證：信任的 CA、有效期間（用戶端的時鐘）、SAN 與萬用字元
   dns.js          DNS 伺服器的記錄、TTL 與用戶端快取
   sim6.js         IPv6：SLAAC 與 DHCPv6（RA 的 M / O / A 旗標、relay、binding）、鄰居探索、靜態路由與 OSPFv3、IPv6 ACL、ICMPv6 / TCP / UDP
-src/levels/   關卡定義：設備、初始設定、任務目標、提示、參考解法（trouble.js 是故障排除章，maint.js 是維運章，voip.js 是語音與 QoS 章，routing.js 是進階路由章，ipv6.js 是 IPv6 章的補充，vpn2.js 是多站台 VPN，wireless.js 是無線控制器章，auto.js 是自動化章，cloud.js 是雲端章，virtual.js 是虛擬化章（vSwitch、VRF、容器），tls.js 是 HTTPS 憑證，mtu.js 是 Jumbo Frame 與 PMTUD，resil.js / audit.js / trouble2.js 是各章的補充關卡）
+src/levels/   關卡定義：設備、初始設定、任務目標、提示、參考解法（trouble.js 是故障排除章，maint.js 是維運章，voip.js 是語音與 QoS 章，routing.js 是進階路由章，ipv6.js 是 IPv6 章的補充，vpn2.js 是多站台 VPN，wireless.js 是無線控制器章，auto.js 是自動化章，cloud.js 是雲端章，virtual.js 是虛擬化章（vSwitch、VRF、容器），tls.js 是 HTTPS 憑證，mtu.js 是 Jumbo Frame 與 PMTUD，redist.js 是路由重分配與政策路由，resil.js / audit.js / trouble2.js 是各章的補充關卡）
 src/data/     題庫與證照對照表
 src/scene/    three.js 場景、設備模型、網路線、無線涵蓋範圍與封包動畫
 src/ui/       設定面板、終端機、CLI、任務面板、測驗、模擬考、故障演練、評分、自由模式與關卡編輯器、對話框
