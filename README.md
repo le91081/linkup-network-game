@@ -377,9 +377,20 @@ src/engine/   模擬引擎（不依賴瀏覽器，可直接用 Node 測試）
   qos.js          QoS：標記與信任邊界、class-map / policy-map 的分類、出口佇列、整形與營運商的管制
   voice.js        IP 電話的開機與註冊、CUCM、通話品質（E-model / MOS）
   wire.js         線路上的訊框：介面計數器、封包擷取、SPAN、IOS debug、FortiGate sniffer 與 debug flow
-  sim.js          供電與連線狀態、L2（VLAN / STP / LACP / Port Security / DHCP Snooping / DAI / 802.1X / Wi-Fi）、
-                  L3（路由表、最長相符與 ECMP、VRRP）、DHCP 與 Relay、PPPoE、NAT、ACL、防火牆政策、VPN、DNS、
-                  模擬時鐘（advance / settle / pendingOf）與傳輸速率（throughput）
+  sim.js          對外的入口：重新計算 (recompute)、模擬時鐘（advance / settle / pendingOf），並匯出 sim/ 底下各模組公開的函式。
+                  其他程式一律 import sim.js，不直接 import sim/ 裡面的檔案
+  sim/core.js       共用的小工具：VRF、MAC、雜湊、時間格式、連線紀錄與命中次數
+  sim/phys.js       供電與連線、err-disabled、DTP、語音 VLAN、LACP、STP 與連接埠的 STP 計時
+  sim/l2.js         VLAN 與 Trunk 的標籤、廣播網域的探索、MAC 位址表、ARP 快取
+  sim/wifi.js       Wi-Fi：加密、涵蓋範圍與牆面衰減、無線控制器與輕量型 AP
+  sim/l3.js         DHCP 租約與 Relay、VRRP / HSRP、路由表與最長相符、DHCP 的 DORA 動畫
+  sim/tunnels.js    VPN：IKE 的兩個階段、提案與金鑰、SA 的壽命與 DPD、封包走哪一條通道
+  sim/auth.js       802.1X / RADIUS、Dynamic ARP Inspection
+  sim/forward.js    逐站轉送：服務、ACL、NAT、防火牆政策、交給本機的服務、MTU、連線表
+  sim/transact.js   一次請求 + 回應：TCP 交握、資料區段與 PMTUD、長時間保持的連線
+  sim/resolve.js    名稱解析（DNS 查詢、用戶端快取、CNAME）
+  sim/objectives.js 任務目標的檢查
+  sim/bandwidth.js  每段線路的速率、背景流量的分配、傳輸速率 (throughput)
   dnac.js         Catalyst Center：Token、設備清單（SNMP / SSH 輪詢）、Assurance 的問題清單
   restconf.js     RESTCONF：YANG 路徑、HTTP 方法與狀態碼、JSON / XML
   yaml.js         YAML 解析（PyYAML 風格的錯誤訊息）
