@@ -12,7 +12,7 @@ setCdpCheck((d, pid, x, xp) => cdpOn(d, pid) && cdpOn(x, xp));
 import { recompute6, transact6, globalIp6 } from './sim6.js';
 import { parseIp6 } from './ip6.js';
 import { opsBefore, opsAfter, logEvent, debugLog, longIf, UPTIME0 } from './ops.js';
-import { onHop, BCAST, spanDest, background, flowTraceStart, debugOf, countBytes } from './wire.js';
+import { onHop, BCAST, spanDest, background, flowTraceStart, debugOf, countBytes, countGiant } from './wire.js';
 import { agentOn } from './snmp.js';
 import { remoteOpen, remoteLogin, remoteClose } from './remote.js';
 import { cloudStep, prepCloud, cloudOwns } from './cloud.js';
@@ -21,6 +21,7 @@ import { syncVsw } from './virt.js';
 import { cacheGet, cachePut, isDnsServer, serverAnswer, INET_TTL } from './dns.js';
 import { dockerDeliver } from './docker.js';
 import { tlsCheck } from './web.js';
+import { l2Mtu, ipMtu, rxMtu, mssClampOf, icmpTypeMatch, isNexus, IPSEC_OVERHEAD, WIFI_MTU, MTU_DEF } from './mtu.js';
 
 /** 介面屬於哪一個 VRF（'' 是全域的路由表） */
 export const vrfOf = (i) => (i && i.vrf) || '';
@@ -1915,6 +1916,7 @@ function aclCheck(list, pkt) {
   for (let n = 0; n < list.length; n++) {
     const r = list[n];
     if (r.proto && r.proto !== 'ip' && r.proto !== pkt.proto) continue;
+    if (r.icmp && !icmpTypeMatch(r.icmp, pkt)) continue; // permit icmp any any packet-too-big
     if (!addrMatch(r.src, pkt.src) || !addrMatch(r.dst, pkt.dst)) continue;
     if (r.port && (pkt.proto === 'tcp' || pkt.proto === 'udp') && +r.port !== pkt.dport) continue;
     if (r.sport && (pkt.proto === 'tcp' || pkt.proto === 'udp') && +r.sport !== pkt.sport) continue;
@@ -1926,8 +1928,9 @@ function aclCheck(list, pkt) {
 
 function pktDesc(p) {
   const what =
-    p.proto === 'icmp' ? (p.reply ? 'ICMP Echo Reply' : 'ICMP Echo Request')
-      : p.proto === 'tcp' ? (p.ack ? `TCP ACK → 埠 ${p.dport}` : p.reply ? `TCP SYN-ACK（來自埠 ${p.sport}）` : `TCP SYN → 埠 ${p.dport}`)
+    p.icmpErr ? `ICMP 需要分段 (type 3 code 4，MTU ${p.mtu})`
+    : p.proto === 'icmp' ? (p.reply ? 'ICMP Echo Reply' : 'ICMP Echo Request')
+      : p.proto === 'tcp' ? (p.bulk ? `TCP 資料 ${p.len} 位元組${p.df ? '（DF）' : ''}` : p.ack ? `TCP ACK → 埠 ${p.dport}` : p.reply ? `TCP SYN-ACK（來自埠 ${p.sport}）` : `TCP SYN → 埠 ${p.dport}`)
         : p.proto === 'esp' ? 'ESP 加密封包'
           : (p.reply ? `UDP 回應（來自埠 ${p.sport}）` : `UDP → 埠 ${p.dport}`);
   return `${what}　${fmtIp(p.src)} → ${fmtIp(p.dst)}`;
@@ -2052,7 +2055,7 @@ function deliver(dev, inIf, pkt) {
     const t = dev.rt.tunnels.find((x) => x.up && x.peerIp === pkt.src);
     return t ? { ok: true, dev: dev.id, tun: t } : no(`${dev.name} 收到來源不明的加密封包，直接丟棄`);
   }
-  if (pkt.reply) return ok;
+  if (pkt.reply || pkt.icmpErr) return ok;
   const PROTO = pkt.proto.toUpperCase();
   // BGP：只接受設定成鄰居的那個位址連進來的 TCP 179
   if (pkt.proto === 'tcp' && pkt.dport === 179) return bgpAccepts(dev, pkt.src) ? ok : no(`${dev.name} 沒有把 ${fmtIp(pkt.src)} 設成 BGP 鄰居，拒絕了 TCP 179 的連線`);
@@ -2156,6 +2159,17 @@ function forward(state, ctx, startId, pkt) {
         T('resolve_ip_tuple_fast', `Find an existing session, id-${sessId(flow)}, original direction`);
         flow.t = state.clock; flow.st = 'est';
         pkt.src = flow.nSrc; pkt.sport = flow.nSport; pkt.dst = flow.nDst; pkt.dport = flow.nDport;
+      } else if (pkt.icmpErr && ct && pkt.inner) {
+        const q = pkt.inner;
+        const rel = ct.find((x) => x.proto === q.proto && x.nSrc === q.src && x.nSport === q.sport && x.nDst === q.dst && x.nDport === q.dport)
+          || ct.find((x) => x.proto === q.proto && ((x.src === q.dst && x.dst === q.src) || (x.nSrc === q.dst && x.nDst === q.src)));
+        if (rel) {
+          established = true; // 和既有連線有關的 ICMP 錯誤：有狀態的設備直接放行
+          if (rel.nSrc === q.src && rel.nSport === q.sport && rel.src !== rel.nSrc) {
+            log.push({ dev: dev.id, kind: 'nat', text: `NAT 還原：ICMP 錯誤訊息裡夾帶的原始封包是 ${fmtIp(q.src)}，送回內部的 ${fmtIp(rel.src)}` });
+            pkt.dst = rel.src; pkt.inner = { ...q, src: rel.src, sport: rel.sport };
+          }
+        }
       } else if (e && pkt.reply) {
         established = true;
         T('resolve_ip_tuple_fast', `Find an existing session, id-${sessId(e)}, reply direction`);
@@ -2224,11 +2238,30 @@ function forward(state, ctx, startId, pkt) {
         if (!pkt.reply && stateful) track(state, ctx, dev, { proto: pkt.proto, ...o, nSrc: pkt.src, nSport: pkt.sport, nDst: pkt.dst, nDport: pkt.dport, inIf: inIf.label, outIf: tun.iface.label, rule: v.rule || 0 });
       }
       const ssl = !tun.cfg; // 遠端存取是 SSL-VPN（包在 TLS 裡），站對站是 IPsec（包在 ESP 裡）
+      let espLen;
+      if (!ssl && !cloud && (dev.kind === 'router' || dev.kind === 'firewall')) {
+        const wan = lookupRoute(dev, tun.peerIp);
+        const wm = wan ? ipMtu(state, dev, wan.iface) : MTU_DEF, tm = wm - IPSEC_OVERHEAD;
+        // 加密前的 SYN 也會被 WAN 介面上的 ip tcp adjust-mss 改小
+        if (pkt.proto === 'tcp' && !pkt.ack && !pkt.bulk) ctx.mssClamp = Math.min(ctx.mssClamp ?? Infinity, mssClampOf(state, dev, inIf, wan && wan.iface));
+        if (ipLen(pkt) > tm) {
+          if (pkt.df) {
+            const reason = `${dev.name} 要把 ${ipLen(pkt)} 位元組的封包送進 VPN 通道「${tun.name}」：加密後多了 ${IPSEC_OVERHEAD} 位元組的標頭，會超過 ${wan ? wan.iface.label : 'WAN'} 的 MTU ${wm}（通道裡最多只能放 ${tm}）。封包設了 DF 不能分段，只好丟掉`;
+            log.push({ dev: dev.id, kind: 'drop', text: reason });
+            if (!inIf) return { ok: false, dev: dev.id, local: true, mtu: tm, reason };
+            return { ok: false, dev: dev.id, reason, ptb: { at: dev.id, mtu: tm, vrf: vrfOf(inIf), pkt: { ...pkt } } };
+          }
+          const n = Math.ceil((ipLen(pkt) - 20) / (tm - 20));
+          log.push({ dev: dev.id, kind: 'info', text: `加密前先分段：${ipLen(pkt)} 位元組加上 IPsec 的標頭會超過 MTU ${wm}，先切成 ${n} 片（每片最多 ${tm}）再分別加密` });
+          pkt.len = tm;
+        }
+        espLen = ipLen(pkt) + IPSEC_OVERHEAD;
+      }
       T('ipsecdev_hard_start_xmit', `enter IPsec interface-${tun.name}`);
       T('esp_output4', `IPsec encrypt/auth`);
       T('ipsec_output_finish', `send to ${fmtIp(tun.peerIp)} via intf-${tun.cfg && tun.cfg.wan ? tun.cfg.wan : 'wan1'}`);
       log.push({ dev: dev.id, kind: 'vpn', text: `加密：整個封包包進 ${ssl ? 'TLS（SSL-VPN 的 TCP 連線）' : 'ESP'}，外層位址 ${fmtIp(tun.localIp)} → ${fmtIp(tun.peerIp)}` });
-      const r = forward(state, ctx, dev.id, { proto: 'esp', src: tun.localIp, dst: tun.peerIp, sport: 0, dport: 0, ttl: 64, reply: pkt.reply, ssl, spi: hash(dev.id + '/' + tun.name) });
+      const r = forward(state, ctx, dev.id, { proto: 'esp', src: tun.localIp, dst: tun.peerIp, sport: 0, dport: 0, ttl: 64, reply: pkt.reply, ssl, spi: hash(dev.id + '/' + tun.name), ...(espLen ? { len: espLen } : {}) });
       if (!r.ok) {
         if (!tun.stale) return r;
         return drop(`VPN 通道「${tun.name}」在 ${dev.name} 上看起來還是 Up（SA 還沒過期），封包照樣加密送了出去，但對端已經失聯：${tun.stale.why}。${dev.name} 還要 ${fmtDur(tun.stale.until - state.clock)} 才會發現${tun.stale.dpd ? '（DPD 探測中）' : '（沒有設定 keepalive，只能等 SA 到期）'}`);
@@ -2289,6 +2322,26 @@ function forward(state, ctx, startId, pkt) {
       const deny = aclCheck(outIf.aclOut, pkt);
       if (deny) return drop(`${dev.name} 的 ${outIf.label}（離開方向）：${deny}`);
     }
+    // TCP 的 SYN / SYN-ACK 經過時記下 MSS 的上限（ip tcp adjust-mss、家用路由器自動調整）
+    if (pkt.proto === 'tcp' && !pkt.ack && !pkt.bulk) ctx.mssClamp = Math.min(ctx.mssClamp ?? Infinity, mssClampOf(state, dev, inIf, outIf));
+    {
+      const m = ipMtu(state, dev, outIf), len = ipLen(pkt);
+      if (len > m) {
+        if (pkt.df && !inIf && pkt.bulk) {
+          pkt.len = m; // 自己送的 TCP 資料：作業系統知道自己的介面 MTU，一開始就送小一點
+        } else if (pkt.df) {
+          const reason = !inIf ? `封包 ${len} 位元組比 ${dev.name} 自己的 ${outIf.label} 的 MTU（${m}）還大，又設了 DF（不可分段）：在本機就送不出去`
+            : `${dev.name} 要從 ${outIf.label}（MTU ${m}）送出 ${len} 位元組的封包，但封包設了 DF（不可分段）：丟掉，並回報 ICMP「需要分段」`;
+          log.push({ dev: dev.id, kind: 'drop', text: reason });
+          if (!inIf) return { ok: false, dev: dev.id, local: true, mtu: m, reason };
+          return { ok: false, dev: dev.id, reason, ptb: { at: dev.id, mtu: m, vrf: vrfOf(inIf), pkt: { ...pkt } } };
+        } else {
+          const n = Math.ceil((len - 20) / (m - 20));
+          log.push({ dev: dev.id, kind: 'info', text: `分段：${len} 位元組的封包超過 ${outIf.label} 的 MTU ${m}，切成 ${n} 片送出（到了目的地再組回來）` });
+          pkt.len = m;
+        }
+      }
+    }
 
     const eps = l2Explore(state, dev.id, outIf);
     if (eps.storm) return drop(`廣播風暴！${state.devices[eps.storm].name} 所在的網段形成了迴圈，訊框不斷繞圈把網路塞爆`);
@@ -2331,8 +2384,22 @@ function forward(state, ctx, startId, pkt) {
     if (cands.length > 1 && !dai) {
       log.push({ dev: dev.id, kind: 'info', text: `注意：這個網段上有 ${cands.length} 台設備都聲稱自己是 ${fmtIp(nh)}（IP 衝突或 ARP 欺騙），封包被送往最先回應的 ${state.devices[tgt.dev].name}` });
     }
-    const names = [dev.name, ...tgt.path.map((h) => state.devices[h.to].name)];
-    const tags = [...new Set(tgt.path.map((h) => h.tag).filter((t) => t != null))];
+    let giant = null;
+    {
+      const len = ipLen(pkt);
+      for (let k = 0; k < tgt.path.length && len > 1500; k++) {
+        const h = tgt.path[k], to = state.devices[h.to], last = k === tgt.path.length - 1;
+        let lim = h.wifi ? WIFI_MTU : Infinity;
+        if (!last) {
+          lim = Math.min(lim, l2Mtu(state, to, h.toPort));
+          if (isNexus(to)) lim = Math.min(lim, l2Mtu(state, to, tgt.path[k + 1].fromPort)); // Nexus 每個埠各自的 MTU：出去的埠也要夠大
+        } else lim = Math.min(lim, rxMtu(state, to, tgt.iface));
+        if (len > lim) { giant = { k, lim, to, port: h.toPort }; break; }
+      }
+    }
+    const path = giant ? tgt.path.slice(0, giant.k + 1) : tgt.path;
+    const names = [dev.name, ...path.map((h) => state.devices[h.to].name)];
+    const tags = [...new Set(path.map((h) => h.tag).filter((t) => t != null))];
     log.push({
       dev: dev.id, kind: 'l2',
       text: (route.via != null ? `查路由 → 下一站 ${fmtIp(nh)}：` : '') + names.join(' → ') + (tags.length ? `　[802.1Q VLAN ${tags.join(',')}]` : '')
@@ -2341,9 +2408,9 @@ function forward(state, ctx, startId, pkt) {
       frame: { smac: outIf.rt.mac, dmac: tmac, tags, src: pkt.src, dst: pkt.dst, ttl: pkt.ttl, proto: pkt.proto, sport: pkt.sport, dport: pkt.dport, reply: pkt.reply, ack: !!pkt.ack, ssl: !!pkt.ssl, wifi: tgt.path.some((h) => h.wifi) },
     });
     // 沿路的交換器從進來的埠學到來源 MAC。目的 MAC 不在表裡（太久沒看到而過期）的話，只能往整個 VLAN 泛洪
-    const keys = learnPath(state, tgt.path, outIf.rt.mac);
+    const keys = learnPath(state, path, outIf.rt.mac);
     let leaked = false, flooded = false;
-    tgt.path.forEach((h, n) => {
+    path.forEach((h, n) => {
       const hub = hubLeak(state, tgt.path, n);
       let leak = hub;
       const sw = state.devices[h.from];
@@ -2364,9 +2431,19 @@ function forward(state, ctx, startId, pkt) {
         onHop(state, h, {
           proto: pkt.proto, smac: outIf.rt.mac, dmac: tmac, src: pkt.src, dst: pkt.dst, sport: pkt.sport, dport: pkt.dport, ttl: pkt.ttl,
           reply: !!pkt.reply, ack: !!pkt.ack, ssl: !!pkt.ssl, data: pkt.data || null, spi: pkt.spi,
+          ...(pkt.len ? { len: pkt.len } : {}), ...(pkt.df ? { df: true } : {}), ...(pkt.bulk ? { bulk: true } : {}), ...(pkt.icmpErr ? { icmpErr: pkt.icmpErr, mtu: pkt.mtu } : {}),
         }, leak);
       }
     });
+    if (giant) {
+      // 第二層的設備不會回 ICMP：送的人只會一直等到逾時
+      if (!QUIET) countGiant(state, giant.to.id, giant.port);
+      const pl = (giant.to.ports.find((p) => p.id === giant.port) || {}).label || giant.port || '';
+      const who = giant.to.kind === 'host' || giant.k === tgt.path.length - 1 ? `${giant.to.name} 的網卡` : giant.to.name;
+      const reason = `${who}（${pl}）收到 ${ipLen(pkt) + 14} 位元組的訊框，超過它能收的 MTU ${giant.lim}：當成 giant 直接丟掉。第二層的設備不會回報 ICMP，送的人完全不知道，只能等到逾時`;
+      log.push({ dev: giant.to.id, kind: 'drop', text: reason });
+      return { ok: false, dev: giant.to.id, reason, l2: true, mtu: giant.lim };
+    }
     dev = state.devices[tgt.dev];
     inIf = tgt.iface;
   }
@@ -2413,7 +2490,7 @@ export function clearSessions(state, dev) { if (state.dyn && state.dyn.ct) delet
 
 const PROTO_NUM = { icmp: 1, tcp: 6, udp: 17, esp: 50 };
 /** IP 封包的長度（debug ip packet 的 len） */
-const ipLen = (p) => (p.proto === 'icmp' ? 60 : p.proto === 'tcp' ? (p.data ? 96 : p.ack ? 40 : 44) : p.proto === 'udp' ? 68 : 120);
+const ipLen = (p) => p.len || (p.proto === 'icmp' ? 60 : p.proto === 'tcp' ? (p.data ? 96 : p.ack ? 40 : 44) : p.proto === 'udp' ? 68 : 120);
 /** FortiGate 連線的編號（同一條連線固定） */
 const sessId = (e) => hash(`${e.proto}|${e.src}|${e.sport}|${e.dst}|${e.dport}`).toString(16).padStart(8, '0');
 /** 防火牆拒絕連線時留下的流量紀錄（會送到 Syslog 伺服器） */
@@ -2551,6 +2628,48 @@ export function closeFlow(state, cid) {
   for (const list of Object.values((state.dyn && state.dyn.ct) || {})) for (const e of list) if (e.cid === cid) { e.st = 'fin'; e.t = state.clock; }
 }
 
+/**
+ * 路由器回報 ICMP「需要分段」給原本送封包的那一台：回傳 { ok, srcIp } 或 { ok:false, reason, failDev }
+ * 中途的 ACL 擋掉 ICMP 就會送不到（PMTUD 黑洞）
+ */
+function icmpBack(state, ctx, ptb, senderId) {
+  const r = state.devices[ptb.at], p = ptb.pkt;
+  const route = lookupRoute(r, p.src, undefined, ptb.vrf || '');
+  if (!route || route.iface.rt.ip == null) return { ok: false, reason: `${r.name} 沒有回到 ${fmtIp(p.src)} 的路由`, failDev: r.id };
+  const srcIp = route.iface.rt.ip;
+  ctx.log.push({ dev: r.id, kind: 'tx', text: `回報 ICMP「需要分段」(type 3 code 4，下一段的 MTU 是 ${ptb.mtu}) 給 ${fmtIp(p.src)}` });
+  const ic = { proto: 'icmp', icmpErr: 'frag', mtu: ptb.mtu, src: srcIp, dst: p.src, sport: 0, dport: 0, ttl: 64, reply: false, len: 56, inner: { proto: p.proto, src: p.src, sport: p.sport, dst: p.dst, dport: p.dport } };
+  const f = forward(state, ctx, r.id, ic);
+  if (f.ok && f.dev === senderId) {
+    ctx.log.push({ dev: senderId, kind: 'rx', text: `收到 ${r.name} 的 ICMP「需要分段」：通往 ${fmtIp(p.dst)} 的路徑 MTU 是 ${ptb.mtu}` });
+    return { ok: true, srcIp };
+  }
+  return { ok: false, reason: f.ok ? `送到了 ${state.devices[f.dev].name}，不是原本送封包的那一台` : f.reason, failDev: f.dev };
+}
+
+/**
+ * TCP 的資料區段：照 MSS 裝滿、設了 DF。路由器回報「需要分段」就照它說的 MTU 改小再送（PMTUD），最多重試幾次。
+ * o = { from: 送資料的設備, seg: 位址與埠 }；回傳 { ok, mss } 或 { ok:false, reason, dev }
+ */
+function bulkSend(state, ctx, o, mss) {
+  let len = mss + 40;
+  for (let k = 0; k < 4; k++) {
+    const seg = { proto: 'tcp', ...o.seg, ttl: 64, ack: true, bulk: true, df: true, len };
+    ctx.log.push({ dev: o.from, kind: 'tx', text: `送出資料：TCP 區段 ${len} 位元組（MSS ${len - 40}，設了 DF 不可分段）` });
+    const f = forward(state, ctx, o.from, seg);
+    if (f.ok) return { ok: true, mss: len - 40 };
+    if (f.ptb) {
+      const back = icmpBack(state, ctx, f.ptb, o.from);
+      if (back.ok && f.ptb.mtu < len) { len = f.ptb.mtu; ctx.log.push({ dev: o.from, kind: 'info', text: `Path MTU Discovery：改送 ${len} 位元組的區段再試一次` }); continue; }
+      const who = state.devices[f.ptb.at].name, me = state.devices[o.from].name;
+      return { ok: false, dev: back.failDev || f.dev, reason: `PMTUD 黑洞：TCP 連線建立得起來，但 ${len} 位元組的資料區段到了 ${who} 就過不去（下一段的 MTU 只有 ${f.ptb.mtu}，封包又設了 DF）。${who} 回報的 ICMP「需要分段」送不回 ${me}：${back.reason}。${me} 不知道要改小，一直重送一樣大的封包` };
+    }
+    if (f.l2) return { ok: false, dev: f.dev, reason: `TCP 連線建立了（交握的封包都很小），但 ${len} 位元組的資料區段被丟掉：${f.reason}。兩端協商出來的 MSS 是 ${len - 40}，中間卻有設備收不下這麼大的訊框——同一個網段裡每一台的 MTU 要一致` };
+    return { ok: false, dev: f.dev, reason: '資料送不過去：' + f.reason };
+  }
+  return { ok: false, dev: o.from, reason: '資料一直送不過去（路徑上的 MTU 一再變小）' };
+}
+
 function transactInner(state, fromId, spec) {
   const ctx = { ct: {}, log: [], hops: [], l3: [], cid: spec.keep || null, vrf: spec.vrf || '', vrfDev: fromId };
   const src = state.devices[fromId];
@@ -2572,9 +2691,17 @@ function transactInner(state, fromId, spec) {
   }
   const id = 1000 + (pktSeq++ % 20000);
   const icmp = spec.proto === 'icmp';
-  const pkt = { proto: spec.proto, src: srcIp, dst: spec.dst, sport: icmp ? id : 30000 + id, dport: icmp ? 0 : spec.dport, ttl: 64, reply: false, data: spec.data || null };
+  const pkt = { proto: spec.proto, src: srcIp, dst: spec.dst, sport: icmp ? id : 30000 + id, dport: icmp ? 0 : spec.dport, ttl: 64, reply: false, data: spec.data || null, ...(spec.size ? { len: +spec.size } : {}), ...(spec.df ? { df: true } : {}) };
   ctx.log.push({ dev: fromId, kind: 'tx', text: `送出 ${pktDesc(pkt)}` });
   const a = forward(state, ctx, fromId, pkt);
+  if (!a.ok && a.local) return done({ ok: false, reason: a.reason, failDev: fromId, phase: 'request', dfLocal: a.mtu });
+  if (!a.ok && a.ptb) {
+    // 路由器回報「需要分段」：ping -f 會直接顯示這個訊息
+    const back = icmpBack(state, ctx, a.ptb, fromId);
+    const who = state.devices[a.ptb.at].name;
+    if (back.ok) return done({ ok: false, reason: `${who} 回報 ICMP「需要分段，但設定了 DF」：往下一段的 MTU 只有 ${a.ptb.mtu}`, failDev: a.dev, phase: 'request', ptb: { mtu: a.ptb.mtu, from: back.srcIp, dev: a.ptb.at } });
+    return done({ ok: false, reason: `${a.reason}；它回報的 ICMP「需要分段」也送不回來（${back.reason}）`, failDev: back.failDev || a.dev, phase: 'request' });
+  }
   if (!a.ok) {
     let reason = a.reason;
     const v = src.rt.vpn;
@@ -2582,10 +2709,11 @@ function transactInner(state, fromId, spec) {
       reason = `${src.name} 的 VPN 沒有連上（${v.why}），所以封包沒有走加密通道`;
       ctx.log.push({ dev: fromId, kind: 'drop', text: reason });
     }
-    return done({ ok: false, reason, failDev: a.dev, phase: 'request' });
+    return done({ ok: false, reason, failDev: a.dev, phase: 'request', ...(a.l2 ? { silent: true } : {}) }); // silent：被第二層的設備默默丟掉，沒有任何回應
   }
 
-  const rp = { proto: pkt.proto, src: pkt.dst, dst: pkt.src, sport: pkt.dport, dport: pkt.sport, ttl: 64, reply: true };
+  const rv = { src: pkt.dst, dst: pkt.src, sport: pkt.dport, dport: pkt.sport }; // 回應方看到的這條連線（rp 送出去之後會被 NAT 改掉）
+  const rp = { proto: pkt.proto, ...rv, ttl: 64, reply: true, ...(icmp && spec.size ? { len: +spec.size } : {}) };
   ctx.log.push({ dev: a.dev, kind: 'rx', text: `收到請求，回覆 ${pktDesc(rp)}` });
   const b = forward(state, ctx, a.dev, rp);
   if (!b.ok) return done({ ok: false, reason: '回程失敗：' + b.reason, failDev: b.dev, phase: 'reply', responder: a.dev });
@@ -2604,8 +2732,18 @@ function transactInner(state, fromId, spec) {
     ctx.log.push({ dev: c.dev, kind: 'ok', text: 'TCP 連線建立完成（SYN → SYN-ACK → ACK），可以開始傳送資料' });
     // 測試用的連線建立之後就由用戶端關閉 (FIN)：連線表裡的項目進入關閉中的狀態，很快就會被清掉
     // 要保持的連線（SSH / Telnet）不關閉，之後每送一次資料，閒置的計時就重新開始
+    // 交握完成之後送一個裝滿的資料區段（設了 DF）：MTU 的問題要到這一步才會出現
+    let mss;
+    if (spec.bulk !== false && !spec.keep) {
+      const resp = state.devices[a.dev];
+      const myIf = src.ifaces.find((i) => i.rt && i.rt.ip === srcIp), peerIf = resp.ifaces.find((i) => i.rt && i.rt.ip === rv.src);
+      mss = Math.min(ipMtu(state, src, myIf) - 40, ipMtu(state, resp, peerIf) - 40, ctx.mssClamp ?? Infinity);
+      const d = bulkSend(state, ctx, spec.bulk === 'up' ? { from: fromId, seg: { src: srcIp, dst: spec.dst, sport: 30000 + id, dport: spec.dport, reply: false } } : { from: a.dev, seg: { ...rv, reply: true } }, mss);
+      if (!d.ok) return done({ ok: false, reason: d.reason, failDev: d.dev, phase: 'data', responder: a.dev, mss });
+      mss = d.mss;
+    }
     if (!spec.keep) for (const l of Object.values(ctx.ct)) for (const e of l) if (e.st === 'est') e.st = 'fin';
-    return done({ ok: true, responder: a.dev, srcIp, seenSrc, sport: 30000 + id });
+    return done({ ok: true, responder: a.dev, srcIp, seenSrc, sport: 30000 + id, ...(mss ? { mss } : {}) });
   }
   ctx.log.push({ dev: fromId, kind: 'ok', text: '收到回應，連線成功' });
   return done({ ok: true, responder: a.dev, srcIp, seenSrc });
@@ -2838,12 +2976,12 @@ export function runObjective(state, o) {
   }
   const srcIp = o.srcIp ? parseIp(o.srcIp) : from.kind === 'internet' ? parseIp(from.inet.client) : undefined;
   const proto = o.type === 'ping' ? 'icmp' : o.type === 'speed' || o.type === 'https' ? 'tcp' : o.type;
-  const r = transact(state, o.from, { proto, dst, dport: o.type === 'speed' ? 5201 : o.port ?? 443, srcIp });
+  const r = transact(state, o.from, { proto, dst, dport: o.type === 'speed' ? 5201 : o.port ?? 443, srcIp, ...(o.size ? { size: o.size } : {}), ...(o.df ? { df: true } : {}), ...(o.bulk != null ? { bulk: o.bulk } : o.type === 'speed' ? { bulk: 'up' } : {}) });
   log.push(...r.log); hops.push(...r.hops);
   if (r.ok && o.type === 'speed') {
     // 傳輸速率測試（iperf3）：連得上之後，看路徑上最慢的那一段
-    const t = throughput(state, r.hops), min = o.min || 0, pass = t.mbps >= min;
-    log.push({ dev: pass ? o.from : t.dev || o.from, kind: pass ? 'ok' : 'drop', text: `iperf3：${t.mbps} Mbps${t.retr ? `，重傳 ${t.retr} 次` : ''}。最慢的一段是 ${t.where}` });
+    const t = throughput(state, r.hops, r.mss), min = o.min || 0, pass = t.mbps >= min;
+    log.push({ dev: pass ? o.from : t.dev || o.from, kind: pass ? 'ok' : 'drop', text: `iperf3：${t.mbps} Mbps${t.retr ? `，重傳 ${t.retr} 次` : ''}。最慢的一段是 ${t.where}${r.mss ? `（MSS ${r.mss}）` : ''}` });
     if (!pass) return { pass: false, ok: true, reason: `只跑得到 ${t.mbps} Mbps（目標 ${min} Mbps 以上）。最慢的一段：${t.where}`, failDev: t.dev || o.from, log, hops, speed: t };
     return { pass: true, ok: true, reason: '', failDev: null, log, hops, speed: t };
   }
@@ -2880,13 +3018,13 @@ export function runObjective(state, o) {
  * - Wi-Fi 的實際吞吐量大約是連線速率的一半。
  */
 /** 一段線路單方向實際跑得到的速率（Mbps）與說明 */
-function linkCap(state, h) {
+function linkCap(state, h, eff = 0.94) {
   const li = linkInfo(state, h.from, h.fromPort);
   if (!li || li.down) return null;
   let c;
   if (li.mismatch) c = { mbps: Math.min(li.speed * 0.01, 2), note: `${li.speed} Mbps，但兩端的雙工不一致 (duplex mismatch)`, loss: 35, retr: 1800 };
   else if (li.half) c = { mbps: li.speed * 0.4, note: `${li.speed} Mbps 半雙工，會發生碰撞`, loss: 3, retr: 60 };
-  else c = { mbps: li.speed * 0.94, note: `${li.speed >= 1000 ? li.speed / 1000 + ' Gbps' : li.speed + ' Mbps'} 全雙工`, loss: 0, retr: 0 };
+  else c = { mbps: li.speed * eff, note: `${li.speed >= 1000 ? li.speed / 1000 + ' Gbps' : li.speed + ' Mbps'} 全雙工`, loss: 0, retr: 0 };
   // 整形 (shape)：自己把送出去的速率壓在設定值以下
   const eg = egressOf(state, h);
   if (eg && eg.shape != null && eg.shape * 0.95 < c.mbps) c = { ...c, mbps: eg.shape * 0.95, note: `${c.note}，整形 (shape) 到 ${eg.shape} Mbps` };
@@ -2995,8 +3133,11 @@ export function linkUtil(state, devId, pid) {
   return { mbps: load, cap: ca.mbps, util: Math.min(100, (load / ca.mbps) * 100), note: ca.note };
 }
 
-export function throughput(state, hops) {
+/** TCP 的有效載荷佔線路上位元的比例：每個區段還有 40 位元組的 IP + TCP 標頭、38 位元組的乙太網路標頭、前導碼與訊框間隔 */
+const payloadRatio = (mss) => mss / (mss + 40 + 38);
+export function throughput(state, hops, mss = 1460) {
   let best = Infinity, where = '', dev = null, loss = 0, retr = 0;
+  const eff = 0.94 * (payloadRatio(mss) / payloadRatio(1460)); // MSS 1460（MTU 1500）跑得到 94%，Jumbo Frame 大約 98%
   const seen = new Set();
   for (const h of hops) {
     if (h.wave || h.reply || h.proto === 'arp' || h.proto === 'dhcp') continue;
@@ -3009,7 +3150,7 @@ export function throughput(state, hops) {
     } else {
       if (!h.cable || seen.has(h.cable)) continue;
       seen.add(h.cable);
-      const c = linkCap(state, h);
+      const c = linkCap(state, h, eff);
       if (!c) continue;
       ({ mbps, note } = c);
       loss = Math.max(loss, c.loss); retr = Math.max(retr, c.retr);

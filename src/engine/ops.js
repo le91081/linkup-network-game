@@ -333,6 +333,7 @@ export function opsBefore(state) {
   for (const d of Object.values(state.devices)) {
     const c = (dyn.clk[d.id] ||= {});
     if (c.boot == null) c.boot = first ? now - UPTIME0 : now;
+    if (d.sw && c.jumbo == null) c.jumbo = +d.sw.jumbo || 1500; // 目前生效的 Jumbo MTU（Catalyst 2960 改了要重新開機）
     const dead = !!down[d.id];
     ensureFlash(d);
     // 按下 reload，或剛從關機變成開機：記憶體清空，開始計算開機時間
@@ -340,6 +341,7 @@ export function opsBefore(state) {
       wipe(state, d);
       delete c.rommon;
       if (d.fwNext) { d.fw = d.fwNext; delete d.fwNext; } // FortiGate：新韌體在重新開機時生效
+      if (d.sw) c.jumbo = +d.sw.jumbo || 1500; // system mtu jumbo 在重新開機時生效
       // Cisco：依 boot system 的順序找映像檔，都找不到就停在 ROMMON
       const b = isCiscoOs(d) && d.flash ? bootPick(d) : null;
       if (b && b.rommon) { c.rommon = { why: b.rommon, notes: b.notes }; c.up = Infinity; }

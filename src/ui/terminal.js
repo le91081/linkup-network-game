@@ -16,6 +16,7 @@ import { isApiCurl, curlApi, ansibleCmd, fileCmd } from './term-auto.js';
 import { dockerCmd } from './term-docker.js';
 import { dockerDeliver } from '../engine/docker.js';
 import { tlsCheck, fmtDate, certSelf, CORP_CA, PUBLIC_CAS } from '../engine/web.js';
+import { ipMtu, jumboCapable } from '../engine/mtu.js';
 
 const V6SRC = { slaac: '（SLAAC）', dhcp6: '（DHCPv6）' };
 const v6Lines = (rt, i) => (rt.v6 && rt.v6.ll != null
@@ -29,6 +30,8 @@ const v6Lines = (rt, i) => (rt.v6 && rt.v6.ll != null
 const HELP = [
   '可用指令：',
   '  ping <IP 或網域>        測試連線（會在場景中播放封包動畫）',
+  '  ping -f -l 1472 <IP>    送 1472 位元組的資料、設 DF 不可分段：找出路徑上的 MTU（1472 + 28 = 1500）',
+  '  netsh interface ipv4 show subinterfaces   看每張網卡的 MTU（set subinterface "乙太網路" mtu=9000 修改）',
   '  ipconfig                顯示本機的網路設定',
   '  ipconfig /renew         重新向 DHCP 伺服器要一次 IP（播放 DORA 四個步驟）',
   '  ipconfig /release       歸還 DHCP 位址',
@@ -55,7 +58,8 @@ const HELP = [
 const HELP_LINUX = [
   '可用指令：',
   '  ping <IP 或網域>        測試連線（會在場景中播放封包動畫）',
-  '  ip addr / ip route      網路介面的位址 / 路由表',
+  '  ip addr / ip route      網路介面的位址 / 路由表（sudo ip link set eth0 mtu 9000 改 MTU）',
+  '  ping -M do -s 8972 <IP> 送 8972 位元組的資料、設 DF 不可分段：測 Jumbo Frame（8972 + 28 = 9000）',
   '  traceroute <IP 或網域>  顯示封包經過的每一台路由器',
   '  nslookup <網域>         直接向 DNS 伺服器查詢',
   '  curl http(s)://<主機>[:埠]   開網頁：-k 略過憑證檢查、-v 看憑證、-I 只看標頭、-L 跟著轉址',
@@ -238,7 +242,10 @@ export function buildTerminal(ctx, body) {
   const run = async (line) => {
     if (remote()) { remoteInput(line); draw(); return; }
     print(PS + ' ' + line, 'cmd');
-    const [cmd, ...args] = line.trim().split(/\s+/);
+    const parts = line.trim().split(/\s+/);
+    const sudo = linux && parts[0] === 'sudo' && parts.length > 1;
+    if (sudo) parts.shift();
+    const [cmd, ...args] = parts;
     const c = (cmd || '').toLowerCase();
     if (c === 'help' || c === '?') {
       (linux ? HELP_LINUX : HELP).forEach((x) => print(x, 'dim'));
@@ -281,7 +288,8 @@ export function buildTerminal(ctx, body) {
         print(`${'單點傳送封包'.padEnd(10)}${w(x.ip - x.ibc - x.imc, x.op - x.obc - x.omc)}`, 'pre');
         print(`${'非單點傳送封包'.padEnd(9)}${w(x.ibc + x.imc, x.obc + x.omc)}`, 'pre');
         print(`${'捨棄'.padEnd(14)}${w(0, 0)}`, 'pre');
-        print(`${'錯誤'.padEnd(14)}${w(x.crc + x.runts, x.late)}`, x.crc + x.runts + x.late ? 'bad' : 'pre');
+        print(`${'錯誤'.padEnd(14)}${w(x.crc + x.runts + (x.giants || 0), x.late)}`, x.crc + x.runts + (x.giants || 0) + x.late ? 'bad' : 'pre');
+        if (x.giants) print(`  ↳ 收到 ${x.giants} 個比網卡的 MTU 還大的訊框，被丟掉了：網段裡有人開了 Jumbo Frame，這台沒有`, 'hint');
         if (x.imc) print(`  ↳ 收到的非單點傳送封包大多是交換器的 STP BPDU（每 2 秒一個）`, 'hint');
       }
     }
@@ -299,7 +307,27 @@ export function buildTerminal(ctx, body) {
       print(`${cmd}: command not found`, 'warn');
       print(`  ↳ 這台是 Linux：${{ ipconfig: '用 ip addr 看位址、ip route 看路由', w32tm: '用 timedatectl 看時間同步', certutil: '根憑證放進 /usr/local/share/ca-certificates/ 再 update-ca-certificates', cls: '用 clear' }[c]}`, 'hint');
     } else if (linux && (c === 'ip' || c === 'ifconfig')) {
-      linuxIp(c === 'ifconfig' ? 'addr' : args[0] || '');
+      linuxIp(c === 'ifconfig' ? ['addr'] : args);
+    } else if (!linux && c === 'netsh') {
+      const a = args.map((x) => x.toLowerCase());
+      const ifName = (i) => (i.bind.t === 'wlan' ? 'Wi-Fi' : dev.ifaces.filter((x) => x.bind.t !== 'wlan').indexOf(i) > 0 ? `乙太網路 ${dev.ifaces.filter((x) => x.bind.t !== 'wlan').indexOf(i) + 1}` : '乙太網路');
+      if (a[0] === 'interface' && /^ip(v4)?$/.test(a[1] || '') && a[2] === 'show' && /^subinterfaces?$/.test(a[3] || '')) {
+        print('');
+        print('   MTU  MediaSenseState   Bytes In  Bytes Out  Interface', 'pre');
+        print('------  ---------------  ---------  ---------  -------------', 'pre');
+        print('4294967295                1          0          0  Loopback Pseudo-Interface 1', 'pre');
+        for (const i of dev.ifaces) {
+          const p = i.bind.port, x = p ? counters(st(), dev.id, p) : { ib: 0, ob: 0 };
+          print(`${String(ipMtu(st(), dev, i)).padStart(6)}  ${String(i.rt && i.rt.link ? 1 : 5).padStart(15)}  ${String(x.ib).padStart(9)}  ${String(x.ob).padStart(9)}  ${ifName(i)}`, 'pre');
+        }
+      } else if (a[0] === 'interface' && /^ip(v4)?$/.test(a[1] || '') && a[2] === 'set' && /^subinterface$/.test(a[3] || '')) {
+        const m = line.match(/subinterface\s+(?:"([^"]+)"|(\S+))/i), mt = line.match(/mtu=(\d+)/i);
+        const name = m && (m[1] || m[2]), i = dev.ifaces.find((x) => ifName(x) === name);
+        if (!i) print(`找不到這個介面：${name || ''}（netsh interface ipv4 show subinterfaces 看名稱）`, 'bad');
+        else if (!mt) print('用法：netsh interface ipv4 set subinterface "乙太網路" mtu=9000 store=persistent', 'warn');
+        else if (!(+mt[1] >= 576 && +mt[1] <= (jumboCapable(dev) && i.bind.t !== 'wlan' ? 9000 : 1500))) print(`設定 MTU 失敗：${i.bind.t === 'wlan' ? 'Wi-Fi 介面卡最大只有 1500' : '超過網路卡支援的最大值（Jumbo Packet 9014 Bytes = MTU 9000）'}`, 'bad');
+        else { if (+mt[1] === 1500) delete i.mtu; else i.mtu = +mt[1]; print('確定。', 'ok'); ctx.commit(true); }
+      } else print('用法：netsh interface ipv4 show subinterfaces、netsh interface ipv4 set subinterface "乙太網路" mtu=<576-9000> store=persistent', 'warn');
     } else if (!linux && c === 'w32tm') {
       const a = args.join(' ').toLowerCase(), off = !!(dev.clock && dev.clock.sync === false);
       if (/\/resync/.test(a)) {
@@ -398,7 +426,17 @@ export function buildTerminal(ctx, body) {
         v6Lines(rt, i).forEach((x) => print(x));
       }
     } else if (c === 'ping' || c === 'tracert' || c === 'traceroute') {
-      const target = args[0];
+      // Windows：ping -f -l 1472 <IP>；Linux：ping -M do -s 1472 <IP>（-l / -s 是資料的大小，IP 封包再多 28 位元組）
+      const takes = linux ? ['-s', '-c', '-M', '-W', '-i', '-t', '-I'] : ['-l', '-n', '-w', '-i', '-S'];
+      let target = '', data = null, df = false, badSize = null;
+      for (let k = 0; k < args.length; k++) {
+        const x = args[k];
+        if (takes.includes(x)) { const v = args[++k]; if (x === '-l' || x === '-s') { data = +v; if (!(Number.isInteger(data) && data >= 0 && data <= (linux ? 65507 : 65500))) badSize = v; } if (x === '-M') df = v === 'do'; continue; }
+        if (x === '-f' && !linux) { df = true; continue; }
+        if (!x.startsWith('-') && !target) target = x;
+      }
+      if (badSize != null) { print(linux ? `ping: invalid argument: '${badSize}': out of range: 0 <= value <= 65507` : `錯誤的值給選項 -l，有效範圍是從 0 到 65500。`, 'bad'); draw(); return; }
+      const dataLen = data ?? (linux ? 56 : 32);
       if (!target) print(`用法：${c} <IP 或網域>`, 'warn');
       else if (target.includes(':')) {
         const d6 = parseIp6(target);
@@ -423,19 +461,37 @@ export function buildTerminal(ctx, body) {
         const r = resolve(target);
         if (!r.ok) print(`Ping 要求找不到主機 ${target}。${r.reason}`, 'bad');
         else {
-          const res = transact(st(), dev.id, { proto: 'icmp', dst: r.ip });
+          const res = transact(st(), dev.id, { proto: 'icmp', dst: r.ip, ...(c === 'ping' ? { size: dataLen + 28, ...(df ? { df: true } : {}) } : {}) });
           const ip = fmtIp(r.ip);
           app.showTrace(`${dev.name}> ${line}`, [...r.log, ...res.log], [...r.hops, ...res.hops], res);
-          if (c === 'ping') {
+          if (c === 'ping' && linux) {
+            // Linux 的 ping（iputils）
+            const ms = (Math.max(1, res.hops.filter((x) => !x.wave && x.proto !== 'arp').length) * 0.21 + (res.l3.some((x) => st().devices[x.dev].kind === 'internet') ? 8.6 : 0)).toFixed(3);
+            print(`PING ${target} (${ip}) ${dataLen}(${dataLen + 28}) bytes of data.`);
+            for (let n = 1; n <= 4; n++) {
+              if (res.ok) print(`${dataLen + 8} bytes from ${ip}: icmp_seq=${n} ttl=${64 - res.l3.length} time=${ms} ms`, 'ok');
+              else if (res.dfLocal) print(`ping: local error: message too long, mtu=${res.dfLocal}`, 'bad');
+              else if (res.ptb) print(`From ${fmtIp(res.ptb.from)} icmp_seq=${n} Frag needed and DF set (mtu = ${res.ptb.mtu})`, 'bad');
+            }
             print('');
-            print(`Ping ${target === ip ? ip : `${target} [${ip}]`} (使用 32 位元組的資料):`);
+            print(`--- ${target} ping statistics ---`);
+            print(`4 packets transmitted, ${res.ok ? 4 : 0} received, ${!res.ok && (res.ptb || res.dfLocal) ? '+4 errors, ' : ''}${res.ok ? 0 : 100}% packet loss, time 3005ms`, res.ok ? '' : 'bad');
+            if (!res.ok) print('  ↳ ' + res.reason, 'hint');
+          } else if (c === 'ping') {
+            print('');
+            print(`Ping ${target === ip ? ip : `${target} [${ip}]`} (使用 ${dataLen} 位元組的資料):`);
             const arp = res.hops.filter((x) => x.wave).length; // 第一個封包要先等 ARP，所以比較慢
             const ms = Math.max(1, res.hops.filter((x) => !x.wave && x.proto !== 'arp').length) + (res.l3.some((x) => st().devices[x.dev].kind === 'internet') ? 9 : 0);
             for (let n = 0; n < 4; n++) {
-              print(res.ok ? `回覆自 ${ip}: 位元組=32 時間=${ms + (n === 0 ? arp * 2 : 0)}ms TTL=${64 - res.l3.length}` : res.phase === 'reply' ? '要求等候逾時。' : '目的地主機無法連線。', res.ok ? 'ok' : 'bad');
+              print(res.ok ? `回覆自 ${ip}: 位元組=${dataLen} 時間=${ms + (n === 0 ? arp * 2 : 0)}ms TTL=${64 - res.l3.length}`
+                : res.dfLocal ? '封包需要分段，但設定了 DF。'
+                  : res.ptb ? `回覆自 ${fmtIp(res.ptb.from)}: 封包需要分段，但設定了 DF。`
+                    : res.phase === 'reply' || res.silent ? '要求等候逾時。' : '目的地主機無法連線。', res.ok ? 'ok' : 'bad');
             }
             print('');
-            print(`    封包: 已傳送 = 4，已收到 = ${res.ok ? 4 : 0}，已遺失 = ${res.ok ? 0 : 4}`);
+            // Windows 把「需要分段」的 ICMP 回應也算成收到
+            const got = res.ok || res.ptb ? 4 : 0;
+            print(`    封包: 已傳送 = 4，已收到 = ${got}，已遺失 = ${4 - got} (${(4 - got) * 25}% 遺失)，`);
             if (!res.ok) print('  ↳ ' + res.reason, 'hint');
           } else {
             print('');
@@ -555,7 +611,20 @@ export function buildTerminal(ctx, body) {
   };
 
   /** Linux 的 ip addr / ip route（Docker 主機多了 docker0 與每個容器的 veth） */
-  function linuxIp(sub) {
+  function linuxIp(argv) {
+    const sub = argv[0] || '';
+    if (sub === 'link' && argv[1] === 'set') {
+      // ip link set eth0 mtu 9000
+      const i = dev.ifaces.find((x) => x.label === argv[2] || x.id === argv[2]);
+      const k = argv.indexOf('mtu'), v = k > 0 ? +argv[k + 1] : NaN;
+      if (!i) { print(`Cannot find device "${argv[2] || ''}"`, 'bad'); return; }
+      if (k < 0) { print('用法：sudo ip link set <介面> mtu <68-9000>', 'warn'); return; }
+      if (!sudo) { print('RTNETLINK answers: Operation not permitted', 'bad'); print('  ↳ 改網卡的設定要 root 權限：前面加 sudo', 'hint'); return; }
+      if (!(v >= 68 && v <= (jumboCapable(dev) && i.bind.t !== 'wlan' ? 9000 : 1500))) { print('Error: mtu greater than device maximum.', 'bad'); return; }
+      if (v === 1500) delete i.mtu; else i.mtu = v;
+      ctx.commit(true);
+      return;
+    }
     const ctrs = dev.docker ? dev.docker.containers.filter((x) => x.state === 'running') : [];
     const bc = (ip, bits) => fmtIp((ip | (bits >= 32 ? 0 : 0xffffffff >>> bits)) >>> 0);
     if (/^r/.test(sub)) {
@@ -571,7 +640,7 @@ export function buildTerminal(ctx, body) {
     if (sub !== 'link') print('    inet 127.0.0.1/8 scope host lo', 'pre');
     for (const i of dev.ifaces) {
       const rt = i.rt || {}, up = !!rt.link;
-      print(`${++n}: ${i.label}: <BROADCAST,MULTICAST${up ? ',UP,LOWER_UP' : ',UP'}> mtu 1500 qdisc fq_codel state ${up ? 'UP' : 'DOWN'} group default qlen 1000`, up ? 'pre' : 'warn');
+      print(`${++n}: ${i.label}: <BROADCAST,MULTICAST${up ? ',UP,LOWER_UP' : ',UP'}> mtu ${ipMtu(st(), dev, i)} qdisc fq_codel state ${up ? 'UP' : 'DOWN'} group default qlen 1000`, up ? 'pre' : 'warn');
       print(`    link/ether ${String(rt.mac || '').toLowerCase()} brd ff:ff:ff:ff:ff:ff`, 'pre');
       if (sub !== 'link' && rt.ip != null) print(`    inet ${fmtIp(rt.ip)}/${rt.bits} brd ${bc(rt.ip, rt.bits)} scope global ${i.mode === 'dhcp' ? 'dynamic ' : ''}${i.label}`, 'pre');
     }

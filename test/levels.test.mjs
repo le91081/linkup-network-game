@@ -282,6 +282,8 @@ console.log('\nCLI 設定指令');
       recompute(s2);
       // DR 是有狀態的：設備重灌之後不會自己搶回 DR，要像工程師那樣讓大家重新選
       if (lv.reelect) { for (const x of Object.values(s2.devices).filter((y) => y.rt && y.rt.ospf)) type(s2, x.id, ['clear ip ospf process', 'yes']); recompute(s2); }
+      // 有些設定要存檔、重新開機才生效（Catalyst 2960 的 system mtu jumbo）：工程師貼完也會這樣做
+      if ((lv.pasteReload || []).includes(d.id)) { type(s2, d.id, ['write memory', 'reload', '']); recompute(s2); }
       const got = runningConfig(s2, s2.devices[d.id]);
       const a = want.filter(keep), b = got.filter(keep);
       n++;
@@ -2350,6 +2352,70 @@ console.log('\nHTTPS 憑證：信任、有效期間（用戶端的時鐘）、SA
   D.byod.trust = []; settle(s);
   const r2 = evaluate(s, lv.objectives);
   ok(!r2[2].pass && /憑證錯誤/.test(r2[2].reason), 'https 目標：TCP 連得上但憑證不被信任，一樣算失敗');
+}
+
+console.log('\nMTU：分段、DF、PMTUD 黑洞、Jumbo Frame、ip tcp adjust-mss');
+{
+  const sim = await import('../src/engine/sim.js');
+  const { iosSession, runningConfig } = await import('../src/engine/ios.js');
+  const { iosRun } = await import('../src/ui/cli.js');
+  const { counters } = await import('../src/engine/wire.js');
+  const ok = (cond, title) => (cond ? console.log('  ✔ ' + title) : fail(title));
+  const cli = (s, id) => { const S = iosSession(() => s.devices[id], () => s); return (...lines) => { const out = []; for (const l of lines) { const r = iosRun({ state: s, showTrace() {} }, id, S, l, (x) => out.push(x)); if (r.changed) settle(s); } return out.join('\n'); }; };
+  const IP = (x) => parseIp(x);
+  // ── Jumbo Frame：兩端 9000、中間的 2960 還是 1500
+  const l75 = LEVELS.find((l) => l.id === 'l75');
+  let s = l75.setup(); settle(s);
+  const t1 = sim.transact(s, 'bk', { proto: 'tcp', dst: IP('10.0.50.20'), dport: 445, bulk: 'up' });
+  ok(!t1.ok && t1.phase === 'data' && /giant/.test(t1.reason) && t1.mss === 8960, '兩端 MTU 9000、交換器 1500：TCP 交握成功（MSS 8960），資料區段在交換器被當成 giant 丟掉');
+  ok(counters(s, 'sw', 'Gi0/2').giants > 0, '交換器那個埠的 giants 計數器增加');
+  const p1 = sim.transact(s, 'bk', { proto: 'icmp', dst: IP('10.0.50.20'), size: 9000, df: true }), p2 = sim.transact(s, 'bk', { proto: 'icmp', dst: IP('10.0.50.20'), size: 1500, df: true });
+  ok(!p1.ok && p1.silent && !p1.ptb && p2.ok, 'ping 9000 位元組（DF）逾時、沒有任何 ICMP；1500 會通');
+  const p3 = sim.transact(s, 'bk', { proto: 'icmp', dst: IP('10.0.50.20'), size: 9100, df: true });
+  ok(!p3.ok && p3.dfLocal === 9000, '比自己網卡的 MTU 還大又設了 DF：在本機就送不出去（封包需要分段）');
+  const p4 = sim.transact(s, 'pc', { proto: 'icmp', dst: IP('10.0.50.1'), size: 4000 });
+  ok(p4.ok && p4.log.some((l) => /分段：4000 位元組/.test(l.text)), '沒有 DF 的大封包：送的人自己切成好幾片，照樣送得到');
+  const sw = cli(s, 'sw');
+  const o1 = sw('configure terminal', 'system mtu jumbo 9000', 'end');
+  ok(/will not take effect until the next reload/.test(o1) && /On next reload, System Jumbo MTU size will be 9000 bytes/.test(sw('show system mtu')), 'system mtu jumbo：要重新開機才生效（show system mtu 寫著 On next reload）');
+  ok(!sim.transact(s, 'bk', { proto: 'tcp', dst: IP('10.0.50.20'), dport: 445, bulk: 'up' }).ok, '還沒重新開機：備份照樣卡住');
+  ok(/% Catalyst 2960 不能各別設定連接埠的 MTU/.test(sw('configure terminal', 'interface gi0/2', 'mtu 9000', 'end')), '2960 不能在介面上設 mtu');
+  sw('write memory', 'reload', ''); settle(s);
+  const sp = sim.runObjective(s, l75.objectives[1]);
+  ok(sp.pass && sp.speed.mbps >= 975 && sim.evaluate(s, l75.objectives).every((r) => r.pass), `存檔、重新開機之後 Jumbo 生效：備份跑到 ${sp.speed.mbps} Mbps（1500 的時候只有 940）`);
+  ok(/system mtu jumbo 9000/.test(runningConfig(s, s.devices.sw).join('\n')), 'running-config 有 system mtu jumbo 9000');
+  // ── 9300 與 Nexus、路由器的 mtu / ip mtu
+  const l76 = LEVELS.find((l) => l.id === 'l76');
+  s = l76.setup(); settle(s);
+  const core = cli(s, 'core'), br = cli(s, 'br');
+  ok(/Global Ethernet MTU is 9198 bytes/.test(core('configure terminal', 'system mtu 9198', 'end') + core('show system mtu')), 'Catalyst 9300 的 system mtu 馬上生效');
+  core('configure terminal', 'no system mtu', 'end');
+  ok(/不能比介面本身的 MTU（1500）大/.test(br('configure terminal', 'interface gi0/0/1', 'ip mtu 9000', 'end')), '路由器的 ip mtu 不能比介面的 mtu 大');
+  br('configure terminal', 'interface gi0/0/1', 'mtu 9000', 'ip mtu 9000', 'no mtu', 'end');
+  ok(!s.devices.br.ifaces.find((i) => i.id === 'Gi0/0/1').mtu, 'no mtu 之後，比 1500 大的 ip mtu 一起清掉');
+  // ── IPsec 與 PMTUD 黑洞
+  const up = sim.transact(s, 'pc', { proto: 'tcp', dst: IP('10.1.20.10'), dport: 445, bulk: 'up' });
+  ok(up.ok && up.mss === 1387 && up.log.some((l) => /Path MTU Discovery：改送 1427/.test(l.text)), '上傳：Branch-RT 回報「需要分段」(MTU 1427)，分公司 PC 改送小一點的區段');
+  const dn = sim.transact(s, 'pc', { proto: 'tcp', dst: IP('10.1.20.10'), dport: 445 });
+  ok(!dn.ok && dn.phase === 'data' && /PMTUD 黑洞/.test(dn.reason) && /HQ-Core 的 Vlan20/.test(dn.reason), '下載：HQ-FW 的「需要分段」被 HQ-Core 的 ACL 擋掉 → PMTUD 黑洞');
+  const pg = sim.transact(s, 'pc', { proto: 'icmp', dst: IP('10.1.20.10'), size: 1500, df: true });
+  ok(!pg.ok && pg.ptb && pg.ptb.mtu === 1427 && pg.ptb.dev === 'br', 'ping -f -l 1472：Branch-RT 回報通道裡只放得下 1427');
+  ok(/MMMMM/.test(br('ping 10.1.20.10 source gi0/0/1 size 1500 df-bit')), '路由器的 ping … source gi0/0/1 size 1500 df-bit：MMMMM（could not fragment）');
+  const s2 = cloneState(s); settle(s2);
+  cli(s2, 'br')('configure terminal', 'interface gi0/0/1', 'ip tcp adjust-mss 1360', 'end');
+  const dn2 = sim.transact(s2, 'pc', { proto: 'tcp', dst: IP('10.1.20.10'), dport: 445 });
+  ok(dn2.ok && dn2.mss === 1360, '只加 ip tcp adjust-mss 1360：SYN 裡的 MSS 被改小，伺服器一開始就送 1400，不用靠 ICMP');
+  core('configure terminal', 'ip access-list extended SERVERS', '25 permit icmp any any packet-too-big', 'end');
+  const acl = core('show access-lists');
+  ok(/30 permit icmp any any packet-too-big[^\n]*\n\s+40 deny icmp any any/.test(acl), '序號 25 插在 deny 的前面（show access-lists 重新編號），ACL 可以只放行 packet-too-big');
+  const dn3 = sim.transact(s, 'pc', { proto: 'tcp', dst: IP('10.1.20.10'), dport: 445 });
+  ok(dn3.ok && dn3.mss === 1387 && !sim.transact(s, 'pc', { proto: 'icmp', dst: IP('10.1.20.10') }).ok, '放行 packet-too-big 之後 PMTUD 正常、下載恢復；一般的 ping 還是被擋');
+  ok(/permit icmp any any packet-too-big/.test(runningConfig(s, s.devices.core).join('\n')) && /ip tcp adjust-mss 1360/.test(runningConfig(s2, s2.devices.br).join('\n')), 'running-config：ICMP 類型與 ip tcp adjust-mss');
+  // ── 家用路由器的 PPPoE：自動把 MSS 改成 1452
+  const l04 = LEVELS.find((l) => l.id === 'l04');
+  const h = l04.setup(); l04.solve(h); settle(h);
+  const r04 = sim.runObjective(h, l04.objectives.find((o) => o.type === 'tcp'));
+  ok(r04.pass && r04.log.some((l) => /1492 位元組（MSS 1452/.test(l.text)), '家用路由器的 PPPoE（MTU 1492）：自動把 MSS 改成 1452');
 }
 
 console.log('\n參考解法與錯題本');

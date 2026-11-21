@@ -26,6 +26,7 @@ import { fmtMask } from '../engine/ip.js';
 import { route6Rows } from '../engine/sim6.js';
 import { CATALOG, MEDIA, peerOf, portOf, linkInfo, phyConfig } from '../engine/model.js';
 import { iosSession, runningConfig, startupConfig, hostName as host, aclName, aclLine } from '../engine/ios.js';
+import { ipMtu, l2Mtu, jumboNow, isCat2960, isCat9300, isNexus } from '../engine/mtu.js';
 
 const pad = (s, n) => String(s).padEnd(n);
 const isSw = (d) => !!d.sw && d.sw.mode === 'vlan';
@@ -595,6 +596,16 @@ const SHOW = {
     }
     return o;
   },
+  'show system mtu': (st, d) => {
+    if (isCat2960(d)) {
+      const now = jumboNow(st, d), next = +d.sw.jumbo || 1500;
+      return ['', 'System MTU size is 1500 bytes', `System Jumbo MTU size is ${now} bytes`, 'System Alternate MTU size is 1500 bytes', 'Routing MTU size is 1500 bytes',
+        ...(next !== now ? [`On next reload, System Jumbo MTU size will be ${next} bytes`, '（system mtu jumbo 要重新開機才生效：先 write memory，再 reload）'] : [])];
+    }
+    if (isCat9300(d)) return ['', `Global Ethernet MTU is ${+d.sw.sysMtu || 1500} bytes.`];
+    if (isNexus(d)) return ['% Nexus 沒有整台的 MTU：每個介面各自設定（show interface ethernet1/1 看 MTU）'];
+    return ['% 這台設備沒有 system mtu：路由器的 MTU 在介面上設定（show interfaces 看 MTU）'];
+  },
   'show vrf': (st, d) => vrfTable(d, true),
   'show ip vrf': (st, d) => vrfTable(d, false),
   'show archive': (st, d) => {
@@ -1076,6 +1087,23 @@ function route6Entry(st, d, rs) {
   }
   return o;
 }
+/** show ip interface <介面>：位址、MTU、套用的 ACL、NAT、TCP MSS 調整 */
+function ipIfLines(st, d, i) {
+  const rt = i.rt || {}, up = rt.link && !i.shut;
+  const acl = (dir, k) => (i[k] && i[k].length ? aclName(i, dir) : null);
+  const ins = acl('in', 'aclIn'), outs = acl('out', 'aclOut');
+  return [`${longIf(i.label)} is ${i.shut ? 'administratively down' : up ? 'up' : 'down'}, line protocol is ${up ? 'up' : 'down'}`,
+    ...(rt.ip != null ? [`  Internet address is ${fmtIp(rt.ip)}/${rt.bits}`, '  Broadcast address is 255.255.255.255'] : ['  Internet protocol processing disabled']),
+    ...(rt.ip != null ? [
+      `  MTU is ${ipMtu(st, d, i)} bytes`, `  Helper address is ${i.helper || 'not set'}`, '  Directed broadcast forwarding is disabled',
+      `  Outgoing Common access list is not set`, `  Outgoing access list is ${outs || 'not set'}`, `  Inbound Common access list is not set`, `  Inbound  access list is ${ins || 'not set'}`,
+      '  Proxy ARP is enabled', '  Security level is default', '  Split horizon is enabled', '  ICMP redirects are always sent', '  ICMP unreachables are always sent', '  ICMP mask replies are never sent',
+      '  IP fast switching is enabled', '  IP Flow switching is disabled', '  IP CEF switching is enabled', '  IP multicast fast switching is enabled',
+      `  Network address translation is ${i.nat || i.natOut || i.natRule ? 'enabled, interface in domain ' + (i.nat || i.natOut ? 'outside' : 'inside') : 'disabled'}`,
+      ...(+i.adjMss ? [`  TCP Adjust MSS is ${+i.adjMss}`] : []),
+      '  BGP Policy Mapping is disabled', '  Input features: MCI Check', `  IPv4 WCCP Redirect outbound is disabled`] : []),
+    ...(ins || outs ? ['', '（這個介面上的 ACL 也會擋到路由器自己以外的 ICMP：擋掉「需要分段」(packet-too-big) 會讓 PMTUD 失效）'] : [])];
+}
 /** show ipv6 interface <介面> */
 function ipv6IfLines(st, d, i) {
   const v = i.rt.v6;
@@ -1086,7 +1114,7 @@ function ipv6IfLines(st, d, i) {
   const hosts = i.raM ? 'Hosts use DHCP to obtain routable addresses.' : i.raO ? 'Hosts use stateless autoconfig for addresses.\n  Hosts use DHCP to obtain other configuration.' : 'Hosts use stateless autoconfig for addresses.';
   return [`${longIf(i.label)} is up, line protocol is up`, `  IPv6 is enabled, link-local address is ${v6up(v.ll)}`, '  No Virtual link-local address(es):',
     ...(v.addrs.length ? ['  Global unicast address(es):', ...v.addrs.map((a) => `    ${v6up(a.ip)}, subnet is ${v6up(net6(a.ip, a.bits))}/${a.bits}${a.src === 'slaac' ? ' [EUI]' : ''}`)] : ['  No global unicast address is configured']),
-    '  Joined group address(es):', ...groups.map((g) => '    ' + g), `  MTU is ${+i.mtu || 1500} bytes`, '  ICMP error messages limited to one every 100 milliseconds', '  ICMP redirects are enabled', '  ICMP unreachables are sent',
+    '  Joined group address(es):', ...groups.map((g) => '    ' + g), `  MTU is ${ipMtu(st, d, i)} bytes`, '  ICMP error messages limited to one every 100 milliseconds', '  ICMP redirects are enabled', '  ICMP unreachables are sent',
     ...(i.acl6In ? [`  Inbound access list ${i.acl6In}`] : []), ...(i.acl6Out ? [`  Outgoing access list ${i.acl6Out}`] : []),
     '  ND DAD is enabled, number of DAD attempts: 1', '  ND reachable time is 30000 milliseconds (using 30000)',
     ...(d.routing ? ['  ND advertised reachable time is 0 (unspecified)', '  ND advertised retransmit interval is 0 (unspecified)',
@@ -1259,11 +1287,12 @@ function ifaceDetail(st, d, p) {
   const speed = li ? li.speed : cfg.speed || (p.media === 'rj45' ? 1000 : 10000);
   const dup = li ? (li.duplex === 'half' ? 'Half-duplex' : 'Full-duplex') : cfg.duplex === 'half' ? 'Half-duplex' : 'Auto-duplex';
   const load = (bps) => Math.max(1, Math.min(255, Math.round((bps / (speed * 1e6)) * 255)));
-  const inErr = c.crc + c.runts;
+  const inErr = c.crc + c.runts + (c.giants || 0);
+  const mtu = pc ? (pc.mode === 'routed' && i ? ipMtu(st, d, i) : l2Mtu(st, d, p.id)) : i ? (+i.l2mtu || 1500) : 1500;
   return [`${L} ${state}`,
     `  Hardware is ${p.media === 'rj45' ? 'Gigabit Ethernet' : 'Ten Gigabit Ethernet'}, address is ${dotMac(mac)} (bia ${dotMac(mac)})`,
     ...(i && i.rt && i.rt.ip != null ? [`  Internet address is ${fmtIp(i.rt.ip)}/${i.rt.bits}`] : []),
-    `  MTU 1500 bytes, BW ${speed * 1000} Kbit/sec, DLY 10 usec,`,
+    `  MTU ${mtu} bytes, BW ${speed * 1000} Kbit/sec, DLY 10 usec,`,
     `     reliability ${inErr && c.ip ? Math.max(1, Math.round(255 * (1 - Math.min(1, inErr / Math.max(1, c.ip + inErr))))) : 255}/255, txload ${load(c.outRate)}/255, rxload ${load(c.inRate)}/255`,
     '  Encapsulation ARPA, loopback not set', '  Keepalive set (10 sec)',
     `  ${dup}, ${speed >= 1000 ? speed / 1000 + '000' : speed}Mb/s, media type is ${p.media === 'rj45' ? '10/100/1000BaseTX' : 'SFP'}`,
@@ -1272,10 +1301,11 @@ function ifaceDetail(st, d, p) {
     '  Input queue: 0/75/0/0 (size/max/drops/flushes); Total output drops: 0', '  Queueing strategy: fifo', '  Output queue: 0/40 (size/max)',
     `  5 minute input rate ${c.inRate} bits/sec, ${c.inPps} packets/sec`, `  5 minute output rate ${c.outRate} bits/sec, ${c.outPps} packets/sec`,
     `     ${c.ip} packets input, ${c.ib} bytes, 0 no buffer`, `     Received ${c.ibc + c.imc} broadcasts (${c.imc} multicasts)`,
-    `     ${c.runts} runts, 0 giants, 0 throttles`, `     ${inErr} input errors, ${c.crc} CRC, 0 frame, 0 overrun, 0 ignored`,
+    `     ${c.runts} runts, ${c.giants || 0} giants, 0 throttles`, `     ${inErr} input errors, ${c.crc} CRC, 0 frame, 0 overrun, 0 ignored`,
     `     0 watchdog, ${c.imc} multicast, 0 pause input`, '     0 input packets with dribble condition detected',
     `     ${c.op} packets output, ${c.ob} bytes, 0 underruns`, `     ${c.late} output errors, ${c.coll} collisions, 1 interface resets`,
     '     0 unknown protocol drops', `     0 babbles, ${c.late} late collision, 0 deferred`, '     0 lost carrier, 0 no carrier, 0 pause output', '     0 output buffer failures, 0 output buffers swapped out',
+    ...(c.giants ? ['', `（giants 是收到比 MTU（${mtu}）還大的訊框，被直接丟掉：對面開了 Jumbo Frame，這一端沒有）`] : []),
     ...(c.crc || c.late ? ['', `（${c.crc ? 'CRC 錯誤與 runts 代表收到的訊框是壞的' : ''}${c.crc && c.late ? '；' : ''}${c.late ? 'late collision 代表這一端是半雙工，卻在訊框送到一半之後才撞到' : ''} — 典型的 duplex mismatch 或線路品質問題）`] : [])];
 }
 
@@ -1383,14 +1413,33 @@ function showOrPing(app, devId, line, print) {
       tok.splice(1, 2);
     }
     const ip = parseIp(tok[1] || '');
-    if (ip == null) print('% 用法：ping <IPv4 位址>', 'warn');
+    const si = tok.indexOf('size'), size = si > 0 ? +tok[si + 1] : 100, df = tok.includes('df-bit');
+    if (si > 0 && !(size >= 36 && size <= 18024)) { print('% 用法：ping <IP> size <36-18024> [df-bit]', 'warn'); return true; }
+    // source <介面 | IP>：用哪個位址當來源（從 LAN 的位址送，才會符合 VPN 的加密範圍）
+    let srcIp;
+    const so = tok.indexOf('source');
+    if (so > 0) {
+      const nm = line.trim().split(/\s+/)[so + 1] || '';
+      const p = parseIp(nm) == null && portByName(d, nm.replace(/\.\d+$/, ''));
+      const sub = nm.match(/\.(\d+)$/);
+      const si2 = parseIp(nm) != null ? d.ifaces.find((x) => x.rt && x.rt.ip === parseIp(nm))
+        : /^lo/i.test(nm) ? d.ifaces.find((x) => isLoopback(x) && x.bind.n === +(nm.match(/(\d+)$/) || [])[1])
+          : p && d.ifaces.find((x) => x.bind.port === p.id && (sub ? x.bind.t === 'sub' && x.bind.vlan === +sub[1] : x.bind.t === 'port'));
+      if (!si2 || !si2.rt || si2.rt.ip == null) { print(`% Invalid source address- IP address not on any of our up interfaces`, 'warn'); return true; }
+      srcIp = si2.rt.ip;
+    }
+    if (ip == null) print('% 用法：ping <IPv4 位址> [size <36-18024>] [df-bit]', 'warn');
     else if (!d.ifaces.some((i) => i.rt && i.rt.ip != null)) print('% 這台設備沒有任何 IP 位址，無法送出封包', 'warn');
     else {
-      const r = transact(st, d.id, { proto: 'icmp', dst: ip, vrf });
+      const r = transact(st, d.id, { proto: 'icmp', dst: ip, vrf, size, df, ...(srcIp != null ? { srcIp } : {}) });
       app.showTrace(`${d.name}# ${line}`, r.log, r.hops, r);
-      print(`Sending 5, 100-byte ICMP Echos to ${fmtIp(ip)}, timeout is 2 seconds:`);
-      print(r.ok ? '!!!!!' : '.....', r.ok ? 'ok' : 'bad');
-      print(`Success rate is ${r.ok ? 100 : 0} percent (${r.ok ? 5 : 0}/5)`);
+      print('Type escape sequence to abort.', 'dim');
+      print(`Sending 5, ${size}-byte ICMP Echos to ${fmtIp(ip)}, timeout is 2 seconds:`);
+      if (df) print('Packet sent with the DF bit set');
+      // M：收到「需要分段」(could not fragment)
+      print(r.ok ? '!!!!!' : r.ptb || r.dfLocal ? 'MMMMM' : '.....', r.ok ? 'ok' : 'bad');
+      print(`Success rate is ${r.ok ? 100 : 0} percent (${r.ok ? 5 : 0}/5)${r.ok ? ', round-trip min/avg/max = 1/1/2 ms' : ''}`);
+      if (r.ptb || r.dfLocal) print(`（M 代表 could not fragment：路徑上的 MTU 只有 ${r.ptb ? r.ptb.mtu : r.dfLocal}）`, 'hint');
       if (!r.ok) print('  ↳ ' + r.reason, 'hint');
     }
     return true;
@@ -1486,6 +1535,15 @@ function showOrPing(app, devId, line, print) {
     }
     if (!hit.length) { print('% Route not found', 'warn'); return true; }
     route6Entry(st, d, hit).forEach((l) => print(l, 'pre'));
+    return true;
+  }
+  if (tok[0].length >= 2 && 'show'.startsWith(tok[0]) && tok[1] === 'ip' && (tok[2] || '').length >= 3 && 'interface'.startsWith(tok[2]) && tok[3] && !'brief'.startsWith(tok[3])) {
+    const name = tok.slice(3).join('');
+    const lo = name.match(/^lo[a-z]*(\d+)$/i), vl = name.match(/^vl[a-z]*(\d+)$/i);
+    const i = lo ? d.ifaces.find((x) => isLoopback(x) && x.bind.n === +lo[1]) : vl ? d.ifaces.find((x) => x.bind.t === 'svi' && x.bind.vlan === +vl[1])
+      : (() => { const p = portByName(d, name.replace(/\.\d+$/, '')); const sub = name.match(/\.(\d+)$/); return p && d.ifaces.find((x) => x.bind.port === p.id && (sub ? x.bind.t === 'sub' && x.bind.vlan === +sub[1] : x.bind.t === 'port')); })();
+    if (!i) { print(`% 找不到介面「${tok.slice(3).join(' ')}」`, 'warn'); return true; }
+    ipIfLines(st, d, i).forEach((l) => print(l, l.startsWith('（') ? 'hint' : 'pre'));
     return true;
   }
   if (tok[0].length >= 2 && 'show'.startsWith(tok[0]) && tok[1] === 'ipv6' && (tok[2] || '').length >= 3 && 'interface'.startsWith(tok[2]) && tok[3] && !'brief'.startsWith(tok[3])) {

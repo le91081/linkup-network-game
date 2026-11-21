@@ -29,9 +29,9 @@ README 說明「現在有什麼、怎麼玩」，這份文件說明「整體應�
 
 | 領域 | ✅ 已完成 | 🟡 部分完成 | ⬜ 尚未開始 |
 | --- | --- | --- | --- |
-| 1. 實體層與接線 | 7 | 1 | 6 |
+| 1. 實體層與接線 | 8 | 1 | 5 |
 | 2. 第二層：交換 | 13 | 0 | 4 |
-| 3. 第三層：路由 | 12 | 0 | 5 |
+| 3. 第三層：路由 | 12 | 1 | 4 |
 | 4. IP 服務 | 11 | 3 | 0 |
 | 5. 網路安全 | 9 | 5 | 3 |
 | 6. VPN 與廣域網路 | 6 | 3 | 4 |
@@ -45,9 +45,9 @@ README 說明「現在有什麼、怎麼玩」，這份文件說明「整體應�
 | 14. 遊戲系統 | 16 | 1 | 5 |
 | 15. 介面與體驗 | 6 | 1 | 7 |
 | 16. 工程品質 | 4 | 0 | 6 |
-| **合計** | **133** | **27** | **55** |
+| **合計** | **134** | **28** | **53** |
 
-另外：關卡 74 關（第 17 節）、證照條目涵蓋情形（第 18 節）、建議的實作順序（第 19 節）。
+另外：關卡 76 關（第 17 節）、證照條目涵蓋情形（第 18 節）、建議的實作順序（第 19 節）。
 
 ---
 
@@ -66,7 +66,7 @@ README 說明「現在有什麼、怎麼玩」，這份文件說明「整體應�
 | 收發器不相容 | ⬜ | 目前線材與收發器是成套的，沒辦法接出 SR 對 LR、速率不符的情況 |
 | 分歧線 (breakout) | ⬜ | 40G / 100G 拆成 4 條 10G / 25G |
 | Console 線與帶外管理 | ⬜ | Console 埠、管理埠 (mgmt)、帶外管理網路 |
-| MTU 與 Jumbo Frame | ⬜ | MTU 不一致造成的大封包不通、分片 |
+| MTU 與 Jumbo Frame | ✅ | 主機網卡的 MTU（Windows 的 `netsh … set subinterface … mtu=`、Linux 的 `ip link set … mtu`、網路設定分頁）、路由器的 `mtu` / `ip mtu`、Catalyst 2960 的 `system mtu jumbo`（存檔、重新開機才生效）、Catalyst 9300 的 `system mtu`、Nexus 每個埠的 `mtu`、ESXi 的 vSwitch 與 vmk MTU；交換器收到太大的訊框當成 giant 丟掉（計數器、不回 ICMP）；`show system mtu`、`show interfaces` 的 MTU 與 giants；Jumbo Frame 讓傳輸速率從 94% 提高到 98% |
 | err-disabled 自動復原 | ⬜ | 目前被關閉的埠要手動 `shutdown` / `no shutdown` |
 | 機櫃與配線架視圖 | ⬜ | 機櫃、配線架、樓層平面圖上的實體位置 |
 
@@ -104,7 +104,7 @@ README 說明「現在有什麼、怎麼玩」，這份文件說明「整體應�
 | TTL 與路徑追蹤 | ✅ | TTL 逐站遞減；主機有 `tracert` |
 | OSPF 進階 | ✅ | DR / BDR 選舉（priority、Router ID、不搶位、BDR 升上來、`clear ip ospf process`）、Router ID 在程序啟動時決定（Loopback）、Router ID 重複、`passive-interface [default]`、Hello / Dead 可調、network type、明文與 MD5 驗證、MTU 不一致卡在 EXSTART、參考頻寬、多區域與 ABR、`area range` 彙總、O IA 與 O*E2；`show ip ospf` / `neighbor` / `interface` / `database` |
 | ECMP（等價多路徑） | ✅ | cost 一樣的路最多 `maximum-paths` 條（預設 4）一起放進路由表；依來源與目的位址雜湊（CEF 的 per-destination），同一對位址永遠走同一條 |
-| ICMP 細節 | ⬜ | Unreachable 的各種類型、Redirect、分片與 PMTUD |
+| ICMP 細節 | 🟡 | 分段與 DF、ICMP「需要分段」與 PMTUD（被 ACL 擋掉就是黑洞）、IPsec 的額外負擔（通道裡 1427）、PPPoE 1492、TCP 的 MSS 與 `ip tcp adjust-mss`、家用路由器自動調整 MSS、ACL 的 ICMP 類型（`packet-too-big`、`unreachable`、`echo`…）、`ping … size … df-bit source …`、`ping -f -l`、`ping -M do -s` 已完成；還沒有 Redirect、其他 Unreachable 類型的細節 |
 | IOS 的 `traceroute` | ✅ | 逐站顯示，每一站三個探測封包；ECMP 時跟著雜湊走 |
 | BGP（eBGP） | ✅ | TCP 179 的鄰居狀態（Idle / Active / OpenSent / Established）、remote-as 寫錯 (Bad Peer AS)、hold time 180 秒、路徑向量與迴圈偵測、最佳路徑（weight、local-preference、AS path、origin、MED）、route-map / prefix-list / as-path ACL、`default-originate`；雙 ISP 的轉運站問題 |
 | iBGP 與 BGP 進階 | ⬜ | iBGP 與 next-hop-self、route reflector、community、多跳 eBGP (`ebgp-multihop`) |
@@ -289,11 +289,11 @@ README 說明「現在有什麼、怎麼玩」，這份文件說明「整體應�
 
 | 功能 | 狀態 | 說明 |
 | --- | --- | --- |
-| 關卡 | ✅ | 17 章 74 關（清單見第 17 節） |
-| 任務目標 | ✅ | ping、TCP、UDP、DHCP、設定檢查、故障演練、IPv6 ping、傳輸速率、遠端登入（SSH / Telnet 帳號密碼）、IP 電話註冊、通話品質 (MOS)、HTTPS（連得上之後還要通過憑證驗證）、路徑（一定要經過 / 不能經過某台設備） |
+| 關卡 | ✅ | 17 章 76 關（清單見第 17 節） |
+| 任務目標 | ✅ | ping、TCP、UDP、DHCP、設定檢查、故障演練、IPv6 ping、傳輸速率、遠端登入（SSH / Telnet 帳號密碼）、IP 電話註冊、通話品質 (MOS)、HTTPS（連得上之後還要通過憑證驗證）、路徑（一定要經過 / 不能經過某台設備）；TCP 的目標交握完還會送一個裝滿的資料區段（設了 DF），MTU 的問題才看得出來 |
 | 提示與星等 | ✅ | 每關 3 個提示，看一個少一顆星 |
 | 學習卡 | ✅ | 每關 2 到 4 張觀念說明 |
-| 題庫 | ✅ | 148 題觀念題、隨機產生的子網路計算題、過關後的小考 |
+| 題庫 | ✅ | 152 題觀念題、隨機產生的子網路計算題、過關後的小考 |
 | 證照地圖 | ✅ | 三種考試的條目與關卡對照、完成進度 |
 | 故障排除章 | ✅ | 網路已經設定好但被改壞，要自己找出原因 |
 | 自由模式 | ✅ | 自己擺設備、接線、設定；可以存目標、匯出與匯入 |
@@ -350,17 +350,17 @@ README 說明「現在有什麼、怎麼玩」，這份文件說明「整體應�
 
 ## 17. 關卡規劃
 
-### 現有的 74 關
+### 現有的 76 關
 
 | 章 | 關卡 |
 | --- | --- |
 | 1 家用網路 | 第一條網路線、換上交換器、自動發 IP、連上網際網路 |
 | 2 小型辦公室 | 辦公室開張、部門隔離、跨樓層、跨 VLAN 路由 |
 | 3 企業網路 | 守門員、總公司與分公司、對外伺服器群 |
-| 4 資料中心 | 機櫃上線、Spine-Leaf、跨棟連線 |
+| 4 資料中心 | 機櫃上線、Spine-Leaf、跨棟連線、一開 Jumbo Frame，備份就卡住 |
 | 5 無線網路 | 家裡的 Wi-Fi、辦公室基地台、訪客 Wi-Fi |
 | 6 網路安全 | 只開了 TCP、誰在發 IP？、不速之客、存取控制清單、管理介面加固、冒牌閘道、搶走根橋、你是誰？、偽裝成交換器 |
-| 7 VPN 與廣域備援 | 站對站 VPN、在家上班、雙線路備援、三個據點，一個中心、線路燈還亮著（IP SLA） |
+| 7 VPN 與廣域備援 | 站對站 VPN、在家上班、雙線路備援、三個據點，一個中心、線路燈還亮著（IP SLA）、小檔案可以，大檔案卡住（PMTUD 黑洞） |
 | 8 高可用與進階路由 | 迴圈與生成樹、EtherChannel、閘道備援、集中式 DHCP、OSPF 路徑選擇、切蛋糕、閘道還活著，但出不去（HSRP 追蹤） |
 | 9 IPv6 | IPv6 初體驗、雙協定、位址從哪裡來？、IPv6 也要動態路由、封了 IPv4，忘了 IPv6 |
 | 10 故障排除 | 誰搶了我的 IP、樓層之間又斷了、分公司的求救電話、明明連得上，為什麼這麼慢、分公司的 OSPF 鄰居起不來、流量為什麼繞去實驗室、VPN 通了，資料卻過不去、DNS 改了，為什麼還連到舊的 |
@@ -420,7 +420,7 @@ CCNA v2.0 預計在 2027 年 2 月取代 v1.1，改版後整張對照表要重�
 | 7（已完成） | 無線控制器、牆面衰減與熱力圖、漫遊 → 第 14 章 | 補上 CCNA 2.6 |
 | 8（已完成） | RESTCONF、Ansible、Catalyst Center → 第 15 章、AWS 的 VPC → 第 16 章 | 補上 CCNA 第 6 領域、Network+ 1.3 |
 | 9（已完成） | 故障演練、模擬考、評分、關卡編輯器 | 引擎功能齊全之後，重玩價值才撐得起來 |
-| 10（進行中） | Playwright 瀏覽器端測試（已完成）；err-disabled 維持與 errdisable recovery、HSRP / VRRP 分開與物件追蹤、IP SLA、設定封存與變更紀錄、多個本機帳號（已完成）；MTU 與 jumbo frame（未做）；第 7、8、10、11 章的補充關卡（已完成六關） | 讓「故障排除」與「維運」更接近真實工作 |
+| 10（已完成） | Playwright 瀏覽器端測試；err-disabled 維持與 errdisable recovery、HSRP / VRRP 分開與物件追蹤、IP SLA、設定封存與變更紀錄、多個本機帳號；MTU、Jumbo Frame 與 PMTUD（→ 4-4、7-6）；第 7、8、10、11 章的補充關卡 | 讓「故障排除」與「維運」更接近真實工作 |
 | 11（已完成） | 虛擬化章節：vSwitch、連接埠群組、VM → 17-1；VRF-Lite → 17-2；Docker 的橋接網路與連接埠發佈 → 17-3。DNS 伺服器角色（A / CNAME / MX / PTR、TTL 與用戶端快取 → 10-8）。HTTP(S) 內容與憑證：信任、有效期間（用戶端的時鐘）、SAN、內部 CA → 11-6 | 補上 CCNA 1.12（伺服器虛擬化、容器、VRF 都有關卡）、Security+ 1.4 |
 | 12（已完成） | 第一次遊玩的導覽、參考解法示範、錯題本、2D 邏輯拓撲圖 | 新手體驗 |
 | 隨時 | CI、拆分 `sim.js`（分塊載入已完成）、存檔格式遷移 | CI 要遠端儲存庫，要另外決定 |

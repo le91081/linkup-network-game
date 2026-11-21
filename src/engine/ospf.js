@@ -66,7 +66,7 @@ function authOf(d, i, area) {
   const k = t === 'none' ? '' : t === 'md5' ? `${(i.ospfKey || {}).id || ''}:${(i.ospfKey || {}).key || ''}` : (i.ospfKey || {}).key || '';
   return { t, k };
 }
-const mtuOf = (i) => +i.mtu || 1500;
+const mtuOf = (i) => +i.mtu || +i.l2mtu || 1500;
 
 // ───────────────────────── Router ID ─────────────────────────
 

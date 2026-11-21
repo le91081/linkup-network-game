@@ -1,5 +1,6 @@
 // 進階功能的設定頁面：Wi-Fi、VPN、ACL、L2 安全、STP / LACP、管理加固、DHCP 範圍
 import { acl6Cards } from './panel-v6.js';
+import { ICMP_TYPES } from '../engine/mtu.js';
 import { h, icon, button, toast } from './dom.js';
 import {
   inp, sel, toggle, field, note, kv, del, cardHead, badge, grid2, bind, linkBadge, ifaceNote,
@@ -512,8 +513,9 @@ export function aclTab(ctx, body) {
         card.append(h('div', { class: 'acl-row ' + r.action },
           h('div', { class: 'acl-l1' }, h('span', { class: 'pno', text: n + 1 }),
             sel(ctx, ...bind(r, 'action'), [['permit', '允許 permit'], ['deny', '拒絕 deny']], { rerender: true }),
-            sel(ctx, ...bind(r, 'proto'), [['ip', 'ip（全部）'], ['tcp', 'tcp'], ['udp', 'udp'], ['icmp', 'icmp']]),
-            inp(ctx, ...bind(r, 'port'), { ph: '埠', check: isPortNo, w: '58px' }),
+            sel(ctx, () => r.proto, (v) => { r.proto = v; if (v !== 'icmp') delete r.icmp; if (v !== 'tcp' && v !== 'udp') r.port = ''; }, [['ip', 'ip（全部）'], ['tcp', 'tcp'], ['udp', 'udp'], ['icmp', 'icmp']], { rerender: true }),
+            r.proto === 'icmp' ? sel(ctx, () => r.icmp || '', (v) => { if (v) r.icmp = v; else delete r.icmp; }, [['', '全部類型'], ...ICMP_TYPES.map((t) => [t, t])])
+              : inp(ctx, ...bind(r, 'port'), { ph: '埠', check: isPortNo, w: '58px' }),
             h('button', { class: 'mini', type: 'button', title: '上移', disabled: n === 0, onclick: () => { list.splice(n - 1, 0, list.splice(n, 1)[0]); ctx.commit(true); } }, icon('up', 14)),
             del(() => { list.splice(n, 1); ctx.commit(true); })),
           h('div', { class: 'acl-l2' },

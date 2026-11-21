@@ -11,6 +11,7 @@ import { clearOspfProcess, ospfArea } from './ospf.js';
 import { transfer, configFile, ensureFlash, flashFree, flashPath, fsName, IMAGES, PLATFORM, PLATFORM_NAME, imageFile, fmtBytes } from './files.js';
 import { macsBehind, recompute, ospfOn, ikeVer } from './sim.js';
 import { logEvent, markReboot, setClock, deviceTime, SEVERITY, bootTime, longIf, localUsers } from './ops.js';
+import { isNexus, isCat2960, isCat9300, ICMP_TYPES } from './mtu.js';
 import { spanDest } from './wire.js';
 import { genKey } from './remote.js';
 import { fhrpProto, fhrpGroup, fhrpPreempt } from './track.js';
@@ -405,13 +406,19 @@ function parseAclRule(tok) {
     port = String(SERVICE_PORT[p] || p);
     if (!/^\d+$/.test(port)) return null;
   }
-  return { action, proto, src, dst, port: proto === 'tcp' || proto === 'udp' ? port : '', ...(sport ? { sport } : {}) };
+  // permit icmp any any packet-too-big：只比對某一種 ICMP
+  let icmp = '';
+  if (proto === 'icmp' && tok[n] && !/^(log|log-input)$/i.test(tok[n])) {
+    icmp = ICMP_TYPES.find((x) => x === tok[n].toLowerCase()) || (/^ttl-exceeded$/i.test(tok[n]) ? 'time-exceeded' : '');
+    if (!icmp) return null;
+  }
+  return { action, proto, src, dst, port: proto === 'tcp' || proto === 'udp' ? port : '', ...(sport ? { sport } : {}), ...(icmp ? { icmp } : {}) };
 }
 
 const HELP = {
   exec: ['configure terminal    進入設定模式', 'show ...              查看狀態（輸入 show ? 列出全部）', 'ping <IP>             測試連線',
     'write memory          把 running-config 存成 startup-config（沒存檔的設定重新開機後會消失）', 'reload                重新開機，回到 startup-config'],
-  config: ['hostname <名稱>', 'interface <介面> | interface range <介面> - <n> | interface vlan <ID>', 'vlan <ID>', 'ip route <網段> <遮罩> <下一站> [距離] [track <物件>]', 'vrf definition <名稱> → rd / address-family ipv4；介面上 vrf forwarding <名稱>；ip route vrf <名稱> …', 'track <編號> interface <介面> line-protocol | track <編號> ip sla <操作> reachability', 'ip sla <編號> → icmp-echo <IP> source-interface <介面> → frequency <秒>；ip sla schedule <編號> life forever start-time now',
+  config: ['hostname <名稱>', 'interface <介面> | interface range <介面> - <n> | interface vlan <ID>', 'vlan <ID>', 'ip route <網段> <遮罩> <下一站> [距離] [track <物件>]', 'system mtu jumbo <1500-9000>（2960，重新開機後生效）| system mtu <1500-9198>（9300）', 'vrf definition <名稱> → rd / address-family ipv4；介面上 vrf forwarding <名稱>；ip route vrf <名稱> …', 'track <編號> interface <介面> line-protocol | track <編號> ip sla <操作> reachability', 'ip sla <編號> → icmp-echo <IP> source-interface <介面> → frequency <秒>；ip sla schedule <編號> life forever start-time now',
     'router ospf 1', 'router bgp <AS>', 'route-map / ip prefix-list / ip as-path access-list', 'ip dhcp pool <名稱> / ip dhcp excluded-address <起> <迄>', 'ip nat inside source list 1 interface <介面> overload',
     'ip nat inside source static <內部 IP> <公用 IP>', 'ip access-list extended <名稱>', 'spanning-tree vlan <清單> priority <值>',
     'ip dhcp snooping / ip arp inspection vlan <清單>', 'line vty 0 4', 'ntp server / logging host / snmp-server community', 'archive → path flash:<名稱> / maximum <n> / write-memory / log config → logging enable / notify syslog / hidekeys', 'cdp run / no cdp run / lldp run / cdp timer / lldp timer', 'class-map / policy-map（QoS）', 'mls qos（Catalyst 2960）', 'do <show 指令>、end、exit'],
@@ -424,7 +431,7 @@ const HELP = {
   router: ['network <網段> <萬用遮罩> area 0', 'default-information originate'],
   dhcp: ['network <網段> <遮罩>', 'default-router <IP>', 'dns-server <IP> [IP]', 'option 150 ip <TFTP 伺服器>（IP 電話下載設定檔）', 'option 43 hex f104.<WLC 的 IP（十六進位）>（Cisco AP 找無線控制器）', 'lease <天> [小時] [分鐘]', 'host <IP> <遮罩> 加上 hardware-address <MAC>（保留位址）'],
   line: ['transport input ssh | telnet | all | none', 'access-class <名稱> in', 'login local'],
-  acl: ['permit|deny <ip|tcp|udp|icmp> <來源> <目的> [eq <埠>]', '來源 / 目的的寫法：any、host <IP>、<網段> <萬用遮罩>', 'no <序號>   刪除一條規則'],
+  acl: ['permit|deny <ip|tcp|udp|icmp> <來源> <目的> [eq <埠>]', 'ICMP 可以指定類型：echo、echo-reply、unreachable、packet-too-big、time-exceeded', '來源 / 目的的寫法：any、host <IP>、<網段> <萬用遮罩>', 'no <序號>   刪除一條規則'],
   stdacl: ['permit <網段> <萬用遮罩> | permit host <IP>'],
   radius: ['address ipv4 <IP>', 'key <共用密鑰>'],
   isakmp: ['encryption aes | aes 256', 'hash sha | sha256', 'group 2 | 5 | 14 | 19', 'authentication pre-share'],
@@ -455,6 +462,14 @@ export function iosSession(getDev, getState, who = null) {
   const l2 = (t) => (t.pc ? null : err(`${t.name} 不是交換器的連接埠`));
   const onL3 = (fn) => each((t) => l3(t) || fn(t.iface, t));
   const onL2 = (fn) => each((t) => l2(t) || fn(t.pc, t));
+  /** 第三層介面能設定的最大 ip mtu：路由器看介面的 mtu、Catalyst 9300 看 system mtu */
+  const l2Of = (i) => {
+    const d = dev();
+    if (d.kind === 'router' || d.kind === 'firewall') return +i.l2mtu || 1500;
+    if (isCat9300(d)) return +d.sw.sysMtu || 1500;
+    if (isNexus(d) && i.bind.t === 'port') return +((d.sw.ports[i.bind.port] || {}).mtu) || 1500;
+    return isNexus(d) ? 9216 : 1500;
+  };
   const ensureVlan = (id, out) => {
     const sw = dev().sw;
     if (sw.vlans.some((v) => v.id === id)) return;
@@ -555,8 +570,40 @@ export function iosSession(getDev, getState, who = null) {
     ['no ip ospf authentication-key [...]', () => onL3((i) => { delete i.ospfKey; })],
     ['ip ospf mtu-ignore', () => onL3((i) => { i.ospfMtuIgnore = true; })],
     ['no ip ospf mtu-ignore', () => onL3((i) => { delete i.ospfMtuIgnore; })],
-    ['ip mtu <n>', ([n]) => (+n >= 68 && +n <= 9216 ? onL3((i) => { if (+n === 1500) delete i.mtu; else i.mtu = +n; }) : err('ip mtu 的範圍是 68 – 9216'))],
+    ['ip mtu <n>', ([n]) => (+n >= 68 && +n <= 9216 ? onL3((i) => {
+      const lim = l2Of(i);
+      if (+n > lim) return err(`% ip mtu 不能比介面本身的 MTU（${lim}）大${dev().kind === 'router' ? '：先用 mtu <1500-9216> 把介面的 MTU 調大' : isCat9300(dev()) ? '：先用 system mtu 調大' : ''}`);
+      if (+n === lim) delete i.mtu; else i.mtu = +n;
+      return undefined;
+    }) : err('ip mtu 的範圍是 68 – 9216'))],
     ['no ip mtu', () => onL3((i) => { delete i.mtu; })],
+    ['ip tcp adjust-mss <n>', ([n]) => (/^\d+$/.test(n) && +n >= 500 && +n <= 1460 ? onL3((i) => { i.adjMss = +n; }) : err('% ip tcp adjust-mss 的範圍是 500 – 1460（IPsec 常用 1360、PPPoE 用 1452）'))],
+    ['no ip tcp adjust-mss [...]', () => onL3((i) => { delete i.adjMss; })],
+    ['mtu <n>', ([n]) => {
+      const d = dev(), v = +n;
+      if (!/^\d+$/.test(n)) return err('用法：mtu <位元組>');
+      if (isCat2960(d)) return err('% Catalyst 2960 不能各別設定連接埠的 MTU：用全域的 system mtu jumbo <1500-9000>（重新開機之後才生效）');
+      if (d.kind === 'l3switch' && !isNexus(d)) return err('% Catalyst 9300 的 MTU 是整台一起設定：用全域的 system mtu <1500-9198>');
+      return each((t) => {
+        if (isNexus(d)) {
+          if (v < 576 || v > 9216) return err('% mtu 的範圍是 576 – 9216');
+          if (t.pc) { if (v === 1500) delete t.pc.mtu; else t.pc.mtu = v; } // 第二層的埠、routed 埠
+          else if (t.iface) { if (v === 1500) delete t.iface.mtu; else t.iface.mtu = v; } // SVI
+          return undefined;
+        }
+        if (!t.iface || t.pc) return err(`${t.name} 不能設定 MTU`);
+        if (t.iface.bind.t === 'loop') return err('% Loopback 的 MTU 不能改');
+        if (v < 1500 || v > 9216) return err('% mtu 的範圍是 1500 – 9216（要比 1500 小，請用 ip mtu）');
+        if (v === 1500) delete t.iface.l2mtu; else t.iface.l2mtu = v;
+        if (+t.iface.mtu >= v) delete t.iface.mtu; // ip mtu 不能比介面的 MTU 大
+        return undefined;
+      });
+    }],
+    ['no mtu', () => each((t) => {
+      if (isNexus(dev())) { if (t.pc) delete t.pc.mtu; else if (t.iface) delete t.iface.mtu; return undefined; }
+      if (t.iface) { delete t.iface.l2mtu; if (+t.iface.mtu > 1500) delete t.iface.mtu; }
+      return undefined;
+    })],
     ['bandwidth <kbps>', ([k]) => (+k >= 1 && +k <= 100000000 ? onL3((i) => { i.bandwidth = +k; }) : err('bandwidth 的單位是 kbps，例如 bandwidth 20000'))],
     ['no bandwidth', () => onL3((i) => { delete i.bandwidth; })],
     ['ip access-group <name> <dir>', ([name, dir]) => (['in', 'out'].includes(dir.toLowerCase()) ? onL3((i) => bindAcl(i, name.toUpperCase(), dir.toLowerCase())) : err('方向必須是 in 或 out'))],
@@ -1161,6 +1208,24 @@ export function iosSession(getDev, getState, who = null) {
     ['no ip dhcp snooping [...]', () => needSw() || void (dev().sw.snoop = { ...(dev().sw.snoop || {}), on: false })],
     ['ip arp inspection vlan <list>', () => needSw() || void (dev().sw.dai = { ...(dev().sw.dai || {}), on: true })],
     ['no ip arp inspection vlan [...]', () => needSw() || void (dev().sw.dai = { ...(dev().sw.dai || {}), on: false })],
+    ['system mtu jumbo <n>', ([n]) => {
+      const d = dev();
+      if (!isCat2960(d)) return err(isCat9300(d) ? '% Catalyst 9300 沒有 jumbo 的分別：用 system mtu <1500-9198>' : isNexus(d) ? '% Nexus 在每個介面上設定：interface ethernet1/1 → mtu 9216' : '% 這台設備沒有這個指令');
+      if (!/^\d+$/.test(n) || +n < 1500 || +n > 9000) return err('% system mtu jumbo 的範圍是 1500 – 9000');
+      if (+n === 1500) delete d.sw.jumbo; else d.sw.jumbo = +n;
+      return 'Changes to the system jumbo MTU will not take effect until the next reload is done（先 write memory 再 reload，show system mtu 看得到現在與下次開機的值）';
+    }],
+    ['no system mtu jumbo', () => { const d = dev(); if (!isCat2960(d)) return err('% 這台設備沒有這個指令'); delete d.sw.jumbo; return 'Changes to the system jumbo MTU will not take effect until the next reload is done'; }],
+    ['system mtu <n>', ([n]) => {
+      const d = dev();
+      if (isCat2960(d)) return err('% system mtu 只影響 10/100 的埠；這台 2960-CX 都是 Gigabit 埠，要用 system mtu jumbo <1500-9000>');
+      if (!isCat9300(d)) return err(isNexus(d) ? '% Nexus 在每個介面上設定：interface ethernet1/1 → mtu 9216' : '% 這台設備沒有 system mtu：路由器在介面上用 mtu / ip mtu');
+      if (!/^\d+$/.test(n) || +n < 1500 || +n > 9198) return err('% system mtu 的範圍是 1500 – 9198');
+      if (+n === 1500) delete d.sw.sysMtu; else d.sw.sysMtu = +n;
+      for (const i of d.ifaces) if (+i.mtu > (+d.sw.sysMtu || 1500)) delete i.mtu;
+      return `Global Ethernet MTU is set to ${+n} bytes.`;
+    }],
+    ['no system mtu', () => { const d = dev(); if (!isCat9300(d)) return err('% 這台設備沒有 system mtu'); delete d.sw.sysMtu; for (const i of d.ifaces) if (+i.mtu > 1500) delete i.mtu; return 'Global Ethernet MTU is set to 1500 bytes.'; }],
     ['spanning-tree mode <m>', () => needSw() || undefined],
     ['spanning-tree portfast default', () => needSw() || void ((dev().sw.stp ||= {}).portfastDefault = true)],
     ['no spanning-tree portfast default', () => needSw() || void ((dev().sw.stp ||= {}).portfastDefault = false)],
@@ -1973,9 +2038,17 @@ export function iosSession(getDev, getState, who = null) {
         return undefined;
       }],
       ['<...>', ([line]) => {
-        const rule = parseAclRule(line.split(/\s+/));
-        if (!rule) return err('用法：permit|deny <ip|tcp|udp|icmp> <來源> <目的> [eq <埠>]，位址寫 any、host <IP> 或 <網段> <萬用遮罩>');
-        for (const l of aclLists(dev(), S.cur)) addUnique(l, { ...rule });
+        const t = line.split(/\s+/);
+        const rule = parseAclRule(t);
+        if (!rule) return err('用法：[序號] permit|deny <ip|tcp|udp|icmp> <來源> <目的> [eq <埠> | ICMP 類型]，位址寫 any、host <IP> 或 <網段> <萬用遮罩>');
+        const seq = /^\d+$/.test(t[0]) ? +t[0] : null;
+        const lists = aclLists(dev(), S.cur);
+        if (seq != null && seq % 10 === 0 && lists.some((l) => l[seq / 10 - 1] && !same(l[seq / 10 - 1], rule))) return err('% Duplicate sequence number');
+        for (const l of lists) {
+          if (l.some((x) => same(x, rule))) continue;
+          if (seq == null) l.push({ ...rule });
+          else l.splice(l.filter((_, k) => (k + 1) * 10 < seq).length, 0, { ...rule }); // 序號 25 插在 20 與 30 之間
+        }
         syncVpnAcl(dev(), S.cur);
         return undefined;
       }],
@@ -2766,7 +2839,7 @@ function aclAddr(spec) {
   const bits = m[2] == null ? 32 : +m[2];
   return bits === 32 ? 'host ' + fmtIp(ip) : `${fmtIp(netOf(ip, bits))} ${wild(bits)}`;
 }
-export const aclLine = (r) => `${r.action} ${r.proto || 'ip'} ${aclAddr(r.src)}${r.sport ? ' eq ' + r.sport : ''} ${aclAddr(r.dst)}${r.port && r.proto !== 'ip' && r.proto !== 'icmp' ? ' eq ' + r.port : ''}`;
+export const aclLine = (r) => `${r.action} ${r.proto || 'ip'} ${aclAddr(r.src)}${r.sport ? ' eq ' + r.sport : ''} ${aclAddr(r.dst)}${r.port && r.proto !== 'ip' && r.proto !== 'icmp' ? ' eq ' + r.port : ''}${r.icmp ? ' ' + r.icmp : ''}`;
 
 /** 產生等效的 running-config */
 export function runningConfig(state, dev) {
@@ -2806,6 +2879,8 @@ export function runningConfig(state, dev) {
       o.push('!', ...ERR_RECOVERY_CAUSES.filter((c) => er.causes.includes(c)).map((c) => `errdisable recovery cause ${c}`));
       if (er.interval) o.push(`errdisable recovery interval ${er.interval}`);
     }
+    if (isCat2960(dev) && +sw.jumbo) o.push('!', `system mtu jumbo ${+sw.jumbo}`);
+    if (isCat9300(dev) && +sw.sysMtu) o.push('!', `system mtu ${+sw.sysMtu}`);
     o.push('!', 'spanning-tree mode rapid-pvst');
     const stp = sw.stp || {};
     if (stp.on === false) o.push('no spanning-tree vlan 1-4094');
@@ -2931,6 +3006,7 @@ export function runningConfig(state, dev) {
   const stp0 = (dev.sw && dev.sw.stp) || {};
   const l3lines = (i) => {
     const l = [];
+    if (+i.l2mtu) l.push(` mtu ${+i.l2mtu}`);
     if (i.vrf) l.push(((dev.vrfs || {})[i.vrf] || {}).style === 'ip' ? ` ip vrf forwarding ${i.vrf}` : ` vrf forwarding ${i.vrf}`);
     if (i.mode === 'dhcp') l.push(' ip address dhcp');
     else if (i.mode === 'pppoe') l.push(' pppoe-client dial-pool-number 1', ` ! PPPoE 帳號 ${i.user || '(未設定)'}`);
@@ -2939,7 +3015,8 @@ export function runningConfig(state, dev) {
     if (anyNat) l.push(natOut(i) ? ' ip nat outside' : i.ip || i.mode !== 'static' ? ' ip nat inside' : null);
     if (i.helper) l.push(` ip helper-address ${i.helper}`);
     if (+i.bandwidth > 0) l.push(` bandwidth ${i.bandwidth}`);
-    if (i.mtu) l.push(` ip mtu ${i.mtu}`);
+    if (i.mtu) l.push(isNexus(dev) ? ` mtu ${i.mtu}` : ` ip mtu ${i.mtu}`);
+    if (+i.adjMss) l.push(` ip tcp adjust-mss ${+i.adjMss}`);
     if (i.ospfAuth) l.push(i.ospfAuth === 'md5' ? ' ip ospf authentication message-digest' : i.ospfAuth === 'null' ? ' ip ospf authentication null' : ' ip ospf authentication');
     if (i.ospfKey && i.ospfKey.id !== '' && i.ospfKey.id != null) l.push(` ip ospf message-digest-key ${i.ospfKey.id} md5 7 ${hex(i.ospfKey.key || '')}`);
     else if (i.ospfKey) l.push(` ip ospf authentication-key 7 ${hex(i.ospfKey.key || '')}`);
@@ -2994,9 +3071,9 @@ export function runningConfig(state, dev) {
     if (pc && isSw(dev)) {
       const phy = [pc.speed && pc.speed !== 'auto' ? ` speed ${pc.speed}` : null, pc.duplex && pc.duplex !== 'auto' ? ` duplex ${pc.duplex}` : null].filter(Boolean);
       const nd = portNd(dev, p.id), ndl = [nd.cdp === false ? ' no cdp enable' : null, nd.tx === false ? ' no lldp transmit' : null, nd.rx === false ? ' no lldp receive' : null].filter(Boolean);
-      const def = pc.mode === defaultPortMode(dev.model) && pc.vlan === 1 && pc.native === 1 && (!pc.allowed || pc.allowed === 'all') && !pc.voice && !pc.noneg && !pc.qosTrust && !pc.trustDevice && !pc.poe && !ndl.length && !pc.shut && !peer && !pc.trust && !(+pc.lag > 0) && !(pc.ps && pc.ps.on) && !pc.bpduguard && !pc.rootguard && !pc.dot1x && !phy.length && pc.portfast == null && !pc.desc;
+      const def = pc.mode === defaultPortMode(dev.model) && pc.vlan === 1 && pc.native === 1 && (!pc.allowed || pc.allowed === 'all') && !pc.voice && !pc.noneg && !pc.qosTrust && !pc.trustDevice && !pc.poe && !ndl.length && !pc.shut && !peer && !pc.trust && !(+pc.lag > 0) && !(pc.ps && pc.ps.on) && !pc.bpduguard && !pc.rootguard && !pc.dot1x && !phy.length && pc.portfast == null && !pc.desc && !pc.mtu;
       if (def) continue;
-      o.push(`interface ${longIf(p.label)}`, ...desc, ...phy);
+      o.push(`interface ${longIf(p.label)}`, ...desc, ...phy, ...(+pc.mtu ? [` mtu ${+pc.mtu}`] : []));
       if (pc.mode === 'routed') {
         const i = dev.ifaces.find((x) => x.bind.t === 'port' && x.bind.port === p.id);
         o.push(' no switchport', ...(i ? l3lines(i) : []), ...ndl);

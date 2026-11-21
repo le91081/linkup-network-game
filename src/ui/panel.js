@@ -23,6 +23,7 @@ import * as VZ from './panel-virt.js';
 import { dnsTab } from './panel-dns.js';
 import { vrfField, vrfCard } from './panel-vrf.js';
 import { webTab, clientTlsCard } from './panel-web.js';
+import { hostMtuField, routerMtuBlock, switchMtuCard, nexusPortMtu } from './panel-mtu.js';
 import { dockerTab } from './term-docker.js';
 import { isDnsServer } from '../engine/dns.js';
 import { isTftp, isFtp } from '../engine/files.js';
@@ -132,6 +133,7 @@ function ifaceCard(ctx, i, o = {}) {
   if (o.ospf && ospfOn(ctx.dev, i)) parts.push(ospfIfBlock(ctx, i));
   if (o.helper) parts.push(grid2(field('DHCP Relay', inp(ctx, ...bind(i, 'helper'), { ph: '遠端 DHCP 伺服器 IP（選填）', check: isIp }))));
   if (o.phy) parts.push(X.phyFields(ctx, i), X.phyNote(ctx, o.port));
+  if (o.mtu) parts.push(routerMtuBlock(ctx, i));
   if (o.access) parts.push(X.accessRow(ctx, i));
   parts.push(ifaceNote(ctx, i));
   if (o.v6 && ctx.state.v6) parts.push(M.routerV6(ctx, i));
@@ -161,7 +163,7 @@ function hostNet(ctx, body) {
       body.append(h('div', { class: 'card' }, cardHead('Wi-Fi', X.assocBadge(ctx, i)), X.wifiPicker(ctx, i), X.wifiSignal(ctx, i), modeSeg(i), ipFields(i), ifaceNote(ctx, i), M.hostV6(ctx, i), macLine(ctx, i)));
     } else {
       body.append(h('div', { class: 'card' }, cardHead(i.label, linkBadge(ctx, i.bind.port)), modeSeg(i), ipFields(i), ifaceNote(ctx, i),
-        dev.dot1x && i === dev.ifaces[0] && M.hostDot1x(ctx), M.hostV6(ctx, i), macLine(ctx, i)));
+        dev.dot1x && i === dev.ifaces[0] && M.hostDot1x(ctx), M.hostV6(ctx, i), hostMtuField(ctx, i), macLine(ctx, i)));
     }
   }
   if (dev.services.length) {
@@ -229,7 +231,8 @@ function swPorts(ctx, body) {
         trunkish && field(dyn ? 'Native VLAN（協商成 Trunk 時）' : 'Native VLAN', sel(ctx, () => pc.native, (v) => { pc.native = +v; }, vlanOpts(pc.native))),
         trunkish && field('允許的 VLAN', inp(ctx, ...bind(pc, 'allowed'), { ph: 'all 或 10,20', check: isVlanSpec })),
         routed && ri && field('IP 位址', inp(ctx, ...bind(ri, 'ip'), { ph: '例如 10.0.1.2', check: isIp })),
-        routed && ri && field('子網路遮罩', inp(ctx, ...bind(ri, 'mask'), { ph: '255.255.255.252', check: isMask }))),
+        routed && ri && field('子網路遮罩', inp(ctx, ...bind(ri, 'mask'), { ph: '255.255.255.252', check: isMask })),
+        nexusPortMtu(ctx, pc)),
       routed && ri && h('div', { class: 'toggles' }, toggle(ctx, () => ospfOn(dev, ri), (v) => setOspf(dev, ri, v), 'OSPF（在此介面啟用動態路由）')),
       routed && ri && ifaceNote(ctx, ri),
       !routed && X.dtpLine(ctx, p, pc),
@@ -241,7 +244,7 @@ function swPorts(ctx, body) {
       !routed && open && X.portAdvanced(ctx, p, pc)));
   }
   body.append(DG.spanCard(ctx));
-  for (const c of [V.poeCard(ctx), V.mlsQosCard(ctx)]) if (c) body.append(c);
+  for (const c of [V.poeCard(ctx), V.mlsQosCard(ctx), switchMtuCard(ctx)]) if (c) body.append(c);
 }
 
 function swVlans(ctx, body) {
@@ -316,7 +319,7 @@ function rtIfaces(ctx, body) {
   for (const p of dev.ports) {
     const i = dev.ifaces.find((x) => x.bind.t === 'port' && x.bind.port === p.id);
     body.append(ifaceCard(ctx, i, {
-      title: p.label, port: p.id, gateway: true, nat: true, dhcp: true, ospf: true, helper: true, vrrp: true, v6: true, shut: true, phy: p.media === 'rj45',
+      title: p.label, port: p.id, gateway: true, nat: true, dhcp: true, ospf: true, helper: true, vrrp: true, v6: true, shut: true, phy: p.media === 'rj45', mtu: true,
       modes: [['static', '固定 IP'], ['dhcp', '自動取得 (DHCP)'], ['pppoe', 'PPPoE 撥接']],
     }));
     const subs = dev.ifaces.filter((x) => x.bind.t === 'sub' && x.bind.port === p.id).sort((a, b) => a.bind.vlan - b.bind.vlan);

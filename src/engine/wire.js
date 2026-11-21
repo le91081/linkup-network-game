@@ -20,6 +20,7 @@ const PROTO_NO = { icmp: 1, tcp: 6, udp: 17, esp: 50 };
 /** 訊框的長度（位元組，不含前導碼與 FCS），給計數器與擷取畫面用 */
 export function frameLen(f) {
   const tag = f.tag != null ? 4 : 0;
+  if (f.len) return f.len + 14 + tag; // 知道 IP 封包有多大（大的 ping、TCP 的資料區段、ICMP 需要分段）
   if (f.proto === 'arp') return 42 + tag;
   if (f.proto === 'stp') return 60 + tag;
   if (f.proto === 'cdp') return 371;
@@ -60,6 +61,7 @@ export function infoOf(f) {
   if (f.proto === 'lldp') return `MA/${f.smac} LA/${f.lldp.port} ${f.lldp.ttl} SysN=${f.lldp.id}`;
   if (f.proto === 'dtp') return `Dynamic Trunk Protocol（${f.dtp.mode}）`;
   if (f.proto === 'dhcp') return `DHCP ${DHCP_TYPE[f.dhcp.type]}  - Transaction ID 0x${f.dhcp.xid}`;
+  if (f.proto === 'icmp' && f.icmpErr) return `Destination unreachable (Fragmentation needed)  next-hop MTU=${f.mtu}`;
   if (f.proto === 'icmp') return `Echo (ping) ${f.reply ? 'reply  ' : 'request'}  id=0x${(f.reply ? f.dport : f.sport).toString(16).padStart(4, '0')}, seq=1/256, ttl=${f.ttl}`;
   if (f.proto === 'esp') return f.ssl ? 'Application Data（SSL-VPN 的加密內容）' : `ESP (SPI=0x${(f.spi || 0).toString(16).padStart(8, '0')})`;
   const name = protoName(f);
@@ -72,6 +74,7 @@ export function infoOf(f) {
     if (name === 'FTP') return f.data.kind === 'ftp' ? `Request: USER ${f.data.user}　Request: PASS ${f.data.pass}　Request: ${f.data.cmd}` : 'Response: 226 Transfer complete';
     return `${f.sport} → ${f.dport} [PSH, ACK] Len=${frameLen(f) - 66}`;
   }
+  if (f.proto === 'tcp' && f.bulk) return `${f.sport} → ${f.dport} [ACK] Seq=1 Ack=1 Win=64240 Len=${f.len - 40}${f.df ? '  [DF]' : ''}`;
   if (f.proto === 'tcp') return `${f.sport} → ${f.dport} ${flags(f)} Seq=${f.ack ? 1 : 0}${f.ack || f.reply ? ' Ack=1' : ''} Win=64240 Len=0`;
   if (name === 'DNS') return f.reply ? 'Standard query response A' : 'Standard query A';
   if (name === 'TFTP') return f.data && f.data.kind === 'tftp' ? `${f.data.op === 'RRQ' ? 'Read' : 'Write'} Request, File: ${f.data.file}, Transfer type: octet` : 'Acknowledgement, Block: 1';
@@ -90,13 +93,20 @@ function snmpInfo(f) {
 
 // ───────────────────────── 介面計數器 ─────────────────────────
 
-const blank = (now) => ({ ip: 0, op: 0, ib: 0, ob: 0, ibc: 0, obc: 0, imc: 0, omc: 0, crc: 0, runts: 0, coll: 0, late: 0, lastIn: null, lastOut: null, cleared: null, w: { t: now, ib: 0, ob: 0, ip: 0, op: 0 }, pw: null });
+const blank = (now) => ({ ip: 0, op: 0, ib: 0, ob: 0, ibc: 0, obc: 0, imc: 0, omc: 0, crc: 0, runts: 0, giants: 0, coll: 0, late: 0, lastIn: null, lastOut: null, cleared: null, w: { t: now, ib: 0, ob: 0, ip: 0, op: 0 }, pw: null });
 function ctr(state, devId, pid) {
   const all = ((state.dyn.ifc ||= {})[devId] ||= {});
   const c = (all[pid] ||= blank(state.clock));
   // 五分鐘的平均速率：每五分鐘換一次取樣的起點
   if (state.clock - c.w.t >= 300) { c.pw = c.w; c.w = { t: state.clock, ib: c.ib, ob: c.ob, ip: c.ip, op: c.op }; }
   return c;
+}
+/** 收到比 MTU 大的訊框 (giant)：這一端把它丟掉，記在 input errors 裡 */
+export function countGiant(state, devId, pid) {
+  if (pid == null || !state.dyn) return;
+  const c = ctr(state, devId, pid);
+  c.giants = (c.giants || 0) + 1;
+  c.lastIn = state.clock;
 }
 /** 這個埠的計數器（沒有就是全部 0） */
 export function counters(state, devId, pid) {

@@ -24,6 +24,7 @@ npm run build    # 輸出到 dist/
 - `e2e/ui.spec.mjs`：用滑鼠點場景上的設備、切分頁、在 Cisco CLI 和主機終端機打指令、上方的每個按鈕、復原與重做。
 - `e2e/modes.spec.mjs`：故障演練（含重新整理後接著做）、模擬考從作答到成績、自由模式拖曳接線並做成自訂關卡試玩。
 - `e2e/ui-learn.spec.mjs`：新手導覽、參考解法與示範、錯題本。
+- `e2e/ui-mtu.spec.mjs`：`ping -f -l` 找出 MTU、交換器的 giants 與 2960 的 Jumbo MTU（存檔、重新開機）、PMTUD 黑洞與 TCP MSS 調整。
 - `e2e/ui-stage11.spec.mjs`：VRF 的 CLI 與路由分頁、Docker 主機的終端機與分頁、HTTPS 憑證錯誤的排除（curl、換憑證、匯入根憑證、打開自動校時）。
 
 失敗時的截圖與操作紀錄在 `e2e/.results/`，可以用 `npx playwright show-trace <trace.zip>` 一步一步回放。
@@ -44,7 +45,7 @@ npm run build    # 輸出到 dist/
 | 場景上方的時鐘 | 暫停 / 繼續模擬時間、切換 1× / 10× / 60×、直接前進 30 秒；出現「收斂中」時點一下會快轉到網路穩定為止 |
 | Shift + 拖曳設備（自由模式） | 移動設備 |
 
-- 電腦與伺服器有「終端機」分頁：`ping`（支援 IPv6）、`ipconfig`、`ipconfig /renew`、`ipconfig /release`、`arp -a`、`arp -d`、`tracert`、`nslookup`、`curl`（HTTPS 會驗證憑證，錯誤訊息和真的 curl 一樣；`-k` 略過、`-v` 看憑證、`-I` 只看標頭、`-L` 跟著轉址）、`date`、`w32tm /resync`、`certutil -store root` / `-addstore root`、`netstat -e`、`iperf3 -c <IP>`（量實際傳輸速率，會讓時間前進 10 秒），以及 `ssh 帳號@IP`、`telnet IP` 登入網路設備的命令列（見下方「遠端登入」）。Linux 主機（Ansible 控制主機、Docker 主機）用的是 `ip addr`、`ip route`、`timedatectl`，Docker 主機還有 `docker`。
+- 電腦與伺服器有「終端機」分頁：`ping`（支援 IPv6）、`ipconfig`、`ipconfig /renew`、`ipconfig /release`、`arp -a`、`arp -d`、`tracert`、`nslookup`、`curl`（HTTPS 會驗證憑證，錯誤訊息和真的 curl 一樣；`-k` 略過、`-v` 看憑證、`-I` 只看標頭、`-L` 跟著轉址）、`date`、`w32tm /resync`、`certutil -store root` / `-addstore root`、`netstat -e`、`netsh interface ipv4 show subinterfaces`（MTU）、`ping -f -l <大小>`（設 DF 找出路徑上的 MTU）、`iperf3 -c <IP>`（量實際傳輸速率，會讓時間前進 10 秒），以及 `ssh 帳號@IP`、`telnet IP` 登入網路設備的命令列（見下方「遠端登入」）。Linux 主機（Ansible 控制主機、Docker 主機）用的是 `ip addr`、`ip route`、`sudo ip link set eth0 mtu 9000`、`ping -M do -s <大小>`、`timedatectl`，Docker 主機還有 `docker`。
 - 電腦與伺服器還有「封包擷取」分頁：像 Wireshark 一樣記下網路卡收送的訊框，可以用 `ip.addr == …`、`tcp.port == …`、`arp`、`telnet` 之類的條件篩選，點一下看每一層的標頭。
 - Cisco 的路由器與交換器有「CLI」分頁：IOS 風格的命令列。`show running-config`、`show startup-config`、`show ip route`、`show vlan brief`、`show interfaces trunk`、`show arp` 等四十多個 `show` 指令用來查看狀態；輸入 `configure terminal` 之後可以直接用指令設定（見下方「CLI 設定指令」），改的和圖形介面是同一份設定。
 - FortiGate 防火牆也有「CLI」分頁，用的是 FortiOS 的階層式語法（`config firewall policy` → `edit 1` → `set …` → `next` → `end`）。
@@ -62,17 +63,17 @@ npm run build    # 輸出到 dist/
 - **評分**：過關時依實際作答時間（畫面在前景、沒有開對話框才算；標準時間是 3 分鐘加上每個目標 1.5 分鐘）、看了幾個提示、跑了幾次完整測試給 S / A / B / C 與分數，關卡選單上顯示最佳等級。設定變更的次數只列出來參考。
 - **關卡編輯器**：自由模式的「關卡設計」可以寫關卡名稱、任務說明、提示，指定哪些設備鎖定（玩家看得到、不能設定），然後試玩、存成自訂關卡、或匯出成關卡檔分享；關卡選單的「自訂關卡」可以遊玩、匯出、刪除與匯入。
 
-## 關卡（17 章 74 關）
+## 關卡（17 章 76 關）
 
 | 章節 | 關卡數 | 主題 |
 | --- | --- | --- |
 | 1 家用網路 | 4 | Hub、Switch、固定 IP、DHCP、PPPoE、NAT、DNS |
 | 2 小型辦公室 | 4 | 固定 IP 線路、連接埠轉發、VLAN、Trunk、子介面 |
 | 3 企業網路 | 3 | 防火牆政策與 DMZ、靜態路由與回程路由、一對一靜態 NAT |
-| 4 資料中心 | 3 | ToR 與 SVI、Spine-Leaf 與 OSPF、銅纜 / 多模 / 單模光纖與距離 |
+| 4 資料中心 | 4 | ToR 與 SVI、Spine-Leaf 與 OSPF、銅纜 / 多模 / 單模光纖與距離；Jumbo Frame 要整條路一致（交換器默默丟掉 giant、`ping -f -l 8972`、2960 的 `system mtu jumbo` 要存檔重新開機） |
 | 5 無線網路 | 3 | SSID、WPA2 / WPA3、PoE、頻道規劃、訪客 SSID 對應 VLAN |
 | 6 網路安全 | 9 | TCP 與 UDP（只放行 TCP 53 的 ACL 擋掉了 DNS、TFTP、Syslog）、DHCP Snooping、Port Security、ACL、管理加固、DAI、BPDU Guard、802.1X / RADIUS、用 DTP 偽裝成交換器的 VLAN hopping 與邊緣埠加固 |
-| 7 VPN 與廣域備援 | 5 | 站對站 IPsec、遠端存取 VPN、雙線路浮動靜態路由；業者骨幹故障時介面還是 up，用 IP SLA 與追蹤的靜態路由切換（探測目標要綁在主線、不要用使用者的 DNS）；三個據點的 Hub-and-Spoke 與 IKEv2（版本要一致、PFS 不一致要到重新協商才斷、加密範圍與 NAT 例外要包含另一個分公司） |
+| 7 VPN 與廣域備援 | 6 | 站對站 IPsec、遠端存取 VPN、雙線路浮動靜態路由；業者骨幹故障時介面還是 up，用 IP SLA 與追蹤的靜態路由切換（探測目標要綁在主線、不要用使用者的 DNS）；三個據點的 Hub-and-Spoke 與 IKEv2（版本要一致、PFS 不一致要到重新協商才斷、加密範圍與 NAT 例外要包含另一個分公司）；IPsec 讓封包變大，ICMP「需要分段」被伺服器網段的 ACL 擋掉造成 PMTUD 黑洞（上傳正常、下載卡住），放行 `packet-too-big` 並在介面上 `ip tcp adjust-mss 1360` |
 | 8 高可用與進階路由 | 7 | STP、EtherChannel、VRRP / HSRP、DHCP Relay、OSPF Cost、VLSM；HSRP 追蹤上行介面（preempt 預設是關的，兩台都要開） |
 | 9 IPv6 | 5 | Link-local、SLAAC、IPv6 靜態路由、雙協定；RA 的 M / O / A 旗標與 DHCPv6（stateless / stateful，DHCPv6 不給閘道）、OSPFv3（link-local 鄰居、純 IPv6 路由器的 Router ID）、IPv6 ACL 與隱含的 ND 允許規則 |
 | 10 故障排除 | 8 | 網路已經設定好但被改壞了：IP 衝突與 DHCP 保留、Trunk / VLAN / shutdown、閘道 / 回程路由 / NAT / ACL / DNS、ping 會通但傳檔很慢（速率寫死、duplex mismatch、舊 Hub）；OSPF 鄰居起不來（MD5 金鑰、被動介面、network 敘述）；流量繞經實驗室的交換器（根橋位置與 Root Guard）；VPN 通了資料卻過不去（NAT 例外、加密的 ACL 要涵蓋新網段）；DNS 改了卻還連到舊的（TTL 與用戶端快取、nslookup 不看快取、`ipconfig /flushdns`） |
@@ -103,7 +104,7 @@ npm run build    # 輸出到 dist/
 
 沒有關卡的條目（安全計畫）是觀念題，題庫裡有對應的題目。
 條目編號依公開的考試大綱，標題是中文摘要。CCNA v2.0 預計在 2027 年 2 月取代 v1.1，改版後需要重新對照。
-題庫（148 題觀念題加上隨機產生的子網路計算題）是自行編寫的練習題，不是實際試題。
+題庫（152 題觀念題加上隨機產生的子網路計算題）是自行編寫的練習題，不是實際試題。
 
 ## CLI 設定指令
 
@@ -127,6 +128,7 @@ npm run build    # 輸出到 dist/
 - **NAT 的範圍**：`ip nat inside source list <ACL>` 可以指定編號或具名的 ACL，`access-list <編號>` 也能用。
 - **DHCP 保留位址**：只有一台主機的位址池（`host` 加上 `hardware-address`）。
 - **實體層**：`speed`、`duplex`。
+- **MTU**：路由器介面的 `mtu`（1500 – 9216）與 `ip mtu`（不能比介面的 MTU 大）、`ip tcp adjust-mss <500-1460>`、Catalyst 2960 的 `system mtu jumbo <1500-9000>`（存檔、重新開機才生效）、Catalyst 9300 的 `system mtu <1500-9198>`、Nexus 介面的 `mtu <576-9216>`；`show system mtu`、`show ip interface <介面>`（MTU、套用的 ACL、TCP Adjust MSS）、`show interfaces` 的 MTU 與 giants；`ping <IP> [size <36-18024>] [df-bit] [source <介面>]`（M 代表 could not fragment）。ACL 的 ICMP 可以指定類型（`permit icmp any any packet-too-big`），具名 ACL 的序號（`25 permit …`）會插在對的位置。
 - **STP 的邊緣埠**：`spanning-tree portfast`（介面，`disable` / `trunk`）、`spanning-tree portfast default`（全域）、`spanning-tree guard root`。
 - **DHCP 租約長度**：位址池裡的 `lease <天> [小時] [分鐘]` 或 `lease infinite`。
 - **跟時間有關的查看指令**：`show clock`、`show spanning-tree`（LSN / LRN / FWD）、`show ip ospf neighbor`（Dead Time）、`show ip dhcp binding`（到期時間）、`show arp`（Age）、`clear arp`。
@@ -335,6 +337,7 @@ npm run build    # 輸出到 dist/
 - IPsec 有 IKEv1 與 IKEv2，只用預先共用金鑰（沒有憑證、EAP、NAT-T）；IOS 的 IKEv2 smart defaults 簡化成 AES-CBC-128/256、SHA-1/256、DH 2/5/14/19 的組合；沒有 GRE、VTI、DMVPN。圖形介面建立的 FortiGate 通道會自動帶出通往對端的路由（相當於用精靈建立）。SSL-VPN 的加密流量在引擎內部仍然當成一層封裝來處理。
 - Wi-Fi 的訊號依距離估算再扣掉沿路穿過的牆，沒有反射、多路徑與樓層；牆只能由關卡預先放好，自由模式還不能畫牆。802.11r 只是設定，沒有模擬漫遊所花的時間。無線控制器沒有 DNS 探索、DTLS、映像檔下載、AP group / tag 與跨控制器漫遊 (Mobility Group)，只能用圖形介面設定。
 - 802.1X 只驗證帳號密碼（沒有憑證）。
+- MTU：TCP 用一個裝滿的資料區段代表一次大量傳輸，PMTUD 的結果不會被記住（每次連線都重新發現）；IPsec 的額外負擔固定算 73 位元組（實際依加密演算法與填充大約 50 – 73），SSL-VPN 與雲端的 VPN 沒有算；FortiGate 的介面 MTU 與 `tcp-mss` 還不能改；Windows 用 `netsh` 設定 MTU，沒有分網卡驅動的 Jumbo Packet 與 IP 的 MTU 兩層。
 - HTTPS 只模擬憑證驗證的結果（信任的 CA、有效期間、SAN）：沒有中繼憑證鏈、CRL / OCSP 撤銷檢查、TLS 版本與加密套件的協商、ACME 自動續約；憑證由 CA 直接簽發，不分產生 CSR、送審、安裝幾個步驟。網頁內容只有標題。
 - VRF 只有 VRF-Lite：介面、直連與靜態路由、`show`、`ping vrf`；OSPF / BGP 還不分 VRF，也沒有 VRF 之間的路由洩漏 (route leaking) 與 MPLS VPN。
 - Docker 只有預設的 bridge 網路與 `-p` 發佈：沒有自訂網路與容器之間用名稱互連、host / macvlan 網路、Compose、volume；映像檔只有幾個常見的（nginx、httpd、grafana、mysql、postgres、redis、portainer），`docker run` 的 `-e`、`-v`、`--restart` 會接受但沒有作用。
@@ -350,7 +353,7 @@ npm run build    # 輸出到 dist/
 
 完整的功能規劃（每個領域已完成、部分完成、尚未開始的項目，以及建議的實作順序）在 [PLAN.md](PLAN.md)。以下是最接近的幾項：
 
-1. MTU 與 jumbo frame、路由重分配與 PBR、VRF 裡跑 OSPF / BGP 與路由洩漏。
+1. 路由重分配與 PBR、VRF 裡跑 OSPF / BGP 與路由洩漏、GRE 與 VTI（通道介面上的 ip mtu）。
 2. FortiGate 的 IPv6 政策、DHCPv6 Prefix Delegation、GRE / VTI / DMVPN、TACACS+、IOS 的 Dialer 介面。
 3. iBGP、OSPF 的 stub / NSSA 區域、自由模式畫牆、訪客入口 (Captive Portal)。
 4. 802.1X 與 IPsec 的憑證驗證（EAP-TLS、RSA 簽章）、中繼憑證鏈與撤銷檢查。
@@ -383,12 +386,13 @@ src/engine/   模擬引擎（不依賴瀏覽器，可直接用 Node 測試）
   automation.js   Ansible：inventory、Jinja 變數、network_cli 與 cisco.ios 模組、PLAY RECAP
   cloud.js        公有雲的 VPC：子網路與路由表、IGW 與彈性 IP、NAT 閘道、安全群組、網路 ACL、VPN 設定檔
   faults.js       故障演練：可能的故障清單、在副本上驗證、依種子重現
+  mtu.js          MTU：每個介面的 IP MTU、交換器能收的訊框、IPsec 的額外負擔、TCP MSS 的調整
   virt.js         虛擬化主機：vSwitch、連接埠群組與 VLAN 標籤
   docker.js       容器：映像檔、bridge 網路、連接埠發佈（只綁 127.0.0.1、埠對錯會被重設）
   web.js          網站與 HTTPS 憑證：信任的 CA、有效期間（用戶端的時鐘）、SAN 與萬用字元
   dns.js          DNS 伺服器的記錄、TTL 與用戶端快取
   sim6.js         IPv6：SLAAC 與 DHCPv6（RA 的 M / O / A 旗標、relay、binding）、鄰居探索、靜態路由與 OSPFv3、IPv6 ACL、ICMPv6 / TCP / UDP
-src/levels/   關卡定義：設備、初始設定、任務目標、提示、參考解法（trouble.js 是故障排除章，maint.js 是維運章，voip.js 是語音與 QoS 章，routing.js 是進階路由章，ipv6.js 是 IPv6 章的補充，vpn2.js 是多站台 VPN，wireless.js 是無線控制器章，auto.js 是自動化章，cloud.js 是雲端章，virtual.js 是虛擬化章（vSwitch、VRF、容器），tls.js 是 HTTPS 憑證，resil.js / audit.js / trouble2.js 是各章的補充關卡）
+src/levels/   關卡定義：設備、初始設定、任務目標、提示、參考解法（trouble.js 是故障排除章，maint.js 是維運章，voip.js 是語音與 QoS 章，routing.js 是進階路由章，ipv6.js 是 IPv6 章的補充，vpn2.js 是多站台 VPN，wireless.js 是無線控制器章，auto.js 是自動化章，cloud.js 是雲端章，virtual.js 是虛擬化章（vSwitch、VRF、容器），tls.js 是 HTTPS 憑證，mtu.js 是 Jumbo Frame 與 PMTUD，resil.js / audit.js / trouble2.js 是各章的補充關卡）
 src/data/     題庫與證照對照表
 src/scene/    three.js 場景、設備模型、網路線、無線涵蓋範圍與封包動畫
 src/ui/       設定面板、終端機、CLI、任務面板、測驗、模擬考、故障演練、評分、自由模式與關卡編輯器、對話框

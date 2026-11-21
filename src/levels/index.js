@@ -19,6 +19,7 @@ import { LEVELS14 } from './audit.js';
 import { LEVELS15 } from './trouble2.js';
 import { CHAPTERS11, LEVELS16 } from './virtual.js';
 import { LEVELS17 } from './tls.js';
+import { LEVELS18 } from './mtu.js';
 import { isCiscoOs } from '../engine/files.js';
 
 export const CHAPTERS = [
@@ -633,7 +634,7 @@ export const LEVELS = [
 ];
 
 CHAPTERS.push(...CHAPTERS2, ...CHAPTERS3, ...CHAPTERS4, ...CHAPTERS5, ...CHAPTERS6, ...CHAPTERS7, ...CHAPTERS8, ...CHAPTERS9, ...CHAPTERS10, ...CHAPTERS11);
-LEVELS.push(...LEVELS2, ...LEVELS3, ...LEVELS4, ...LEVELS5, ...LEVELS6, ...LEVELS7, ...LEVELS8, ...LEVELS9, ...LEVELS10, ...LEVELS11, ...LEVELS12, ...LEVELS13, ...LEVELS14, ...LEVELS15, ...LEVELS16, ...LEVELS17);
+LEVELS.push(...LEVELS2, ...LEVELS3, ...LEVELS4, ...LEVELS5, ...LEVELS6, ...LEVELS7, ...LEVELS8, ...LEVELS9, ...LEVELS10, ...LEVELS11, ...LEVELS12, ...LEVELS13, ...LEVELS14, ...LEVELS15, ...LEVELS16, ...LEVELS17, ...LEVELS18);
 LEVELS.sort((a, b) => a.chapter - b.chapter); // 穩定排序：補充關卡排到所屬章節的最後
 
 // 關卡裡的交換器都由「前任管理員」下過 spanning-tree portfast default：接終端設備的埠一連上就開始轉送。

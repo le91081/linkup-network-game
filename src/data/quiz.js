@@ -32,7 +32,7 @@ export const LEVEL_TOPIC = {
   l55: 'wireless', l56: 'wireless', l57: 'wireless',
   l58: 'auto', l59: 'auto', l60: 'auto', l61: 'auto', l62: 'auto',
   l63: 'routing', l64: 'routing', l65: 'ops', l66: 'routing', l67: 'switching', l68: 'vpn', l69: 'security', l71: 'services',
-  l70: 'auto', l72: 'routing', l73: 'auto', l74: 'security',
+  l70: 'auto', l72: 'routing', l73: 'auto', l74: 'security', l75: 'switching', l76: 'vpn',
 };
 
 export const QUESTIONS = {
@@ -57,6 +57,8 @@ export const QUESTIONS = {
     { q: 'Syslog 的嚴重等級是 0 到 7。哪一個說法正確？', a: ['數字越大越嚴重', '數字越小越嚴重', '7 代表系統無法使用', '0 是除錯訊息'], c: 1, e: '0 是 Emergency（系統無法使用），7 是 Debugging。數字越小代表事件越嚴重。', r: 'CCNA 4.5' },
   ],
   switching: [
+    { q: '兩台伺服器都把網卡的 MTU 改成 9000，中間的交換器沒有開 Jumbo Frame。會發生什麼事？', a: ['完全連不到', 'ping 會通、TCP 連得上，但大量傳輸卡住', '速度會自動降到 1500 的水準，其他正常', '交換器會回 ICMP「需要分段」'], c: 1, e: '交握與一般 ping 的封包都小於 1500，可以通過；資料區段依 MSS 8960 裝滿，超過交換器的 MTU 被當成 giant 丟掉。第二層的設備不會回 ICMP，送的人不知道要改小。', r: 'Network+ 2.2' },
+    { q: '在 Windows 上，哪一個指令可以測出整條路能不能跑 MTU 9000？', a: ['ping -l 9000', 'ping -f -l 8972', 'tracert -h 9000', 'ping -t 9000'], c: 1, e: '-f 設定 DF（不可分段），-l 是資料的大小：8972 + ICMP 標頭 8 + IP 標頭 20 = 9000。不加 -f 的話封包會被分段，測不出問題。Linux 是 ping -M do -s 8972。', r: 'Network+ 5.5' },
     { q: 'Access 埠與 Trunk 埠的差別是什麼？', a: ['Access 埠速度比較快', 'Access 埠屬於單一 VLAN；Trunk 埠用 802.1Q 標籤載送多個 VLAN', 'Trunk 埠只能接電腦', 'Access 埠不會學習 MAC 位址'], c: 1, e: 'Access 埠接終端設備，訊框不帶標籤；Trunk 埠接交換器或路由器，靠標籤區分不同 VLAN 的訊框。', r: 'CCNA 2.1' },
     { q: '802.1Q Trunk 上，哪一個 VLAN 的訊框不會被貼上標籤？', a: ['VLAN 1', '管理 VLAN', 'Native VLAN', '編號最小的 VLAN'], c: 2, e: 'Native VLAN 的訊框以不帶標籤的方式傳送。它預設是 VLAN 1，但可以改，兩端必須設成一樣。', r: 'CCNA 2.2' },
     { q: '要讓 VLAN 10 和 VLAN 20 的主機互通，需要什麼？', a: ['把兩個 VLAN 的埠都設成 Trunk', '一台第三層設備（路由器或 L3 交換器）', '把兩邊的子網路遮罩改成一樣', '啟用 STP'], c: 1, e: '不同的 VLAN 是不同的廣播網域與子網路，流量必須經過路由才能互通。', r: 'CCNA 2.1' },
@@ -106,6 +108,8 @@ export const QUESTIONS = {
     { q: '公司用內部 CA 簽發 intranet.corp.local 的憑證。加入網域的電腦都正常，員工自己帶的筆電卻出現憑證錯誤。原因是？', a: ['筆電不支援 TLS 1.3', '筆電沒有安裝公司的根憑證，不信任這個 CA', '憑證的名稱打錯了', '筆電的 DNS 快取過期'], c: 1, e: '加入網域的電腦由群組原則自動安裝公司的根憑證；自己帶的設備要手動匯入或用 MDM 派送。公開 CA 不會簽發 .local 這種內部名稱，所以內部網站只能用公司的 CA。', r: 'Security+ 1.4' },
   ],
   vpn: [
+    { q: '分公司經由 IPsec VPN 存取總公司：ping 會通、小檔案正常，大檔案下載卻一直卡住。最可能的原因是？', a: ['預先共用金鑰不一致', '加密之後封包變大，路由器回報的 ICMP「需要分段」又被 ACL 擋掉（PMTUD 黑洞）', 'DNS 設定錯誤', 'NAT 例外沒有設'], c: 1, e: 'IPsec 大約多 73 位元組的標頭。路由器用 ICMP type 3 code 4 要求改小，被擋掉的話送的人一直送大封包。解法：放行 packet-too-big，或在路由器上 ip tcp adjust-mss 1360。金鑰或 NAT 例外錯了，連 ping 都不會通。', r: 'CCNA 5.5' },
+    { q: '介面下的 ip tcp adjust-mss 1360 有什麼作用？', a: ['把介面的 MTU 改成 1360', '把經過的 TCP SYN 裡的 MSS 改成 1360，兩端一開始就送比較小的區段', '每秒最多轉送 1360 個封包', '只允許 1360 位元組以下的 UDP'], c: 1, e: '它只改 TCP 交握時宣告的 MSS，對 UDP 與 ICMP 沒有作用。IPsec 常用 1360（1400 − 40），PPPoE 常用 1452（1492 − 40）。', r: 'CCNA 5.5' },
     { q: '站對站 VPN 與遠端存取 VPN 的差別是什麼？', a: ['站對站 VPN 沒有加密', '站對站連接兩個網路；遠端存取讓單一使用者的設備連回公司', '遠端存取 VPN 需要專線', '兩者沒有差別'], c: 1, e: '站對站由兩端的閘道建立通道，使用者不必做任何事；遠端存取則由使用者設備上的用戶端軟體撥入。', r: 'CCNA 5.5' },
     { q: '建立 IPsec 通道時，下列哪一項「不需要」兩端一致？', a: ['預先共用金鑰', '加密與雜湊演算法', 'DH 群組', '兩邊內部網路的主機數量'], c: 3, e: '金鑰與加密提案必須相同，本地 / 遠端網段要互相對應；兩邊有多少主機則完全無關。', r: 'CCNA 5.5' },
     { q: 'IPsec 的 ESP 提供什麼保護？', a: ['只有壓縮', '只有來源驗證', '加密、完整性與來源驗證', '只有路由'], c: 2, e: 'ESP 會加密內容並驗證完整性。AH 只提供完整性與驗證、不加密，所以實務上幾乎都用 ESP。', r: 'CCNA 5.5' },
