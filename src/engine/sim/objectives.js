@@ -169,7 +169,8 @@ export function runObjective(state, o) {
   const from = state.devices[o.from];
   const log = [], hops = [];
   const expect = o.expect ?? true;
-  const finish = (ok, reason, failDev) => ({ pass: ok === expect, ok, reason, failDev, log, hops });
+  const what = o.type === 'tcp' ? `TCP ${o.port} 的連線` : o.type === 'udp' ? `UDP ${o.port}` : o.type === 'ping' ? 'ping ' : '連線';
+  const finish = (ok, reason, failDev) => ({ pass: ok === expect, ok, reason: ok && !expect ? `${what}成功了，但這應該要被擋下` : reason, failDev, log, hops });
   let dst;
   if (o.name) {
     const r = resolveName(state, o.from, o.name);

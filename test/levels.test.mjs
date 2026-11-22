@@ -4165,6 +4165,49 @@ console.log('\nVTP（revision、transparent、密碼）');
   ok(/^vtp mode transparent$/m.test(runningConfig(s, s.devices.lab).join('\n')) && /^vlan 99$/m.test(runningConfig(s, s.devices.lab).join('\n')), 'transparent：VLAN 自己管，印在 running-config');
 }
 
+console.log('\nIOS 的 Zone-Based Firewall');
+{
+  const { iosSession, runningConfig } = await import('../src/engine/ios.js');
+  const sim = await import('../src/engine/sim.js');
+  const ok = (cond, title) => (cond ? console.log('  ✔ ' + title) : fail(title));
+  const lv = LEVELS.find((x) => x.id === 'l123');
+  const s = lv.setup(); settle(s);
+  const R = () => iosSession(() => s.devices.r1, () => s);
+  const cli = (lines) => { const S = R(); const o = []; for (const l of lines) o.push(...S.exec(l).out); settle(s); return o.join('\n'); };
+  const tcp = (from, ip, port) => sim.transact(s, from, { proto: 'tcp', dst: parseIp(ip), dport: port, quiet: true });
+  ok(tcp('inet', '203.0.113.35', 22).ok && tcp('web', '192.168.10.21', 445).ok, '一開始什麼都通：外面 SSH 得到 DMZ，DMZ 連得進辦公室');
+  ok(/Zone INSIDE does not exist/.test(cli(['configure terminal', 'interface gi0/0/1', 'zone-member security INSIDE', 'end'])), 'zone 要先建立');
+  cli(['configure terminal', 'zone security INSIDE', 'exit', 'zone security OUTSIDE', 'exit', 'interface gi0/0/1', 'zone-member security INSIDE', 'end']);
+  const a = tcp('pc1', '93.184.216.34', 443);
+  ok(!a.ok && /Gi0\/0\/1 在 zone INSIDE，Gi0\/0\/0 不屬於任何 zone/.test(a.reason), '有 zone 和沒有 zone 的介面之間不通');
+  cli(['configure terminal', 'interface gi0/0/0', 'zone-member security OUTSIDE', 'end']);
+  const b = tcp('pc1', '93.184.216.34', 443);
+  ok(!b.ok && /沒有 INSIDE → OUTSIDE 的 zone-pair/.test(b.reason), '不同 zone 之間沒有 zone-pair：全部拒絕');
+  cli(['configure terminal', 'class-map type inspect match-any WEB', 'match protocol https', 'exit', 'policy-map type inspect IN-OUT', 'class type inspect WEB', 'pass', 'exit', 'exit',
+    'zone-pair security ZP-IN-OUT source INSIDE destination OUTSIDE', 'service-policy type inspect IN-OUT', 'end']);
+  const c = tcp('pc1', '93.184.216.34', 443);
+  ok(!c.ok && /沒有 OUTSIDE → INSIDE 的 zone-pair.*回程的封包：去程如果用的是 pass/.test(c.reason), 'pass 是無狀態的：回程被擋，說明要用 inspect 或反方向也 pass');
+  cli(['configure terminal', 'policy-map type inspect IN-OUT', 'class type inspect WEB', 'inspect', 'end']);
+  const d = sim.transact(s, 'pc1', { proto: 'tcp', dst: parseIp('93.184.216.34'), dport: 443 });
+  ok(d.ok && d.log.some((l) => /ZBF：zone-pair ZP-IN-OUT 的 class WEB → inspect（記下連線，回程自動放行）/.test(l.text)), 'inspect：有狀態，回程自動放行');
+  const e = tcp('pc1', '93.184.216.34', 80);
+  ok(!e.ok && /class-default 丟掉/.test(e.reason), '沒有符合任何 class：class-default drop');
+  ok(tcp('pc1', '192.168.10.1', 22).ok !== undefined && sim.transact(s, 'pc1', { proto: 'icmp', dst: parseIp('192.168.10.1'), quiet: true }).ok, '沒有指向 self 的 zone-pair：ping 路由器本身照樣通');
+  cli(['configure terminal', 'zone-pair security IN-SELF source INSIDE destination self', 'end']);
+  const f = sim.transact(s, 'pc1', { proto: 'icmp', dst: parseIp('192.168.10.1'), quiet: true });
+  ok(!f.ok && /IN-SELF.*沒有套用 service-policy/.test(f.reason), 'INSIDE → self 的 zone-pair 沒有政策：連路由器本身都 ping 不到');
+  cli(['configure terminal', 'no zone-pair security IN-SELF', 'end']);
+  // 解答
+  const s2 = lv.setup(); settle(s2); lv.solve(s2); settle(s2);
+  ok(lv.objectives.every((o) => (o.type === 'check' ? o.test(s2) : sim.runObjective(s2, o).pass) === true), '解答：INSIDE → OUTSIDE / DMZ inspect、OUTSIDE → DMZ 只放 https，七個目標都通過');
+  const g = sim.transact(s2, 'inet', { proto: 'tcp', dst: parseIp('203.0.113.35'), dport: 22, quiet: true });
+  ok(!g.ok && /OUT-DMZ.*class-default 丟掉/.test(g.reason), '外面 SSH 到 DMZ：class-default 丟掉');
+  const rc = runningConfig(s2, s2.devices.r1).join('\n');
+  ok(/class-map type inspect match-any IN-OUT-CM\n match protocol http\n match protocol https\n match protocol dns\n match protocol icmp\n!/.test(rc) && /policy-map type inspect IN-OUT-PM\n class type inspect IN-OUT-CM\n  inspect\n class class-default\n  drop\n!/.test(rc)
+    && /zone-pair security OUT-DMZ source OUTSIDE destination DMZ\n service-policy type inspect OUT-DMZ-PM/.test(rc) && /interface GigabitEthernet0\/0\/2[^!]*zone-member security DMZ/.test(rc), 'running-config：class-map / policy-map type inspect、zone、zone-pair、介面的 zone-member');
+  ok(/Class-map IN-OUT-CM is being used/.test((() => { const S = iosSession(() => s2.devices.r1, () => s2); const o = []; for (const l of ['configure terminal', 'no class-map type inspect IN-OUT-CM', 'end']) o.push(...S.exec(l).out); return o.join('\n'); })()), '還在 policy-map 裡的 class-map 不能刪');
+}
+
 console.log('\nNetFlow 與 QoS 的 police');
 {
   const sim = await import('../src/engine/sim.js');

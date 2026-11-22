@@ -1,6 +1,7 @@
 // 進階功能的設定頁面：Wi-Fi、VPN、ACL、L2 安全、STP / LACP、管理加固、DHCP 範圍
 import { ipsecCards } from './panel-tun.js';
 import { acl6Cards } from './panel-v6.js';
+import { zbfCard } from './panel-zbf.js';
 import { ICMP_TYPES } from '../engine/mtu.js';
 import { h, icon, button, toast } from './dom.js';
 import {
@@ -524,6 +525,8 @@ export function mgmtTab(ctx, body) {
 export function aclTab(ctx, body) {
   const { dev } = ctx;
   body.append(h('p', { class: 'tip', text: 'ACL 由上往下比對，第一條符合的規則決定放行或拒絕。只要清單裡有規則，最後就隱含一條「全部拒絕」。ACL 不記錄連線狀態，回程封包也會被檢查。' }));
+  const zc = zbfCard(ctx);
+  if (zc) body.append(zc);
   for (const i of dev.ifaces) {
     const card = h('div', { class: 'card' }, cardHead(i.label, ctx.live(() => h('span', { class: 'mono muted', text: i.rt.ip != null ? `${fmtIp(i.rt.ip)}/${i.rt.bits}` : '未設定 IP' }))));
     for (const [key, title] of [['aclIn', '進入方向 (in)'], ['aclOut', '離開方向 (out)']]) {

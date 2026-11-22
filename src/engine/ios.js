@@ -20,6 +20,7 @@ import { genKey } from './remote.js';
 import { fhrpProto, fhrpGroup, fhrpPreempt } from './track.js';
 import { archiveNow, archiveLines, cfgLog, cfgDiff, ARCH_MAX_DEFAULT } from './archive.js';
 import { vtpCapable, vtpOf, vtpSet } from './vtp.js';
+import { ZBF_PROTO, newZbf, zbfConfigLines } from './zbf.js';
 
 // ───────────────────────── running-config 與 startup-config ─────────────────────────
 // IOS 設備改的是記憶體裡的 running-config；要下 write memory 才會存進 startup-config。
@@ -100,6 +101,7 @@ const isSw = (d) => !!d.sw && d.sw.mode === 'vlan';
 export const ERR_RECOVERY_CAUSES = ['arp-inspection', 'bpduguard', 'channel-misconfig', 'dhcp-rate-limit', 'dtp-flap', 'gbic-invalid', 'inline-power', 'link-flap', 'loopback', 'mac-limit', 'pagp-flap', 'port-mode-failure', 'psecure-violation', 'security-violation', 'sfp-config-mismatch', 'storm-control', 'udld', 'vmps'];
 const TYPES = { gi: 'gigabitethernet', te: 'tengigabitethernet', fa: 'fastethernet', eth: 'ethernet' };
 const PROMPT = {
+  zone: '(config-sec-zone)#', zpair: '(config-sec-zone-pair)#', icmap: '(config-cmap)#', ipmap: '(config-pmap)#', ipmapc: '(config-pmap-c)#',
   exec: '#', config: '(config)#', if: '(config-if)#', vlan: '(config-vlan)#', raguard: '(config-ra-guard)#', router: '(config-router)#', dhcp: '(dhcp-config)#',
   line: '(config-line)#', tacacs: '(config-server-tacacs)#', acl: '(config-ext-nacl)#', stdacl: '(config-std-nacl)#', radius: '(config-radius-server)#',
   isakmp: '(config-isakmp)#', tset: '(cfg-crypto-trans)#', cmap: '(config-crypto-map)#', ipsecprof: '(ipsec-profile)#', flowrec: '(config-flow-record)#', flowexp: '(config-flow-exporter)#', flowmon: '(config-flow-monitor)#', pkitp: '(ca-trustpoint)#', pkichain: '(config-cert-chain)#', pkicert: '(config-pubkey)#',
@@ -810,6 +812,12 @@ export function iosSession(getDev, getState, who = null) {
     })],
     // DHCPv6 Prefix Delegation 的用戶端：向 ISP 要一段前綴，存成一般前綴
     ['ipv6 dhcp client pd <name> [...]', ([name]) => onL3((i) => { i.pd6 = name; })],
+    ['zone-member security <z>', ([z]) => {
+      const Z = dev().zbf;
+      if (!Z || !Z.zones[z]) return err(`Zone ${z} does not exist（先用 zone security ${z} 建立）`);
+      return onL3((i) => { i.zone = z; });
+    }],
+    ['no zone-member security [...]', () => onL3((i) => { delete i.zone; })],
     ['nat64 enable', () => onL3((i) => { i.nat64 = true; })],
     ['no nat64 enable', () => onL3((i) => { delete i.nat64; })],
     ['no ipv6 dhcp client pd [...]', () => onL3((i) => { delete i.pd6; })],
@@ -1142,6 +1150,26 @@ export function iosSession(getDev, getState, who = null) {
     S.mode = 'pmapc'; S.cur = { pm: S.cur.pm, cls: name };
     return undefined;
   }
+  /** ZBF：policy-map type inspect 裡進入某個 class（新的 class 放在 class-default 前面） */
+  function zClass(name) {
+    const z = dev().zbf, pm = z.pmaps[S.cur.pm];
+    if (name !== 'class-default' && !z.cmaps[name]) return err(`class-map type inspect ${name} 不存在（先建立 class-map type inspect）`);
+    let c = pm.find((x) => x.cls === name);
+    if (!c) { c = { cls: name, act: 'drop' }; const n = pm.findIndex((x) => x.cls === 'class-default'); if (n < 0) pm.push(c); else pm.splice(n, 0, c); }
+    S.mode = 'ipmapc'; S.cur = { pm: S.cur.pm, cls: name };
+    return undefined;
+  }
+  function zAct(act, log) {
+    const c = dev().zbf.pmaps[S.cur.pm].find((x) => x.cls === S.cur.cls);
+    if (!c) return err('找不到目前的 class');
+    c.act = act; if (log) c.log = true; else delete c.log;
+    return undefined;
+  }
+  /** ZBF 的設定全部拿掉了：連物件一起移除 */
+  function tidyZbf() {
+    const z = dev().zbf;
+    if (z && !Object.keys(z.zones).length && !Object.keys(z.cmaps).length && !Object.keys(z.pmaps).length && !Object.keys(z.pairs).length) delete dev().zbf;
+  }
   function pmSet(fn) {
     const c = dev().policyMaps[S.cur.pm].find((x) => x.cls === S.cur.cls);
     return c ? fn(c) : err('找不到目前的 class');
@@ -1244,6 +1272,57 @@ export function iosSession(getDev, getState, who = null) {
       return undefined;
     }],
     ['no mls qos map cos-dscp', () => { const sw = dev().sw; if (sw && sw.qos) delete sw.qos.cosDscp; }],
+    // ── Zone-Based Firewall ──
+    ['zone security <name>', ([n]) => { const d = dev(); if (d.kind !== 'router') return err('這個模擬的 ZBF 只在路由器上'); if (n === 'self') return err('self 是系統內建的 zone'); (d.zbf ||= newZbf()).zones[n] ||= {}; enter('zone', n); return undefined; }],
+    ['no zone security <name>', ([n]) => {
+      const d = dev(), z = d.zbf;
+      if (!z || !z.zones[n]) return err(`Zone ${n} does not exist`);
+      if (d.ifaces.some((i) => i.zone === n)) return err(`Zone ${n} 還有介面（先在介面上 no zone-member security）`);
+      if (Object.values(z.pairs).some((p) => p.src === n || p.dst === n)) return err(`Zone ${n} 還被 zone-pair 使用`);
+      delete z.zones[n]; tidyZbf(); return undefined;
+    }],
+    ['class-map type inspect <...>', ([rest]) => {
+      const t = rest.split(/\s+/), any = /^match-any$/i.test(t[0]), all = /^match-all$/i.test(t[0]);
+      const name = any || all ? t[1] : t[0];
+      if (!name) return err('用法：class-map type inspect [match-any | match-all] <名稱>');
+      if (dev().kind !== 'router') return err('這個模擬的 ZBF 只在路由器上');
+      const m = ((dev().zbf ||= newZbf()).cmaps[name] ||= { any: false, match: [] });
+      if (any || all) m.any = any;
+      enter('icmap', name);
+      return undefined;
+    }],
+    ['no class-map type inspect <...>', ([rest]) => {
+      const name = rest.split(/\s+/).pop(), z = dev().zbf;
+      if (!z || !z.cmaps[name]) return err(`class-map ${name} not configured`);
+      if (Object.values(z.pmaps).some((pm) => pm.some((c) => c.cls === name))) return err(`Class-map ${name} is being used`);
+      delete z.cmaps[name]; tidyZbf(); return undefined;
+    }],
+    ['policy-map type inspect <name>', ([n]) => {
+      if (dev().kind !== 'router') return err('這個模擬的 ZBF 只在路由器上');
+      (dev().zbf ||= newZbf()).pmaps[n] ||= [{ cls: 'class-default', act: 'drop' }];
+      enter('ipmap', { pm: n });
+      return undefined;
+    }],
+    ['no policy-map type inspect <name>', ([n]) => {
+      const z = dev().zbf;
+      if (!z || !z.pmaps[n]) return err(`policy-map ${n} not configured`);
+      if (Object.values(z.pairs).some((p) => p.policy === n)) return err(`Policy map ${n} is being used by a zone-pair`);
+      delete z.pmaps[n]; tidyZbf(); return undefined;
+    }],
+    ['zone-pair security <name> source <s> destination <d>', ([n, s, t]) => {
+      const d = dev(), z = (d.zbf ||= newZbf());
+      if (d.kind !== 'router') return err('這個模擬的 ZBF 只在路由器上');
+      const ok = (x) => x === 'self' || !!z.zones[x];
+      if (!ok(s)) return err(`Zone ${s} does not exist`);
+      if (!ok(t)) return err(`Zone ${t} does not exist`);
+      if (s === t) return err('來源和目的 zone 不能一樣（同一個 zone 裡的介面本來就互通）');
+      const dup = Object.entries(z.pairs).find(([k, p]) => k !== n && p.src === s && p.dst === t);
+      if (dup) return err(`zone-pair ${dup[0]} 已經是 ${s} → ${t}`);
+      z.pairs[n] = { ...(z.pairs[n] || {}), src: s, dst: t };
+      enter('zpair', n);
+      return undefined;
+    }],
+    ['no zone-pair security <name>', ([n]) => { const z = dev().zbf; if (!z || !z.pairs[n]) return err(`Zone-pair ${n} does not exist`); delete z.pairs[n]; tidyZbf(); return undefined; }],
     ['class-map <...>', ([rest]) => {
       const t = rest.split(/\s+/), any = /^match-any$/i.test(t[0]), all = /^match-all$/i.test(t[0]);
       const name = any || all ? t[1] : t[0];
@@ -3160,6 +3239,42 @@ export function iosSession(getDev, getState, who = null) {
       ['no set [...]', () => rm((e) => { e.set = {}; })],
       ['description [...]', () => undefined],
     ],
+    zone: [['description [...]', ([t]) => { dev().zbf.zones[S.cur].desc = t; return undefined; }]],
+    icmap: [
+      ['match protocol <p>', ([p]) => {
+        const v = p.toLowerCase();
+        if (!ZBF_PROTO[v]) return err(`這個模擬的 match protocol 認得：${Object.keys(ZBF_PROTO).join('、')}`);
+        const m = dev().zbf.cmaps[S.cur];
+        if (!m.match.some((x) => x.t === 'protocol' && x.v === v)) m.match.push({ t: 'protocol', v });
+        return undefined;
+      }],
+      ['match access-group name <n>', ([n]) => { const m = dev().zbf.cmaps[S.cur]; if (!m.match.some((x) => x.t === 'acl' && x.v === n.toUpperCase())) m.match.push({ t: 'acl', v: n.toUpperCase() }); return undefined; }],
+      ['match access-group <n>', ([n]) => { const m = dev().zbf.cmaps[S.cur]; if (!m.match.some((x) => x.t === 'acl' && x.v === n.toUpperCase())) m.match.push({ t: 'acl', v: n.toUpperCase() }); return undefined; }],
+      ['no match protocol <p>', ([p]) => { const m = dev().zbf.cmaps[S.cur]; m.match = m.match.filter((x) => !(x.t === 'protocol' && x.v === p.toLowerCase())); return undefined; }],
+      ['no match access-group [...]', ([r]) => { const m = dev().zbf.cmaps[S.cur], n = String(r || '').split(/\s+/).pop().toUpperCase(); m.match = m.match.filter((x) => !(x.t === 'acl' && (!n || x.v === n))); return undefined; }],
+      ['description [...]', () => undefined],
+    ],
+    ipmap: [
+      ['class type inspect <name>', ([n]) => zClass(n)],
+      ['class class-default', () => zClass('class-default')],
+      ['no class type inspect <name>', ([n]) => { const pm = dev().zbf.pmaps[S.cur.pm]; const k = pm.findIndex((c) => c.cls === n); if (k < 0) return err(`class ${n} 不在這個政策裡`); pm.splice(k, 1); return undefined; }],
+      ['description [...]', () => undefined],
+    ],
+    ipmapc: [
+      ['class type inspect <name>', ([n]) => zClass(n)],
+      ['class class-default', () => zClass('class-default')],
+      ['inspect [...]', () => zAct('inspect')],
+      ['pass [...]', () => zAct('pass')],
+      ['drop [...]', ([r]) => zAct('drop', /\blog\b/i.test(r || ''))],
+      ['no inspect [...]', () => zAct('drop')],
+      ['no pass [...]', () => zAct('drop')],
+      ['no drop [...]', () => zAct('drop')],
+    ],
+    zpair: [
+      ['service-policy type inspect <pm>', ([pm]) => { const z = dev().zbf; if (!z.pmaps[pm]) return err(`Policy map ${pm} not configured（policy-map type inspect ${pm}）`); z.pairs[S.cur].policy = pm; return undefined; }],
+      ['no service-policy type inspect [...]', () => { delete dev().zbf.pairs[S.cur].policy; return undefined; }],
+      ['description [...]', () => undefined],
+    ],
     qcmap: [
       ['match any', () => addMatch({ t: 'any' })],
       ['match ip dscp <...>', ([l]) => matchDscp(l)],
@@ -3398,6 +3513,7 @@ export function iosSession(getDev, getState, who = null) {
     };
     if (match(tok, 'end') || t0 === '^z') { S.mode = 'exec'; S.cur = null; return leave(); }
     if (match(tok, 'exit') && S.mode === 'pmapc') { S.mode = 'pmap'; S.cur = { pm: S.cur.pm }; return done(false); }
+    if (match(tok, 'exit') && S.mode === 'ipmapc') { S.mode = 'ipmap'; S.cur = { pm: S.cur.pm }; return done(false); }
     if (match(tok, 'exit') && S.mode === 'ikev2peer') { S.mode = 'ikev2kr'; S.cur = S.cur.kr; return done(false); }
     // 巢狀的子模式：exit 只回到上一層（和真的 IOS 一樣）
     if (match(tok, 'exit') && S.mode === 'archlog') { S.mode = 'archive'; S.cur = null; return done(false); }
@@ -3426,7 +3542,7 @@ export function iosSession(getDev, getState, who = null) {
     let res = trySub ? run(SUB[S.mode], tok, out) : { hit: false };
     let viaSub = res.hit;
     // 巢狀的子模式不認得的指令，先往上一層找（例如貼上設定時 log config 底下接著 archive 的 path）
-    const UP = { vrfaf: ['vrfdef', (c) => c], archlog: ['archive', () => null], slaecho: ['ipsla', (c) => c], ikev2peer: ['ikev2kr', (c) => c.kr], pmapc: ['pmap', (c) => ({ pm: c.pm })] };
+    const UP = { vrfaf: ['vrfdef', (c) => c], archlog: ['archive', () => null], slaecho: ['ipsla', (c) => c], ikev2peer: ['ikev2kr', (c) => c.kr], pmapc: ['pmap', (c) => ({ pm: c.pm })], ipmapc: ['ipmap', (c) => ({ pm: c.pm })] };
     if (!res.hit && trySub && UP[S.mode]) {
       const [pm, pc] = UP[S.mode], prev = S.mode, prevCur = S.cur;
       S.mode = pm; S.cur = pc(prevCur);
@@ -3945,6 +4061,7 @@ export function runningConfig(state, dev) {
     }
   }
   if (Object.keys(dev.classMaps || {}).length || Object.keys(dev.policyMaps || {}).length) o.push('!');
+  o.push(...zbfConfigLines(dev)); // Zone-Based Firewall：介面的 zone-member 要先有 zone
   // DHCP 位址池
   for (const i of dev.ifaces) {
     if (!i.dhcp || !i.dhcp.on || !i.rt || i.rt.ip == null) continue;
@@ -4080,6 +4197,7 @@ export function runningConfig(state, dev) {
     if (i.raO) l.push(' ipv6 nd other-config-flag');
     if ((i.ip6 || i.gp6) && !i.ra) l.push(' ipv6 nd ra suppress all');
     if (i.pd6) l.push(` ipv6 dhcp client pd ${i.pd6}`);
+    if (i.zone) l.push(` zone-member security ${i.zone}`);
     if (i.nat64) l.push(' nat64 enable');
     if (i.dhcp6) l.push(` ipv6 dhcp server ${i.dhcp6}`);
     if (i.relay6) l.push(` ipv6 dhcp relay destination ${i.relay6.toUpperCase()}`);

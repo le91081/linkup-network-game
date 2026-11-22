@@ -27,6 +27,7 @@ import { isIos } from '../engine/ios.js';
 import { fmtMask } from '../engine/ip.js';
 import { route6Rows, nat64Rows, nat64Stats, clearNat64 } from '../engine/sim6.js';
 import { vtpCapable, vtpOf, vtpStatusLines } from '../engine/vtp.js';
+import { zbfActive } from '../engine/zbf.js';
 import { CATALOG, MEDIA, peerOf, portOf, linkInfo, phyConfig, fiberLink } from '../engine/model.js';
 import { xcvrAt, xcvrSerial, MEDIA_TYPE } from '../engine/optics.js';
 import { PLATFORM as PID_OF } from '../engine/dnac.js';
@@ -229,6 +230,24 @@ const SHOW = {
     }
     return o;
   },
+  'show zone security': (st, d) => {
+    if (d.kind !== 'router') return ['% 這個指令只適用於路由器'];
+    const z = d.zbf || { zones: {} };
+    const o = ['zone self', '  Description: System defined zone', ''];
+    for (const [n, x] of Object.entries(z.zones)) {
+      const mem = d.ifaces.filter((i) => i.zone === n);
+      o.push(`zone ${n}`, ...(x.desc ? [`  Description: ${x.desc}`] : []), ...(mem.length ? ['  Member Interfaces:', ...mem.map((i) => `    ${longIf(i.label)}`)] : []), '');
+    }
+    return o;
+  },
+  'show zone-pair security': (st, d) => {
+    if (d.kind !== 'router') return ['% 這個指令只適用於路由器'];
+    const pairs = Object.entries((d.zbf && d.zbf.pairs) || {});
+    if (!pairs.length) return ['（沒有任何 zone-pair：不同 zone 之間全部拒絕）'];
+    return pairs.flatMap(([n, p], k) => [`Zone-pair name ${n} ${k + 1}`, `    Source-Zone ${p.src}  Destination-Zone ${p.dst} `, `    service-policy ${p.policy || 'not present'}`]);
+  },
+  'show policy-map type inspect zone-pair sessions': (st, d) => zbfSessions(st, d),
+  'show policy-map type inspect zone-pair': (st, d) => zbfSessions(st, d, true),
   'show vtp status': (st, d) => {
     if (!isSw(d)) return ['% 這個指令只適用於交換器'];
     if (!vtpCapable(d)) return ['% 這台交換器沒有 VTP'];
@@ -1655,6 +1674,35 @@ export function consoleFollow(app, devId, key, print) {
 }
 
 /** NAT 轉換表：動態的項目閒置太久會被移除，靜態的一直都在 */
+/** show policy-map type inspect zone-pair [sessions]：每個 zone-pair 的 class、命中次數與 inspect 的連線 */
+function zbfSessions(st, d, counts) {
+  if (d.kind !== 'router') return ['% 這個指令只適用於路由器'];
+  const z = d.zbf, pairs = Object.entries((z && z.pairs) || {});
+  if (!zbfActive(d) || !pairs.length) return ['（沒有任何套用了政策的 zone-pair）'];
+  const rows = sessionRows(st, d).filter((e) => e.zp && !e.zbfPass);
+  const o = [];
+  for (const [n, p] of pairs) {
+    if (!p.policy) continue;
+    o.push(`policy exists on zp ${n}`, `  Zone-pair: ${n}`, '', `  Service-policy inspect : ${p.policy}`, '');
+    for (const c of z.pmaps[p.policy] || []) {
+      const cm = z.cmaps[c.cls];
+      o.push(`    Class-map: ${c.cls} (${c.cls === 'class-default' ? 'match-any' : cm && cm.any ? 'match-any' : 'match-all'})`);
+      if (cm) for (const m of cm.match) o.push(m.t === 'protocol' ? `      Match: protocol ${m.v}` : `      Match: access-group name ${m.v}`);
+      else o.push('      Match: any');
+      const act = c.act || 'drop';
+      o.push(`      ${act === 'inspect' ? 'Inspect' : act === 'pass' ? 'Pass' : 'Drop'}`);
+      if (counts || act !== 'inspect') o.push(`        ${c.hits || 0} packets`);
+      if (act === 'inspect') {
+        const ss = rows.filter((e) => e.zp === n && e.zcls === c.cls);
+        o.push(ss.length ? '        Established Sessions' : '        （目前沒有連線）');
+        ss.forEach((e, k) => o.push(`         Session ID 0x${(k + 1).toString(16).padStart(8, '0')} (${fmtIp(e.src)}:${e.sport})=>(${fmtIp(e.dst)}:${e.dport}) ${e.proto} SIS_OPEN`));
+      }
+      o.push('');
+    }
+  }
+  return o;
+}
+
 function natTable(st, d, verbose) {
   const W = 22;
   const o = [pad('Pro', 5) + pad('Inside global', W) + pad('Inside local', W) + pad('Outside local', W) + 'Outside global'];

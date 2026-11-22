@@ -484,3 +484,29 @@ test('VTP：SW-LAB 在 VLAN 分頁切成 Transparent，Core 補回 VLAN；show v
   await expect(page.locator('#panel .line', { has: page.locator('.vid', { hasText: /^10$/ }) }).locator('input')).toHaveValue('SALES');
   expect(await scan(page, '#panel', 'ACC1 的 VLAN 分頁（VTP client）')).toEqual([]);
 });
+
+test('ZBF：ACL 分頁建立 zone、指派介面、zone-pair 放行 https 與 dns；nslookup 通、ping 不通，show zone security 列出成員', async ({ page }) => {
+  await boot(page);
+  await open(page, 'l123');
+  await clickDevice(page, 'r1');
+  await page.locator('#panel .tab', { hasText: 'ACL' }).click();
+  const card = () => page.locator('#panel .card.zbf');
+  for (const z of ['INSIDE', 'OUTSIDE']) { const x = card().locator('.addrow input.inp').first(); await x.fill(z); await x.press('Enter'); }
+  await card().locator('label.field', { hasText: 'Gi0/0/1 的 zone' }).locator('select').selectOption('INSIDE');
+  await card().locator('label.field', { hasText: 'Gi0/0/0 的 zone' }).locator('select').selectOption('OUTSIDE');
+  await card().locator('.addrow', { hasText: '新增 zone-pair' }).locator('button').click();
+  await expect(card().locator('.zbf-pair')).toContainText('INSIDE → OUTSIDE');
+  for (const p of ['https', 'dns']) await card().locator('.zbf-pair label.switch', { hasText: new RegExp(`^${p}$`) }).click();
+  expect(await scan(page, '#panel', 'R1 的 ACL 分頁（Zone-Based Firewall）')).toEqual([]);
+  await page.locator('#panel .tab', { hasText: 'CLI' }).click();
+  await typeCmd(page, 'show zone security', 'show zone-pair security');
+  const out = page.locator('#panel .term-out');
+  await expect(out).toContainText('GigabitEthernet0/0/1');
+  await expect(out).toContainText('service-policy INSIDE-TO-OUTSIDE-PM');
+  await clickDevice(page, 'pc1');
+  await page.locator('#panel .tab', { hasText: '終端機' }).click();
+  await typeCmd(page, 'nslookup www.example.com');
+  await expect(page.locator('#panel .term-out')).toContainText('93.184.216.34');
+  await typeCmd(page, 'ping 8.8.8.8');
+  await expect(page.locator('#panel .term-out')).toContainText('class-default');
+});

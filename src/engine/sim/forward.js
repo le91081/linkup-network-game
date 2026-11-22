@@ -18,6 +18,7 @@ import { findTunnel } from './tunnels.js';
 import { lookupRoute } from './l3.js';
 import { GRE_OVERHEAD, greRx, greTarget, isTun, nhrpRedirect, tunMode } from './gre.js';
 import { haLostNote } from '../ha.js';
+import { zbfActive, zbfCheck, zbfNeeds } from '../zbf.js';
 
 // ───────────────────────────── 封包轉送 ─────────────────────────────
 
@@ -240,8 +241,16 @@ function filter(dev, inIf, outIf, pkt, dnat) {
     }
     return { ok: false, reason: `${dev.name} 沒有符合的政策（${inIf.label} → ${outIf.label}${isMember(dev, outIf.id) ? `，${outIf.label} 是 SD-WAN 的成員：政策的目的介面要用 ${ZONE}` : ''}），預設全部拒絕 (implicit deny)` };
   }
+  // IOS 的 Zone-Based Firewall：不同 zone 之間要有 zone-pair 的 inspect / pass
+  if (dev.kind === 'router' && zbfActive(dev)) {
+    const z = zbfCheck(dev, inIf, outIf, pkt, zbfAcl(dev));
+    if (!z.ok) return { ok: false, reason: z.reason };
+    return { ok: true, nat: outIf.nat, zbf: z.pair ? z : null };
+  }
   return { ok: true, nat: outIf.nat };
 }
+/** ZBF 的 class-map 用 match access-group 時：ACL 有沒有放行這個封包 */
+const zbfAcl = (dev) => (name, p) => { const r = aclRules(dev, name); return !!r && r.length > 0 && aclCheck(r, p) === null; };
 
 /** NAT 設備替後面的 NAT-T 對端留著的轉換：外面送進來的 UDP 4500 轉給 NAT 後面那台路由器 */
 function nattMap(state, dev, pkt) {
@@ -422,7 +431,7 @@ export function forward(state, ctx, startId, pkt) {
           }
         }
       } else if (e && pkt.reply) {
-        established = true;
+        established = !e.zbfPass;
         T('resolve_ip_tuple_fast', `Find an existing session, id-${sessId(e)}, reply direction`);
         if (e.nSrc !== e.src) T('__ip_session_run_tuple', `DNAT ${fmtIp(pkt.dst)}:${pkt.dport}->${fmtIp(e.src)}:${e.sport}`);
         e.t = state.clock; // 有封包經過，閒置的計時重新開始
@@ -447,6 +456,10 @@ export function forward(state, ctx, startId, pkt) {
         return drop(`${dev.name} 的骨幹故障：封包到了業者那一端就出不去（線路燈號正常，介面沒有 down）`);
       }
       if (isLocal(dev, pkt.dst, vrfOf(inIf))) {
+        if (dev.kind === 'router' && !pkt.reply && zbfActive(dev)) {
+          const z = zbfCheck(dev, inIf, null, pkt, zbfAcl(dev));
+          if (!z.ok) return drop(z.reason);
+        }
         T('vf_ip_route_input_common', `find a route: flag=84000000 gw-${fmtIp(pkt.dst)} via root`);
         const r = deliver(dev, inIf, pkt);
         if (!r.ok) { log.push({ dev: dev.id, kind: 'drop', text: r.reason }); T('fw_local_in_handler', 'iprope_in_check() check failed on policy 0, drop'); }
@@ -555,7 +568,7 @@ export function forward(state, ctx, startId, pkt) {
     if (!inIf) D('packet', `IP: s=${fmtIp(pkt.src)} (local), d=${fmtIp(pkt.dst)} (${longIf(outIf.label)}), len ${ipLen(pkt)}, sending`);
 
 
-    if (inIf && !established && ctx.mid && dev.kind === 'firewall') return lostSession();
+    if (inIf && !established && ctx.mid && (dev.kind === 'firewall' || (dev.kind === 'router' && zbfNeeds(dev, inIf, outIf)))) return lostSession();
     T('vf_ip_route_input_common', `find a route: flag=04000000 gw-${fmtIp(nh)} via ${outIf.id}`);
     if (inIf && !established) {
       const v = filter(dev, inIf, outIf, pkt, dnat);
@@ -563,6 +576,7 @@ export function forward(state, ctx, startId, pkt) {
       if (stateful && !ctx.mid) sess(dev, { act: v.ok ? 'allow' : 'deny', proto: pkt.proto, ...o, rule: v.rule || 0, inIf: inIf.label, outIf: outIf.label });
       if (!v.ok) { denyLog(state, dev, pkt, o, inIf, outIf, v.rule); return drop(v.reason); }
       if (v.rule) log.push({ dev: dev.id, kind: 'fwd', text: `符合政策 #${v.rule}，放行（${inIf.label} → ${outIf.label}）` });
+      if (v.zbf) log.push({ dev: dev.id, kind: 'fwd', text: `ZBF：zone-pair ${v.zbf.pair} 的 class ${v.zbf.cls} → ${v.zbf.act}${pkt.reply ? '' : v.zbf.act === 'inspect' ? '（記下連線，回程自動放行）' : '（無狀態：回程要另外放行）'}` });
       if (!pkt.reply) {
         let nSrc = pkt.src;
         const st = (dev.staticNat || []).find((x) => parseIp(x.priv || '') === pkt.src && outIf.rt.vips.includes(parseIp(x.pub || '')));
@@ -572,8 +586,8 @@ export function forward(state, ctx, startId, pkt) {
           if (pkt.proto === 'esp' && !pkt.ssl && dev.kind !== 'homerouter') return drop(`${dev.name} 做的是 PAT（多個位址共用 ${outIf.label} 的位址）：ESP 封包沒有連接埠號碼，PAT 沒辦法替它轉換，只好丟掉。中間有 NAT 時兩端都要用 NAT-T（ESP 包在 UDP 4500 裡）`);
           nSrc = outIf.rt.ip;
         }
-        if (nSrc !== pkt.src || dnat || stateful) {
-          track(state, ctx, dev, { proto: pkt.proto, ...o, nSrc, nSport: pkt.sport, nDst: pkt.dst, nDport: pkt.dport, inIf: inIf.label, outIf: outIf.label, rule: v.rule || 0 });
+        if (nSrc !== pkt.src || dnat || stateful || v.zbf) {
+          track(state, ctx, dev, { proto: pkt.proto, ...o, nSrc, nSport: pkt.sport, nDst: pkt.dst, nDport: pkt.dport, inIf: inIf.label, outIf: outIf.label, rule: v.rule || 0, ...(v.zbf ? { zp: v.zbf.pair, zcls: v.zbf.cls, ...(v.zbf.act === 'pass' ? { zbfPass: true } : {}) } : {}) });
         }
         if (nSrc !== pkt.src) {
           T('__ip_session_run_tuple', `SNAT ${fmtIp(pkt.src)}->${fmtIp(nSrc)}:${pkt.sport}`);
