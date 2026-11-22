@@ -3620,6 +3620,32 @@ console.log('\nVPC peering 與 Transit Gateway');
   ok(!tcp('dev', '10.30.1.10', '10.10.1.20', 3306).ok, '關掉 prod 的路由傳播：Transit Gateway 不知道 10.10.0.0/16 在哪裡');
 }
 
+console.log('\nNETCONF');
+{
+  const { netconf } = await import('../src/engine/restconf.js');
+  const { iosSession, runningConfig } = await import('../src/engine/ios.js');
+  const ok = (cond, title) => (cond ? console.log('  ✔ ' + title) : fail(title));
+  const lv = LEVELS.find((x) => x.id === 'l111');
+  const s = lv.setup(); settle(s);
+  const nc = (o) => netconf(s, 'auto', { host: '10.20.0.1', user: 'netauto', pass: 'Aut0mate!26', quiet: true, ...o });
+  ok(/Connection refused/.test(nc({ op: 'hello' }).error) && /netconf-yang/.test(nc({ op: 'hello' }).why), '沒有 netconf-yang：830 埠連線被拒絕');
+  const S = iosSession(() => s.devices.rt, () => s);
+  for (const l of ['configure terminal', 'netconf-yang', 'end']) S.exec(l);
+  settle(s);
+  ok(/RSA 金鑰/.test(nc({ op: 'hello' }).why), '有 netconf-yang 但沒有 RSA 金鑰：SSH 沒有在聽');
+  for (const l of ['configure terminal', 'ip domain name corp.local', 'crypto key generate rsa modulus 2048', 'end']) S.exec(l);
+  settle(s);
+  const h = nc({ op: 'hello' });
+  ok(h.ok && /<capability>urn:ietf:params:netconf:base:1\.1<\/capability>/.test(h.xml) && /ietf-interfaces\?module=ietf-interfaces/.test(h.xml), '<hello>：列出 base 1.0 / 1.1 與 YANG 模組');
+  ok(/AuthenticationError/.test(nc({ op: 'hello', pass: 'wrong' }).error), '密碼錯誤：AuthenticationError');
+  ok(/<interface>\s*<name>GigabitEthernet0\/0\/1<\/name>/.test(nc({ op: 'get-config' }).xml), '<get-config>：running 裡的介面 (ietf-interfaces)');
+  ok(/operation-not-supported/.test(nc({ op: 'get-config', source: 'candidate' }).xml), 'candidate：IOS XE 預設沒有，回 <rpc-error> operation-not-supported');
+  ok(/data-missing/.test(nc({ op: 'edit-config', config: '<config><interfaces xmlns="urn:ietf:params:xml:ns:yang:ietf-interfaces"><interface><name>GigabitEthernet9/9/9</name></interface></interfaces></config>' }).xml), '<edit-config> 不存在的實體介面：data-missing');
+  const e = nc({ op: 'edit-config', config: '<config><interfaces xmlns="urn:ietf:params:xml:ns:yang:ietf-interfaces"><interface><name>Loopback100</name><description>MGMT</description><ipv4 xmlns="urn:ietf:params:xml:ns:yang:ietf-ip"><address><ip>10.255.255.1</ip><netmask>255.255.255.255</netmask></address></ipv4></interface></interfaces></config>' });
+  const rc = runningConfig(s, s.devices.rt).join('\n');
+  ok(e.ok && /<ok\/>/.test(e.xml) && /interface Loopback100\n description MGMT\n ip address 10\.255\.255\.1 255\.255\.255\.255/.test(rc) && /\nnetconf-yang/.test(rc), '<edit-config>：建立 Loopback100，回 <ok/>；running-config 有 netconf-yang');
+}
+
 console.log('\nNetFlow 與 QoS 的 police');
 {
   const sim = await import('../src/engine/sim.js');

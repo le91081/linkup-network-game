@@ -1812,6 +1812,14 @@ export function iosSession(getDev, getState, who = null) {
       return d.mgmt.https ? undefined : '（RESTCONF 走 HTTPS：還要 ip http secure-server）';
     }],
     ['no restconf', () => { if (dev().mgmt) delete dev().mgmt.restconf; }],
+    // NETCONF：SSH 的 830 埠（要有 RSA 金鑰，SSH 才在聽）
+    ['netconf-yang', () => {
+      const d = dev();
+      if (!IOS_XE.has(d.model)) return err(`${CATALOG[d.model].title} 跑的不是 IOS XE，沒有 NETCONF`);
+      d.mgmt.netconf = true;
+      return d.mgmt.sshKey ? undefined : '（NETCONF 走 SSH：還要 ip domain name 與 crypto key generate rsa，SSH 才會在 830 埠聽）';
+    }],
+    ['no netconf-yang', () => { if (dev().mgmt) delete dev().mgmt.netconf; }],
     ['ip http authentication local', () => undefined],
     ['ip http server', () => void (dev().mgmt && (dev().mgmt.http = true))],
     ['no ip http server', () => void (dev().mgmt && (dev().mgmt.http = false))],
@@ -4144,6 +4152,7 @@ export function runningConfig(state, dev) {
     }
     o.push(m.http ? 'ip http server' : 'no ip http server', m.https ? 'ip http secure-server' : 'no ip http secure-server');
     if (m.restconf) o.push('ip http authentication local', 'restconf');
+    if (m.netconf) o.push('netconf-yang');
     const allow = String(m.allow || '').split(/[,\s]+/).filter(Boolean).map((s) => { const x = s.match(/^([\d.]+)(?:\/(\d+))?$/); const ip = x && parseIp(x[1]); return ip == null ? null : { net: ip, bits: x[2] == null ? 32 : +x[2] }; }).filter(Boolean);
     const an = m.aclName || 'MGMT';
     if (allow.length) { o.push(`ip access-list standard ${an}`); for (const c of allow) o.push(c.bits === 32 ? ` permit host ${fmtIp(c.net)}` : ` permit ${fmtIp(netOf(c.net, c.bits))} ${wild(c.bits)}`); }

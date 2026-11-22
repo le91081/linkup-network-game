@@ -1,5 +1,5 @@
 // 終端機裡的自動化指令：curl（呼叫 REST API）與 ansible-playbook
-import { sendApi } from './panel-auto.js';
+import { sendApi, sendNetconf } from './panel-auto.js';
 import { ansibleRun } from './panel-auto.js';
 import { parseYaml, yamlErrorText } from '../engine/yaml.js';
 
@@ -128,6 +128,32 @@ export function ansibleCmd(app, dev, line, print) {
   const r = ansibleRun(app, dev.id, o);
   const CLS = { head: 'cmd', ok: 'ok', chg: 'warn', bad: 'bad', skip: 'dim', hint: 'hint', warn: 'warn', dim: 'dim' };
   for (const l of r.lines) print(l.t, l.c === 'hint' ? 'hint' : 'pre ' + (CLS[l.c] || ''));
+}
+
+/** netconf-console2 --host=… --port=830 -u … -p … --hello | --get-config（edit-config 要 XML 檔，用 API 分頁的 NETCONF） */
+export function netconfCmd(app, dev, line, print) {
+  const sw = shellWords(line);
+  if (sw.err) { print(`-bash: ${sw.err}`, 'bad'); return; }
+  const o = { port: 830, op: '', db: 'running' };
+  const w = sw.words.slice(1);
+  for (let i = 0; i < w.length; i++) {
+    const x = w[i], eq = x.indexOf('='), key = eq > 0 ? x.slice(0, eq) : x, val = eq > 0 ? x.slice(eq + 1) : null;
+    const next = () => (val != null ? val : w[++i]);
+    if (key === '--host') o.host = next();
+    else if (key === '--port') o.port = +next();
+    else if (key === '-u' || key === '--user') o.user = next();
+    else if (key === '-p' || key === '--password') o.pass = next();
+    else if (key === '--hello') o.op = 'hello';
+    else if (key === '--get-config') o.op = 'get-config';
+    else if (key === '--get') o.op = 'get';
+    else if (key === '--db') o.db = next();
+    else if (key === '--edit-config') { print('netconf-console2: --edit-config 要讀 XML 檔：這個模擬請用「API」分頁的 NETCONF 模式（可以直接貼 XML）', 'warn'); return; }
+    else { print(`netconf-console2: error: unrecognized arguments: ${x}`, 'bad'); return; }
+  }
+  if (!o.host || !o.op) { print('usage: netconf-console2 --host=HOST [--port=830] -u USER -p PASS (--hello | --get-config | --get) [--db=running]', 'dim'); return; }
+  const r = sendNetconf(app, dev.id, o);
+  if (r.error) { print(r.error, 'bad'); if (r.why) print('  ↳ ' + r.why, 'hint'); return; }
+  for (const l of r.xml.split('\n')) print(l, 'pre');
 }
 
 /** Linux 控制主機上的幾個檔案指令 */

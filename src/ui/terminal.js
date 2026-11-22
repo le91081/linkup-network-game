@@ -12,7 +12,7 @@ import { counters, onBulk } from '../engine/wire.js';
 import { fortiRun } from './forticli.js';
 import { transact6, dhcp6Trace, duidOf, iaidOf } from '../engine/sim6.js';
 import { parseIp6, fmtIp6 } from '../engine/ip6.js';
-import { isApiCurl, curlApi, ansibleCmd, fileCmd } from './term-auto.js';
+import { isApiCurl, curlApi, ansibleCmd, fileCmd, netconfCmd } from './term-auto.js';
 import { dockerCmd } from './term-docker.js';
 import { dockerDeliver } from '../engine/docker.js';
 import { tlsCheck, fmtDate, certSelf, CORP_CA, PUBLIC_CAS } from '../engine/web.js';
@@ -251,6 +251,7 @@ export function buildTerminal(ctx, body) {
     if (c === 'help' || c === '?') {
       (linux ? HELP_LINUX : HELP).forEach((x) => print(x, 'dim'));
       if ((dev.apps || []).includes('api')) print('  curl -k -u 帳號:密碼 -H "Accept: application/yang-data+json" https://<IP>/restconf/data/…   呼叫 REST API（-X 方法、-d 內容、-i 顯示標頭）', 'dim');
+      if ((dev.apps || []).includes('api')) print('  netconf-console2 --host=<IP> --port=830 -u 帳號 -p 密碼 --hello | --get-config   NETCONF（SSH 的 830 埠；edit-config 用 API 分頁）', 'dim');
       if (dev.ansible) { print('  ansible-playbook -i inventory.ini <playbook> [--check] [-v] [--limit 主機]   執行 playbook', 'dim'); print('  ls / cat <檔名>          列出 / 顯示控制主機上的檔案', 'dim'); }
       if (dev.docker) {
         print('  docker ps [-a]          列出容器；PORTS 欄是發佈的連接埠（主機:埠->容器埠）', 'dim');
@@ -563,6 +564,9 @@ export function buildTerminal(ctx, body) {
       dockerCmd(app, dev, args, print, () => ctx.commit(false));
     } else if (c === 'curl' && isApiCurl(line)) {
       curlApi(app, dev, line.trim(), print);
+      ctx.commit(false);
+    } else if (c === 'netconf-console2' && ((dev.apps || []).includes('api') || dev.ansible)) {
+      netconfCmd(app, dev, line.trim(), print);
       ctx.commit(false);
     } else if (c === 'ansible-playbook' && dev.ansible) {
       ansibleCmd(app, dev, line.trim(), print);

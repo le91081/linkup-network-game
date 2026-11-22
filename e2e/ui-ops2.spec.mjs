@@ -211,3 +211,21 @@ test('Transit Gateway：peering 分頁列出 active 的連線，TGW 主控台 at
   expect(await page.evaluate(() => window.linkup.state.devices.tgw.tgw.attach.length)).toBe(3);
   expect(await scan(page, '#panel', 'Transit Gateway 主控台')).toEqual([]);
 });
+
+test('NETCONF：API 分頁切到 NETCONF，沒有 netconf-yang 時連線被拒絕，開啟之後 <hello> 列出 capabilities', async ({ page }) => {
+  await boot(page);
+  await open(page, 'l111');
+  await clickDevice(page, 'auto');
+  await page.locator('#panel .tab', { hasText: 'API' }).click();
+  await page.locator('#panel .seg button', { hasText: 'NETCONF' }).click();
+  const req = page.locator('#panel .card', { hasText: 'NETCONF 請求' });
+  await req.locator('label', { hasText: '帳號' }).locator('input').fill('netauto');
+  await req.locator('label', { hasText: '密碼' }).locator('input').fill('Aut0mate!26');
+  await req.locator('button', { hasText: '送出' }).click();
+  await expect(page.locator('#panel .card', { hasText: '回應' })).toContainText('Connection refused');
+  await page.evaluate(() => { const m = window.linkup.state.devices.rt.mgmt; m.netconf = true; m.sshKey = { bits: 2048, gen: 1 }; window.linkup.settleNow(); });
+  await clickDevice(page, 'auto');
+  await page.locator('#panel .card', { hasText: 'NETCONF 請求' }).locator('button', { hasText: '送出' }).click();
+  await expect(page.locator('#panel .card', { hasText: '回應' })).toContainText('urn:ietf:params:netconf:base:1.1');
+  expect(await scan(page, '#panel', 'API 分頁（NETCONF）')).toEqual([]);
+});

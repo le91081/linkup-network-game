@@ -2,7 +2,7 @@
 import { h, button, ownKeys } from './dom.js';
 import { note, cardHead, badge, toggle } from './form.js';
 import { fmtIp } from '../engine/ip.js';
-import { restconf } from '../engine/restconf.js';
+import { restconf, netconf } from '../engine/restconf.js';
 import { runPlaybook, MODULES } from '../engine/automation.js';
 import { parseYaml, YamlError } from '../engine/yaml.js';
 import { IOS_XE, iosSession } from '../engine/ios.js';
@@ -85,10 +85,46 @@ export function sendApi(app, devId, r) {
   return out;
 }
 
+/** NETCONF 的範本：建立 Loopback 並設定描述與 IP */
+const NC_TEMPLATE = '<config>\n  <interfaces xmlns="urn:ietf:params:xml:ns:yang:ietf-interfaces">\n    <interface>\n      <name>Loopback100</name>\n      <description>MGMT</description>\n      <type xmlns:ianaift="urn:ietf:params:xml:ns:yang:iana-if-type">ianaift:softwareLoopback</type>\n      <enabled>true</enabled>\n      <ipv4 xmlns="urn:ietf:params:xml:ns:yang:ietf-ip">\n        <address>\n          <ip>10.255.255.1</ip>\n          <netmask>255.255.255.255</netmask>\n        </address>\n      </ipv4>\n    </interface>\n  </interfaces>\n</config>';
+/** 等效的 netconf-console2 指令 */
+export const ncCmd = (n) => `netconf-console2 --host=${n.host || '<IP>'} --port=${n.port || 830} -u ${n.user || '<帳號>'} -p ${n.pass ? '********' : '<密碼>'} ${n.op === 'hello' ? '--hello' : n.op === 'edit-config' ? `--db=${n.db || 'running'} --edit-config=edit.xml` : `--db=${n.db || 'running'} --get-config`}`;
+export function sendNetconf(app, devId, n) {
+  const st = app.state, r = netconf(st, devId, { host: n.host, port: n.port, user: n.user, pass: n.pass, op: n.op, target: n.db, source: n.db, config: n.xml });
+  if (r.res) app.showTrace(`${st.devices[devId].name} → NETCONF ${n.op}`, r.res.log, r.res.hops, r.res.ok ? { ...r.res, ok: r.ok, reason: r.ok ? '' : r.error || 'rpc-error', failDev: r.ok ? undefined : r.dev } : r.res);
+  return r;
+}
+/** API 分頁的 NETCONF 模式：SSH 的 830 埠、XML 的 RPC */
+function netconfPanel(ctx, body, ui) {
+  const { app, dev, state } = ctx;
+  const n = (ui.nc ||= { host: guessTarget(state, dev), port: 830, user: '', pass: '', op: 'hello', db: 'running', xml: NC_TEMPLATE });
+  const rerender = () => app.renderPanel();
+  const fld = (label, el) => h('label', { class: 'field' }, h('span', { class: 'f-label', text: label }), el);
+  const txt = (k, ph, type = 'text') => h('input', { class: 'inp mono', type, value: n[k], placeholder: ph, spellcheck: 'false', autocomplete: 'off', oninput: (e) => { n[k] = e.target.value; cmd.textContent = ncCmd(n); } });
+  const sel = (k, opts) => h('select', { class: 'inp sel', onchange: (e) => { n[k] = e.target.value; rerender(); } }, opts.map(([v, t]) => h('option', { value: v, selected: v === n[k], text: t })));
+  body.append(h('p', { class: 'tip', text: 'NETCONF：用 SSH 連到設備的 830 埠，送 XML 格式的 RPC。<hello> 交換彼此支援的功能 (capabilities)，<get-config> 讀出設定，<edit-config> 修改設定。IOS XE 要先 netconf-yang，帳號是 privilege 15 的本機帳號；資料模型和 RESTCONF 一樣是 YANG。' }));
+  const area = n.op === 'edit-config' && h('textarea', { class: 'code', rows: 14, spellcheck: 'false', wrap: 'off', value: n.xml, oninput: (e) => { n.xml = e.target.value; } });
+  if (area) area.addEventListener('keydown', (e) => { if (codeKey(area, e)) n.xml = area.value; ownKeys(e); });
+  const cmd = h('div', { class: 'api-curl mono', text: ncCmd(n) });
+  const send = () => { n.last = sendNetconf(app, dev.id, n); ctx.commit(false); rerender(); };
+  body.append(h('div', { class: 'card api-req' }, cardHead('NETCONF 請求'),
+    h('div', { class: 'grid2' }, fld('設備 (--host)', txt('host', '10.0.0.1')), fld('埠 (--port)', txt('port', '830')), fld('帳號', txt('user', 'admin')), fld('密碼', txt('pass', '', 'password')),
+      fld('操作', sel('op', [['hello', '<hello>（看看設備支援什麼）'], ['get-config', '<get-config>（讀設定）'], ['edit-config', '<edit-config>（改設定）']])),
+      n.op !== 'hello' ? fld('資料庫 (datastore)', sel('db', [['running', 'running'], ['candidate', 'candidate']])) : h('span')),
+    area && fld('<config> 的內容 (edit.xml)', area),
+    h('div', { class: 'addrow' }, button('送出', { ic: 'play', kind: 'primary', small: true, onclick: send }), area && button('範本：建立 Loopback100', { small: true, onclick: () => { n.xml = NC_TEMPLATE; rerender(); } })),
+    h('div', { class: 'f-label', text: '等效的指令（也可以在終端機輸入 --hello 或 --get-config）' }), cmd));
+  const r = n.last;
+  if (r) body.append(h('div', { class: 'card api-resp' }, cardHead('回應', r.ok ? badge('on', r.xml && r.xml.includes('<ok/>') ? '<ok/>' : 'OK') : badge('off', r.xml ? 'rpc-error' : '失敗')),
+    r.error && note('warn', r.error), r.why && note('muted', r.why), r.xml ? h('pre', { class: 'api-body mono', text: r.xml }) : null));
+}
+
 export function apiTab(ctx, body) {
   const { app, dev, state } = ctx;
   const ui = ((app.apiUi ||= {})[dev.id] ||= { method: 'GET', url: `https://${guessTarget(state, dev)}/restconf/data/ietf-interfaces:interfaces`, user: '', pass: '', ctype: YANG, accept: '', body: '', verify: true, hist: [] });
   const rerender = () => app.renderPanel();
+  body.append(h('div', { class: 'seg' }, [['restconf', 'RESTCONF（HTTPS + JSON）'], ['netconf', 'NETCONF（SSH + XML）']].map(([v, t]) => h('button', { type: 'button', class: (ui.proto || 'restconf') === v ? 'on' : '', onclick: () => { ui.proto = v; rerender(); } }, t))));
+  if (ui.proto === 'netconf') { netconfPanel(ctx, body, ui); return; }
   const set = (k) => (e) => { ui[k] = e.target.value; };
   body.append(h('p', { class: 'tip', text: '用 HTTPS 呼叫設備的 REST API（RESTCONF）。方法 + 網址決定要對哪一份資料做什麼，帳號密碼用 HTTP Basic 驗證；寫入的內容是 JSON。按「送出」會看到封包真的從這台電腦出發。' }));
 

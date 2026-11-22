@@ -229,3 +229,79 @@ function route(state, d, method, rest, body, user) {
 }
 
 void fmtIp;
+
+// ───────────────────────── NETCONF ─────────────────────────
+// IOS XE 的 netconf-yang：SSH 的 830 埠、XML 的 RPC。和 RESTCONF 用同一份 YANG 資料（ietf-interfaces）。
+// 這裡只做 <hello>、<get-config> / <get>（running）、<edit-config>（running；candidate 要另外開啟，這裡回錯誤）
+const NC = 'urn:ietf:params:xml:ns:netconf:base:1.0';
+const xmlEsc = (s) => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+/** 取出第一個 <tag>…</tag> 的內容（忽略命名空間前綴） */
+function xmlIn(s, tag) {
+  const m = new RegExp('<(?:[\\w-]+:)?' + tag + '(?:\\s[^>]*)?>([\\s\\S]*?)</(?:[\\w-]+:)?' + tag + '>').exec(s || '');
+  return m ? m[1].trim() : null;
+}
+function xmlAll(s, tag) {
+  const re = new RegExp('<(?:[\\w-]+:)?' + tag + '(?:\\s[^>]*)?>([\\s\\S]*?)</(?:[\\w-]+:)?' + tag + '>', 'g');
+  const out = [];
+  let m;
+  while ((m = re.exec(s || ''))) out.push(m[1]);
+  return out;
+}
+const rpcErr = (tag, msg, type = 'application') => `<rpc-reply message-id="101" xmlns="${NC}">\n  <rpc-error>\n    <error-type>${type}</error-type>\n    <error-tag>${tag}</error-tag>\n    <error-severity>error</error-severity>\n    <error-message xml:lang="en">${xmlEsc(msg)}</error-message>\n  </rpc-error>\n</rpc-reply>`;
+const HELLO_CAPS = ['urn:ietf:params:netconf:base:1.0', 'urn:ietf:params:netconf:base:1.1', 'urn:ietf:params:netconf:capability:writable-running:1.0', 'urn:ietf:params:netconf:capability:xpath:1.0',
+  'urn:ietf:params:netconf:capability:validate:1.0', 'urn:ietf:params:netconf:capability:rollback-on-error:1.0', 'urn:ietf:params:xml:ns:yang:ietf-interfaces?module=ietf-interfaces&amp;revision=2014-05-08',
+  'urn:ietf:params:xml:ns:yang:ietf-ip?module=ietf-ip&amp;revision=2014-06-16', 'http://cisco.com/ns/yang/Cisco-IOS-XE-native?module=Cisco-IOS-XE-native&amp;revision=2023-07-01'];
+
+/**
+ * NETCONF 用戶端（netconf-console2 / ncclient）。req = { host, port, user, pass, op: 'hello' | 'get-config' | 'get' | 'edit-config', target, config（XML） }
+ * 回傳 { ok, xml, error, why, dev }
+ */
+export function netconf(state, fromId, req) {
+  const ip = parseIp(req.host || ''), port = +(req.port || 830), op = req.op || 'hello';
+  if (ip == null) return { ok: false, error: '要指定設備的 IP（--host）' };
+  const res = transact(state, fromId, { proto: 'tcp', dst: ip, dport: port, quiet: !!req.quiet });
+  if (!res.ok) return { ok: false, error: `ssh: connect to host ${fmtIp(ip)} port ${port}: ${/沒有啟用|拒絕|沒有開啟|沒有在/.test(res.reason) ? 'Connection refused' : 'Connection timed out'}`, why: res.reason, res };
+  const d = state.devices[res.responder];
+  if (!d.mgmt || !IOS_XE.has(d.model)) return { ok: false, error: `${d.name} 不支援 NETCONF（不是 IOS XE）`, res, dev: d.id };
+  if (!localUsers(d.mgmt).some((u) => u.user === (req.user || '') && u.pass === (req.pass || ''))) return { ok: false, error: 'ncclient.transport.errors.AuthenticationError: AuthenticationException(\'Authentication failed.\')', why: 'NETCONF 走 SSH，用 username … privilege 15 建立的帳號登入', res, dev: d.id };
+  const done = (xml, ok = true) => {
+    if (!req.quiet) {
+      const log = ((state.dyn ||= {}).api ||= []);
+      log.push({ t: state.clock, from: fromId, dev: d.id, method: 'NETCONF', path: op, status: ok ? 200 : 400 });
+      if (log.length > 40) log.splice(0, log.length - 40);
+    }
+    return { ok, xml, res, dev: d.id };
+  };
+  if (op === 'hello') return done(`<hello xmlns="${NC}">\n  <capabilities>\n${HELLO_CAPS.map((c) => `    <capability>${c}</capability>`).join('\n')}\n  </capabilities>\n  <session-id>${27 + (state.clock | 0) % 50}</session-id>\n</hello>`);
+  const store = req.target || req.source || 'running';
+  if (store !== 'running') return done(rpcErr('operation-not-supported', `${store} datastore is not supported (netconf-yang feature candidate-datastore is not configured)`, 'protocol'), false);
+  if (op === 'get-config' || op === 'get') {
+    const data = toXml({ 'ietf-interfaces:interfaces': { interface: ifaceList(d).map(ifaceJson) } }, '    ');
+    return done(`<rpc-reply message-id="101" xmlns="${NC}">\n  <data>\n${data}\n  </data>\n</rpc-reply>`);
+  }
+  if (op !== 'edit-config') return done(rpcErr('operation-not-supported', `unknown operation ${op}`, 'protocol'), false);
+  const cfg = xmlIn(req.config, 'config') ?? req.config ?? '';
+  const ifs = xmlIn(cfg, 'interfaces');
+  if (ifs == null) return done(rpcErr('malformed-message', 'edit-config: expected <interfaces xmlns="urn:ietf:params:xml:ns:yang:ietf-interfaces"> inside <config>', 'rpc'), false);
+  for (const blk of xmlAll(ifs, 'interface')) {
+    const name = xmlIn(blk, 'name');
+    if (!name) return done(rpcErr('missing-element', 'interface/name is required'), false);
+    const body = {};
+    const desc = xmlIn(blk, 'description'), en = xmlIn(blk, 'enabled'), v4 = xmlIn(blk, 'ipv4');
+    if (desc != null) body.description = desc;
+    if (en != null) body.enabled = en === 'true';
+    if (v4 != null) { const a = xmlIn(v4, 'address'); body['ietf-ip:ipv4'] = a ? { address: [{ ip: xmlIn(a, 'ip'), netmask: xmlIn(a, 'netmask') }] } : {}; }
+    let x = ifaceList(d).find((y) => y.name.toLowerCase() === name.toLowerCase());
+    if (!x) {
+      const lm = name.match(/^Loopback(\d+)$/i);
+      if (!lm || !d.routing) return done(rpcErr('data-missing', `/interfaces/interface[name='${name}'] does not exist`), false);
+      const i = newIface('Lo' + +lm[1], `Loopback${+lm[1]}`, { t: 'loop', n: +lm[1] });
+      d.ifaces.push(i);
+      x = { name: `Loopback${+lm[1]}`, kind: 'loop', i };
+    }
+    const e = applyIface(x, body, false);
+    if (e) return done(rpcErr('invalid-value', e), false);
+  }
+  changed(state, d, req.user || 'admin');
+  return done(`<rpc-reply message-id="101" xmlns="${NC}">\n  <ok/>\n</rpc-reply>`);
+}

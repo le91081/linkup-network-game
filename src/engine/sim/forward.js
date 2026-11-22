@@ -309,6 +309,13 @@ function deliver(dev, inIf, pkt) {
     }
   }
   if (pkt.proto === 'tcp' && dev.vpnServer && dev.vpnServer.on && pkt.dport === (+dev.vpnServer.port || 10443)) return ok; // SSL-VPN
+  // NETCONF（SSH 的 830 埠）：netconf-yang 開了、而且有 RSA 金鑰（SSH 伺服器在聽）
+  if (pkt.proto === 'tcp' && pkt.dport === 830 && dev.mgmt && dev.kind !== 'firewall' && dev.kind !== 'host') {
+    if (!dev.mgmt.netconf) return no(`${dev.name} 沒有啟用 NETCONF（netconf-yang），830 埠沒有在聽（連線被拒絕）`);
+    if (!(dev.mgmt.sshKey && dev.mgmt.sshKey.bits >= 768)) return no(`${dev.name} 沒有 RSA 金鑰，SSH（NETCONF 的 830 埠）沒有在聽（連線被拒絕）`);
+    if (!addrMatch(String(dev.mgmt.allow || '').replace(/[,\s]+/g, ','), pkt.src)) return no(`來源 ${fmtIp(pkt.src)} 不在 ${dev.name} 允許管理的位址範圍內`);
+    return ok;
+  }
   if (pkt.proto === 'tcp' && dev.mgmt && MGMT[pkt.dport]) {
     const [k, name] = MGMT[pkt.dport];
     if (dev.kind === 'firewall' && inIf) {

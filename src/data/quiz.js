@@ -32,7 +32,7 @@ export const LEVEL_TOPIC = {
   l55: 'wireless', l56: 'wireless', l57: 'wireless',
   l58: 'auto', l59: 'auto', l60: 'auto', l61: 'auto', l62: 'auto',
   l63: 'routing', l64: 'routing', l65: 'ops', l66: 'routing', l67: 'switching', l68: 'vpn', l69: 'security', l71: 'services',
-  l70: 'auto', l72: 'routing', l73: 'auto', l74: 'security', l75: 'switching', l76: 'vpn', l77: 'routing', l78: 'routing', l79: 'routing', l80: 'routing', l81: 'routing', l82: 'routing', l83: 'security', l84: 'security', l85: 'switching', l86: 'security', l87: 'ipv6', l88: 'vpn', l89: 'vpn', l90: 'vpn', l91: 'vpn', l92: 'vpn', l93: 'ipv6', l94: 'ipv6', l95: 'routing', l96: 'routing', l97: 'ops', l98: 'switching', l99: 'ops', l100: 'ops', l101: 'vpn', l102: 'security', l103: 'switching', l104: 'wireless', l105: 'wireless', l106: 'wireless', l107: 'wireless', l108: 'wireless', l109: 'auto', l110: 'auto',
+  l70: 'auto', l72: 'routing', l73: 'auto', l74: 'security', l75: 'switching', l76: 'vpn', l77: 'routing', l78: 'routing', l79: 'routing', l80: 'routing', l81: 'routing', l82: 'routing', l83: 'security', l84: 'security', l85: 'switching', l86: 'security', l87: 'ipv6', l88: 'vpn', l89: 'vpn', l90: 'vpn', l91: 'vpn', l92: 'vpn', l93: 'ipv6', l94: 'ipv6', l95: 'routing', l96: 'routing', l97: 'ops', l98: 'switching', l99: 'ops', l100: 'ops', l101: 'vpn', l102: 'security', l103: 'switching', l104: 'wireless', l105: 'wireless', l106: 'wireless', l107: 'wireless', l108: 'wireless', l109: 'auto', l110: 'auto', l111: 'auto',
 };
 
 export const QUESTIONS = {
@@ -228,6 +228,7 @@ export const QUESTIONS = {
     { q: '兩台 AP 都放送 SSID「Corp」，但一台放進 VLAN 31、另一台放進 VLAN 32。筆電從一台漫遊到另一台時會怎樣？', a: ['沒有影響', '換了網段：IP 改變，進行中的連線（遠端桌面、通話）都會斷', '速度會變快', 'SSID 會消失'], c: 1, e: '漫遊要在同一個第二層網段裡才不會斷。用無線控制器時，所有 AP 的用戶端都從控制器放進同一個 VLAN，就沒有這個問題。', r: 'CCNA 1.11' },
   ],
   auto: [
+    { q: 'NETCONF 和 RESTCONF 最主要的差別是？', a: ['NETCONF 不用 YANG 模型', 'NETCONF 走 SSH（830 埠）、用 XML 的 RPC；RESTCONF 走 HTTPS、用 HTTP 方法與 JSON / XML', 'RESTCONF 只能讀、不能寫', 'NETCONF 只能用在 Nexus'], c: 1, e: '兩者用同一套 YANG 資料模型。NETCONF 先互送 <hello> 交換 capabilities，再用 <get-config>、<edit-config> 等 RPC；IOS XE 要 netconf-yang，而且 SSH 要能動（RSA 金鑰）。', r: 'CCNA 6.3' },
     { q: 'VPC A ↔ VPC B、VPC B ↔ VPC C 各有一條 peering，A 的執行個體能不能連到 C？', a: ['可以，經過 B 轉送', '不行：VPC peering 不能轉送 (non-transitive)，要 A ↔ C 另外接，或改用 Transit Gateway', '可以，但要開啟 NAT', '只有 ICMP 可以'], c: 1, e: 'peering 是一對一的，從 peering 進來的封包只能到那個 VPC 自己的執行個體。VPC 多的時候用 Transit Gateway：每個 VPC 一個 attachment，路由表由傳播學到各網段，兩邊的子網路路由表都指向它。', r: 'Network+ 1.3' },
     { q: '雲端的應用程式負載平衡器 (ALB) 後面有兩台網站伺服器，ALB 卻一直回應 503。最可能的原因是？', a: ['ALB 沒有公用 IP', '目標的安全群組沒有允許 ALB 的健康檢查，兩台都被判定不健康', '網站伺服器沒有彈性 IP', 'DNS 還沒生效'], c: 1, e: 'ALB 只把流量分給通過健康檢查的目標，一台都不健康就回 503。健康檢查從 ALB 自己發出，目標的安全群組要允許它（來源用 ALB 的安全群組）；目標放在私有子網路、不需要公用 IP。', r: 'Network+ 1.3' },
     { q: 'REST API 中，建立一筆新資源通常使用哪一個 HTTP 方法？', a: ['GET', 'POST', 'DELETE', 'HEAD'], c: 1, e: 'CRUD 對應到 HTTP：Create = POST、Read = GET、Update = PUT / PATCH、Delete = DELETE。', r: 'CCNA 6.5' },

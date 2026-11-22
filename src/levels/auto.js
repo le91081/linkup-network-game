@@ -1,7 +1,7 @@
 // 第十五章：網路自動化 — RESTCONF 與 JSON、Ansible
 import { makeDevice as D, makeState, setLine, newIface } from '../engine/model.js';
 import { iosSession } from '../engine/ios.js';
-import { restconf } from '../engine/restconf.js';
+import { restconf, netconf } from '../engine/restconf.js';
 import { runPlaybook } from '../engine/automation.js';
 import { inventory, issues } from '../engine/dnac.js';
 import { recompute } from '../engine/sim.js';
@@ -434,5 +434,68 @@ export const LEVELS11 = [
       for (const p of ['/dna/intent/api/v1/network-device', '/dna/intent/api/v1/issues']) restconf(s, 'ops', { method: 'GET', url: base + p, headers: { 'x-auth-token': tok } });
     },
     recap: ['控制器式網路把管理集中起來：北向用 REST API（Token 驗證）給程式呼叫，南向用 SNMP、SSH、NETCONF 管理設備；資料平面仍然在每台設備上。', 'AI 驅動的 Assurance 依照網路自己的基準找出異常並建議處置，但最後還是要由人確認與修正。'],
+  },
+  // ════════════════════════ 15-4 ════════════════════════
+  {
+    id: 'l111', chapter: 15, title: '資安說 HTTPS 管理要關掉，自動化要改用 NETCONF', subtitle: 'NETCONF：SSH 的 830 埠、XML 與 YANG', tags: ['NETCONF', 'YANG', 'XML', 'SSH', 'RESTCONF'],
+    brief: '資安稽核要求設備上的網頁管理一律關掉（HTTPS 與 RESTCONF 都不准開），自動化小組的工具要改走 NETCONF（SSH）。請在 R1 關掉 HTTPS 與 RESTCONF、啟用 NETCONF，然後從自動化工作站用 NETCONF 的 <edit-config> 建立 Loopback100（10.255.255.1/32，說明 MGMT）。',
+    given: [
+      ['R1', `IOS XE · 內部 ${R1_LAN} · 帳號 ${RC.user} / ${RC.pass}（privilege 15）· 目前開著 HTTPS 與 RESTCONF`], ['自動化工作站', '10.20.0.50 ·「API」分頁切到 NETCONF，或終端機的 netconf-console2'],
+      ['NETCONF', 'SSH 的 830 埠 · <hello>、<get-config>、<edit-config>'],
+    ],
+    learn: [
+      { t: 'NETCONF', d: 'NETCONF 是比 RESTCONF 更早的網路設定協定：走 SSH（830 埠），內容是 XML 的 RPC。連上之後先互送 <hello>，交換支援的功能 (capabilities) 與 YANG 模組；<get-config> 讀設定、<edit-config> 改設定。資料模型和 RESTCONF 一樣是 YANG。' },
+      { t: 'IOS XE 上的 NETCONF', d: '設定模式下 netconf-yang 就會在 830 埠聽。NETCONF 走 SSH，所以 SSH 伺服器要先能動：要有 ip domain name 與 RSA 金鑰 (crypto key generate rsa)。帳號是 privilege 15 的本機帳號。' },
+      { t: 'running 與 candidate', d: 'NETCONF 有好幾個資料庫 (datastore)：running 是正在用的設定；candidate 是先改好、再 <commit> 一次生效。IOS XE 預設只有 running（netconf-yang feature candidate-datastore 才有 candidate）。' },
+    ],
+    setup() {
+      const s = makeState([
+        setLine(D('internet', 'inet', { name: '網際網路', pos: [0, -10] }), 'line1', { type: 'static', gw: '203.0.113.33', mask: '255.255.255.252', assign: '203.0.113.34' }),
+        D('isr4321', 'rt', {
+          name: 'R1', pos: [0, -5],
+          init(d) {
+            Object.assign(d.ifaces[0], { ip: '203.0.113.34', mask: '255.255.255.252', gateway: '203.0.113.33', nat: true });
+            Object.assign(d.ifaces[1], { ip: R1_LAN, mask: '255.255.255.0' });
+            Object.assign(d.mgmt, { user: RC.user, pass: RC.pass, http: false, https: true, restconf: true, sshKey: null }); // 從來沒用過 SSH：沒有 RSA 金鑰
+          },
+        }),
+        D('sw8', 'sw', { name: 'LAN Switch', pos: [0, -0.5] }),
+        D('laptop', 'auto', { name: '自動化工作站', pos: [-6, 4], ip: '10.20.0.50', gw: R1_LAN, dns: '8.8.8.8', init(d) { d.apps = ['api']; } }),
+      ], [['inet:line1', 'rt:Gi0/0/0'], ['rt:Gi0/0/1', 'sw:1'], ['auto:eth0', 'sw:2']]);
+      return s;
+    },
+    objectives: [
+      {
+        type: 'check', label: 'R1 不再提供 HTTPS 管理與 RESTCONF',
+        test(s) { const m = dev(s, 'rt').mgmt; return m.https ? 'R1 還開著 HTTPS 管理（no ip http secure-server）' : m.restconf ? 'R1 還開著 RESTCONF（no restconf）' : true; },
+      },
+      {
+        type: 'check', label: `自動化工作站用 NETCONF（帳號 ${RC.user}）連得上 R1（<hello>）`,
+        test(s) { const r = netconf(s, 'auto', { host: R1_LAN, user: RC.user, pass: RC.pass, op: 'hello', quiet: true }); return r.ok || `${r.error}${r.why ? '（' + r.why + '）' : ''}`; },
+      },
+      {
+        type: 'check', label: '用 NETCONF 的 <edit-config> 建立 Loopback100（10.255.255.1/32，說明 MGMT）',
+        test(s) {
+          const i = dev(s, 'rt').ifaces.find((x) => x.bind.t === 'loop' && x.bind.n === 100);
+          if (!i) return 'R1 還沒有 Loopback100';
+          if (i.ip !== '10.255.255.1' || i.mask !== '255.255.255.255') return `Loopback100 的位址是 ${i.ip || '（沒有）'} ${i.mask || ''}，要 10.255.255.1 255.255.255.255`;
+          if ((i.desc || '') !== 'MGMT') return 'Loopback100 的說明不是 MGMT';
+          return apiLog(s, 'auto', 'rt').some((x) => x.method === 'NETCONF' && x.path === 'edit-config' && x.status === 200) || 'Loopback100 是在命令列建立的：這一關要用 NETCONF 的 <edit-config> 從自動化工作站建立';
+        },
+      },
+    ],
+    hints: [
+      'R1：configure terminal → no restconf → no ip http secure-server → netconf-yang。',
+      'NETCONF 走 SSH：<hello> 連不上（Connection refused）的話，R1 還沒有 RSA 金鑰 — ip domain name corp.local → crypto key generate rsa modulus 2048。',
+      `自動化工作站 →「API」分頁切到 NETCONF：設備 ${R1_LAN}、埠 830、帳號 ${RC.user}，操作選 <edit-config>、資料庫 running，按「範本：建立 Loopback100」再送出（回應 <ok/>）。`,
+    ],
+    solve(s) {
+      if (!s.dyn) recompute(s);
+      const S = iosSession(() => s.devices.rt, () => s);
+      for (const l of ['configure terminal', 'no restconf', 'no ip http secure-server', 'ip domain name corp.local', 'crypto key generate rsa modulus 2048', 'netconf-yang', 'end']) S.exec(l);
+      recompute(s);
+      netconf(s, 'auto', { host: R1_LAN, user: RC.user, pass: RC.pass, op: 'edit-config', config: '<config><interfaces xmlns="urn:ietf:params:xml:ns:yang:ietf-interfaces"><interface><name>Loopback100</name><description>MGMT</description><enabled>true</enabled><ipv4 xmlns="urn:ietf:params:xml:ns:yang:ietf-ip"><address><ip>10.255.255.1</ip><netmask>255.255.255.255</netmask></address></ipv4></interface></interfaces></config>' });
+    },
+    recap: ['NETCONF 走 SSH 的 830 埠、用 XML 的 RPC；IOS XE 要 netconf-yang，而且 SSH 要先能動（RSA 金鑰）。', 'NETCONF 與 RESTCONF 用同一套 YANG 模型：一個走 SSH + XML，一個走 HTTPS + JSON / XML。'],
   },
 ];
