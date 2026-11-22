@@ -241,10 +241,13 @@ function computePass(state, auth) {
     }
   }
   if (again) routesAll(state);
-  // IP 位址衝突：同一個廣播網域裡有另一個介面用了一樣的 IP
+  // IP 位址衝突：同一個廣播網域裡有另一個介面用了一樣的 IP。
+  // 先數每個 IP 出現幾次：只有出現兩次以上的才需要走一遍第二層（大型拓撲時，每個介面都走一遍會變成 n²）
+  const ipUse = new Map();
+  for (const d of devs) for (const i of d.ifaces) if (i.rt.ip != null) ipUse.set(i.rt.ip, (ipUse.get(i.rt.ip) || 0) + 1);
   for (const d of devs) {
     for (const i of d.ifaces) {
-      if (i.rt.ip == null || !i.rt.link || i.rt.src === 'apipa') continue;
+      if (i.rt.ip == null || !i.rt.link || i.rt.src === 'apipa' || ipUse.get(i.rt.ip) < 2) continue;
       const dup = l2Explore(state, d.id, i).find((e) => e.iface.rt.ip === i.rt.ip);
       if (dup) i.rt.conflict = dup.dev;
     }
