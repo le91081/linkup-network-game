@@ -458,3 +458,29 @@ test('FortiGate HA：FG-A 用 CLI、FG-B 用 HA 分頁組成叢集，FG-A 當主
   await expect(page.locator('#panel .ha-status')).toContainText('主要機 (primary)');
   expect(await scan(page, '#panel', 'FortiGate 的 HA 分頁（主要機）')).toEqual([]);
 });
+
+test('VTP：SW-LAB 在 VLAN 分頁切成 Transparent，Core 補回 VLAN；show vtp status 看得到 revision，client 不能新增 VLAN', async ({ page }) => {
+  await boot(page);
+  await open(page, 'l122');
+  await clickDevice(page, 'core');
+  await page.locator('#panel .tab', { hasText: 'CLI' }).click();
+  await typeCmd(page, 'show vtp status');
+  const out = page.locator('#panel .term-out');
+  await expect(out).toContainText('Configuration Revision            : 42');
+  await expect(out).toContainText('（SW-LAB）');
+  await clickDevice(page, 'lab');
+  await page.locator('#panel .tab', { hasText: 'VLAN' }).click();
+  await page.locator('#panel .card.vtp .seg button', { hasText: 'Transparent' }).click();
+  await expect(page.locator('#panel .card.vtp')).toContainText('revision 永遠是 0');
+  expect(await scan(page, '#panel', 'SW-LAB 的 VLAN 分頁（VTP transparent）')).toEqual([]);
+  await clickDevice(page, 'core');
+  await page.locator('#panel .tab', { hasText: 'CLI' }).click();
+  await typeCmd(page, 'configure terminal', 'vlan 10', 'name SALES', 'exit', 'vlan 20', 'name RD', 'exit', 'no vlan 99', 'end', 'show vtp status');
+  await expect(page.locator('#panel .term-out')).toContainText(/Configuration Revision\s+: 4[3-9]/);
+  await clickDevice(page, 'acc1');
+  await page.locator('#panel .tab', { hasText: 'VLAN' }).click();
+  await expect(page.locator('#panel .card.vtp')).toContainText('Client 不能新增或刪除 VLAN');
+  await expect(page.locator('#panel .card', { hasText: '新增 VLAN' })).toHaveCount(0);
+  await expect(page.locator('#panel .line', { has: page.locator('.vid', { hasText: /^10$/ }) }).locator('input')).toHaveValue('SALES');
+  expect(await scan(page, '#panel', 'ACC1 的 VLAN 分頁（VTP client）')).toEqual([]);
+});

@@ -26,6 +26,7 @@ import { prepTunnels } from './sim/tunnels.js';
 import { sessionTtl } from './sim/forward.js';
 import { scriptTick } from './script.js';
 import { prepHa, haIdle, haMacs } from './ha.js';
+import { prepVtp } from './vtp.js';
 export { portalPending, portalAccept } from './portal.js';
 import { transact } from './sim/transact.js';
 setCdpCheck((d, pid, x, xp) => cdpOn(d, pid) && cdpOn(x, xp));
@@ -153,6 +154,7 @@ function computePass(state, auth) {
   }
   prepPhysical(state);
   prepDtp(state);
+  prepVtp(state); // VTP：Trunk 協商好之後，同一個網域的交換器同步 VLAN 資料庫
   prepVoice(state);
   prepLag(state);
   prepStp(state);

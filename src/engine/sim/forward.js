@@ -11,7 +11,7 @@ import { debugLog, longIf } from '../ops.js';
 import { dockerDeliver } from '../docker.js';
 import { fmtIp, isPrivate, parseIp, sameNet } from '../ip.js';
 import { aclRules } from '../policy.js';
-import { PBR_HITS, PROTO_NUM, QUIET, cidrList, denyLog, fmtDur, hash, hit, ipLen, selMatch, sess, sessId, vrfOf } from './core.js';
+import { PBR_HITS, PROTO_NUM, QUIET, cidrList, denyLog, fmtDur, hash, hit, ipLen, selMatch, sess, sessId, vrfOf, isVlanSw, isTrunk } from './core.js';
 import { VRRP_MAC, answerMac, arpTtl, floodPorts, l2Explore, learnPath, learns, macAgeOf, macKnown, reversed } from './l2.js';
 import { daiBlock } from './auth.js';
 import { findTunnel } from './tunnels.js';
@@ -144,6 +144,16 @@ function arpFail(state, dev, outIf, nh, viaGw, eps) {
     const s = eps.stp;
     return `${state.devices[s.dev].name} 的 ${s.pid} 剛連上，還在 STP 的${s.left > 15 ? ' listening ' : s.left > 2 ? ' learning ' : '協商'}狀態，再 ${Math.ceil(s.left)} 秒才會開始轉送資料${s.left > 2 ? '（接電腦或伺服器的埠可以啟用 PortFast，跳過這段等待）' : ''}`;
   }
+  // 埠或 SVI 所在的 VLAN 不存在：埠是 inactive（VLAN 被刪掉了、或被 VTP 的通告整份取代）
+  const noVlan = (sw, vid) => isVlanSw(sw) && !sw.sw.vlans.some((v) => v.id === vid);
+  const first = (b.t === 'port' || b.t === 'sub') && state.rt.links[dev.id + ':' + b.port];
+  const sw = first && state.devices[first.dev], pc = sw && sw.sw && sw.sw.ports[first.port];
+  if (pc && pc.mode !== 'routed' && !isTrunk(sw, first.port) && noVlan(sw, pc.vlan)) {
+    const lab = (sw.ports.find((p) => p.id === first.port) || {}).label || first.port;
+    return `ARP 沒有回應：${sw.name} 的 ${lab} 設在 VLAN ${pc.vlan}，但 ${sw.name} 的 VLAN 資料庫裡沒有 VLAN ${pc.vlan}，這個埠是 inactive（show vlan brief 看不到它）`;
+  }
+  const svi = owner.ifaces.find((i) => i.bind.t === 'svi' && parseIp(i.ip || '') === nh && noVlan(owner, i.bind.vlan));
+  if (svi) return `ARP 沒有回應：${owner.name} 的 ${svi.label} 沒有作用 — ${owner.name} 的 VLAN 資料庫裡沒有 VLAN ${svi.bind.vlan}`;
   // 路徑上如果有沒燈號的線，把原因一起說出來
   const dead = state.cables.find((c) => state.rt.why[c.id]);
   const extra = dead ? `。另外，${state.devices[dead.a.dev].name} ↔ ${state.devices[dead.b.dev].name} 的連線沒有燈號：${state.rt.why[dead.id]}` : '';

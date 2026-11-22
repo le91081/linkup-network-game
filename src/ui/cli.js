@@ -26,6 +26,7 @@ import { portByName } from '../engine/ios.js';
 import { isIos } from '../engine/ios.js';
 import { fmtMask } from '../engine/ip.js';
 import { route6Rows, nat64Rows, nat64Stats, clearNat64 } from '../engine/sim6.js';
+import { vtpCapable, vtpOf, vtpStatusLines } from '../engine/vtp.js';
 import { CATALOG, MEDIA, peerOf, portOf, linkInfo, phyConfig, fiberLink } from '../engine/model.js';
 import { xcvrAt, xcvrSerial, MEDIA_TYPE } from '../engine/optics.js';
 import { PLATFORM as PID_OF } from '../engine/dnac.js';
@@ -227,6 +228,17 @@ const SHOW = {
       o.push(pad(v.id, 6) + pad(v.name.slice(0, 16), 18) + pad('active', 10) + ports.slice(0, 6).join(', ') + (ports.length > 6 ? ', ...' : ''));
     }
     return o;
+  },
+  'show vtp status': (st, d) => {
+    if (!isSw(d)) return ['% 這個指令只適用於交換器'];
+    if (!vtpCapable(d)) return ['% 這台交換器沒有 VTP'];
+    const mac = (d.ifaces[0] && d.ifaces[0].rt && d.ifaces[0].rt.mac) || '00:00:00:00:00:00';
+    return vtpStatusLines(st, d, mac.replace(/:/g, '').replace(/(.{4})(?!$)/g, '$1.'));
+  },
+  'show vtp password': (st, d) => {
+    if (!isSw(d) || !vtpCapable(d)) return ['% 這台交換器沒有 VTP'];
+    const p = vtpOf(d).pass;
+    return [p ? `VTP Password: ${p}` : 'The VTP password is not configured.'];
   },
   'show interfaces trunk': (st, d) => {
     if (!isSw(d)) return ['% 這個指令只適用於交換器'];

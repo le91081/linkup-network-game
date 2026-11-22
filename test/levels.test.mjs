@@ -4127,6 +4127,44 @@ console.log('\nFortiGate HA（Active-Passive）');
   ok(/不能同時當監控的介面/.test(cli('fga', ['config system ha', 'set monitor "dmz"', 'end', 'abort'])) || /不能同時當監控的介面/.test(cli('fga', ['end'])), 'heartbeat 介面不能同時當監控的介面');
 }
 
+console.log('\nVTP（revision、transparent、密碼）');
+{
+  const { iosSession, runningConfig } = await import('../src/engine/ios.js');
+  const { vtpOf } = await import('../src/engine/vtp.js');
+  const sim = await import('../src/engine/sim.js');
+  const ok = (cond, title) => (cond ? console.log('  ✔ ' + title) : fail(title));
+  const lv = LEVELS.find((x) => x.id === 'l122');
+  const s = lv.setup(); settle(s);
+  const ids = (id) => s.devices[id].sw.vlans.map((v) => v.id).join(',');
+  const cli = (id, lines) => { const S = iosSession(() => s.devices[id], () => s); const o = []; for (const l of lines) o.push(...S.exec(l).out); settle(s); return o.join('\n'); };
+  ok(['core', 'acc1', 'acc2'].every((id) => ids(id) === '1,99' && vtpOf(s.devices[id]).rev === 42), 'SW-LAB 的 revision 42 比較大：整個網域的 VLAN 資料庫被換成它的那一份（1、99）');
+  const r0 = sim.runObjective(s, lv.objectives[0]);
+  ok(!r0.pass && /ACC1 的 Gi0\/1 設在 VLAN 10，但 ACC1 的 VLAN 資料庫裡沒有 VLAN 10/.test(r0.reason), '埠所在的 VLAN 不存在：說明埠是 inactive');
+  ok(/VTP VLAN configuration not allowed when device is in CLIENT mode/.test(cli('acc1', ['configure terminal', 'vlan 10', 'end'])), 'client 不能建 VLAN');
+  // 先在 Core 補回 VLAN：revision 43 → SW-LAB 也被蓋掉，實驗室斷線
+  const s0 = JSON.parse(JSON.stringify(s));
+  cli('core', ['configure terminal', 'vlan 10', 'name SALES', 'end']);
+  ok(vtpOf(s.devices.core).rev === 43 && ids('acc1') === '1,10,99' && ids('lab') === '1,10,99', 'server 改一次 VLAN，revision 加一，整個網域（包括 SW-LAB）跟著更新');
+  // 回到起點：先把 SW-LAB 切成 transparent
+  Object.assign(s, JSON.parse(JSON.stringify(s0))); settle(s);
+  ok(/Setting device to VTP Transparent mode for VLANS\./.test(cli('lab', ['configure terminal', 'vtp mode transparent', 'end'])) && vtpOf(s.devices.lab).rev === 0, 'SW-LAB：vtp mode transparent，revision 歸零');
+  cli('core', ['configure terminal', 'vlan 10', 'name SALES', 'exit', 'vlan 20', 'name RD', 'exit', 'vlan 30', 'name GUEST', 'exit', 'vlan 100', 'name SERVERS', 'exit', 'no vlan 99', 'end']);
+  ok(ids('acc2') === '1,10,20,30,100' && ids('lab') === '1,99' && vtpOf(s.devices.acc2).rev === vtpOf(s.devices.core).rev, 'Core 補回 VLAN、刪掉 99：client 跟著更新，transparent 的 SW-LAB 留著自己的 VLAN 99');
+  ok([0, 1, 2, 3].every((n) => { const o = lv.objectives[n]; return (o.type === 'check' ? o.test(s) : sim.runObjective(s, o).pass) === true; }), '業務、研發連得到伺服器，VLAN 一致，實驗室照常');
+  ok(!(lv.objectives[4].test(s) === true), '還沒設密碼：revision 999 的交換器一接上就整份取代');
+  cli('core', ['configure terminal', 'vtp password Bldg-VTP-7', 'end']);
+  ok(/VTP 密碼不一樣/.test(s.devices.acc1.rt.vtp.err), '只有 Core 設密碼：ACC1 的密碼不一樣，不同步');
+  cli('core', ['configure terminal', 'vlan 40', 'name TEMP', 'end']);
+  ok(!s.devices.acc1.sw.vlans.some((v) => v.id === 40), '密碼不同：Core 新增的 VLAN 40 不會到 ACC1');
+  cli('core', ['configure terminal', 'no vlan 40', 'end']);
+  for (const id of ['acc1', 'acc2']) cli(id, ['configure terminal', 'vtp password Bldg-VTP-7', 'end']);
+  ok(lv.objectives.every((o) => (o.type === 'check' ? o.test(s) : sim.runObjective(s, o).pass) === true), '整個網域都設了密碼：五個目標都通過');
+  ok(/Changing VTP domain name from CORP to LAB2/.test(cli('lab', ['configure terminal', 'vtp domain LAB2', 'end'])), 'vtp domain：顯示舊的與新的網域名稱');
+  const rc = runningConfig(s, s.devices.acc1).join('\n');
+  ok(/^vtp domain CORP\nvtp mode client\nvtp password Bldg-VTP-7$/m.test(rc) && !/^vlan 10$/m.test(rc), 'running-config：client 印出 VTP 設定，VLAN 由 server 同步、不印');
+  ok(/^vtp mode transparent$/m.test(runningConfig(s, s.devices.lab).join('\n')) && /^vlan 99$/m.test(runningConfig(s, s.devices.lab).join('\n')), 'transparent：VLAN 自己管，印在 running-config');
+}
+
 console.log('\nNetFlow 與 QoS 的 police');
 {
   const sim = await import('../src/engine/sim.js');

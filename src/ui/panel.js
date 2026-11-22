@@ -2,6 +2,8 @@
 import * as AUTO from './panel-auto.js';
 import { sdwanTab } from './panel-sdwan.js';
 import { haTab } from './panel-ha.js';
+import { vtpCard } from './panel-vtp.js';
+import { vtpOf } from '../engine/vtp.js';
 import { ZONE, sdwanOn } from '../engine/sdwan.js';
 import * as CL from './panel-cloud.js';
 import * as W from './panel-wlc.js';
@@ -263,6 +265,9 @@ function swPorts(ctx, body) {
 function swVlans(ctx, body) {
   const { dev } = ctx;
   const sw = dev.sw;
+  const vc = vtpCard(ctx);
+  if (vc) body.append(vc);
+  const client = vtpOf(dev).mode === 'client' && !!vc;
   const list = h('div', { class: 'card' }, cardHead('VLAN 資料庫'));
   for (const v of sw.vlans.slice().sort((a, b) => a.id - b.id)) {
     const n = Object.values(sw.ports).filter((p) => p.mode !== 'trunk' && p.mode !== 'routed' && p.vlan === v.id).length;
@@ -270,7 +275,7 @@ function swVlans(ctx, body) {
       h('b', { class: 'mono vid', text: v.id }),
       inp(ctx, ...bind(v, 'name'), { mono: false, ph: '名稱' }),
       h('span', { class: 'muted nowrap', text: v.pvlan ? `PVLAN ${v.pvlan}` : `${n} 個 Access 埠` }),
-      v.id === 1 ? h('span', { class: 'mini ghost' }) : del(() => {
+      v.id === 1 || client ? h('span', { class: 'mini ghost' }) : del(() => {
         sw.vlans = sw.vlans.filter((x) => x.id !== v.id);
         for (const p of Object.values(sw.ports)) { if (p.vlan === v.id) p.vlan = 1; if (p.native === v.id) p.native = 1; if (p.voice === v.id) delete p.voice; }
         ctx.commit(true);
@@ -291,8 +296,9 @@ function swVlans(ctx, body) {
     ctx.commit(true);
   };
   for (const el of [idInp, nmInp]) el.addEventListener('keydown', (e) => { if (e.key === 'Enter') add(); });
-  body.append(h('div', { class: 'card' }, cardHead('新增 VLAN'),
-    h('div', { class: 'addrow' }, idInp, nmInp, button('新增', { ic: 'plus', kind: 'primary', small: true, onclick: add }))),
+  if (!client) body.append(h('div', { class: 'card' }, cardHead('新增 VLAN'),
+    h('div', { class: 'addrow' }, idInp, nmInp, button('新增', { ic: 'plus', kind: 'primary', small: true, onclick: add }))));
+  body.append(
   h('p', { class: 'tip', text: 'VLAN 必須先建立，才能指派給連接埠。Trunk 經過的每一台交換器都要有同樣的 VLAN。' }));
 }
 

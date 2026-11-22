@@ -19,6 +19,7 @@ import { spanDest } from './wire.js';
 import { genKey } from './remote.js';
 import { fhrpProto, fhrpGroup, fhrpPreempt } from './track.js';
 import { archiveNow, archiveLines, cfgLog, cfgDiff, ARCH_MAX_DEFAULT } from './archive.js';
+import { vtpCapable, vtpOf, vtpSet } from './vtp.js';
 
 // ───────────────────────── running-config 與 startup-config ─────────────────────────
 // IOS 設備改的是記憶體裡的 running-config；要下 write memory 才會存進 startup-config。
@@ -231,6 +232,7 @@ function syncVpnAcl(d, name) {
 
 // 訊息本身已經是 IOS 的「% …」格式時不再多加一個 %
 const err = (s) => (String(s).startsWith('%') ? String(s) : '% ' + s);
+const VTP_CLIENT = '% VTP VLAN configuration not allowed when device is in CLIENT mode.';
 const DTP_OK = (d) => defaultPortMode(d.model) !== 'access';
 function tidy(d, k) {
   const o = d[k];
@@ -501,6 +503,7 @@ export function iosSession(getDev, getState, who = null) {
   const ensureVlan = (id, out) => {
     const sw = dev().sw;
     if (sw.vlans.some((v) => v.id === id)) return;
+    if (vtpOf(dev()).mode === 'client') return; // VTP client 不能自己建 VLAN：埠會停在不存在的 VLAN 裡 (inactive)
     sw.vlans.push({ id, name: 'VLAN' + String(id).padStart(4, '0') });
     out.push(`% Access VLAN does not exist. Creating vlan ${id}`);
   };
@@ -1298,6 +1301,7 @@ export function iosSession(getDev, getState, who = null) {
     ['vlan <id>', ([id]) => {
       const e = needSw(); if (e) return e;
       if (!(+id >= 1 && +id <= 4094) || !/^\d+$/.test(id)) return err('VLAN ID 必須是 1 – 4094');
+      if (vtpCapable(dev()) && vtpOf(dev()).mode === 'client' && +id !== 1) return VTP_CLIENT;
       const sw = dev().sw;
       let v = sw.vlans.find((x) => x.id === +id);
       if (!v) { v = { id: +id, name: 'VLAN' + String(+id).padStart(4, '0') }; sw.vlans.push(v); }
@@ -1307,6 +1311,7 @@ export function iosSession(getDev, getState, who = null) {
     ['no vlan <id>', ([id]) => {
       const e = needSw(); if (e) return e;
       if (+id === 1) return err('預設的 VLAN 1 不能刪除');
+      if (vtpCapable(dev()) && vtpOf(dev()).mode === 'client') return VTP_CLIENT;
       const sw = dev().sw;
       sw.vlans = sw.vlans.filter((x) => x.id !== +id);
       for (const p of Object.values(sw.ports)) { if (p.vlan === +id) p.vlan = 1; if (p.native === +id) p.native = 1; }
@@ -1337,6 +1342,45 @@ export function iosSession(getDev, getState, who = null) {
       sw.staticMacs = (sw.staticMacs || []).filter((x) => !(x.mac === m && (!v || +x.vlan === +v)));
       if (!sw.staticMacs.length) delete sw.staticMacs;
       return (sw.staticMacs || []).length < n ? undefined : err('沒有這一筆靜態 MAC');
+    }],
+    // ── VTP ──
+    ['vtp mode <m>', ([m], out) => {
+      const e0 = needSw(); if (e0) return e0;
+      if (!vtpCapable(dev())) return err('這台交換器沒有 VTP');
+      const k = ['server', 'client', 'transparent', 'off'].find((x) => x.startsWith(String(m).toLowerCase()));
+      if (!k) return err('用法：vtp mode server | client | transparent | off');
+      const name = { server: 'Server', client: 'Client', transparent: 'Transparent', off: 'Off' }[k];
+      if (vtpOf(dev()).mode === k) { out.push(`Device mode already VTP ${name} for VLANS.`); return undefined; }
+      vtpSet(dev(), { mode: k });
+      out.push(`Setting device to VTP ${name} mode for VLANS.`);
+      return undefined;
+    }],
+    ['vtp domain <name>', ([n], out) => {
+      const e0 = needSw(); if (e0) return e0;
+      if (!vtpCapable(dev())) return err('這台交換器沒有 VTP');
+      if (n.length > 32) return err('VTP 網域名稱最長 32 個字元');
+      const old = vtpOf(dev()).domain;
+      if (old === n) { out.push(`Domain name already set to ${n}.`); return undefined; }
+      vtpSet(dev(), { domain: n });
+      out.push(`Changing VTP domain name from ${old || 'NULL'} to ${n}`);
+      return undefined;
+    }],
+    ['vtp password <pw>', ([p], out) => {
+      const e0 = needSw(); if (e0) return e0;
+      if (!vtpCapable(dev())) return err('這台交換器沒有 VTP');
+      if (p.length > 64) return err('VTP 密碼最長 64 個字元');
+      vtpSet(dev(), { pass: p });
+      out.push(`Setting device VTP password to ${p}`);
+      return undefined;
+    }],
+    ['no vtp password', (args, out) => { if (!vtpCapable(dev())) return err('這台交換器沒有 VTP'); vtpSet(dev(), { pass: '' }); out.push('Clearing device VTP password.'); return undefined; }],
+    ['vtp version <n>', ([n]) => {
+      const e0 = needSw(); if (e0) return e0;
+      if (!vtpCapable(dev())) return err('這台交換器沒有 VTP');
+      if (n === '3') return err('VTP 版本 3 這個模擬還沒有（只有 1 和 2）');
+      if (n !== '1' && n !== '2') return err('用法：vtp version 1 | 2');
+      vtpSet(dev(), { ver: +n });
+      return undefined;
     }],
     ['vlan dot1q tag native', () => { const e0 = needSw(); if (e0) return e0; dev().sw.tagNative = true; return undefined; }],
     ['no vlan dot1q tag native', () => { if (dev().sw) delete dev().sw.tagNative; }],
@@ -3837,7 +3881,10 @@ export function runningConfig(state, dev) {
   }
   if (isSw(dev)) {
     const sw = dev.sw;
-    for (const v of sw.vlans.slice().sort((a, b) => a.id - b.id)) if (v.id !== 1) o.push(`vlan ${v.id}`, ...(v.pvlan ? [` private-vlan ${v.pvlan}`] : []), ...(v.pvlan === 'primary' && (v.assoc || []).length ? [` private-vlan association ${v.assoc.join(',')}`] : []), ` name ${v.name.replace(/\s+/g, '_')}`);
+    // VTP：真的 IOS 把這些存在 vlan.dat，這裡為了貼回設定方便印在 running-config；client 的 VLAN 由 server 同步，不印
+    const vt = vtpCapable(dev) ? vtpOf(dev) : null;
+    if (vt && (vt.domain || vt.mode !== 'server' || vt.pass || vt.ver !== 1)) o.push(...(vt.domain ? [`vtp domain ${vt.domain}`] : []), ...(vt.mode !== 'server' ? [`vtp mode ${vt.mode}`] : []), ...(vt.ver !== 1 ? [`vtp version ${vt.ver}`] : []), ...(vt.pass ? [`vtp password ${vt.pass}`] : []), '!');
+    if (!(vt && vt.mode === 'client')) for (const v of sw.vlans.slice().sort((a, b) => a.id - b.id)) if (v.id !== 1) o.push(`vlan ${v.id}`, ...(v.pvlan ? [` private-vlan ${v.pvlan}`] : []), ...(v.pvlan === 'primary' && (v.assoc || []).length ? [` private-vlan association ${v.assoc.join(',')}`] : []), ` name ${v.name.replace(/\s+/g, '_')}`);
     if (sw.tagNative) o.push('!', 'vlan dot1q tag native');
     for (const [n, p] of Object.entries(sw.raPolicies || {})) o.push('!', `ipv6 nd raguard policy ${n}`, ` device-role ${p.role || 'host'}`);
     // 和真的 Catalyst 一樣，errdisable recovery 印在 spanning-tree 前面
