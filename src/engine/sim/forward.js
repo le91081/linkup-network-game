@@ -35,7 +35,7 @@ export const SERVICE_NAMES = Object.keys(SERVICES);
 const MGMT = { 22: ['ssh', 'SSH'], 23: ['telnet', 'Telnet'], 80: ['http', 'HTTP'], 443: ['https', 'HTTPS'] };
 
 /** 政策的服務欄位可以列出好幾個服務 */
-const svcMatch = (spec, pkt) => {
+export const svcMatch = (spec, pkt) => {
   const list = String(spec || 'ALL').split(/[,\s]+/).filter((s) => SERVICES[s.toUpperCase()]);
   return !list.length || list.some((s) => SERVICES[s.toUpperCase()](pkt));
 };
@@ -218,6 +218,7 @@ function filter(dev, inIf, outIf, pkt, dnat) {
     for (let n = 0; n < list.length; n++) {
       const p = list[n];
       if (p.off) continue;
+      if (p.src6 && !String(p.src || '').trim()) continue; // 只有 IPv6 位址的政策
       if (p.srcIf !== 'any' && p.srcIf !== inIf.id && !zoneHas(dev, p.srcIf, inIf)) continue;
       if (p.dstIf !== 'any' && p.dstIf !== outIf.id && !zoneHas(dev, p.dstIf, outIf)) continue;
       if (!addrMatch(p.src, pkt.src) || !addrMatch(p.dst, pkt.dst)) continue;

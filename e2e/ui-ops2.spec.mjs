@@ -373,3 +373,25 @@ test('IPv6 PD：R1 的 WAN 用 autoconfig 與 dhcp client pd 拿到 /56，LAN �
   await typeCmd(page, 'ping 2606:2800:220:1:248:1893:25c8:1946');
   await expect(page.locator('#panel .term-out')).toContainText('回覆自 2606:2800:220:1:248:1893:25c8:1946');
 });
+
+test('FortiGate IPv6：政策加上 IPv6 位址、dmz 用委派的前綴，辦公室與訪客都能用 IPv6 上網', async ({ page }) => {
+  await boot(page);
+  await open(page, 'l119');
+  await clickDevice(page, 'fg');
+  await page.locator('#panel .tab', { hasText: '政策' }).click();
+  for (let n = 0; n < 2; n++) {
+    const card = page.locator('#panel .card.policy').nth(n);
+    for (const label of ['IPv6 來源位址', 'IPv6 目的位址']) { const x = card.locator('label.field', { hasText: label }).locator('input'); await x.fill('all'); await x.press('Enter'); }
+  }
+  await page.locator('#panel .tab', { hasText: '介面' }).click();
+  const dmz = page.locator('#panel .card', { hasText: 'DMZ · IPv6' });
+  await dmz.locator('select').first().selectOption('delegated');
+  const sub = page.locator('#panel .card', { hasText: 'DMZ · IPv6' }).locator('label.field', { hasText: '子網路' }).locator('input');
+  await sub.fill('::2:0:0:0:1/64'); await sub.press('Enter');
+  await expect(page.locator('#panel .card', { hasText: 'DMZ · IPv6' }).locator('.note.ok')).toContainText('2001:db8:61c0:2202::1/64');
+  expect(await scan(page, '#panel', 'FortiGate 的介面（IPv6）')).toEqual([]);
+  await clickDevice(page, 'pc2');
+  await page.locator('#panel .tab', { hasText: '終端機' }).click();
+  await typeCmd(page, 'ping 2606:2800:220:1:248:1893:25c8:1946');
+  await expect(page.locator('#panel .term-out')).toContainText('回覆自 2606:2800:220:1:248:1893:25c8:1946');
+});

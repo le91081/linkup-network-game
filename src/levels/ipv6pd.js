@@ -7,12 +7,12 @@ import { parseIp6, parseCidr6, net6, fmtIp6 } from '../engine/ip6.js';
 import { dev } from './util.js';
 
 const typeIn = (s, id, lines) => { const S = iosSession(() => s.devices[id], () => s); for (const l of lines) S.exec(l); };
-const WEB6 = '2606:2800:220:1:248:1893:25c8:1946';
+export const WEB6 = '2606:2800:220:1:248:1893:25c8:1946';
 const PD = '2001:db8:4f20:7a00::/56', OLD = '2001:db8:1111:1::1/64';
 const two = [{ id: 'line1', label: '線路 1', media: 'rj45' }];
 
 /** 網際網路上的主機加上 IPv6 位址（AAAA） */
-function inet6(inet) {
+export function inet6(inet) {
   const six = { '8.8.8.8': '2001:4860:4860::8888', '1.1.1.1': '2606:4700:4700::1111', '93.184.216.34': WEB6 };
   for (const h of inet.inet.hosts) if (six[h.ip]) h.ip6 = six[h.ip];
   inet.inet.dns6 = { 'www.example.com': WEB6, 'example.com': WEB6, 'dns.google': '2001:4860:4860::8888' };

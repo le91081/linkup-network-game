@@ -32,7 +32,7 @@ export const LEVEL_TOPIC = {
   l55: 'wireless', l56: 'wireless', l57: 'wireless',
   l58: 'auto', l59: 'auto', l60: 'auto', l61: 'auto', l62: 'auto',
   l63: 'routing', l64: 'routing', l65: 'ops', l66: 'routing', l67: 'switching', l68: 'vpn', l69: 'security', l71: 'services',
-  l70: 'auto', l72: 'routing', l73: 'auto', l74: 'security', l75: 'switching', l76: 'vpn', l77: 'routing', l78: 'routing', l79: 'routing', l80: 'routing', l81: 'routing', l82: 'routing', l83: 'security', l84: 'security', l85: 'switching', l86: 'security', l87: 'ipv6', l88: 'vpn', l89: 'vpn', l90: 'vpn', l91: 'vpn', l92: 'vpn', l93: 'ipv6', l94: 'ipv6', l95: 'routing', l96: 'routing', l97: 'ops', l98: 'switching', l99: 'ops', l100: 'ops', l101: 'vpn', l102: 'security', l103: 'switching', l104: 'wireless', l105: 'wireless', l106: 'wireless', l107: 'wireless', l108: 'wireless', l109: 'auto', l110: 'auto', l111: 'auto', l112: 'auto', l113: 'auto', l114: 'auto', l115: 'basics', l116: 'security', l117: 'vpn', l118: 'ipv6',
+  l70: 'auto', l72: 'routing', l73: 'auto', l74: 'security', l75: 'switching', l76: 'vpn', l77: 'routing', l78: 'routing', l79: 'routing', l80: 'routing', l81: 'routing', l82: 'routing', l83: 'security', l84: 'security', l85: 'switching', l86: 'security', l87: 'ipv6', l88: 'vpn', l89: 'vpn', l90: 'vpn', l91: 'vpn', l92: 'vpn', l93: 'ipv6', l94: 'ipv6', l95: 'routing', l96: 'routing', l97: 'ops', l98: 'switching', l99: 'ops', l100: 'ops', l101: 'vpn', l102: 'security', l103: 'switching', l104: 'wireless', l105: 'wireless', l106: 'wireless', l107: 'wireless', l108: 'wireless', l109: 'auto', l110: 'auto', l111: 'auto', l112: 'auto', l113: 'auto', l114: 'auto', l115: 'basics', l116: 'security', l117: 'vpn', l118: 'ipv6', l119: 'ipv6',
 };
 
 export const QUESTIONS = {
@@ -161,6 +161,7 @@ export const QUESTIONS = {
     { q: '為什麼不直接用連接埠轉發把內部的 ERP 開放到網際網路？', a: ['連接埠轉發比較慢', '服務會直接暴露給全世界的攻擊者；VPN 會先驗證身分並加密', '這樣會佔用太多 IP', 'ERP 不支援 HTTPS'], c: 1, e: '開放到網際網路的服務隨時會被掃描與攻擊。只讓通過驗證的 VPN 使用者連線，可以大幅縮小攻擊面。', r: 'Security+ 3.2' },
   ],
   ipv6: [
+    { q: 'FortiGate 開了 IPv6 之後，使用者抱怨「有些網站要等好幾秒才開」。最可能的原因是？', a: ['IPv6 比 IPv4 慢', '政策只寫了 IPv4 的位址，IPv6 被隱含拒絕擋掉，電腦先試 IPv6、失敗了才退回 IPv4', 'DNS 伺服器壞了', 'MTU 太小'], c: 1, e: '有全域 IPv6 位址的電腦會優先用 IPv6 連有 AAAA 的網站。FortiOS 的政策要用 srcaddr6 / dstaddr6 才會放行 IPv6；沒有的話被隱含拒絕擋掉，要等 Happy Eyeballs 或逾時才改用 IPv4。', r: 'CCNA 1.8' },
     { q: 'ISP 用 DHCPv6 Prefix Delegation 委派 2001:db8:4f20:7a00::/56 給路由器。路由器最多可以切出幾個 /64 的網段？', a: ['8 個', '64 個', '256 個', '65536 個'], c: 2, e: '/56 到 /64 之間有 8 個位元可以當子網路編號：2⁸ = 256 個 /64。IOS 用一般前綴寫成 ipv6 address <名稱> ::1:0:0:0:1/64、::2:0:0:0:1/64…，ISP 換前綴時自動跟著換。', r: 'CCNA 1.8' },
     { q: 'DNS 裡 AAAA 記錄的用途是？', a: ['名稱對應到 IPv4 位址', '名稱對應到 IPv6 位址', '郵件伺服器', '反查名稱'], c: 1, e: 'A 是 IPv4、AAAA（quad-A）是 IPv6。同一個名稱可以兩種都有，雙協定的用戶端兩種都會問。', r: 'CCNA 4.3' },
     { q: '網站加了 AAAA 之後，雙協定的電腦 ping 網站名稱逾時，瀏覽器卻打得開、只是比較慢；只有 IPv4 的電腦一切正常。最可能的原因是？', a: ['DNS 伺服器故障', 'AAAA 寫錯或 IPv6 的路不通：電腦優先用 IPv6，瀏覽器的 Happy Eyeballs 才改用 IPv4', 'IPv4 的 ACL 擋掉 ICMP', 'MTU 太小'], c: 1, e: '有全域 IPv6 位址的電腦依 RFC 6724 優先用 AAAA；ping 不會改用 IPv4，瀏覽器會在兩三百毫秒後改試 IPv4。用 nslookup -type=aaaa 與 ping -6 / ping -4 比對。', r: 'Network+ 3.4' },

@@ -7,8 +7,9 @@ import * as W from './panel-wlc.js';
 import { h, icon, button, faceplate, toast } from './dom.js';
 import {
   inp, sel, toggle, seg, field, note, kv, del, cardHead, grid2, bind, linkBadge, ifaceNote,
-  isIp, isMask, isIpList, isVlanSpec, isPortNo, isAddr, isAddrList, isNum, isMacList, isCidrList,
+  isIp, isMask, isIpList, isVlanSpec, isPortNo, isAddr, isAddrList, isNum, isMacList, isCidrList, isCidr6,
 } from './form.js';
+import { fmtIp6 } from '../engine/ip6.js';
 import { CATALOG, MEDIA, peerOf, newIface, defaultPortMode } from '../engine/model.js';
 import { parseIp, fmtIp } from '../engine/ip.js';
 import { routeRows, SERVICE_NAMES, hitsOf, ospfOn, setOspf, fmtDur } from '../engine/sim.js';
@@ -526,7 +527,35 @@ function fwIfaces(ctx, body) {
     body.append(ifaceCard(ctx, i, {
       title: isBr ? 'internal（埠 1 – 5）' : i.label, port: isBr ? null : i.bind.port, gateway: wan, access: true, dhcp: !wan,
     }));
+    if (state.v6) body.append(h('div', { class: 'card' }, cardHead(`${isBr ? 'internal' : i.label} · IPv6`), fgV6(ctx, i)));
   }
+}
+
+/** FortiGate 介面的 IPv6：固定、DHCPv6（WAN：自動取得並要求前綴委派）、委派（從上游介面拿到的前綴切一段） */
+function fgV6(ctx, i) {
+  const d = ctx.dev;
+  const mode = i.gp6 ? 'delegated' : i.mode6 === 'auto' ? 'dhcp' : i.ip6 ? 'static' : '';
+  const setMode = (v) => {
+    delete i.gp6; delete i.pd6; delete i.v6default; delete i.mode6; i.ip6 = '';
+    if (v === 'static') { i.ip6 = '2001:db8::1/64'; i.ra = true; }
+    if (v === 'dhcp') Object.assign(i, { mode6: 'auto', v6default: true, pd6: i.id });
+    if (v === 'delegated') { const up = d.ifaces.find((x) => x.pd6) || d.ifaces.find((x) => /^wan/.test(x.id)); i.gp6 = { name: up ? up.id : 'wan1', suffix: '::1:0:0:0:1/64' }; i.ra = true; }
+  };
+  return h('div', null,
+    field('取得方式 (ip6-mode)', sel(ctx, () => mode, setMode, [['', '不使用 IPv6'], ['static', '固定 (static)'], ['dhcp', 'DHCPv6（WAN：自動取得、向 ISP 要求前綴委派）'], ['delegated', '委派 (delegated)：從上游介面拿到的前綴切一段']], { rerender: true })),
+    mode === 'static' && field('IPv6 位址 / 前綴', inp(ctx, ...bind(i, 'ip6'), { ph: '2001:db8:1::1/64', check: isCidr6 })),
+    mode === 'dhcp' && toggle(ctx, () => !!i.pd6, (v) => { if (v) i.pd6 = i.id; else delete i.pd6; }, '向 ISP 要求前綴委派（dhcp6-prefix-delegation）'),
+    mode === 'delegated' && grid2(
+      field('上游介面 (ip6-upstream-interface)', sel(ctx, () => i.gp6.name, (v) => { i.gp6.name = v; }, d.ifaces.filter((x) => x !== i).map((x) => [x.id, x.label]))),
+      field('子網路 (ip6-subnet)', inp(ctx, () => i.gp6.suffix, (v) => { i.gp6.suffix = v; }, { ph: '::1:0:0:0:1/64', check: isCidr6 }))),
+    (mode === 'static' || mode === 'delegated') && toggle(ctx, ...bind(i, 'ra'), '發送 Router Advertisement（ip6-send-adv）：電腦用 SLAAC 自己產生位址'),
+    ctx.live(() => {
+      const v = i.rt && i.rt.v6;
+      if (!mode) return null;
+      if (!v || !v.addrs.length) return note('warn', `還沒有 IPv6 位址${v && v.note ? '：' + v.note : ''}`);
+      const gp = i.pd6 && ((d.rt && d.rt.gp) || {})[i.pd6];
+      return note('ok', `${v.addrs.map((a) => fmtIp6(a.ip) + '/' + a.bits).join('、')}${gp && gp.prefix != null ? `；ISP 委派的前綴 ${fmtIp6(gp.prefix)}/${gp.bits}` : ''}`);
+    }));
 }
 
 function fwPolicies(ctx, body) {
@@ -552,6 +581,9 @@ function fwPolicies(ctx, body) {
         field('目的位址', inp(ctx, ...bind(p, 'dst'), { ph: 'any 或 172.16.1.10', check: isAddrList })),
         field('服務', sel(ctx, ...bind(p, 'service'), SERVICE_NAMES.includes(p.service) ? SERVICE_NAMES.map((s) => [s, s]) : [[p.service, p.service], ...SERVICE_NAMES.map((s) => [s, s])])),
         field('動作', sel(ctx, ...bind(p, 'action'), [['accept', '允許 ACCEPT'], ['deny', '拒絕 DENY']], { rerender: true }))),
+      ctx.state.v6 && grid2(
+        field('IPv6 來源位址 (srcaddr6)', inp(ctx, () => p.src6 || '', (v) => { p.src6 = v; }, { ph: '留空＝不比對 IPv6；all 或 2001:db8::/32' })),
+        field('IPv6 目的位址 (dstaddr6)', inp(ctx, () => p.dst6 || '', (v) => { p.dst6 = v; }, { ph: '留空＝不比對 IPv6；all 或 2001:db8::/32' }))),
       h('div', { class: 'toggles' },
         p.action === 'accept' && toggle(ctx, ...bind(p, 'nat'), 'NAT（來源位址換成出口介面的 IP）'),
         p.off && toggle(ctx, () => !p.off, (v) => { p.off = !v; }, '啟用這條政策（目前是停用狀態）', { rerender: true }))));

@@ -3982,6 +3982,40 @@ console.log('\n網際網路的 IPv6 與 DHCPv6 Prefix Delegation');
   ok(fmtIp6(globalIp6(s.devices.pc1)).startsWith('2001:db8:9c31:b501:') && transact6(s, 'pc1', WEB, { quiet: true }).ok, 'ISP 換了前綴：LAN 的位址跟著換，照樣連得到');
 }
 
+console.log('\nFortiGate 的 IPv6（前綴委派與 IPv6 政策）');
+{
+  const { fortiSession, fortiConfig } = await import('../src/engine/fortios.js');
+  const { transact6, globalIp6 } = await import('../src/engine/sim6.js');
+  const { parseIp6, fmtIp6 } = await import('../src/engine/ip6.js');
+  const sim = await import('../src/engine/sim.js');
+  const ok = (cond, title) => (cond ? console.log('  ✔ ' + title) : fail(title));
+  const lv = LEVELS.find((x) => x.id === 'l119');
+  const s = lv.setup(); settle(s);
+  const fg = s.devices.fg, WEB = parseIp6('2606:2800:220:1:248:1893:25c8:1946');
+  ok(fmtIp6(fg.rt.gp.wan1.prefix) === '2001:db8:61c0:2200::' && fmtIp6(globalIp6(s.devices.pc1)).startsWith('2001:db8:61c0:2201:'), 'wan1 用 DHCPv6 拿到委派的 /56；internal 切子網路 1 並送 RA，辦公室 PC 用 SLAAC 拿到位址');
+  const r0 = transact6(s, 'pc1', WEB, { quiet: true });
+  ok(!r0.ok && /政策 #1「辦公室上網」只寫了 IPv4 的位址/.test(r0.reason), 'IPv4 的政策不放行 IPv6：隱含拒絕，指出哪一條政策少了 srcaddr6 / dstaddr6');
+  ok(sim.transact(s, 'pc1', { proto: 'tcp', dst: parseIp('93.184.216.34'), dport: 443, quiet: true }).ok, '同一條政策的 IPv4 照樣通');
+  const F = fortiSession(() => s.devices.fg, () => s);
+  const cli = (lines) => { const o = []; for (const l of lines) o.push(...F.exec(l).out); settle(s); return o.join('\n'); };
+  cli(['config firewall policy', 'edit 1', 'set srcaddr6 "all"', 'set dstaddr6 "all"', 'next', 'end']);
+  ok(transact6(s, 'pc1', WEB, { quiet: true }).ok && transact6(s, 'pc1', WEB, { proto: 'tcp', dport: 443, quiet: true }).ok, 'set srcaddr6 / dstaddr6 "all"：辦公室 PC 用 IPv6 連得到網站');
+  ok(/srcaddr6 \/ dstaddr6/.test(cli(['config firewall policy', 'edit 9', 'set srcintf "dmz"', 'set dstintf "wan1"', 'set service "ALL"', 'set action accept', 'next'])) && !fg.policies.some((p) => p.id === 9), '政策沒有任何位址（IPv4 或 IPv6 都沒有）：不能建立');
+  cli(['abort', 'end']); // 和 FortiOS 一樣，設定被拒絕之後還停在 edit 裡：放棄這一筆
+  cli(['config system interface', 'edit dmz', 'config ipv6', 'set ip6-mode delegated', 'set ip6-upstream-interface "wan1"', 'set ip6-subnet ::2:0:0:0:1/64', 'set ip6-send-adv enable', 'end', 'next', 'end']);
+  ok(fmtIp6(globalIp6(s.devices.pc2)).startsWith('2001:db8:61c0:2202:'), 'config ipv6：dmz 用 delegated 切子網路 2，訪客筆電拿到位址');
+  const g1 = transact6(s, 'pc2', WEB, { quiet: true });
+  ok(!g1.ok && /訪客上網/.test(g1.reason), '「訪客上網」也要加 IPv6 位址');
+  cli(['config firewall policy', 'edit 2', 'set srcaddr6 "all"', 'set dstaddr6 "all"', 'next', 'end']);
+  const g2 = transact6(s, 'pc2', globalIp6(s.devices.pc1), { quiet: true });
+  ok(transact6(s, 'pc2', WEB, { quiet: true }).ok && !g2.ok && /沒有符合的 IPv6 政策（dmz → internal）/.test(g2.reason), '訪客可以用 IPv6 上網，但連不進辦公室（沒有 dmz → internal 的政策）');
+  // 只有 IPv6 的政策不比對 IPv4
+  cli(['config firewall policy', 'edit 3', 'set name "v6 only"', 'set srcintf "dmz"', 'set dstintf "internal"', 'set srcaddr6 "all"', 'set dstaddr6 "all"', 'set service "ALL"', 'set action accept', 'next', 'end']);
+  ok(transact6(s, 'pc2', globalIp6(s.devices.pc1), { quiet: true }).ok && !sim.transact(s, 'pc2', { proto: 'icmp', dst: parseIp('192.168.1.21'), quiet: true }).ok, '只寫 IPv6 位址的政策：放行 IPv6、不放行 IPv4');
+  const txt = fortiConfig(s, fg).join('\n');
+  ok(/edit "dmz"[^]*?config ipv6\n {12}set ip6-mode delegated\n {12}set ip6-upstream-interface "wan1"\n {12}set ip6-subnet ::2:0:0:0:1\/64\n {12}set ip6-send-adv enable\n {8}end/.test(txt) && /set srcaddr6 "all"/.test(txt), 'show：介面的 config ipv6 與政策的 srcaddr6');
+}
+
 console.log('\nNetFlow 與 QoS 的 police');
 {
   const sim = await import('../src/engine/sim.js');

@@ -14,8 +14,9 @@ import { parseIp6, fmtIp6, parseCidr6, net6, linkLocal, eui64, isLinkLocal } fro
 import { l2Explore } from './sim.js';
 import { computeOspf6 } from './ospf.js';
 import { raBlocked } from './l2sec.js';
-import { forward, isTun, tunMode, GRE_OVERHEAD } from './sim.js';
+import { forward, isTun, tunMode, GRE_OVERHEAD, svcMatch } from './sim.js';
 import { fmtIp } from './ip.js';
+import { zoneHas } from './sdwan.js';
 
 export const mode6 = (dev, i) => i.mode6 || (dev.kind === 'host' ? 'auto' : 'static');
 const owns6 = (i, ip) => !!i.rt.v6 && (i.rt.v6.ll === ip || i.rt.v6.addrs.some((a) => a.ip === ip));
@@ -110,7 +111,7 @@ function raOf(state, d, i) {
   for (const e of l2Explore(state, d.id, i)) {
     const r = e.iface, rd = state.devices[e.dev];
     const guard = raGuarded(state, e.path);
-    if (rd.routing && (rd.v6routing || rd.kind === 'internet') && r.ra && r.rt.v6 && r.rt.v6.addrs.length) {
+    if (rd.routing && (rd.v6routing || rd.kind === 'internet' || rd.kind === 'firewall') && r.ra && r.rt.v6 && r.rt.v6.addrs.length) {
       const pfx = r.rt.v6.addrs.find((a) => a.bits === 64) || r.rt.v6.addrs[0];
       cands.push({ dev: rd.id, iface: r, M: !!r.raM, O: !!r.raO, A: !r.raNoAuto, prefix: net6(pfx.ip, pfx.bits), bits: pfx.bits, ll: r.rt.v6.ll, prio: 'medium', guard });
     } else if (r.rogueRa && r.rt.v6 && r.rt.v6.ll != null) {
@@ -395,7 +396,7 @@ function forward6(state, ctx, startId, pkt) {
     if (isLocal6(dev, pkt.dst)) return { ok: true, dev: dev.id, rxIf: inIf };
     if (inIf) {
       if (!dev.routing) return drop(`${dev.name} 收到不是給自己的 IPv6 封包，它不是路由器所以直接丟棄`);
-      if (!dev.v6routing && dev.kind !== 'internet') return drop(`${dev.name} 沒有啟用 IPv6 路由 (ipv6 unicast-routing)，不會轉送 IPv6 封包`);
+      if (!dev.v6routing && dev.kind !== 'internet' && dev.kind !== 'firewall') return drop(`${dev.name} 沒有啟用 IPv6 路由 (ipv6 unicast-routing)，不會轉送 IPv6 封包`);
       if (--pkt.hl <= 0) return drop('Hop Limit 歸零，封包被丟棄（可能有路由迴圈）');
       if (!pkt.reply) ctx.l3.push({ dev: dev.id, ip6: inIf.rt.v6.addrs[0] ? inIf.rt.v6.addrs[0].ip : inIf.rt.v6.ll });
     }
@@ -407,6 +408,12 @@ function forward6(state, ctx, startId, pkt) {
       if (dev.kind === 'internet') return drop(`${fmtIp6(pkt.dst)} 不是 ISP 配給任何客戶的前綴：網際網路上沒有往它的路由（是不是用了以前的 ISP 或自己編的前綴？）`);
       const bad = (dev.rt.routes6 || []).find((x) => x.bad);
       return drop(`${dev.name} 的 IPv6 路由表裡沒有通往 ${fmtIp6(pkt.dst)} 的路由${bad ? '（' + bad.bad + '）' : ''}`);
+    }
+    // 防火牆的政策：IPv6 要比對政策的 srcaddr6 / dstaddr6（回程封包由連線紀錄放行）
+    if (inIf && dev.kind === 'firewall' && !pkt.reply) {
+      const v = fw6Filter(dev, inIf, r.iface, pkt);
+      if (!v.ok) return drop(v.reason);
+      ctx.log.push({ dev: dev.id, kind: 'info', text: `${dev.name} 的政策 #${v.rule} 允許這個 IPv6 連線` });
     }
     // 出方向的 ACL 只檢查轉送的封包（路由器自己送出的不檢查，和 IOS 一樣）
     if (inIf && r.iface.acl6Out && dev.routing) {
@@ -444,6 +451,28 @@ function forward6(state, ctx, startId, pkt) {
     inIf = tgt.iface;
   }
   return drop('封包繞了太多站仍未抵達（路由迴圈）');
+}
+
+/** 防火牆的 IPv6 政策：srcaddr6 / dstaddr6 是 all 或 IPv6 的網段；沒有寫的政策不比對 IPv6 */
+function fw6Filter(dev, inIf, outIf, pkt) {
+  const m6 = (spec, ip) => {
+    const s = String(spec || '').trim().toLowerCase();
+    if (!s) return false;
+    if (s === 'all' || s === 'any') return true;
+    return s.split(/[,\s]+/).some((x) => { const c = parseCidr6(x.includes('/') ? x : x + '/128'); return c && net6(ip, c.bits) === net6(c.ip, c.bits); });
+  };
+  const ifOk = (p) => (p.srcIf === 'any' || p.srcIf === inIf.id || zoneHas(dev, p.srcIf, inIf)) && (p.dstIf === 'any' || p.dstIf === outIf.id || zoneHas(dev, p.dstIf, outIf));
+  const list = dev.policies || [];
+  for (let n = 0; n < list.length; n++) {
+    const p = list[n];
+    if (p.off || !ifOk(p)) continue;
+    if (!m6(p.src6, pkt.src) || !m6(p.dst6, pkt.dst)) continue;
+    if (!svcMatch(p.service, pkt)) continue;
+    if (p.action === 'accept') return { ok: true, rule: n + 1 };
+    return { ok: false, rule: n + 1, reason: `${dev.name} 的政策 #${n + 1}「${p.name || '未命名'}」拒絕了這個 IPv6 連線` };
+  }
+  const v4only = list.find((p) => !p.off && ifOk(p) && !String(p.src6 || '').trim());
+  return { ok: false, reason: `${dev.name} 沒有符合的 IPv6 政策（${inIf.label} → ${outIf.label}），預設全部拒絕 (implicit deny)${v4only ? `：政策 #${list.indexOf(v4only) + 1}「${v4only.name || '未命名'}」只寫了 IPv4 的位址（srcaddr / dstaddr），IPv6 要另外設定 srcaddr6 / dstaddr6` : ''}` };
 }
 
 /** 這台設備往 dst 送封包時用哪個來源位址：出口介面上同網段的優先，其次是第一個全域位址 */

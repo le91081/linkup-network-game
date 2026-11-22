@@ -2,6 +2,7 @@
 // 每個設定區段都定義「怎麼從設備的設定讀出 FortiOS 的欄位」和「怎麼把欄位寫回去」，
 // 所以 show 印出來的內容可以整份貼到另一台 FortiGate 上，得到相同的設定。不依賴瀏覽器，可用 Node 測試。
 import { parseIp, fmtIp, parseMask, fmtMask, netOf } from './ip.js';
+import { parseCidr6 } from './ip6.js';
 import { SERVICE_NAMES, accessOf, sessionLog, routeRows, sessionRows, clearSessions, saInfo } from './sim.js';
 import { ntpInfo, plainStamp, logRows, clearLog, syslogStats, vtyRows, markReboot, bootTime } from './ops.js';
 import { counters, startSniff, bpf, dflowOf, fgIfName } from './wire.js';
@@ -36,7 +37,7 @@ const verOf = (v) => String(v || '0').split('.').map((x) => parseInt(x, 10) || 0
 
 const ACCESS = ['ping', 'https', 'ssh', 'snmp', 'http', 'telnet', 'fgfm', 'radius-acct', 'fabric'];
 /** 可以放好幾個值、能用 append / unselect 的欄位 */
-const MULTI = new Set(['allowaccess', 'member', 'srcintf', 'dstintf', 'srcaddr', 'dstaddr', 'service', 'proposal', 'dhgrp', 'dns-server', 'interface']);
+const MULTI = new Set(['allowaccess', 'member', 'srcintf', 'dstintf', 'srcaddr', 'dstaddr', 'srcaddr6', 'dstaddr6', 'service', 'proposal', 'dhgrp', 'dns-server', 'interface']);
 const PROPOSALS = ['aes128-sha1', 'aes128-sha256', 'aes256-sha1', 'aes256-sha256'];
 const DH = ['2', '5', '14', '19'];
 const P1_DEFAULT = ['aes128-sha256', 'aes256-sha256', 'aes128-sha1', 'aes256-sha1']; // FortiOS 新建通道時的預設提案
@@ -168,6 +169,37 @@ function parseProposals(toks) {
 // read(d, st) → [{ key, f: { 欄位: [字串…] }, sub: { 子表: [{ key, f }] } }]
 // write(d, key, f, sub, st, isNew) → 失敗時回傳 { err }；fields 的值：'q' 輸出時加引號，'b' 不加
 
+/** 介面的 IPv6 設定 → config ipv6 的欄位（沒有 IPv6 回傳空陣列） */
+function fg6Read(i) {
+  const f = {};
+  if (i.gp6) Object.assign(f, { 'ip6-mode': ['delegated'], 'ip6-upstream-interface': [i.gp6.name], 'ip6-subnet': [i.gp6.suffix] });
+  else if (i.mode6 === 'auto') Object.assign(f, { 'ip6-mode': ['dhcp'], ...(i.pd6 ? { 'dhcp6-prefix-delegation': ['enable'] } : {}) });
+  else if (i.ip6) Object.assign(f, { 'ip6-mode': ['static'], 'ip6-address': [i.ip6] });
+  if (i.ra && (i.gp6 || i.ip6)) f['ip6-send-adv'] = ['enable'];
+  return Object.keys(f).length ? [{ key: '', f }] : [];
+}
+function fg6Write(d, i, e) {
+  if (!e) return undefined;
+  const f = e.f || {}, one = (k) => (f[k] || [])[0];
+  const mode = (one('ip6-mode') || 'static').toLowerCase();
+  delete i.gp6; delete i.pd6; delete i.v6default; delete i.mode6; i.ip6 = '';
+  if (mode === 'static') {
+    const a = one('ip6-address');
+    if (a && !parseCidr6(a)) return ERR('ip6-address 要寫成 位址/前綴長度，例如 2001:db8:1::1/64');
+    i.ip6 = a || '';
+  } else if (mode === 'dhcp') {
+    Object.assign(i, { mode6: 'auto', v6default: true });
+    if ((one('dhcp6-prefix-delegation') || '').toLowerCase() === 'enable') i.pd6 = i.id;
+  } else if (mode === 'delegated') {
+    const up = one('ip6-upstream-interface'), sfx = one('ip6-subnet') || '::1/64';
+    if (!d.ifaces.some((x) => x.id === up)) return notFound(`ip6-upstream-interface 要是有前綴委派的介面（例如 "wan1"）`);
+    if (!parseCidr6(sfx)) return ERR('ip6-subnet 要寫成 ::1:0:0:0:1/64 這種格式（子網路編號與主機的部分）');
+    i.gp6 = { name: up, suffix: sfx.toLowerCase() };
+  } else return ERR('ip6-mode 必須是 static、dhcp 或 delegated');
+  i.ra = (one('ip6-send-adv') || '').toLowerCase() === 'enable';
+  return undefined;
+}
+
 const SEC = {
   'system global': {
     single: true, fields: { hostname: 'q', admintimeout: 'b' },
@@ -183,8 +215,11 @@ const SEC = {
   },
   'system interface': {
     noCreate: true, fields: { type: 'b', mode: 'b', ip: 'b', allowaccess: 'b', username: 'q', password: 'b' },
+    // config ipv6：static（固定位址）、dhcp（WAN：SLAAC 與 DHCPv6 前綴委派）、delegated（從上游介面委派的前綴切一段）
+    subs: { ipv6: { single: true, fields: { 'ip6-mode': 'b', 'ip6-address': 'b', 'ip6-send-adv': 'b', 'dhcp6-prefix-delegation': 'b', 'ip6-upstream-interface': 'q', 'ip6-subnet': 'b' } } },
     read: (d) => d.ifaces.map((i) => ({
       key: i.id,
+      sub: { ipv6: fg6Read(i) },
       f: {
         ...(i.bind.t === 'bridge' ? { type: ['hard-switch'] } : {}),
         mode: [i.mode],
@@ -193,9 +228,11 @@ const SEC = {
         ...(i.mode === 'pppoe' ? { username: [i.user || ''], password: [i.pass || ''] } : {}),
       },
     })),
-    write(d, key, f) {
+    write(d, key, f, sub) {
       const i = d.ifaces.find((x) => x.id === key);
       if (!i) return notFound(`沒有 ${key} 這個介面；可用的介面：${d.ifaces.map((x) => x.id).join('、')}`);
+      const e6 = fg6Write(d, i, ((sub && sub.ipv6) || [])[0]);
+      if (e6) return e6;
       const mode = f.mode ? f.mode[0] : i.mode;
       if (!['static', 'dhcp', 'pppoe'].includes(mode)) return ERR('mode 必須是 static、dhcp 或 pppoe');
       if (f.ip && (parseIp(f.ip[0] || '') == null || dottedBits(f.ip[1]) == null)) return ERR('用法：set ip <IP> <遮罩>，例如 set ip 192.168.1.1 255.255.255.0');
@@ -607,7 +644,7 @@ const SEC = {
     remove(d) { d.vpnServer.subnets = ''; },
   },
   'firewall policy': {
-    numeric: true, fields: { name: 'q', srcintf: 'q', dstintf: 'q', srcaddr: 'q', dstaddr: 'q', action: 'b', schedule: 'q', service: 'q', nat: 'b', status: 'b', logtraffic: 'b', comments: 'q', groups: 'q' },
+    numeric: true, fields: { name: 'q', srcintf: 'q', dstintf: 'q', srcaddr: 'q', dstaddr: 'q', srcaddr6: 'q', dstaddr6: 'q', action: 'b', schedule: 'q', service: 'q', nat: 'b', status: 'b', logtraffic: 'b', comments: 'q', groups: 'q' },
     read(d) {
       ensureIds(d);
       return d.policies.map((p) => ({
@@ -615,7 +652,8 @@ const SEC = {
         f: {
           ...(p.name ? { name: [p.name] } : {}),
           srcintf: [intfName(d, p.srcIf)], dstintf: [intfName(d, p.dstIf)],
-          srcaddr: specNames(d, p.src, false), dstaddr: specNames(d, p.dst, true),
+          ...(String(p.src || '').trim() ? { srcaddr: specNames(d, p.src, false), dstaddr: specNames(d, p.dst, true) } : {}),
+          ...(p.src6 ? { srcaddr6: list(p.src6), dstaddr6: list(p.dst6 || 'all') } : {}),
           action: [p.action === 'accept' ? 'accept' : 'deny'], schedule: ['always'], service: list(p.service || 'ALL'),
           ...(p.action === 'accept' && p.nat ? { nat: ['enable'] } : {}), ...(p.off ? { status: ['disable'] } : {}),
         },
@@ -623,17 +661,21 @@ const SEC = {
     },
     write(d, key, f) {
       ensureIds(d);
-      for (const k of ['srcintf', 'dstintf', 'srcaddr', 'dstaddr', 'service']) if (!f[k] || !f[k].length) return ERR(`政策還缺少必填欄位 ${k}（必填：srcintf、dstintf、srcaddr、dstaddr、service、action）`);
+      const has = (k) => f[k] && f[k].length;
+      for (const k of ['srcintf', 'dstintf', 'service']) if (!has(k)) return ERR(`政策還缺少必填欄位 ${k}（必填：srcintf、dstintf、srcaddr / dstaddr 或 srcaddr6 / dstaddr6、service、action）`);
+      if (!(has('srcaddr') && has('dstaddr')) && !(has('srcaddr6') && has('dstaddr6'))) return ERR('政策要有 IPv4 的 srcaddr / dstaddr，或 IPv6 的 srcaddr6 / dstaddr6（兩種都可以同時寫）');
+      const bad6 = [...(f.srcaddr6 || []), ...(f.dstaddr6 || [])].find((x) => !/^(all|any)$/i.test(x) && !parseCidr6(x.includes('/') ? x : x + '/128'));
+      if (bad6) return notFound(`IPv6 位址「${bad6}」不正確：用 all，或 IPv6 的網段（例如 2001:db8::/32）`);
       const srcIf = intfId(d, f.srcintf[0]), dstIf = intfId(d, f.dstintf[0]);
       if (!srcIf || !dstIf) return notFound(`沒有 ${!srcIf ? f.srcintf[0] : f.dstintf[0]} 這個介面；可用的介面：any、${d.ifaces.map((i) => i.id).join('、')}${tunnels(d).length ? '、' + tunnels(d).map((t) => t.name).join('、') : ''}${d.vpnServer ? '、' + sslIntf : ''}`);
-      const src = resolveSpec(d, f.srcaddr), dst = resolveSpec(d, f.dstaddr);
+      const src = has('srcaddr') ? resolveSpec(d, f.srcaddr) : '', dst = has('dstaddr') ? resolveSpec(d, f.dstaddr) : '';
       if (src == null || dst == null) return notFound(`找不到位址物件 ${(src == null ? f.srcaddr : f.dstaddr).find((x) => !addrResolve(d, x))}：先用 config firewall address 建立，或使用 "all"`);
       const svc = f.service.map((s) => s.toUpperCase());
       const bad = svc.find((s) => !SERVICE_NAMES.includes(s));
       if (bad) return notFound(`沒有 ${bad} 這個服務；可用的服務：${SERVICE_NAMES.join('、')}`);
       const action = (f.action || ['deny'])[0].toLowerCase();
       if (!['accept', 'deny'].includes(action)) return ERR('action 必須是 accept 或 deny');
-      const val = { name: (f.name || [''])[0], srcIf, dstIf, src, dst, service: svc.includes('ALL') ? 'ALL' : svc.join(', '), action, nat: action === 'accept' && (f.nat || [])[0] === 'enable', off: (f.status || [])[0] === 'disable' };
+      const val = { name: (f.name || [''])[0], srcIf, dstIf, src, dst, src6: has('srcaddr6') ? f.srcaddr6.join(' ') : '', dst6: has('dstaddr6') ? f.dstaddr6.join(' ') : '', service: svc.includes('ALL') ? 'ALL' : svc.join(', '), action, nat: action === 'accept' && (f.nat || [])[0] === 'enable', off: (f.status || [])[0] === 'disable' };
       const cur = d.policies.find((p) => String(p.id) === key);
       if (cur) Object.assign(cur, val); else d.policies.push({ id: +key, ...val });
       return undefined;
@@ -934,7 +976,9 @@ export function fortiSession(getDev, getState) {
         return res();
       }
       if (t.t === 'edit' && !t.nested && t.sec.subs && t.sec.subs[name]) {
-        stack.push({ t: 'cfg', nested: true, spec: t.sec.subs[name], label: name, name, list: ((t.sub ||= {})[name] ||= []) });
+        const sp = t.sec.subs[name], lst = ((t.sub ||= {})[name] ||= []);
+        if (sp.single) stack.push({ t: 'edit', nested: true, single: true, sec: t.sec, spec: sp, list: lst, label: name, name, key: '', ...clone({ f: {}, ...(lst[0] || {}) }) });
+        else stack.push({ t: 'cfg', nested: true, spec: sp, label: name, name, list: lst });
         return res();
       }
       return fail(parseErr(tok[1] || ''));
