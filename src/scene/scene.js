@@ -685,6 +685,8 @@ export class Scene3D {
 
   rebuildCables(state) {
     this.clearCables();
+    // 「看不到接線」的關卡：只有埠上的燈號，線藏在天花板裡
+    if (state.hideCables) return;
     const lanes = {}; // 設備 → 每一側已經有幾條線繞過去
     const plugMat = {
       rj45: new THREE.MeshStandardMaterial({ color: 0xe8edf6, roughness: 0.35, transparent: true, opacity: 0.92 }),
@@ -747,7 +749,7 @@ export class Scene3D {
 
   sync(state) {
     this.state = state;
-    const sig = state.cables.map((c) => `${c.id}:${c.a.dev}.${c.a.port}-${c.b.dev}.${c.b.port}:${state.rt.cable[c.id]}:${c.kind}:${state.rt.wait && state.rt.wait[c.id] > 0 ? 'w' : ''}`).join('|');
+    const sig = (state.hideCables ? 'H|' : '') + state.cables.map((c) => `${c.id}:${c.a.dev}.${c.a.port}-${c.b.dev}.${c.b.port}:${state.rt.cable[c.id]}:${c.kind}:${state.rt.wait && state.rt.wait[c.id] > 0 ? 'w' : ''}`).join('|');
     if (sig !== this.cableSig) { this.cableSig = sig; this.rebuildCables(state); }
     const wsig = JSON.stringify([
       Object.values(state.devices).filter((d) => d.wifi).map((d) => [d.id, apRange(d), !!state.rt.off[d.id] || !!(state.down || {})[d.id] || (state.rt.booting || {})[d.id] > 0, ssidsOf(state, d).filter((x) => !x.off && x.name).length, ...((state.walls || []).length ? d.pos.map((v) => Math.round(v * 4)) : [])]),

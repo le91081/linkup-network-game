@@ -28,7 +28,7 @@ export const CERTS = [
         name: '2.0 網路存取 · 20%', items: [
           ['2.1', 'VLAN（Access 埠、預設 VLAN、跨 VLAN 連線）', ['l06', 'l08', 'l11', 'l37', 'l44']],
           ['2.2', '交換器之間的連線（Trunk、802.1Q、Native VLAN）', ['l07', 'l15', 'l37', 'l46']],
-          ['2.3', '第二層探索協定（CDP、LLDP）', ['l44', 'l46', 'l98']],
+          ['2.3', '第二層探索協定（CDP、LLDP）', ['l44', 'l46', 'l98', 'l103']],
           ['2.4', 'EtherChannel（LACP）', ['l24']],
           ['2.5', 'Rapid PVST+ 生成樹（根橋、埠的角色與狀態、BPDU Guard）', ['l23', 'l32', 'l67']],
           ['2.6', 'Cisco 無線架構與 AP 模式', ['l55', 'l56']],

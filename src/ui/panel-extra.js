@@ -51,7 +51,7 @@ export const hitBadge = (ctx, rule) => ctx.live(() => {
 /** 兩端設定不一致時的提醒（真實設備上會看到 CDP 的 native VLAN mismatch 之類的訊息） */
 export const portWarn = (ctx, p, pc) => ctx.live(() => {
   const { state, dev } = ctx;
-  const n = peerOf(state, dev.id, p.id);
+  const n = state.hideCables ? null : peerOf(state, dev.id, p.id);
   if (!n) return null;
   const peer = state.devices[n.dev];
   const qc = peer.sw && peer.sw.mode === 'vlan' && peer.sw.ports[n.port];

@@ -136,7 +136,7 @@ export function faceplate(state, dev, opts = {}) {
     const cols = Math.ceil(g.ports.length / rows);
     const grid = h('div', { class: 'fp-group m-' + g.media, style: { gridTemplateRows: `repeat(${rows}, auto)`, gridTemplateColumns: `repeat(${cols}, auto)` } });
     for (const p of g.ports) {
-      const peer = peerOf(state, dev.id, p.id);
+      const peer = state.hideCables ? null : peerOf(state, dev.id, p.id);
       const used = !!cableAt(state, dev.id, p.id);
       let why = '';
       if (opts.pickable) {

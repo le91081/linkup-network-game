@@ -97,3 +97,16 @@ test('EAP-TLS：NPS 分頁重新申請伺服器憑證、筆電打開自動校時
   expect(await page.evaluate(() => ['sw:Gi0/1', 'sw:Gi0/2', 'sw:Gi0/3'].map((k) => window.linkup.state.rt.auth.dot1x[k].ok))).toEqual([true, true, false]);
   expect(await scan(page, '#panel', '筆電的網路設定（802.1X）')).toEqual([]);
 });
+
+test('看不到接線的關卡：場景沒有線、連接埠只說有插線，show cdp neighbors 找得到對面', async ({ page }) => {
+  await boot(page);
+  await open(page, 'l103');
+  expect(await page.evaluate(() => window.linkup.scene.cables.size)).toBe(0);
+  await clickDevice(page, 'sw');
+  await expect(page.locator('#panel')).toContainText('有插線（看不到另一端）');
+  await expect(page.locator('#panel')).not.toContainText('AP-2F-01 · Gi0');
+  await page.locator('#panel .tab', { hasText: 'CLI' }).click();
+  await typeCmd(page, 'enable', 'show cdp neighbors');
+  await expect(page.locator('#panel .term-out')).toContainText('AP-2F-01');
+  expect(await scan(page, '#panel', '看不到接線的連接埠')).toEqual([]);
+});

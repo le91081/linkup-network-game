@@ -109,14 +109,15 @@ function advert(state, d, pid, proto) {
     id: proto === 'cdp' ? deviceIdOf(d) : deviceIdOf(d).split('.')[0],
     platform: PLATFORM_ID[d.model] || CATALOG[d.model].title,
     caps: proto === 'cdp' ? cdpCaps(d) : lldpCaps(d),
-    port: proto === 'cdp' ? (isPhone(d) ? 'Port 1' : longName(p.label)) : isPhone(d) ? 'Port 1' : p.label,
+    // 基地台的埠在畫面上叫「Gi0 / PoE」，通告裡是介面名稱（GigabitEthernet0、eth0）
+    port: isPhone(d) ? 'Port 1' : proto === 'cdp' ? longName(d.kind === 'ap' ? pid : p.label) : d.kind === 'ap' ? pid : p.label,
+    power: d.kind === 'ap' && CATALOG[d.model].poe ? CATALOG[d.model].poe.watts : isPhone(d) ? CATALOG[d.model].poe.watts : null,
     ip: mgmtAddr(d, pid),
     ver: versionOf(d),
     native: pc && op && op !== 'down' ? (op === 'trunk' ? pc.native : pc.vlan) : null,
     duplex: li && li.duplex ? li.duplex : 'full',
     voice: pc && op === 'access' && pc.voice ? pc.voice : null, // CDP 的 Appliance VLAN / LLDP-MED 的 Network Policy
     med: isPhone(d), // LLDP-MED 端點
-    power: isPhone(d) ? CATALOG[d.model].poe.watts : null,
   };
 }
 

@@ -104,6 +104,8 @@ export function linkBadge(ctx, pid) {
   if (!p) return badge('off', '未接線');
   const d = ctx.state.devices[p.dev];
   const up = ctx.state.rt.cable[p.cable] !== 'down';
+  // 「看不到接線」的關卡：只知道有插線、燈亮不亮，不知道接到哪裡
+  if (ctx.state.hideCables) return h('span', { class: 'link ' + (up ? 'on' : 'warn'), title: '線藏在天花板裡：用 CDP / LLDP 或 MAC 位址表找出對面是誰' }, h('i'), up ? '有插線（看不到另一端）' : '有插線（無燈號）');
   const why = ctx.state.rt.why[p.cable];
   const li = up && linkInfo(ctx.state, ctx.dev.id, pid);
   return h('span', { class: 'link ' + (up ? 'on' : 'warn'), title: why || (li && '連線速率：' + li.text) || null }, h('i'), `${d.name} · ${portOf(d, p.port).label}${up ? '' : '（無燈號）'}`,

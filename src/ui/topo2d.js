@@ -106,8 +106,8 @@ export function renderTopo(app, svg, rect) {
     return { pa, pb, dx, dy, len, ta: out(ba), tb: 1 - out(bb) };
   };
   const parts = [];
-  // 線路
-  for (const c of st.cables) {
+  // 線路（「看不到接線」的關卡不畫）
+  for (const c of st.hideCables ? [] : st.cables) {
     if (!P.has(c.a.dev) || !P.has(c.b.dev)) continue;
     const cs = st.rt.cable[c.id] || 'down', e = edge(c.a.dev, c.b.dev);
     const virt = c.media === 'virt';

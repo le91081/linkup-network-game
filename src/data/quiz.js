@@ -32,7 +32,7 @@ export const LEVEL_TOPIC = {
   l55: 'wireless', l56: 'wireless', l57: 'wireless',
   l58: 'auto', l59: 'auto', l60: 'auto', l61: 'auto', l62: 'auto',
   l63: 'routing', l64: 'routing', l65: 'ops', l66: 'routing', l67: 'switching', l68: 'vpn', l69: 'security', l71: 'services',
-  l70: 'auto', l72: 'routing', l73: 'auto', l74: 'security', l75: 'switching', l76: 'vpn', l77: 'routing', l78: 'routing', l79: 'routing', l80: 'routing', l81: 'routing', l82: 'routing', l83: 'security', l84: 'security', l85: 'switching', l86: 'security', l87: 'ipv6', l88: 'vpn', l89: 'vpn', l90: 'vpn', l91: 'vpn', l92: 'vpn', l93: 'ipv6', l94: 'ipv6', l95: 'routing', l96: 'routing', l97: 'ops', l98: 'switching', l99: 'ops', l100: 'ops', l101: 'vpn', l102: 'security',
+  l70: 'auto', l72: 'routing', l73: 'auto', l74: 'security', l75: 'switching', l76: 'vpn', l77: 'routing', l78: 'routing', l79: 'routing', l80: 'routing', l81: 'routing', l82: 'routing', l83: 'security', l84: 'security', l85: 'switching', l86: 'security', l87: 'ipv6', l88: 'vpn', l89: 'vpn', l90: 'vpn', l91: 'vpn', l92: 'vpn', l93: 'ipv6', l94: 'ipv6', l95: 'routing', l96: 'routing', l97: 'ops', l98: 'switching', l99: 'ops', l100: 'ops', l101: 'vpn', l102: 'security', l103: 'switching',
 };
 
 export const QUESTIONS = {
@@ -57,6 +57,7 @@ export const QUESTIONS = {
     { q: 'Syslog 的嚴重等級是 0 到 7。哪一個說法正確？', a: ['數字越大越嚴重', '數字越小越嚴重', '7 代表系統無法使用', '0 是除錯訊息'], c: 1, e: '0 是 Emergency（系統無法使用），7 是 Debugging。數字越小代表事件越嚴重。', r: 'CCNA 4.5' },
   ],
   switching: [
+    { q: '交換器上要找出某台電腦接在哪個埠，但它不送 CDP 也不送 LLDP。最直接的方法是？', a: ['show cdp neighbors detail', '查出電腦的 MAC，再 show mac address-table address <MAC>', 'show ip route', 'show vlan brief'], c: 1, e: '電腦通常不送 CDP / LLDP。交換器收到訊框就會記下來源 MAC 是從哪個埠進來的，所以先在電腦上 ipconfig /all 查 MAC（必要時讓它送點流量），再查 MAC 位址表。', r: 'CCNA 2.3' },
     { q: 'PoE 交換器的預算還剩 4 W，又插上一台 802.3at（Class 4）的 AP，交換器會怎麼做？', a: ['降低每個埠的電壓，大家一起分', '拒絕供電給新的 AP（ILPOWER_POWER_DENY）', '關掉最早插上的那台設備', '照樣供電，超過的部分由備用電源補'], c: 1, e: '交換器依 IEEE 等級先保留上限（Class 4 是 30 W），剩下的預算不夠就拒絕供電，已經在用的設備不受影響。Cisco 的設備用 CDP / LLDP 協商之後，保留量才會降到實際用量。', r: 'CCNA 1.1' },
     { q: '稽核要求「CDP 不能把設備資訊送給使用者」，最恰當的做法是？', a: ['整台交換器 no cdp run', '只在使用者的埠 no cdp enable', '把 CDP 的計時器調成 255 秒', '改用 LLDP 就不會洩漏'], c: 1, e: '整台關掉會連帶影響 Cisco 電話的語音 VLAN 與 AP、電話的 PoE 電力協商。只在使用者可以接觸的埠關掉（LLDP 是 no lldp transmit），基礎設施的埠保留。LLDP 一樣會送出設備資訊。', r: 'CCNA 2.3' },
     { q: '二樓的網路 ping 都通，但大量傳輸非常慢；某個埠收到的廣播比其他埠多了好幾個數量級，也沒有迴圈。最適合的對策是？', a: ['在接電腦的埠設定 storm-control broadcast level', '把 STP 關掉', '增加 VLAN', '把所有埠設成 Trunk'], c: 0, e: '單一台設備狂送廣播，整個 VLAN 的線路都被佔掉，STP 管不到。Storm Control 設定廣播上限，超過的丟掉或把埠關掉。', r: 'Network+ 5.3' },
