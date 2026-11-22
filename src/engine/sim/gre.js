@@ -179,6 +179,8 @@ export function greReach(state, list) {
     const add = (p) => { rt.peers.push(p); return p; };
     if (rt.mode === 'ipsec') {
       const T = d.rt.tunnels.find((t) => t.tif === i.id);
+      // SA 還沒過期、但對端已經失聯（stale）：line protocol 還是 up，只是 Hello 送不過去
+      if (!T.peer) { rt.note = T.stale ? `對端已經沒有回應：${T.stale.why}` : ''; continue; }
       const pd = state.devices[T.peer.dev], pi = pd.ifaces.find((x) => x.id === T.peer.tif);
       if (pi) {
         add({ ip: pi.rt.ip, nbma: T.peerIp, dev: pd.id, iface: pi.id, mcast: true, ok: true, kind: 'p2p' });

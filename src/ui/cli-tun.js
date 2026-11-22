@@ -120,6 +120,13 @@ export function ipsecProfileLines(st, d) {
   return o;
 }
 
+/** show crypto ipsec transform-set */
+export function transformSetLines(st, d) {
+  const sets = Object.entries(d.tsets || {});
+  if (!sets.length) return ['（沒有自己定義的 transform-set：crypto ipsec transform-set <名稱> esp-aes 256 esp-sha256-hmac）', '', 'Transform set #$!default_transform_set_1: { esp-aes esp-sha-hmac  }', '   will negotiate = { Transport,  },'];
+  return sets.flatMap(([n, x]) => [`Transform set ${n}: { ${ENC[x.enc2]} ${HASH[x.hash2]}  }`, `   will negotiate = { ${x.mode === 'transport' ? 'Transport' : 'Tunnel'},  },`, '']);
+}
+
 /** show crypto session [detail] */
 export function cryptoSessionLines(st, d) {
   const list = (d.rt.tunnels || []).filter((t) => t.cfg);

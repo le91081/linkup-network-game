@@ -27,6 +27,7 @@ import { vrfField, vrfCard } from './panel-vrf.js';
 import { webTab, clientTlsCard } from './panel-web.js';
 import { hostMtuField, routerMtuBlock, switchMtuCard, nexusPortMtu } from './panel-mtu.js';
 import { redistCard, pbrCard } from './panel-policy.js';
+import { tunnelCards } from './panel-tun.js';
 import { dockerTab } from './term-docker.js';
 import { isDnsServer } from '../engine/dns.js';
 import { isTftp, isFtp } from '../engine/files.js';
@@ -50,7 +51,7 @@ function ospfIfBlock(ctx, i) {
       field('OSPF 區域', fromStmt ? h('span', { class: 'mono', text: `area ${area}（由 network 敘述決定）` }) : inp(ctx, () => String(i.ospfArea || 0), (v) => { i.ospfArea = +v || 0; }, { check: isNum(0, 4294967295) })),
       field('Cost', inp(ctx, ...bind(i, 'ospfCost'), { ph: `自動：${ospfCost(ctx.state, d, i)}（參考頻寬 ${+c.ospfRefBw || 100} Mbps ÷ 介面頻寬）`, check: isNum(1, 65535) })),
       !isLoopback(i) && field('Priority（DR 選舉）', inp(ctx, () => (i.ospfPrio == null ? '' : String(i.ospfPrio)), (v) => { if (v === '') delete i.ospfPrio; else i.ospfPrio = +v; }, { ph: '預設 1；0 表示不當 DR / BDR', check: isNum(0, 255) })),
-      !isLoopback(i) && field('網路類型', sel(ctx, () => i.ospfNet || '', (v) => { if (v) i.ospfNet = v; else delete i.ospfNet; }, [['', 'broadcast（要選 DR / BDR）'], ['p2p', 'point-to-point（兩台直連，不選 DR）']])),
+      !isLoopback(i) && field('網路類型', sel(ctx, () => i.ospfNet || '', (v) => { if (v) i.ospfNet = v; else delete i.ospfNet; }, i.bind.t === 'gre' ? [['', 'point-to-point（Tunnel 的預設）'], ['broadcast', 'broadcast（DMVPN：hub 當 DR，spoke 設 priority 0）']] : [['', 'broadcast（要選 DR / BDR）'], ['p2p', 'point-to-point（兩台直連，不選 DR）']])),
       !isLoopback(i) && field('Hello / Dead（秒）', inp(ctx, () => (i.ospfHello || i.ospfDead ? `${i.ospfHello || 10}/${i.ospfDead || 4 * (i.ospfHello || 10)}` : ''), (v) => {
         const m = String(v).match(/^(\d+)\s*\/\s*(\d+)$/);
         if (!m) { delete i.ospfHello; delete i.ospfDead; return; }
@@ -141,6 +142,7 @@ function ifaceCard(ctx, i, o = {}) {
   if (o.phy) parts.push(X.phyFields(ctx, i), X.phyNote(ctx, o.port));
   if (o.mtu) parts.push(routerMtuBlock(ctx, i));
   if (o.access) parts.push(X.accessRow(ctx, i));
+  if (o.extra) parts.push(...[].concat(o.extra()).filter(Boolean));
   parts.push(ifaceNote(ctx, i));
   if (o.v6 && ctx.state.v6) parts.push(M.routerV6(ctx, i));
   if (o.dhcp) parts.push(dhcpBlock(ctx, i));
@@ -357,6 +359,7 @@ function rtIfaces(ctx, body) {
   const pools6 = M.dhcp6PoolsCard(ctx);
   if (pools6) body.append(pools6);
   loopbackCards(ctx, body);
+  tunnelCards(ctx, body, ifaceCard);
 }
 
 /** Loopback：不靠任何實體線路、永遠是 up 的虛擬介面，常拿來當 Router ID 與管理位址 */

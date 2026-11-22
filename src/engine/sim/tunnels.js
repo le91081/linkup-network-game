@@ -223,7 +223,7 @@ export function prepTunnels(state) {
     if (T.why || T.responder) continue;
     const pd = findOwner(state, T.peerIp);
     if (pd && all.some((x) => x.dev === pd.id && x.peerIp === T.localIp)) continue;
-    const r = transact(state, T.dev, { proto: 'udp', dst: T.peerIp, dport: 500, quiet: true });
+    const r = transact(state, T.dev, { proto: 'udp', dst: T.peerIp, dport: 500, sport: 500, quiet: true });
     if (r.ok && r.seenSrc != null && r.seenSrc !== T.localIp) {
       const by = findOwner(state, r.seenSrc);
       T.nat = { seen: r.seenSrc, by: by ? by.id : null, peerDev: r.responder };
@@ -260,10 +260,10 @@ export function prepTunnels(state) {
     else if (!sameSel(T.local, P.remote) || !sameSel(T.remote, P.local)) T.why = T.prot || P.prot ? `IPsec 的 proxy ID 對不起來（本端 ${T.cfg.local} → ${T.cfg.remote}，對端 ${P.cfg.local} → ${P.cfg.remote}）` : '兩端的本地 / 遠端網段沒有互相對應';
     else {
       // 對端在 NAT 後面時，IKE 由它主動發起（從外面連不進 NAT 裡面），這一端不用自己試
-      const r = viaNat ? { ok: true } : transact(state, T.dev, { proto: 'udp', dst: T.peerIp, dport: 500, quiet: true });
+      const r = viaNat ? { ok: true } : transact(state, T.dev, { proto: 'udp', dst: T.peerIp, dport: 500, sport: 500, quiet: true });
       // NAT-T（RFC 3948）：偵測到 NAT，兩端都支援就改用 UDP 4500，把 ESP 包在 UDP 裡穿過 PAT
       const natT = nat && nattOn(state.devices[T.dev]) && nattOn(pd);
-      const r2 = natT && !viaNat ? transact(state, T.dev, { proto: 'udp', dst: T.peerIp, dport: 4500, quiet: true }) : { ok: true };
+      const r2 = natT && !viaNat ? transact(state, T.dev, { proto: 'udp', dst: T.peerIp, dport: 4500, sport: 4500, quiet: true }) : { ok: true };
       if (!r.ok) { T.why = 'IKE 封包到不了對端：' + r.reason; T.dead = true; }
       else if (!r2.ok) { T.why = `偵測到 NAT（對端看到的來源是 ${fmtIp(nat.seen)}），IKE 改用 UDP 4500 (NAT-T)，但 UDP 4500 過不去：${r2.reason}`; T.dead = true; }
       else {

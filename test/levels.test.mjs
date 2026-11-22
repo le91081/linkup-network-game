@@ -2407,7 +2407,7 @@ console.log('\nMTU：分段、DF、PMTUD 黑洞、Jumbo Frame、ip tcp adjust-ms
   ok(dn2.ok && dn2.mss === 1360, '只加 ip tcp adjust-mss 1360：SYN 裡的 MSS 被改小，伺服器一開始就送 1400，不用靠 ICMP');
   core('configure terminal', 'ip access-list extended SERVERS', '25 permit icmp any any packet-too-big', 'end');
   const acl = core('show access-lists');
-  ok(/30 permit icmp any any packet-too-big[^\n]*\n\s+40 deny icmp any any/.test(acl), '序號 25 插在 deny 的前面（show access-lists 重新編號），ACL 可以只放行 packet-too-big');
+  ok(/25 permit icmp any any packet-too-big[^\n]*\n\s+30 deny icmp any any/.test(acl), '序號 25 插在 30 的 deny 前面（和 IOS 一樣保留序號），ACL 可以只放行 packet-too-big');
   const dn3 = sim.transact(s, 'pc', { proto: 'tcp', dst: IP('10.1.20.10'), dport: 445 });
   ok(dn3.ok && dn3.mss === 1387 && !sim.transact(s, 'pc', { proto: 'icmp', dst: IP('10.1.20.10') }).ok, '放行 packet-too-big 之後 PMTUD 正常、下載恢復；一般的 ping 還是被擋');
   ok(/permit icmp any any packet-too-big/.test(runningConfig(s, s.devices.core).join('\n')) && /ip tcp adjust-mss 1360/.test(runningConfig(s2, s2.devices.br).join('\n')), 'running-config：ICMP 類型與 ip tcp adjust-mss');

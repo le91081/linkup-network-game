@@ -26,9 +26,9 @@ import { isIos } from '../engine/ios.js';
 import { fmtMask } from '../engine/ip.js';
 import { route6Rows } from '../engine/sim6.js';
 import { CATALOG, MEDIA, peerOf, portOf, linkInfo, phyConfig } from '../engine/model.js';
-import { iosSession, runningConfig, startupConfig, hostName as host, aclName, aclLine } from '../engine/ios.js';
+import { iosSession, runningConfig, startupConfig, hostName as host, aclName, aclLine, aclSeqs } from '../engine/ios.js';
 import { ipMtu, l2Mtu, jumboNow, isCat2960, isCat9300, isNexus } from '../engine/mtu.js';
-import { tunByName, tunnelDetail, dmvpnLines, nhrpLines, nhsLines, ipsecProfileLines, cryptoSessionLines } from './cli-tun.js';
+import { tunByName, tunnelDetail, dmvpnLines, nhrpLines, nhsLines, ipsecProfileLines, cryptoSessionLines, transformSetLines } from './cli-tun.js';
 
 const pad = (s, n) => String(s).padEnd(n);
 const isTunIf = (i) => i.bind && i.bind.t === 'gre';
@@ -363,6 +363,7 @@ const SHOW = {
   'show ip nhrp nhs': (st, d) => nhsLines(st, d),
   'show ip nhrp nhs detail': (st, d) => nhsLines(st, d),
   'show crypto ipsec profile': (st, d) => ipsecProfileLines(st, d),
+  'show crypto ipsec transform-set': (st, d) => transformSetLines(st, d),
   'show crypto session': (st, d) => cryptoSessionLines(st, d),
   'show crypto session detail': (st, d) => cryptoSessionLines(st, d),
   'show crypto ikev2 profile': (st, d) => {
@@ -479,7 +480,7 @@ const SHOW = {
     for (const i of d.ifaces) for (const [key, dir] of [['aclIn', 'in'], ['aclOut', 'out']]) {
       if (!i[key] || !i[key].length) continue;
       o.push(`Extended IP access list ${aclName(i, dir)}`);
-      i[key].forEach((r, n) => o.push(`    ${(n + 1) * 10} ${aclLine(r)}${hitsOf(r) ? ` (${hitsOf(r)} matches)` : ''}`));
+      { const qs = aclSeqs(i[key]); i[key].forEach((r, n) => o.push(`    ${qs[n]} ${aclLine(r)}${hitsOf(r) ? ` (${hitsOf(r)} matches)` : ''}`)); }
     }
     return o.length ? o : ['沒有設定任何 ACL'];
   },

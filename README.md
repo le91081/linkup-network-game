@@ -75,7 +75,7 @@ npm run build    # 輸出到 dist/
 - **評分**：過關時依實際作答時間（畫面在前景、沒有開對話框才算；標準時間是 3 分鐘加上每個目標 1.5 分鐘）、看了幾個提示、跑了幾次完整測試給 S / A / B / C 與分數，關卡選單上顯示最佳等級。設定變更的次數只列出來參考。
 - **關卡編輯器**：自由模式的「關卡設計」可以寫關卡名稱、任務說明、提示，指定哪些設備鎖定（玩家看得到、不能設定），然後試玩、存成自訂關卡、或匯出成關卡檔分享；關卡選單的「自訂關卡」可以遊玩、匯出、刪除與匯入。
 
-## 關卡（17 章 87 關）
+## 關卡（17 章 92 關）
 
 | 章節 | 關卡數 | 主題 |
 | --- | --- | --- |
@@ -85,7 +85,7 @@ npm run build    # 輸出到 dist/
 | 4 資料中心 | 4 | ToR 與 SVI、Spine-Leaf 與 OSPF、銅纜 / 多模 / 單模光纖與距離；Jumbo Frame 要整條路一致（交換器默默丟掉 giant、`ping -f -l 8972`、2960 的 `system mtu jumbo` 要存檔重新開機） |
 | 5 無線網路 | 3 | SSID、WPA2 / WPA3、PoE、頻道規劃、訪客 SSID 對應 VLAN |
 | 6 網路安全 | 12 | TCP 與 UDP（只放行 TCP 53 的 ACL 擋掉了 DNS、TFTP、Syslog）、DHCP Snooping、Port Security、ACL、管理加固、DAI、BPDU Guard、802.1X / RADIUS、用 DTP 偽裝成交換器的 VLAN hopping 與邊緣埠加固；MAC flooding 把交換器的表塞滿、變成 Hub（Port Security 的 maximum 與違規動作要先設好再打開、亂造的項目要等老化或 clear）；雙重標籤從 Native VLAN 跳進伺服器 VLAN、繞過 ACL（Native VLAN 改成沒人用的、或 vlan dot1q tag native）；飯店的房間用 Private VLAN 隔離（isolated、community、promiscuous） |
-| 7 VPN 與廣域備援 | 6 | 站對站 IPsec、遠端存取 VPN、雙線路浮動靜態路由；業者骨幹故障時介面還是 up，用 IP SLA 與追蹤的靜態路由切換（探測目標要綁在主線、不要用使用者的 DNS）；三個據點的 Hub-and-Spoke 與 IKEv2（版本要一致、PFS 不一致要到重新協商才斷、加密範圍與 NAT 例外要包含另一個分公司）；IPsec 讓封包變大，ICMP「需要分段」被伺服器網段的 ACL 擋掉造成 PMTUD 黑洞（上傳正常、下載卡住），放行 `packet-too-big` 並在介面上 `ip tcp adjust-mss 1360` |
+| 7 VPN 與廣域備援 | 11 | 站對站 IPsec、遠端存取 VPN、雙線路浮動靜態路由；業者骨幹故障時介面還是 up，用 IP SLA 與追蹤的靜態路由切換（探測目標要綁在主線、不要用使用者的 DNS）；三個據點的 Hub-and-Spoke 與 IKEv2（版本要一致、PFS 不一致要到重新協商才斷、加密範圍與 NAT 例外要包含另一個分公司）；IPsec 讓封包變大，ICMP「需要分段」被伺服器網段的 ACL 擋掉造成 PMTUD 黑洞（上傳正常、下載卡住），放行 `packet-too-big` 並在介面上 `ip tcp adjust-mss 1360`；GRE 通道上的 OSPF 學到 tunnel destination 的網段，造成 recursive routing、Tunnel 一直 flapping（`%TUN-5-RECURDOWN`，network 敘述不要包含 WAN）；GRE 不加密，用 `tunnel protection ipsec profile` 改成 GRE over IPsec，外部 ACL 改放 UDP 500 與 ESP、不再放行明文 GRE；crypto map 換成 VTI（`tunnel mode ipsec ipv4`），transform-set 不一致時 VTI 是 up/down，再讓 OSPF 在 VTI 上學到新網段；DMVPN（mGRE + NHRP + IPsec）：hub 少了 `ip nhrp map multicast dynamic` 讓 OSPF 只有單向的 Hello，spoke 搶到 DR，門市之間的流量在 NHRP 解析之後直接走；分公司在大樓的 PAT 後面：總公司的對端要寫 NAT 之後的位址，NAT-T 改走 UDP 4500，ACL 要放行 |
 | 8 高可用與進階路由 | 7 | STP、EtherChannel、VRRP / HSRP、DHCP Relay、OSPF Cost、VLSM；HSRP 追蹤上行介面（preempt 預設是關的，兩台都要開） |
 | 9 IPv6 | 6 | Link-local、SLAAC、IPv6 靜態路由、雙協定；RA 的 M / O / A 旗標與 DHCPv6（stateless / stateful，DHCPv6 不給閘道）、OSPFv3（link-local 鄰居、純 IPv6 路由器的 Router ID）、IPv6 ACL 與隱含的 ND 允許規則；冒牌的 Router Advertisement 搶走預設閘道（主機多一個位址、IPv6 變黑洞），RA Guard 的 device-role host |
 | 10 故障排除 | 9 | 網路已經設定好但被改壞了：IP 衝突與 DHCP 保留、Trunk / VLAN / shutdown、閘道 / 回程路由 / NAT / ACL / DNS、ping 會通但傳檔很慢（速率寫死、duplex mismatch、舊 Hub）；OSPF 鄰居起不來（MD5 金鑰、被動介面、network 敘述）；流量繞經實驗室的交換器（根橋位置與 Root Guard）；VPN 通了資料卻過不去（NAT 例外、加密的 ACL 要涵蓋新網段）；DNS 改了卻還連到舊的（TTL 與用戶端快取、nslookup 不看快取、`ipconfig /flushdns`）；整層樓都慢了：一台電腦狂送廣播（從介面的 broadcasts 計數器找出是誰），用 Storm Control 擋下 |
@@ -116,7 +116,7 @@ npm run build    # 輸出到 dist/
 
 沒有關卡的條目（安全計畫）是觀念題，題庫裡有對應的題目。
 條目編號依公開的考試大綱，標題是中文摘要。CCNA v2.0 預計在 2027 年 2 月取代 v1.1，改版後需要重新對照。
-題庫（168 題觀念題加上隨機產生的子網路計算題）是自行編寫的練習題，不是實際試題。
+題庫（176 題觀念題加上隨機產生的子網路計算題）是自行編寫的練習題，不是實際試題。
 
 ## CLI 設定指令
 
@@ -147,6 +147,8 @@ npm run build    # 輸出到 dist/
 - **存檔**：`write memory` / `copy running-config startup-config`、`show startup-config`、`reload`。
 - **MAC 位址表**：`show mac address-table`、`show mac address-table aging-time`、`mac address-table aging-time <秒>`、`clear mac address-table dynamic`。
 - **NAT 轉換表**：`show ip nat translations [verbose]`、`show ip nat statistics`、`ip nat translation icmp-timeout | udp-timeout | tcp-timeout | … <秒>`、`clear ip nat translation *`。
+- **Tunnel 介面**：`interface Tunnel<n>`（路由器）→ `tunnel source <介面 | IP>`、`tunnel destination <IP>`、`tunnel mode gre ip | gre multipoint | ipsec ipv4`、`tunnel key`、`keepalive [秒] [次數]`、`tunnel protection ipsec profile <名稱>`、`ip mtu`、`ip tcp adjust-mss`、`ip ospf network broadcast`、`shutdown`；`crypto ipsec profile <名稱>` →（`set transform-set`、`set pfs`、`set ikev2-profile`、`set security-association lifetime seconds`）；transform-set 裡的 `mode transport | tunnel`；`crypto isakmp key … address 0.0.0.0`（萬用金鑰）；`[no] crypto ipsec nat-transparency udp-encapsulation`、`crypto isakmp nat keepalive`；`ip route <網段> <遮罩> Tunnel0`（點對點的 Tunnel 只寫出口介面）；ACL 可以寫 `esp`、`gre`、`ahp`，命名 ACL 的序號和 IOS 一樣保留（`no 10` 不會讓後面的重新編號）。
+- **DMVPN（NHRP）**：`ip nhrp network-id`、`ip nhrp authentication`、`ip nhrp holdtime`、`ip nhrp nhs <IP> [nbma <IP>] [multicast]`、`ip nhrp map <IP> <NBMA>`、`ip nhrp map multicast dynamic | <NBMA>`、`ip nhrp redirect`、`ip nhrp shortcut`；`show dmvpn`、`show ip nhrp [brief]`、`show ip nhrp nhs`、`show interfaces tunnel <n>`、`show crypto session`、`show crypto ipsec profile`、`show crypto ipsec transform-set`、`show running-config interface <名稱>`。
 - **VPN 的時間面**：`show crypto isakmp sa`、`show crypto ipsec sa`、isakmp policy 裡的 `lifetime`、`crypto ipsec security-association lifetime seconds`、crypto map 裡的 `set security-association lifetime seconds`、`crypto isakmp keepalive <秒> [重試間隔]`。
 - **時鐘與 NTP**：`show clock [detail]`、`clock set`、`clock timezone`、`ntp server`、`ntp master [stratum]`、`show ntp status`、`show ntp associations`。
 - **紀錄**：`show logging`、`logging host`、`logging trap <等級>`、`clear logging`。
@@ -315,6 +317,10 @@ npm run build    # 輸出到 dist/
 - **IKEv2**：IKE_SA_INIT 與 IKE_AUTH 四個訊息就建好 IKE SA 和第一個 CHILD_SA（IKEv1 要 Main Mode 加 Quick Mode）。兩端版本不一致時協商失敗；預先共用金鑰可以兩個方向不同（A 用來簽的要等於 B 用來驗證的）。第一個 CHILD_SA 不做 PFS 的 DH，所以 PFS 不一致時一開始照樣通，到第一次重新協商才斷 — 任務裡有「一小時後再測一次」。
 - **Hub-and-Spoke**：分公司只和總公司建通道，分公司之間的流量在總公司解密、比對政策（VPN → VPN）、再加密送出去；兩條通道的加密範圍、總公司的政策、Cisco 分公司的 NAT 例外都要包含另一個分公司。
 - **IPsec 兩階段**：第一階段 (IKE) 與第二階段 (IPsec SA、PFS) 分開協商，哪一個階段不一致會分別指出。IOS 的 ISAKMP 政策整台共用。
+- **GRE 與 Tunnel 介面**：GRE 在外面再包一層 IP + GRE 標頭（多 24 位元組，Tunnel 的 MTU 是 1476），traceroute 只看到 Tunnel 對面一站，封包擷取看得到 GRE 裡面的明文。Tunnel 的 line protocol 看外層的路由：tunnel source 是 up、有路到 destination 就是 up/up，對面有沒有設定都不管，要偵測對面就加 keepalive（period × retries 秒沒回應才 down）。Tunnel 預設頻寬 100 Kbit/sec（OSPF cost 1000）、OSPF 網路類型 point-to-point。通往 destination 的最佳路由變成走 Tunnel 自己（Tunnel 上的 OSPF 學到了 WAN 的網段）時，Tunnel 被暫停 30 秒（`%TUN-5-RECURDOWN`），之後再起來、又被關掉，一直 flapping。tunnel key 不一致的 GRE 封包被默默丟掉。
+- **GRE over IPsec 與 VTI**：`tunnel protection` 讓 GRE 封包再包進 ESP（proxy ID 是 gre host 本端 host 對端，Tunnel 的 MTU 扣掉兩層剩 1403）；VTI 不包 GRE、直接 ESP（1427），line protocol 跟著 IPsec SA，transform-set 或金鑰不一致時是 up/down，不能設 keepalive。一端 VTI、一端 GRE 時 proxy ID 對不起來。
+- **DMVPN**：spoke 向 NHS 註冊（network-id、驗證字串、tunnel key、同一個網段都要對），hub 記下 Tunnel 位址 ↔ NBMA 位址；multicast 只送給 `map multicast` 的對象，hub 少了 `map multicast dynamic` 時 OSPF 只有單向的 Hello。OSPF broadcast 的 DMVPN 上，spoke 往另一個 spoke 內網的下一站是對方的 Tunnel 位址（phase 2）：第一個封包先經過 hub、同時送出 NHRP Resolution，spoke 之間的 IPsec 建好之後就直接走；spoke 搶到 DR 時其他 spoke 聽不到 DR；Tunnel 預設的 point-to-point 在 hub 上一個介面聽到好幾個鄰居，會一直被重設。Phase 3：hub 的 `ip nhrp redirect` 在流量繞回同一個 Tunnel 時通知 spoke，spoke 有 `ip nhrp shortcut` 才會解析整個網段、在路由表裝一筆 H（NHRP）的捷徑。spoke 之間的 IPsec 要靠萬用金鑰（`address 0.0.0.0`）。
+- **NAT-T**：IKE 的來源位址在對端看來不一樣（NAT-D）就知道中間有 NAT，兩端都開著 NAT-T 時 IKE 與 ESP 改走 UDP 4500，NAT 設備替這個轉換保留對應，總公司主動連過去也通；關掉 NAT-T 的話 IKE 照樣建得起來，ESP 卻被 PAT 丟掉（沒有連接埠號碼），家用路由器有 IPsec passthrough。對端的設定要指向 NAT 之後的位址，ACL 要放行 UDP 4500。
 - **先 NAT 再加密**：路由器會先做 NAT 才比對 crypto map，站對站 VPN 沒有設 NAT 例外的話，通道是 Up 的但流量進不去。
 - **running-config 與 startup-config**：IOS 設備改的是 running-config，沒有 `write memory` 就 `reload` 或斷電，設定會回到上一次存檔的樣子。
 - **速率與雙工**：一端寫死、另一端自動協商時，自動的那一端會退回半雙工，形成 duplex mismatch；兩端速率寫死成不同的值則連線建立不起來。
@@ -354,7 +360,7 @@ npm run build    # 輸出到 dist/
 - DTP 不模擬 VTP 網域不同造成的協商失敗，也不模擬經過非網管交換器的 DTP。雙重標籤 (double tagging) 的 VLAN hopping 只在觀念題出現。
 - 遠端存取的 SSL-VPN 沒有連線建立的時間。
 - STP 以每個 VLAN 各算一棵樹的方式近似 Rapid PVST+，只處理交換器直接相連的情況；非網管交換器形成迴圈會被判定為廣播風暴。邊緣埠用的是傳統的 30 秒計時（和 Cisco 預設的 PVST+ 一樣）。
-- IPsec 有 IKEv1 與 IKEv2，只用預先共用金鑰（沒有憑證、EAP、NAT-T）；IOS 的 IKEv2 smart defaults 簡化成 AES-CBC-128/256、SHA-1/256、DH 2/5/14/19 的組合；沒有 GRE、VTI、DMVPN。圖形介面建立的 FortiGate 通道會自動帶出通往對端的路由（相當於用精靈建立）。SSL-VPN 的加密流量在引擎內部仍然當成一層封裝來處理。
+- IPsec 有 IKEv1 與 IKEv2，只用預先共用金鑰（沒有憑證、EAP）；IOS 的 IKEv2 smart defaults 簡化成 AES-CBC-128/256、SHA-1/256、DH 2/5/14/19 的組合。Tunnel 介面只有 IOS 路由器有（沒有 FortiGate 的 IPsec 介面模式、L3 交換器的 Tunnel、GRE over IPv6、tunnel vrf）；OSPF 沒有 point-to-multipoint；NHRP 的註冊與解析是即時的（沒有計時重送），NHRP 項目到 holdtime 才過期；DMVPN 不能放在 NAT 後面；NAT-T 的 NAT 對應一直保留（不模擬 NAT keepalive 與轉換逾時）。圖形介面建立的 FortiGate 通道會自動帶出通往對端的路由（相當於用精靈建立）。SSL-VPN 的加密流量在引擎內部仍然當成一層封裝來處理。
 - Wi-Fi 的訊號依距離估算再扣掉沿路穿過的牆，沒有反射、多路徑與樓層；牆只能由關卡預先放好，自由模式還不能畫牆。802.11r 只是設定，沒有模擬漫遊所花的時間。無線控制器沒有 DNS 探索、DTLS、映像檔下載、AP group / tag 與跨控制器漫遊 (Mobility Group)，只能用圖形介面設定。
 - 802.1X 只驗證帳號密碼（沒有憑證）。
 - 路由重分配只有 OSPF 與 BGP 之間、以及靜態與直連；沒有 EIGRP / RIP，所以也沒有雙向重分配造成的迴圈。政策路由只有 `set ip next-hop` 與 `set ip default next-hop`（沒有 `set interface`、`verify-availability` 搭配 track），FortiGate 的政策路由還沒有做。
@@ -374,7 +380,7 @@ npm run build    # 輸出到 dist/
 
 完整的功能規劃（每個領域已完成、部分完成、尚未開始的項目，以及建議的實作順序）在 [PLAN.md](PLAN.md)。以下是最接近的幾項：
 
-1. GRE、GRE over IPsec、IOS VTI、DMVPN、NAT-T（PLAN 的第 16 階段）；FortiGate 的 IPv6 政策、DHCPv6 Prefix Delegation、TACACS+、IOS 的 Dialer 介面。
+1. IKEv2 的憑證驗證（PKI、時鐘與憑證有效期）、OSPF point-to-multipoint、FortiGate 的 IPsec 介面模式；FortiGate 的 IPv6 政策、DHCPv6 Prefix Delegation、TACACS+、IOS 的 Dialer 介面。
 2. BGP 的 VRF 與 MP-BGP route-target、自由模式畫牆、訪客入口 (Captive Portal)。
 3. 802.1X 與 IPsec 的憑證驗證（EAP-TLS、RSA 簽章）、中繼憑證鏈與撤銷檢查。
 4. NTP 與 Syslog 的維運關卡（引擎已經有了，還沒有獨立的關卡）。
@@ -404,7 +410,8 @@ src/engine/   模擬引擎（不依賴瀏覽器，可直接用 Node 測試）
   sim/l2.js         VLAN 與 Trunk 的標籤、廣播網域的探索、MAC 位址表、ARP 快取
   sim/wifi.js       Wi-Fi：加密、涵蓋範圍與牆面衰減、無線控制器與輕量型 AP
   sim/l3.js         DHCP 租約與 Relay、VRRP / HSRP、路由表與最長相符、DHCP 的 DORA 動畫
-  sim/tunnels.js    VPN：IKE 的兩個階段、提案與金鑰、SA 的壽命與 DPD、封包走哪一條通道
+  sim/tunnels.js    VPN：IKE 的兩個階段、提案與金鑰、SA 的壽命與 DPD、NAT-T、tunnel protection 的 SA、封包走哪一條通道
+  sim/gre.js        Tunnel 介面：GRE / mGRE / VTI 的 line protocol、keepalive、recursive routing、NHRP 的註冊、解析與 phase 3 捷徑
   sim/auth.js       802.1X / RADIUS、Dynamic ARP Inspection
   sim/forward.js    逐站轉送：服務、ACL、NAT、防火牆政策、交給本機的服務、MTU、連線表
   sim/transact.js   一次請求 + 回應：TCP 交握、資料區段與 PMTUD、長時間保持的連線
@@ -425,7 +432,7 @@ src/engine/   模擬引擎（不依賴瀏覽器，可直接用 Node 測試）
   web.js          網站與 HTTPS 憑證：信任的 CA、有效期間（用戶端的時鐘）、SAN 與萬用字元
   dns.js          DNS 伺服器的記錄、TTL 與用戶端快取
   sim6.js         IPv6：SLAAC 與 DHCPv6（RA 的 M / O / A 旗標、relay、binding）、鄰居探索、靜態路由與 OSPFv3、IPv6 ACL、ICMPv6 / TCP / UDP
-src/levels/   關卡定義：設備、初始設定、任務目標、提示、參考解法（trouble.js 是故障排除章，maint.js 是維運章，voip.js 是語音與 QoS 章，routing.js 是進階路由章，ipv6.js 是 IPv6 章的補充，vpn2.js 是多站台 VPN，wireless.js 是無線控制器章，auto.js 是自動化章，cloud.js 是雲端章，virtual.js 是虛擬化章（vSwitch、VRF、容器），tls.js 是 HTTPS 憑證，mtu.js 是 Jumbo Frame 與 PMTUD，redist.js 是路由重分配與政策路由，routing2.js 是 OSPF 的 stub / NSSA、iBGP、VRF 裡的 OSPF 與路由洩漏，l2sec.js 是第二層的攻擊與防護（MAC flooding、雙重標籤、Storm Control、Private VLAN、RA Guard），resil.js / audit.js / trouble2.js 是各章的補充關卡）
+src/levels/   關卡定義：設備、初始設定、任務目標、提示、參考解法（trouble.js 是故障排除章，maint.js 是維運章，voip.js 是語音與 QoS 章，routing.js 是進階路由章，ipv6.js 是 IPv6 章的補充，vpn2.js 是多站台 VPN，wireless.js 是無線控制器章，auto.js 是自動化章，cloud.js 是雲端章，virtual.js 是虛擬化章（vSwitch、VRF、容器），tls.js 是 HTTPS 憑證，mtu.js 是 Jumbo Frame 與 PMTUD，redist.js 是路由重分配與政策路由，routing2.js 是 OSPF 的 stub / NSSA、iBGP、VRF 裡的 OSPF 與路由洩漏，tunnels.js 是 GRE、GRE over IPsec、VTI、DMVPN 與 NAT-T，l2sec.js 是第二層的攻擊與防護（MAC flooding、雙重標籤、Storm Control、Private VLAN、RA Guard），resil.js / audit.js / trouble2.js 是各章的補充關卡）
 src/data/     題庫與證照對照表
 src/scene/    three.js 場景、設備模型、網路線、無線涵蓋範圍與封包動畫
 src/ui/       設定面板、終端機、CLI、任務面板、測驗、模擬考、故障演練、評分、自由模式與關卡編輯器、對話框

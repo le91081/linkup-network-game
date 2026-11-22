@@ -387,6 +387,16 @@ function attachPools(dev) {
   if (dev.dhcpPools) dev.dhcpPools = rest;
 }
 
+/**
+ * ACL 每一條規則的序號：CLI 寫過序號的記在 r.seq，其他的接在前一條後面 +10（和 IOS 一樣，刪掉一條不會讓後面的重新編號；
+ * running-config 不印序號，所以存檔重開機之後才會變回 10、20、30…）
+ */
+export function aclSeqs(list) {
+  let last = 0;
+  return (list || []).map((r) => (last = r.seq != null && +r.seq > last ? +r.seq : last + 10));
+}
+const stripSeq = ({ seq, ...r }) => r;
+
 function parseAclRule(tok) {
   let n = 0;
   if (/^\d+$/.test(tok[0])) n++;
@@ -2064,6 +2074,7 @@ export function iosSession(getDev, getState, who = null) {
     ['no crypto ipsec transform-set <name>', ([name]) => {
       const d = dev();
       if ((d.vpns || []).some((v) => v.tset === name)) return err(`transform-set ${name} 正被 crypto map 使用，不能刪除`);
+      if (Object.values(d.ipsecProfiles || {}).some((p) => p.tset === name)) return err(`transform-set ${name} 正被 IPsec profile 使用，不能刪除`);
       if (d.tsets) delete d.tsets[name];
       return undefined;
     }],
@@ -2472,10 +2483,11 @@ export function iosSession(getDev, getState, who = null) {
     ],
     acl: [
       ['no <seq>', ([seq]) => {
-        const d = dev(), n = Math.round(+seq / 10) - 1;
+        const d = dev();
         const lists = aclLists(d, S.cur);
-        if (!(n >= 0) || !lists.some((l) => l[n])) return err('沒有這個序號的規則（序號是 10、20、30…）');
-        for (const l of lists) l.splice(n, 1);
+        const n = aclSeqs(lists[0]).indexOf(+seq);
+        if (!/^\d+$/.test(seq) || n < 0) return err(`沒有序號 ${seq} 的規則（show access-lists ${S.cur} 看得到每一條的序號）`);
+        for (const l of lists) { aclSeqs(l).forEach((q, k) => { l[k].seq = q; }); l.splice(n, 1); } // 後面的規則保留原本的序號
         syncVpnAcl(d, S.cur);
         return undefined;
       }],
@@ -2485,11 +2497,13 @@ export function iosSession(getDev, getState, who = null) {
         if (!rule) return err('用法：[序號] permit|deny <ip|tcp|udp|icmp|esp|gre> <來源> <目的> [eq <埠> | ICMP 類型]，位址寫 any、host <IP> 或 <網段> <萬用遮罩>');
         const seq = /^\d+$/.test(t[0]) ? +t[0] : null;
         const lists = aclLists(dev(), S.cur);
-        if (seq != null && seq % 10 === 0 && lists.some((l) => l[seq / 10 - 1] && !same(l[seq / 10 - 1], rule))) return err('% Duplicate sequence number');
+        if (seq != null && lists.some((l) => { const k = aclSeqs(l).indexOf(seq); return k >= 0 && !same(stripSeq(l[k]), rule); })) return err('% Duplicate sequence number');
         for (const l of lists) {
-          if (l.some((x) => same(x, rule))) continue;
-          if (seq == null) l.push({ ...rule });
-          else l.splice(l.filter((_, k) => (k + 1) * 10 < seq).length, 0, { ...rule }); // 序號 25 插在 20 與 30 之間
+          if (l.some((x) => same(stripSeq(x), rule))) continue;
+          const qs = aclSeqs(l);
+          qs.forEach((q, k) => { l[k].seq = q; });
+          if (seq == null) l.push({ ...rule, seq: (qs[qs.length - 1] || 0) + 10 });
+          else l.splice(qs.filter((q) => q < seq).length, 0, { ...rule, seq }); // 序號 25 插在 20 與 30 之間
         }
         syncVpnAcl(dev(), S.cur);
         return undefined;

@@ -1,4 +1,5 @@
 // 進階功能的設定頁面：Wi-Fi、VPN、ACL、L2 安全、STP / LACP、管理加固、DHCP 範圍
+import { ipsecCards } from './panel-tun.js';
 import { acl6Cards } from './panel-v6.js';
 import { ICMP_TYPES } from '../engine/mtu.js';
 import { h, icon, button, toast } from './dom.js';
@@ -580,6 +581,7 @@ export function vpnTab(ctx, body) {
       ctx.commit(true);
     },
   })));
+  if (dev.kind === 'router') ipsecCards(ctx, body);
   if (dev.kind === 'router' && dev.vpns.length) {
     body.append(h('div', { class: 'card' }, cardHead('對端失聯偵測 (IKE keepalive)'),
       field('多久沒有流量就探測一次（秒）', inp(ctx, () => (dev.ikeKeepalive ? dev.ikeKeepalive.sec : ''), (v) => {

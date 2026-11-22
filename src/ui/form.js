@@ -82,7 +82,7 @@ export function ifaceNote(ctx, i) {
       }
       const bad = ctx.dev.rt.routes.find((r) => r.bad && r.iface === i && r.bits === 0);
       if (bad) return note('warn', bad.bad);
-      if (!rt.link) return note('warn', i.bind.t === 'wlan' ? rt.note || 'Wi-Fi 尚未連線' : `已設定 ${fmtIp(rt.ip)}/${rt.bits}，但這個介面沒有連線`);
+      if (!rt.link) return i.bind.t === 'gre' ? null : note('warn', i.bind.t === 'wlan' ? rt.note || 'Wi-Fi 尚未連線' : `已設定 ${fmtIp(rt.ip)}/${rt.bits}，但這個介面沒有連線`); // Tunnel 的原因寫在 Tunnel 自己的區塊
       if (rt.conflict) return conflictNote(ctx, rt);
       return note('ok', `已套用 ${fmtIp(rt.ip)}/${rt.bits}`);
     }

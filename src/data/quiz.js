@@ -32,7 +32,7 @@ export const LEVEL_TOPIC = {
   l55: 'wireless', l56: 'wireless', l57: 'wireless',
   l58: 'auto', l59: 'auto', l60: 'auto', l61: 'auto', l62: 'auto',
   l63: 'routing', l64: 'routing', l65: 'ops', l66: 'routing', l67: 'switching', l68: 'vpn', l69: 'security', l71: 'services',
-  l70: 'auto', l72: 'routing', l73: 'auto', l74: 'security', l75: 'switching', l76: 'vpn', l77: 'routing', l78: 'routing', l79: 'routing', l80: 'routing', l81: 'routing', l82: 'routing', l83: 'security', l84: 'security', l85: 'switching', l86: 'security', l87: 'ipv6',
+  l70: 'auto', l72: 'routing', l73: 'auto', l74: 'security', l75: 'switching', l76: 'vpn', l77: 'routing', l78: 'routing', l79: 'routing', l80: 'routing', l81: 'routing', l82: 'routing', l83: 'security', l84: 'security', l85: 'switching', l86: 'security', l87: 'ipv6', l88: 'vpn', l89: 'vpn', l90: 'vpn', l91: 'vpn', l92: 'vpn',
 };
 
 export const QUESTIONS = {
@@ -123,6 +123,14 @@ export const QUESTIONS = {
     { q: '公司用內部 CA 簽發 intranet.corp.local 的憑證。加入網域的電腦都正常，員工自己帶的筆電卻出現憑證錯誤。原因是？', a: ['筆電不支援 TLS 1.3', '筆電沒有安裝公司的根憑證，不信任這個 CA', '憑證的名稱打錯了', '筆電的 DNS 快取過期'], c: 1, e: '加入網域的電腦由群組原則自動安裝公司的根憑證；自己帶的設備要手動匯入或用 MDM 派送。公開 CA 不會簽發 .local 這種內部名稱，所以內部網站只能用公司的 CA。', r: 'Security+ 1.4' },
   ],
   vpn: [
+    { q: 'GRE 通道上跑 OSPF，結果 Tunnel 一直 up / down，log 出現 %TUN-5-RECURDOWN。最可能的原因是？', a: ['兩端的 tunnel key 不一致', 'OSPF 透過 Tunnel 學到了 tunnel destination 所在的網段，往 destination 的路變成要先走 Tunnel', 'Tunnel 的 MTU 太小', '沒有設定 keepalive'], c: 1, e: 'Tunnel 的 destination 一定要從外層（實體線路）學到。外層的網段被放進 Tunnel 上的 OSPF，學到的路比預設路由精確，就變成 recursive routing：IOS 暫停 Tunnel、路由消失、Tunnel 又起來，一直 flapping。', r: 'CCNA 3.4' },
+    { q: '沒有設定 keepalive 的點對點 GRE Tunnel，什麼情況下 line protocol 是 up？', a: ['對端的 Tunnel 也設定好、互相收得到', 'tunnel source 是 up，而且路由表裡有路到 tunnel destination', '有 OSPF 鄰居', 'IPsec SA 建好了'], c: 1, e: 'GRE 預設不確認對端在不在：只要來源介面正常、有路到 destination 就是 up/up。要偵測對端，在 Tunnel 上設定 keepalive；VTI 則是跟著 IPsec SA。', r: 'ENCOR 2.2' },
+    { q: 'GRE 和 IPsec 站對站 VPN（crypto map）比起來，GRE 的優點與缺點是？', a: ['GRE 有加密、IPsec 沒有', 'GRE 能帶 multicast、跑 OSPF，但本身不加密', 'GRE 只能用在同一個網段', 'GRE 比較省頻寬，因為沒有標頭'], c: 1, e: 'GRE 多包一層 IP + 4 位元組 GRE 標頭（共 24 位元組），可以載送 multicast 與各種路由協定，但完全不加密。實務上常用 GRE over IPsec 或 VTI 兩者兼得。', r: 'CCNA 5.5' },
+    { q: 'GRE over IPsec（tunnel protection）之後，總公司外部的 ACL 至少要放行哪些？', a: ['GRE（IP 協定 47）', 'UDP 500（IKE）與 ESP（IP 協定 50）', 'TCP 443', 'UDP 1701'], c: 1, e: 'GRE 被整個包進 ESP，網際網路上只看得到 IKE 與 ESP；中間有 NAT 時再加上 UDP 4500。繼續放行 GRE 反而讓別人可以送明文的 GRE 進來。', r: 'Security+ 3.2' },
+    { q: 'VTI（tunnel mode ipsec ipv4）和 crypto map 最大的差別是？', a: ['VTI 不用預先共用金鑰', 'VTI 是 route-based：路由指到 Tunnel 介面的流量就加密，可以跑 OSPF，加網段不用改 crypto ACL', 'VTI 只能用 IKEv1', 'VTI 不加密'], c: 1, e: 'crypto map 是 policy-based，靠 crypto ACL 決定加密範圍；VTI 是一個真的介面，line protocol 跟著 IPsec SA，路由協定直接在上面跑。', r: 'ENCOR 2.2' },
+    { q: 'DMVPN 的 hub 少了 ip nhrp map multicast dynamic，會發生什麼事？', a: ['spoke 無法向 hub 註冊', 'hub 收得到 spoke 的 OSPF Hello，spoke 卻收不到 hub 的：鄰居建不起來', 'IPsec 建不起來', 'spoke 之間沒辦法解析'], c: 1, e: '網際網路不轉送 multicast，DMVPN 的 multicast 要由 hub 複製給每個註冊上來的 spoke。少了 map multicast dynamic，OSPF 只有單向的 Hello，卡在 INIT。', r: 'ENCOR 2.2' },
+    { q: 'DMVPN phase 2 用 OSPF broadcast，為什麼 spoke 要設 ip ospf priority 0？', a: ['讓 spoke 不送 Hello', 'spoke 之間收不到彼此的 Hello；DR 必須是大家都聽得到的 hub', '讓 OSPF cost 變小', '才會觸發 NHRP Redirect'], c: 1, e: 'broadcast 網段要選 DR。spoke 之間沒有直接的 multicast，某個 spoke 搶到 DR，其他 spoke 就跟它建不起鄰居。priority 0 表示永遠不當 DR / BDR。', r: 'ENCOR 2.2' },
+    { q: '分公司的路由器在大樓的 PAT 後面：IKE 談得起來，加密的資料卻過不去。原因與解法是？', a: ['金鑰錯誤，重設金鑰', 'ESP 沒有連接埠號碼，PAT 無法轉換；用 NAT-T 把 ESP 包進 UDP 4500，並放行 UDP 4500', 'MTU 太大，改小 MTU', '對端不支援 AES-256'], c: 1, e: 'NAT-T 透過 NAT-D 偵測到中間有 NAT，把 IKE 與 ESP 改走 UDP 4500。對端的設定要指向 NAT 之後的公用位址，防火牆 / ACL 要放行 UDP 500 與 4500。', r: 'Network+ 1.2' },
     { q: '分公司經由 IPsec VPN 存取總公司：ping 會通、小檔案正常，大檔案下載卻一直卡住。最可能的原因是？', a: ['預先共用金鑰不一致', '加密之後封包變大，路由器回報的 ICMP「需要分段」又被 ACL 擋掉（PMTUD 黑洞）', 'DNS 設定錯誤', 'NAT 例外沒有設'], c: 1, e: 'IPsec 大約多 73 位元組的標頭。路由器用 ICMP type 3 code 4 要求改小，被擋掉的話送的人一直送大封包。解法：放行 packet-too-big，或在路由器上 ip tcp adjust-mss 1360。金鑰或 NAT 例外錯了，連 ping 都不會通。', r: 'CCNA 5.5' },
     { q: '介面下的 ip tcp adjust-mss 1360 有什麼作用？', a: ['把介面的 MTU 改成 1360', '把經過的 TCP SYN 裡的 MSS 改成 1360，兩端一開始就送比較小的區段', '每秒最多轉送 1360 個封包', '只允許 1360 位元組以下的 UDP'], c: 1, e: '它只改 TCP 交握時宣告的 MSS，對 UDP 與 ICMP 沒有作用。IPsec 常用 1360（1400 − 40），PPPoE 常用 1452（1492 − 40）。', r: 'CCNA 5.5' },
     { q: '站對站 VPN 與遠端存取 VPN 的差別是什麼？', a: ['站對站 VPN 沒有加密', '站對站連接兩個網路；遠端存取讓單一使用者的設備連回公司', '遠端存取 VPN 需要專線', '兩者沒有差別'], c: 1, e: '站對站由兩端的閘道建立通道，使用者不必做任何事；遠端存取則由使用者設備上的用戶端軟體撥入。', r: 'CCNA 5.5' },
