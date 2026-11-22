@@ -6,7 +6,7 @@ import { parseIp, fmtIp } from './ip.js';
 import { transact } from './sim.js';
 import { linkInfo, peerOf } from './model.js';
 import { ensureFlash } from './files.js';
-import { hostName } from './ios.js';
+import { hostName, iosSession } from './ios.js';
 
 const PLATFORM = { c9300: 'C9300-24T', c2960: 'WS-C2960CX-8TC-L', c2960p: 'WS-C2960CX-8PC-L', isr4321: 'ISR4321/K9', isr4331: 'ISR4331/K9', c9800: 'C9800-L-F-K9', n93180: 'N9K-C93180YC-FX', n9332: 'N9K-C9332C' };
 const ROLE = { router: 'BORDER ROUTER', l3switch: 'DISTRIBUTION', mswitch: 'ACCESS', wlc: 'ACCESS' };
@@ -125,3 +125,98 @@ export function dnacApi(state, ctl, req, method, path, query) {
   return R(404, { message: 'Not Found' }, '這個模擬支援：/dna/system/api/v1/auth/token、/dna/intent/api/v1/network-device[/count]、/dna/intent/api/v1/issues（可以加 ?priority=P1、?hostname=…）');
 }
 void fmtIp;
+
+// ───────────────────────── 範本 (Template Hub) ─────────────────────────
+// 範本是一段 IOS 設定，可以有 Velocity 變數：$name 或 ${name}；## 開頭的是範本自己的註解，不會送到設備。
+// 編輯的是草稿 (draft)；要提交 (commit) 才會產生新的版本，部署 (provision) 永遠用最新提交的版本。
+// 部署時控制器用 SSH 登入每一台設備（南向），進設定模式一行一行送；遇到設備不接受的指令就停下來，這台算 FAILURE。
+
+const VAR_RE = /\$\{([A-Za-z_]\w*)\}|\$([A-Za-z_]\w*)/g;
+const tplLines = (text) => String(text).split('\n').map((l) => l.replace(/\s+$/, '')).filter((l) => l.trim() && !/^\s*##/.test(l));
+
+/** 範本裡用到的變數（依出現順序） */
+export function tplVars(text) {
+  const out = [];
+  for (const l of tplLines(text)) for (const m of l.matchAll(VAR_RE)) { const k = m[1] || m[2]; if (!out.includes(k)) out.push(k); }
+  return out;
+}
+
+/** 代入變數：{ lines, miss: [沒有值的變數] } */
+export function tplRender(text, params = {}) {
+  const miss = [];
+  const lines = tplLines(text).map((l) => l.replace(VAR_RE, (m, a, b) => {
+    const k = a || b, v = params[k];
+    if (v == null || String(v).trim() === '') { if (!miss.includes(k)) miss.push(k); return m; }
+    return String(v).trim();
+  }));
+  return { lines, miss };
+}
+
+export const tplLatest = (t) => t.versions[t.versions.length - 1] || null;
+
+/** 提交草稿：回傳 { ok, ver } 或 { error } */
+export function tplCommit(state, ctl, tplId, msg) {
+  const t = (ctl.dnac.templates || []).find((x) => x.id === tplId);
+  if (!t) return { error: '找不到這個範本' };
+  const last = tplLatest(t);
+  if (last && last.text === t.draft) return { error: '草稿和最新的版本一樣，沒有東西可以提交' };
+  const ver = { v: (last ? last.v : 0) + 1, text: t.draft, msg: String(msg || '').trim() || `Version ${(last ? last.v : 0) + 1}`, t: state.clock, by: ctl.dnac.user };
+  t.versions.push(ver);
+  return { ok: true, ver };
+}
+
+/**
+ * 部署範本：targets = [{ dev, params }]。回傳 { error } 或 { id, ver, results: [{ dev, ip, host, status, detail, lines, sent }] }
+ * 改了設備之後呼叫的一方要 recompute。
+ */
+export function tplDeploy(state, ctl, tplId, targets) {
+  const C = ctl.dnac, t = (C.templates || []).find((x) => x.id === tplId);
+  if (!t) return { error: '找不到這個範本' };
+  const ver = tplLatest(t);
+  if (!ver) return { error: `範本「${t.name}」還沒有提交過 (Template is not committed)：要先提交，才能部署` };
+  if (!targets.length) return { error: '沒有選擇要部署的設備' };
+  // 先檢查每一台的變數：有缺的話整批都不部署（Catalyst Center 在部署前就會擋下來）
+  const miss = targets.map((x) => ({ x, r: tplRender(ver.text, x.params) })).filter((y) => y.r.miss.length);
+  if (miss.length) {
+    const m = (C.managed || []).find((z) => z.id === miss[0].x.dev);
+    return { error: `${m ? m.ip : miss[0].x.dev} 的變數沒有填：${miss[0].r.miss.join('、')}（Template variable not bound — 每個變數都要有值才能部署）` };
+  }
+  const src = (ctl.ifaces[0].rt || {}).ip;
+  const results = [];
+  for (const x of targets) {
+    const m = (C.managed || []).find((z) => z.id === x.dev), d = state.devices[x.dev];
+    const res = { dev: x.dev, ip: m ? m.ip : '', host: d ? hostName(d) : x.dev, status: 'FAILURE', detail: '', lines: tplRender(ver.text, x.params).lines, sent: 0 };
+    results.push(res);
+    if (!m || !d) { res.detail = '這台設備不在 Catalyst Center 的設備清單裡'; continue; }
+    const ssh = transact(state, ctl.id, { proto: 'tcp', dst: parseIp(m.ip), dport: 22, quiet: true });
+    if (!ssh.ok) { res.detail = `控制器用 SSH 連不到 ${m.ip}：${ssh.reason}`; continue; }
+    // 以控制器的帳號從 vty 登入：設定改了之後，設備自己會記 %SYS-5-CONFIG_I ... by netops on vty0 (控制器的 IP)
+    const S = iosSession(() => state.devices[x.dev], () => state, { user: C.user, line: 'vty0', ip: src != null ? fmtIp(src) : ctl.name });
+    S.exec('configure terminal');
+    let bad = null;
+    for (const [n, l] of res.lines.entries()) {
+      const cmd = l.trim();
+      if (cmd === '!' || /^!/.test(cmd)) { res.sent++; continue; }
+      const r = S.exec(cmd);
+      const out = (r && r.out) || [];
+      const e = out.find((o) => /^% (Invalid|Incomplete|Ambiguous)|不認識的指令|^%\s*Error/.test(o));
+      if (e) { bad = { n: n + 1, cmd, e }; break; }
+      res.sent++;
+    }
+    S.exec('end');
+    res.host = hostName(d); // 範本可能改了主機名稱
+    // 設備回的錯誤訊息（模擬的 CLI 會附上「輸入 ? 查看…」的提示，控制器的結果裡不需要）
+    if (bad) { res.detail = `第 ${bad.n} 行「${bad.cmd}」：${bad.e.replace(/[，,]\s*輸入 \?.*$/, '')}（前面 ${bad.n - 1} 行已經套用）`; continue; }
+    res.status = 'SUCCESS';
+    res.detail = `${res.sent} 行設定已套用`;
+  }
+  const dep = { id: uuid(`deploy/${state.clock}/${(C.deployments || []).length}`), tpl: t.id, name: t.name, ver: ver.v, t: state.clock, results };
+  (C.deployments ||= []).push(dep);
+  if (C.deployments.length > 20) C.deployments.splice(0, C.deployments.length - 20);
+  return dep;
+}
+
+/** 新的範本（關卡用） */
+export function newTemplate(name, project, versions, draft) {
+  return { id: uuid('tpl/' + name), name, project, versions: versions.map((text, i) => ({ v: i + 1, text, msg: i ? `Version ${i + 1}` : 'Initial version', t: 0, by: 'netops' })), draft: draft ?? versions[versions.length - 1] };
+}

@@ -1,11 +1,12 @@
 // 自動化主機上的工具：API 用戶端（像 Postman）與 Ansible（ansible-playbook）
 import { h, button, ownKeys } from './dom.js';
-import { note, cardHead, badge, toggle } from './form.js';
+import { note, cardHead, badge, toggle, inp, field } from './form.js';
 import { fmtIp } from '../engine/ip.js';
 import { restconf, netconf } from '../engine/restconf.js';
 import { runPlaybook, MODULES } from '../engine/automation.js';
 import { parseYaml, YamlError } from '../engine/yaml.js';
-import { IOS_XE, iosSession } from '../engine/ios.js';
+import { IOS_XE, iosSession, hostName } from '../engine/ios.js';
+import { inventory, tplVars, tplLatest, tplCommit, tplDeploy } from '../engine/dnac.js';
 import { iosRun } from './cli.js';
 import { parseHcl, terraform, tfApplyConfirmed, tfStateJson } from '../engine/terraform.js';
 
@@ -422,4 +423,85 @@ export function terraformTab(ctx, body) {
       'protocol：tcp、udp、icmp、"-1"（全部）· 來源也可以寫 security_groups = ["sg-…"]',
       '指令：init、validate、plan、apply（-auto-approve、-refresh-only）、import <位址> <ID>、state list',
     ].join('\n') })));
+}
+
+// ───────────────────────── Catalyst Center（設備清單、範本、部署） ─────────────────────────
+
+export function dnacTab(ctx, body) {
+  const { app, state, dev } = ctx, C = dev.dnac;
+  const ui = ((app.dnacUi ||= {})[dev.id] ||= { tpl: null, sel: {}, msg: '', note: null, out: null });
+  const rerender = () => app.renderPanel();
+  body.append(h('p', { class: 'tip', text: 'Catalyst Center：把標準設定寫成範本，每台不同的地方用變數（$hostname）表示。編輯的是草稿，提交 (commit) 之後才是新的版本；部署時控制器用 SSH 登入每一台設備，送出最新提交的版本。' }));
+  // 設備清單（只顯示控制器看得到的：可達性與失敗的類型）
+  const inv = inventory(state, dev), okN = inv.filter((x) => x.json.reachabilityStatus === 'Reachable').length;
+  body.append(h('div', { class: 'card' }, cardHead('設備清單', badge(okN === inv.length ? 'on' : 'off', `${okN} / ${inv.length} Reachable`)),
+    h('div', { class: 'dn-list' }, inv.map((x) => h('div', { class: 'dn-row' },
+      h('b', { class: 'mono', text: x.json.hostname }), h('span', { class: 'mono muted', text: x.json.managementIpAddress }),
+      h('span', { class: 'mono muted', text: x.json.platformId }),
+      badge(x.json.reachabilityStatus === 'Reachable' ? 'on' : 'off', x.json.reachabilityStatus + (x.json.reachabilityFailureReason ? `（${x.json.reachabilityFailureReason}）` : '')))))));
+  const T = C.templates || [];
+  if (!T.length) { body.append(note('info', '範本庫 (Template Hub) 裡還沒有任何範本。')); return; }
+  const t = T.find((x) => x.id === ui.tpl) || T[0];
+  const last = tplLatest(t), dirty = !last || last.text !== t.draft;
+  // 範本編輯器
+  const area = h('textarea', { class: 'code ans-edit dn-edit', rows: 13, spellcheck: 'false', wrap: 'off', value: t.draft });
+  const varsEl = h('div', { class: 'api-lint' });
+  const showVars = () => { const v = tplVars(area.value); varsEl.replaceChildren(note(v.length ? 'ok' : 'info', v.length ? `變數：${v.map((x) => '$' + x).join('、')}` : '這個範本沒有變數（每台都送一樣的設定）')); };
+  area.addEventListener('keydown', (e) => { if (codeKey(area, e)) showVars(); ownKeys(e); });
+  area.addEventListener('input', showVars);
+  area.addEventListener('change', () => { t.draft = area.value; ctx.commit(false); rerender(); });
+  const msgIn = h('input', { class: 'inp', placeholder: '提交說明（例如：加上 logging host）', value: ui.msg, spellcheck: 'false', oninput: (e) => { ui.msg = e.target.value; }, onkeydown: ownKeys });
+  const doCommit = () => {
+    t.draft = area.value;
+    const r = tplCommit(state, dev, t.id, ui.msg);
+    ui.note = r.error ? ['warn', r.error] : ['ok', `已提交 v${r.ver.v}：${r.ver.msg}`];
+    if (r.ok) ui.msg = '';
+    ctx.commit(false);
+    rerender();
+  };
+  body.append(h('div', { class: 'card' },
+    cardHead(`${t.project} / ${t.name}`, badge(dirty ? 'off' : 'on', last ? `已提交 v${last.v}${dirty ? '・草稿已修改' : ''}` : '還沒有提交')),
+    T.length > 1 && h('div', { class: 'seg' }, T.map((x) => h('button', { type: 'button', class: x === t ? 'on' : '', onclick: () => { ui.tpl = x.id; rerender(); } }, x.name))),
+    area, varsEl,
+    h('div', { class: 'ans-bar' }, msgIn, button('提交', { ic: 'check', kind: 'primary', small: true, onclick: doCommit })),
+    ui.note && note(ui.note[0], ui.note[1]),
+    h('details', { class: 'dn-vers' }, h('summary', { text: `版本紀錄（${t.versions.length}）` }),
+      t.versions.slice().reverse().map((v) => h('details', { class: 'dn-ver' }, h('summary', {}, h('b', { class: 'mono', text: `v${v.v}` }), h('span', { text: ` ${v.msg}` }), h('span', { class: 'muted mono', text: ` · ${v.by}` })),
+        h('pre', { class: 'mono dn-cfg', text: v.text.replace(/\n$/, '') }))))));
+  showVars();
+  // 部署：每台設備填自己的變數
+  const vars = last ? tplVars(last.text) : [];
+  const P = (C.params ||= {});
+  const sel = (id) => ui.sel[id] ?? true;
+  const rows = (C.managed || []).map((m) => {
+    const d = state.devices[m.id], pv = (P[m.id] ||= {});
+    return h('div', { class: 'dn-target' + (sel(m.id) ? '' : ' off') },
+      h('label', { class: 'switch' }, h('input', { type: 'checkbox', checked: sel(m.id), onchange: (e) => { ui.sel[m.id] = e.target.checked; rerender(); } }), h('i'), h('span', { class: 'mono', text: `${d ? hostName(d) : m.id} · ${m.ip}` })),
+      sel(m.id) && vars.length ? h('div', { class: 'grid2' }, vars.map((k) => field('$' + k, inp(ctx, () => pv[k], (v) => { pv[k] = v; }, { ph: '必填' })))) : null);
+  });
+  const deploy = () => {
+    const targets = (C.managed || []).filter((m) => sel(m.id)).map((m) => ({ dev: m.id, params: { ...(P[m.id] || {}) } }));
+    ui.out = tplDeploy(state, dev, t.id, targets);
+    ui.scrollToOut = true;
+    ctx.commit(false);
+    rerender();
+  };
+  body.append(h('div', { class: 'card' }, cardHead('部署 (Provision)', h('span', { class: 'muted', text: last ? `${t.name} v${last.v}` : '' })),
+    !last ? note('warn', '範本還沒有提交過，不能部署') : dirty ? note('warn', `草稿有未提交的修改：部署會送出已提交的 v${last.v}，不是編輯框裡的內容`) : null,
+    rows,
+    h('div', { class: 'ans-bar' }, button('部署到選取的設備', { ic: 'play', kind: 'primary', small: true, onclick: deploy }))));
+  // 部署結果
+  if (ui.out) {
+    const r = ui.out, okR = r.results ? r.results.filter((x) => x.status === 'SUCCESS').length : 0;
+    const card = h('div', { class: 'card' }, cardHead('部署結果', r.error ? badge('off', '沒有部署') : badge(okR === r.results.length ? 'on' : 'off', `${okR} / ${r.results.length} SUCCESS`)),
+      r.error ? note('warn', r.error) : [
+        h('div', { class: 'muted mono dn-dep', text: `${r.name} v${r.ver} · deployment ${r.id.slice(0, 8)}` }),
+        ...r.results.map((x) => h('details', { class: 'dn-res', open: x.status !== 'SUCCESS' },
+          h('summary', {}, badge(x.status === 'SUCCESS' ? 'on' : 'off', x.status), h('b', { class: 'mono', text: ` ${x.host}` }), h('span', { class: 'mono muted', text: ` ${x.ip}` })),
+          h('div', { class: 'dn-detail', text: x.detail }),
+          h('pre', { class: 'mono dn-cfg', text: x.lines.join('\n') }))),
+      ]);
+    body.append(card);
+    if (ui.scrollToOut) { ui.scrollToOut = false; requestAnimationFrame(() => { body.scrollTop += card.getBoundingClientRect().top - body.getBoundingClientRect().top - 12; }); }
+  }
 }

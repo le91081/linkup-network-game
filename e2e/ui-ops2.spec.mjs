@@ -255,3 +255,23 @@ test('Terraform：init、plan 列出主控台改過的地方 (drift)，main.tf �
   await page.locator('#panel .seg button', { hasText: 'terraform.tfstate' }).click();
   await expect(page.locator('#panel textarea.ans-edit')).toHaveValue(/"from_port": 8443/);
 });
+
+test('Catalyst Center 的範本：填變數、提交草稿、部署，結果一台一台列出 SUCCESS / FAILURE', async ({ page }) => {
+  await boot(page);
+  await open(page, 'l113');
+  await clickDevice(page, 'dnac');
+  await page.locator('#panel .tab', { hasText: 'Catalyst Center' }).click();
+  await expect(page.locator('#panel .card', { hasText: '設備清單' })).toContainText('2 / 3 Reachable');
+  const V = [['TPE-AS01', 'TPE-3F-A'], ['TPE-AS02', 'TPE-3F-B'], ['TPE-AS03', 'TPE-5F-C']];
+  const rows = page.locator('#panel .dn-target');
+  for (let i = 0; i < 3; i++) for (let j = 0; j < 2; j++) { const x = rows.nth(i).locator('input.inp').nth(j); await x.fill(V[i][j]); await x.press('Enter'); }
+  await page.locator('#panel .ans-bar input.inp').fill('Add logging host');
+  await page.locator('#panel .btn', { hasText: '提交' }).click();
+  await expect(page.locator('#panel .note.ok', { hasText: '已提交 v2' })).toBeVisible();
+  await page.locator('#panel .btn', { hasText: '部署到選取的設備' }).click();
+  const res = page.locator('#panel .card', { hasText: '部署結果' });
+  await expect(res).toContainText('0 / 3 SUCCESS');
+  await expect(res).toContainText('第 4 行「ntp sever 10.1.98.10」');
+  await expect(res).toContainText('不在 SW-C 允許管理的位址範圍內');
+  expect(await scan(page, '#panel', 'Catalyst Center 分頁')).toEqual([]);
+});

@@ -1,9 +1,9 @@
 // 第十五章：網路自動化 — RESTCONF 與 JSON、Ansible
 import { makeDevice as D, makeState, setLine, newIface } from '../engine/model.js';
-import { iosSession } from '../engine/ios.js';
+import { iosSession, hostName, runningConfig } from '../engine/ios.js';
 import { restconf, netconf } from '../engine/restconf.js';
 import { runPlaybook } from '../engine/automation.js';
-import { inventory, issues } from '../engine/dnac.js';
+import { inventory, issues, newTemplate, tplCommit, tplDeploy } from '../engine/dnac.js';
 import { recompute } from '../engine/sim.js';
 import { dev } from './util.js';
 
@@ -29,6 +29,36 @@ const BASE = `https://${R1_LAN}/restconf/data`;
 // ═══════════════════════════ 15-3 Catalyst Center ═══════════════════════════
 const DNAC = { user: 'netops', pass: 'C@talyst-2026' };
 const DNAC_IP = '10.1.98.50';
+
+// ═══════════════════════════ 15-5 Catalyst Center 的範本 ═══════════════════════════
+const TPL_DNAC = '10.1.98.20';
+const SITES = [
+  { id: 'swa', name: 'SW-A', ip: '10.1.99.21', hostname: 'TPE-AS01', location: 'TPE-3F-A', pos: [-11.5, 1] },
+  { id: 'swb', name: 'SW-B', ip: '10.1.99.22', hostname: 'TPE-AS02', location: 'TPE-3F-B', pos: [0, 1.5] },
+  { id: 'swc', name: 'SW-C', ip: '10.1.99.23', hostname: 'TPE-AS03', location: 'TPE-5F-C', pos: [11.5, 1] },
+];
+const TPL_V1 = `## 分店接入交換器的標準設定
+hostname $hostname
+snmp-server location $location
+!
+ntp server 10.1.98.10
+service timestamps log datetime msec
+!
+vlan 40
+ name VOICE
+`;
+// 同事改到一半的草稿：加了 logging host，但 ntp server 打錯了
+const TPL_DRAFT = `## 分店接入交換器的標準設定
+hostname $hostname
+snmp-server location $location
+!
+ntp sever 10.1.98.10
+logging host 10.1.98.10
+service timestamps log datetime msec
+!
+vlan 40
+ name VOICE
+`;
 
 // ═══════════════════════════ 15-2 Ansible ═══════════════════════════
 const ANS = { user: 'netadmin', pass: 'Ans1ble!Net' };
@@ -497,5 +527,122 @@ export const LEVELS11 = [
       netconf(s, 'auto', { host: R1_LAN, user: RC.user, pass: RC.pass, op: 'edit-config', config: '<config><interfaces xmlns="urn:ietf:params:xml:ns:yang:ietf-interfaces"><interface><name>Loopback100</name><description>MGMT</description><enabled>true</enabled><ipv4 xmlns="urn:ietf:params:xml:ns:yang:ietf-ip"><address><ip>10.255.255.1</ip><netmask>255.255.255.255</netmask></address></ipv4></interface></interfaces></config>' });
     },
     recap: ['NETCONF 走 SSH 的 830 埠、用 XML 的 RPC；IOS XE 要 netconf-yang，而且 SSH 要先能動（RSA 金鑰）。', 'NETCONF 與 RESTCONF 用同一套 YANG 模型：一個走 SSH + XML，一個走 HTTPS + JSON / XML。'],
+  },
+  // ════════════════════════ 15-5 ════════════════════════
+  {
+    id: 'l113', chapter: 15, title: '三台新交換器，用控制器的範本一次設好', subtitle: 'Catalyst Center 的範本：變數、提交與部署', tags: ['Catalyst Center', '範本', 'Velocity', '控制器式網路', '組態管理'],
+    brief: '台北分店新上架三台接入交換器，已經加進 Catalyst Center 的設備清單。公司規定接入交換器要照標準設定：主機名稱與位置照命名規則、NTP 與 Syslog 都指向 10.1.98.10、語音 VLAN 40。同事已經在 Catalyst Center 寫好範本 Branch-Access，草稿改到一半就去休假了。請用這個範本把三台一次設好（不要一台一台登入設定），SW-C 的管理存取限制 (access-class) 要保留。',
+    given: [
+      ['Catalyst Center', `${TPL_DNAC} ·「Catalyst Center」分頁：設備清單、範本、部署`],
+      ['範本 Branch / Branch-Access', '變數 $hostname、$location · 已提交 v1，編輯框裡是還沒提交的草稿'],
+      ...SITES.map((x) => [x.name, `${x.ip} → 主機名稱 ${x.hostname}、位置 ${x.location}`]),
+      ['NTP 與 Syslog 伺服器', '10.1.98.10'],
+    ],
+    learn: [
+      { t: '設定範本', d: '把每台都一樣的標準設定寫成範本，每台不同的地方（主機名稱、位置、管理 IP）用變數表示。Catalyst Center 的範本用 Velocity 語法（$hostname 或 ${hostname}，## 開頭是範本的註解），也支援 Jinja2。部署時每台填自己的值，控制器代入之後送到設備。' },
+      { t: '提交與版本', d: '範本編輯的是草稿；按「提交」(commit) 才會產生新的版本，部署一律送出最新提交的版本。改到一半的草稿不會被誤送出去；出問題時也查得到是哪一版、誰提交的。' },
+      { t: '部署 (provision)', d: '控制器用 SSH（南向介面）登入每台設備，進設定模式一行一行送。設備不接受某一行時，這一台就是 FAILURE，但前面已經送出的行還是生效了；控制器連不到的設備（路由、ACL、SSH）也會失敗。部署結果要一台一台看。' },
+      { t: '也可以用 API', d: '同樣的事也能用北向 API：POST /dna/intent/api/v1/template-programmer/template/deploy 帶範本 ID 與每台的變數，再用回傳的 ID 查詢部署狀態。範本本身也能放在 Git 裡管理。' },
+    ],
+    setup() {
+      const access = (x, init) => D('c2960', x.id, {
+        name: x.name, pos: x.pos,
+        init(d) {
+          d.sw.vlans.push({ id: 99, name: 'MGMT' });
+          Object.assign(d.sw.ports['Gi0/9'], { mode: 'trunk', allowed: 'all' });
+          mgmtIp(d, 99, x.ip, '10.1.99.1');
+          if (init) init(d);
+        },
+      });
+      return makeState([
+        D('c9300', 'core', {
+          name: 'Core', pos: [0, -4],
+          init(d) {
+            d.sw.vlans.push({ id: 98, name: 'DATACENTER' }, { id: 99, name: 'MGMT' });
+            for (const p of ['Gi1/0/1', 'Gi1/0/2', 'Gi1/0/3']) Object.assign(d.sw.ports[p], { mode: 'trunk', allowed: 'all' });
+            for (const p of ['Gi1/0/10', 'Gi1/0/12', 'Te1/1/1']) Object.assign(d.sw.ports[p], { mode: 'access', vlan: 98 });
+            for (const v of [98, 99]) d.ifaces.push(newIface('vlan' + v, 'Vlan' + v, { t: 'svi', vlan: v }, { ip: `10.1.${v}.1`, mask: '255.255.255.0' }));
+          },
+        }),
+        access(SITES[0]), access(SITES[1]),
+        // SW-C：vty 只允許管理網段 10.1.99.0/24 — 控制器在 10.1.98.0/24
+        access(SITES[2], (d) => { d.stdAcls = { MGMT: ['10.1.99.0/24'] }; Object.assign(d.mgmt, { aclName: 'MGMT', allow: '10.1.99.0/24' }); }),
+        D('tower', 'srv', { name: 'NTP 與 Syslog 伺服器', pos: [-11, -9.5], ip: '10.1.98.10', gw: '10.1.98.1', services: [{ proto: 'udp', port: 123, name: 'NTP' }, { proto: 'udp', port: 514, name: 'Syslog' }] }),
+        D('rack1u', 'dnac', {
+          name: 'Catalyst Center', pos: [0, -11.5], ip: TPL_DNAC, gw: '10.1.98.1', services: [{ proto: 'tcp', port: 443, name: 'HTTPS（Catalyst Center）' }],
+          init(d) { d.dnac = { user: DNAC.user, pass: DNAC.pass, managed: SITES.map((x) => ({ id: x.id, ip: x.ip })), templates: [newTemplate('Branch-Access', 'Branch', [TPL_V1], TPL_DRAFT)], params: {} }; },
+        }),
+      ], [
+        ['core:Gi1/0/1', 'swa:Gi0/9'], ['core:Gi1/0/2', 'swb:Gi0/9'], ['core:Gi1/0/3', 'swc:Gi0/9'],
+        ['srv:eth0', 'core:Gi1/0/10'], ['dnac:eth0', 'core:Te1/1/1'],
+      ]);
+    },
+    objectives: [
+      {
+        type: 'check', label: `主機名稱與位置照命名規則（${SITES.map((x) => x.hostname).join('、')}）`,
+        test(s) {
+          for (const x of SITES) {
+            const d = dev(s, x.id), rc = runningConfig(s, d).join('\n');
+            if (hostName(d) !== x.hostname) return `${x.name} 的主機名稱是 ${hostName(d)}，要 ${x.hostname}`;
+            if (!rc.includes(`snmp-server location ${x.location}`)) return `${x.name} 沒有 snmp-server location ${x.location}`;
+          }
+          return true;
+        },
+      },
+      {
+        type: 'check', label: '三台都把 NTP 與 Syslog 指向 10.1.98.10，也有語音 VLAN 40 (VOICE)',
+        test(s) {
+          for (const x of SITES) {
+            const d = dev(s, x.id), rc = runningConfig(s, d).join('\n');
+            if (!/\nntp server 10\.1\.98\.10\b/.test(rc)) return `${x.name} 沒有 ntp server 10.1.98.10`;
+            if (!/\nlogging host 10\.1\.98\.10\b/.test(rc)) return `${x.name} 沒有 logging host 10.1.98.10`;
+            const v = d.sw.vlans.find((y) => y.id === 40);
+            if (!v || v.name !== 'VOICE') return `${x.name} 沒有 VLAN 40 VOICE`;
+          }
+          return true;
+        },
+      },
+      {
+        type: 'check', label: 'SW-C 的 vty 仍然有 access-class（只開放管理網段與控制器）',
+        test(s) {
+          const m = dev(s, 'swc').mgmt, a = String(m.allow || '').trim();
+          if (!a) return 'SW-C 的 vty 沒有 access-class 了：管理存取限制要保留，改成也允許控制器的網段就好';
+          return !/(^|[,\s])(any|0\.0\.0\.0\/0)\b/.test(a) || 'SW-C 的 access-class 允許了所有來源 (any)';
+        },
+      },
+      {
+        type: 'check', label: '用範本部署：三台最後一次部署都是 SUCCESS，而且是有 logging host 的新版本',
+        test(s) {
+          const C = dev(s, 'dnac').dnac, t = C.templates[0];
+          for (const x of SITES) {
+            const dep = (C.deployments || []).slice().reverse().find((y) => y.results.some((r) => r.dev === x.id));
+            if (!dep) return `${x.name} 還沒有從 Catalyst Center 部署過範本`;
+            const r = dep.results.find((y) => y.dev === x.id);
+            if (r.status !== 'SUCCESS') return `${x.name} 最後一次部署是 FAILURE：${r.detail}`;
+            const v = t.versions.find((y) => y.v === dep.ver);
+            if (!/logging host/.test(v.text)) return `${x.name} 最後一次部署的是 v${dep.ver}（沒有 logging host）：先把草稿提交成新的版本再部署`;
+          }
+          return true;
+        },
+      },
+    ],
+    hints: [
+      '選取 Catalyst Center →「Catalyst Center」分頁。範本已提交的版本是 v1，編輯框裡是同事改到一半、還沒提交的草稿（多了 logging host）。部署永遠送出最新提交的版本。',
+      '每台設備填好 $hostname 與 $location，把草稿「提交」成 v2，再按「部署到選取的設備」。',
+      '三台都在「ntp sever」那一行 FAILURE？那是草稿裡的錯字。改成 ntp server、再提交一次 (v3)，重新部署。',
+      'SW-C 的 SSH 被拒絕：它的 vty 用 access-class MGMT 只允許 10.1.99.0/24，控制器在 10.1.98.0/24。到 SW-C 的 CLI：configure terminal → ip access-list standard MGMT → permit 10.1.98.0 0.0.0.255。',
+    ],
+    solve(s) {
+      recompute(s);
+      typeIn(s, 'swc', ['configure terminal', 'ip access-list standard MGMT', 'permit 10.1.98.0 0.0.0.255', 'end']);
+      recompute(s);
+      const c = dev(s, 'dnac'), t = c.dnac.templates[0];
+      t.draft = t.draft.replace('ntp sever', 'ntp server');
+      tplCommit(s, c, t.id, 'Add logging host');
+      for (const x of SITES) c.dnac.params[x.id] = { hostname: x.hostname, location: x.location };
+      tplDeploy(s, c, t.id, SITES.map((x) => ({ dev: x.id, params: c.dnac.params[x.id] })));
+      recompute(s);
+    },
+    recap: ['範本把標準設定寫一次、用變數處理每台不同的地方；草稿要提交成新版本才會被部署，版本紀錄看得出誰改了什麼。', '控制器用 SSH 把設定推到每台設備：某一行不被接受、或控制器連不到，那一台就是 FAILURE — 部署結果要一台一台確認。'],
   },
 ];

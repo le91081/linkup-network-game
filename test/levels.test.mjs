@@ -3693,6 +3693,41 @@ console.log('\nTerraform');
   ok(parseHcl('terraform {\n  required_providers {\n    aws = { source = "hashicorp/aws", version = "~> 5.0" }\n  }\n}').length === 1, 'HCL：物件值（required_providers）');
 }
 
+console.log('\nCatalyst Center 的範本');
+{
+  const { tplVars, tplRender, tplCommit, tplDeploy, inventory } = await import('../src/engine/dnac.js');
+  const { iosSession, runningConfig, hostName } = await import('../src/engine/ios.js');
+  const ok = (cond, title) => (cond ? console.log('  ✔ ' + title) : fail(title));
+  const lv = LEVELS.find((x) => x.id === 'l113');
+  const s = lv.setup(); settle(s);
+  const c = s.devices.dnac, C = c.dnac, t = C.templates[0];
+  const P = { swa: { hostname: 'TPE-AS01', location: 'TPE-3F-A' }, swb: { hostname: 'TPE-AS02', location: 'TPE-3F-B' }, swc: { hostname: 'TPE-AS03', location: 'TPE-5F-C' } };
+  const all = () => ['swa', 'swb', 'swc'].map((id) => ({ dev: id, params: P[id] }));
+  ok(tplVars(t.draft).join() === 'hostname,location' && tplRender('hostname ${hostname}-x\n## 註解\n', { hostname: 'A' }).lines.join() === 'hostname A-x', '變數：$name 與 ${name}；## 是範本的註解，不會送出');
+  const inv = inventory(s, c);
+  ok(inv.filter((x) => x.json.reachabilityStatus === 'Reachable').length === 2 && inv[2].json.reachabilityFailureReason === 'SSH Connection Failed', '設備清單：SW-C 是 Unreachable (SSH Connection Failed)，SNMP 通、SSH 被 access-class 擋');
+  ok(/變數沒有填：location/.test(tplDeploy(s, c, t.id, [{ dev: 'swa', params: { hostname: 'X' } }]).error), '有變數沒填：整批都不部署');
+  // 用已提交的 v1 部署：成功，但沒有 logging host
+  const d1 = tplDeploy(s, c, t.id, all()); settle(s);
+  const rcA = runningConfig(s, s.devices.swa).join('\n');
+  ok(d1.ver === 1 && d1.results[0].status === 'SUCCESS' && hostName(s.devices.swa) === 'TPE-AS01' && /snmp-server location TPE-3F-A/.test(rcA) && /ntp server 10\.1\.98\.10/.test(rcA) && !/logging host/.test(rcA), '部署用的是已提交的 v1（草稿的 logging host 沒有送出）');
+  ok(d1.results[2].status === 'FAILURE' && /允許管理的位址範圍/.test(d1.results[2].detail), `SW-C：控制器用 SSH 連不到（${d1.results[2].detail.slice(0, 40)}…）`);
+  ok(((s.dyn.log || {}).swa || []).some((x) => /%SYS-5-CONFIG_I: Configured from console by netops on vty0 \(10\.1\.98\.20\)/.test(x.line)), '設備的紀錄：%SYS-5-CONFIG_I Configured from console by netops on vty0 (10.1.98.20)');
+  // 提交草稿 (v2)：錯字 ntp sever
+  const cm = tplCommit(s, c, t.id, 'Add logging host');
+  ok(cm.ok && cm.ver.v === 2 && /和最新的版本一樣/.test(tplCommit(s, c, t.id, 'again').error), '提交草稿成 v2；沒有修改就不能再提交');
+  const d2 = tplDeploy(s, c, t.id, all().slice(0, 2)); settle(s);
+  ok(d2.results.every((x) => x.status === 'FAILURE' && /第 4 行「ntp sever 10\.1\.98\.10」/.test(x.detail)) && !/logging host/.test(runningConfig(s, s.devices.swb).join('\n')), 'v2 在「ntp sever」那一行失敗（前面的行已經套用，後面的沒有）');
+  t.draft = t.draft.replace('ntp sever', 'ntp server');
+  tplCommit(s, c, t.id, 'Fix typo');
+  const SC = iosSession(() => s.devices.swc, () => s);
+  for (const l of ['configure terminal', 'ip access-list standard MGMT', 'permit 10.1.98.0 0.0.0.255', 'end']) SC.exec(l);
+  settle(s);
+  ok(s.devices.swc.mgmt.allow.includes('10.1.98.0/24') && inventory(s, c).every((x) => x.json.reachabilityStatus === 'Reachable'), 'SW-C 的 MGMT 加上控制器的網段：三台都 Reachable');
+  const d3 = tplDeploy(s, c, t.id, all()); settle(s);
+  ok(d3.ver === 3 && d3.results.every((x) => x.status === 'SUCCESS') && /logging host 10\.1\.98\.10/.test(runningConfig(s, s.devices.swc).join('\n')) && s.devices.swc.sw.vlans.some((v) => v.id === 40 && v.name === 'VOICE'), 'v3 部署到三台：都 SUCCESS');
+}
+
 console.log('\nNetFlow 與 QoS 的 police');
 {
   const sim = await import('../src/engine/sim.js');
