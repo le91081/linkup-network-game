@@ -4300,6 +4300,36 @@ console.log('\nConsole 線與 access-class');
   ok(login('emp').ok && !/access-class/.test(runningConfig(s, sw).join('\n')), '沒有 access-class 時改 ACL 不會又套回 vty');
 }
 
+console.log('\nFortiGate 的應用程式控管與 IPS');
+{
+  const { fortiSession, fortiConfig } = await import('../src/engine/fortios.js');
+  const sim = await import('../src/engine/sim.js');
+  const ok = (cond, title) => (cond ? console.log('  ✔ ' + title) : fail(title));
+  const lv = LEVELS.find((x) => x.id === 'l127');
+  const s = lv.setup(); settle(s);
+  const fg = s.devices.fg;
+  const cli = (lines) => { const S = fortiSession(() => s.devices.fg, () => s); const o = []; for (const l of lines) o.push(...S.exec(l).out); settle(s); return o.join('\n'); };
+  const run = (n) => sim.runObjective(s, lv.objectives[n]);
+  ok(!run(1).pass && !run(4).pass && /攻擊流量（log4j）成功了/.test(run(4).reason), '一開始 BitTorrent 與 Log4Shell 都過得去');
+  ok(/value parse error before '99'/.test(cli(['config application list', 'edit "corp-app"', 'config entries', 'edit 1', 'set category 2 99', 'set action block', 'next', 'end', 'next', 'end'])), '不認得的應用程式類別');
+  cli(['config application list', 'edit "corp-app"', 'config entries', 'edit 1', 'set category 2 6', 'set action block', 'next', 'end', 'next', 'end']);
+  ok(fg.appList['corp-app'].block.join() === '2,6', 'config application list：封鎖 P2P 與 Proxy');
+  cli(['config firewall policy', 'edit 2', 'set utm-status enable', 'set application-list "corp-app"', 'next', 'end']);
+  ok(!run(1).pass, '應用程式控管掛錯政策（#2 是客戶連進來的方向）：員工的 BitTorrent 照樣通');
+  cli(['config firewall policy', 'edit 2', 'unset utm-status', 'next', 'edit 1', 'set utm-status enable', 'set application-list "corp-app"', 'next', 'end']);
+  ok(run(1).pass && /BitTorrent/.test(run(1).reason) && run(2).pass && run(0).pass, '掛在 #1：BitTorrent 與 Tor 被擋，一般上網照常');
+  cli(['config ips sensor', 'edit "watch"', 'config entries', 'edit 1', 'set severity medium', 'set action block', 'next', 'end', 'next', 'end']);
+  cli(['config firewall policy', 'edit 2', 'set utm-status enable', 'set ips-sensor "watch"', 'next', 'end']);
+  const w = run(4);
+  ok(!w.pass && w.log.some((l) => /沒有封鎖這個嚴重程度，只記錄/.test(l.text)), 'IPS 感測器只封鎖 medium：critical 的 Log4Shell 只記錄、沒擋');
+  cli(['config ips sensor', 'edit "watch"', 'config entries', 'edit 1', 'set severity high critical', 'set action block', 'next', 'end', 'next', 'end']);
+  ok(run(4).pass && /CVE-2021-44228/.test(run(4).reason) && run(3).pass, 'severity high critical：Log4Shell 被擋，一般的連線照常');
+  ok(lv.objectives.every((o) => sim.runObjective(s, o).pass), '五個目標都通過');
+  const t = fortiConfig(s, fg).join('\n');
+  ok(/config application list\n    edit "corp-app"\n        config entries\n            edit 1\n                set category 2 6\n                set action block/.test(t) && /config ips sensor\n    edit "watch"/.test(t)
+    && t.indexOf('config ips sensor') < t.indexOf('config firewall policy') && /set application-list "corp-app"/.test(t) && /set ips-sensor "watch"/.test(t), 'show：application list、ips sensor 印在政策前面');
+}
+
 console.log('\nNetFlow 與 QoS 的 police');
 {
   const sim = await import('../src/engine/sim.js');

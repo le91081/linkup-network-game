@@ -19,7 +19,7 @@ import { lookupRoute } from './l3.js';
 import { GRE_OVERHEAD, greRx, greTarget, isTun, nhrpRedirect, tunMode } from './gre.js';
 import { haLostNote } from '../ha.js';
 import { zbfActive, zbfCheck, zbfNeeds } from '../zbf.js';
-import { utmCheck } from '../utm.js';
+import { utmCheck, appIpsCheck } from '../utm.js';
 
 // ───────────────────────────── 封包轉送 ─────────────────────────────
 
@@ -583,6 +583,9 @@ export function forward(state, ctx, startId, pkt) {
         if (u.note) log.push({ dev: dev.id, kind: 'info', text: u.note });
         if (u.deep) ctx.deep = { dev: dev.id, rule: v.rule };
         if (u.drop) { T('fw_forward_handler', `webfilter block, policy-${v.rule}`); if (u.block) ctx.wfBlock = { ...u.block, dev: dev.id }; return drop(u.drop); }
+        const ai = appIpsCheck(dev, dev.policies[v.rule - 1], v.rule, pkt);
+        if (ai.note) log.push({ dev: dev.id, kind: 'info', text: ai.note });
+        if (ai.drop) { T('fw_forward_handler', `${ai.ips ? 'IPS' : 'application control'} block, policy-${v.rule}`); return drop(ai.drop); }
       }
       if (v.zbf) log.push({ dev: dev.id, kind: 'fwd', text: `ZBF：zone-pair ${v.zbf.pair} 的 class ${v.zbf.cls} → ${v.zbf.act}${pkt.reply ? '' : v.zbf.act === 'inspect' ? '（記下連線，回程自動放行）' : '（無狀態：回程要另外放行）'}` });
       if (!pkt.reply) {

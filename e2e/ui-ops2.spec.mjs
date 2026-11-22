@@ -574,3 +574,26 @@ test('Console 線：機房的交換器沒有設定分頁；工程筆電接 Conso
   await typeCmd(page, 'ssh netadmin@10.1.98.11');
   await expect(page.locator('#panel .term-out')).toContainText(/password:|\(yes\/no/);
 });
+
+test('應用程式控管與 IPS：安全設定檔分頁建立清單與感測器，掛到兩條政策上', async ({ page }) => {
+  await boot(page);
+  await open(page, 'l127');
+  await clickDevice(page, 'fg');
+  await page.locator('#panel .tab', { hasText: '安全設定檔' }).click();
+  const add = (title, v) => page.locator('#panel .card', { hasText: title }).locator('input');
+  await add('新增應用程式控管清單').fill('corp-app'); await add('新增應用程式控管清單').press('Enter');
+  for (const c of ['點對點下載', '代理 / 匿名網路']) await page.locator('#panel .card.appList-prof label.switch', { hasText: c }).click();
+  await expect(page.locator('#panel .card.appList-prof')).toContainText('封鎖 2 個類別');
+  await add('新增 IPS 感測器').fill('protect-web'); await add('新增 IPS 感測器').press('Enter');
+  await expect(page.locator('#panel .card.ips-prof')).toContainText('封鎖 2 種嚴重程度');
+  expect(await scan(page, '#panel', 'FortiGate 的安全設定檔（應用程式控管、IPS）')).toEqual([]);
+  await page.locator('#panel .tab', { hasText: '政策' }).click();
+  const pol = (n) => page.locator('#panel .card.policy').nth(n);
+  await pol(0).locator('label.switch', { hasText: '安全設定檔' }).click();
+  await pol(0).locator('label.field', { hasText: '應用程式控管' }).locator('select').selectOption('corp-app');
+  await pol(1).locator('label.switch', { hasText: '安全設定檔' }).click();
+  await pol(1).locator('label.field', { hasText: 'IPS' }).locator('select').selectOption('protect-web');
+  await expect(pol(1).locator('label.field', { hasText: 'IPS' }).locator('select')).toHaveValue('protect-web');
+  expect(await page.evaluate(() => { const p = window.linkup.state.devices.fg.policies; return [p[0].utm, p[0].app, p[1].utm, p[1].ips].join(); })).toBe('true,corp-app,true,protect-web');
+  expect(await scan(page, '#panel', 'FortiGate 的政策（應用程式控管、IPS）')).toEqual([]);
+});

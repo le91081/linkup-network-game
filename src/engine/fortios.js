@@ -11,7 +11,7 @@ import { ZONE, sdwanOn, diagHealth, diagService, sdwanConfigLines, applySdwanCli
 import { recompute } from './sim.js';
 import { transfer, configFile, IMAGES, PLATFORM, PLATFORM_NAME, ensureFlash } from './files.js';
 import { newHa, haOn, haStatusLines } from './ha.js';
-import { SSL_PROFILES, wfConfigLines, applyWfCli } from './utm.js';
+import { SSL_PROFILES, wfConfigLines, applyWfCli, appIpsConfigLines, applyAppIpsCli } from './utm.js';
 
 // HA 的密碼在設定裡顯示成 ENC <十六進位>（貼回來也認得），也可以直接打明文
 const encPass = (p) => Array.from(new TextEncoder().encode(p)).map((b) => b.toString(16).padStart(2, '0')).join('');
@@ -703,7 +703,7 @@ const SEC = {
     remove(d) { d.vpnServer.subnets = ''; },
   },
   'firewall policy': {
-    numeric: true, fields: { name: 'q', srcintf: 'q', dstintf: 'q', srcaddr: 'q', dstaddr: 'q', srcaddr6: 'q', dstaddr6: 'q', action: 'b', schedule: 'q', service: 'q', 'utm-status': 'b', 'ssl-ssh-profile': 'q', 'webfilter-profile': 'q', nat: 'b', status: 'b', logtraffic: 'b', comments: 'q', groups: 'q' },
+    numeric: true, fields: { name: 'q', srcintf: 'q', dstintf: 'q', srcaddr: 'q', dstaddr: 'q', srcaddr6: 'q', dstaddr6: 'q', action: 'b', schedule: 'q', service: 'q', 'utm-status': 'b', 'ssl-ssh-profile': 'q', 'webfilter-profile': 'q', 'application-list': 'q', 'ips-sensor': 'q', nat: 'b', status: 'b', logtraffic: 'b', comments: 'q', groups: 'q' },
     read(d) {
       ensureIds(d);
       return d.policies.map((p) => ({
@@ -714,7 +714,7 @@ const SEC = {
           ...(String(p.src || '').trim() ? { srcaddr: specNames(d, p.src, false), dstaddr: specNames(d, p.dst, true) } : {}),
           ...(p.src6 ? { srcaddr6: list(p.src6), dstaddr6: list(p.dst6 || 'all') } : {}),
           action: [p.action === 'accept' ? 'accept' : 'deny'], schedule: ['always'], service: list(p.service || 'ALL'),
-          ...(p.utm ? { 'utm-status': ['enable'], 'ssl-ssh-profile': [p.ssl || 'no-inspection'], ...(p.wf ? { 'webfilter-profile': [p.wf] } : {}) } : {}),
+          ...(p.utm ? { 'utm-status': ['enable'], 'ssl-ssh-profile': [p.ssl || 'no-inspection'], ...(p.wf ? { 'webfilter-profile': [p.wf] } : {}), ...(p.app ? { 'application-list': [p.app] } : {}), ...(p.ips ? { 'ips-sensor': [p.ips] } : {}) } : {}),
           ...(p.action === 'accept' && p.nat ? { nat: ['enable'] } : {}), ...(p.off ? { status: ['disable'] } : {}),
         },
       }));
@@ -739,14 +739,17 @@ const SEC = {
       const utm = (f['utm-status'] || [])[0] === 'enable';
       // 原本就開著、這次 unset / disable：設定檔跟著拿掉；原本沒開卻直接指定設定檔：和 FortiOS 一樣不接受
       const was = d.policies.find((p) => String(p.id) === key);
-      if (!utm && (has('webfilter-profile') || has('ssl-ssh-profile')) && !(was && was.utm)) return ERR('要先 set utm-status enable，才能設定 ssl-ssh-profile 與 webfilter-profile');
+      if (!utm && ['webfilter-profile', 'ssl-ssh-profile', 'application-list', 'ips-sensor'].some(has) && !(was && was.utm)) return ERR('要先 set utm-status enable，才能設定安全設定檔（ssl-ssh-profile、webfilter-profile、application-list、ips-sensor）');
       const ssl = (f['ssl-ssh-profile'] || ['no-inspection'])[0], wfp = (f['webfilter-profile'] || [])[0];
       if (utm && !SSL_PROFILES.includes(ssl)) return notFound(`沒有 SSL 檢查設定檔「${ssl}」；內建的有：${SSL_PROFILES.join('、')}`);
       if (utm && wfp && !(d.wf || {})[wfp]) return notFound(`沒有網頁過濾設定檔「${wfp}」：先用 config webfilter profile 建立`);
+      const apl = (f['application-list'] || [])[0], ipsn = (f['ips-sensor'] || [])[0];
+      if (utm && apl && !(d.appList || {})[apl]) return notFound(`沒有應用程式控管清單「${apl}」：先用 config application list 建立`);
+      if (utm && ipsn && !(d.ips || {})[ipsn]) return notFound(`沒有 IPS 感測器「${ipsn}」：先用 config ips sensor 建立`);
       const val = { name: (f.name || [''])[0], srcIf, dstIf, src, dst, src6: has('srcaddr6') ? f.srcaddr6.join(' ') : '', dst6: has('dstaddr6') ? f.dstaddr6.join(' ') : '', service: svc.includes('ALL') ? 'ALL' : svc.join(', '), action, nat: action === 'accept' && (f.nat || [])[0] === 'enable', off: (f.status || [])[0] === 'disable' };
-      Object.assign(val, utm ? { utm: true, ssl, wf: wfp || '' } : { utm: false, ssl: '', wf: '' });
+      Object.assign(val, utm ? { utm: true, ssl, wf: wfp || '', app: apl || '', ips: ipsn || '' } : { utm: false, ssl: '', wf: '', app: '', ips: '' });
       const cur = d.policies.find((p) => String(p.id) === key);
-      const tidy = (p) => { for (const k of ['utm', 'ssl', 'wf']) if (!p[k]) delete p[k]; return p; };
+      const tidy = (p) => { for (const k of ['utm', 'ssl', 'wf', 'app', 'ips']) if (!p[k]) delete p[k]; return p; };
       if (cur) tidy(Object.assign(cur, val)); else d.policies.push(tidy({ id: +key, ...val }));
       return undefined;
     },
@@ -839,7 +842,7 @@ export function fortiConfig(state, dev) {
     if (sec.only && !sec.only(dev)) continue;
     const entries = sec.read(dev, state);
     // 和 FortiOS 一樣，SD-WAN 印在防火牆政策前面（政策會用到 virtual-wan-link）
-    if (name === 'firewall policy') o.push(...wfConfigLines(dev), ...sdwanConfigLines(dev));
+    if (name === 'firewall policy') o.push(...wfConfigLines(dev), ...appIpsConfigLines(dev), ...sdwanConfigLines(dev));
     if (hasContent(entries)) o.push(...block(name, sec, entries));
   }
   return o;
@@ -1023,7 +1026,7 @@ export function fortiSession(getDev, getState) {
       if (w === 'config') rawT.depth++;
       if (w === 'end' && --rawT.depth === 0) {
         stack.pop();
-        const e = rawT.label === 'webfilter' ? applyWfCli(dev(), rawT.lines) : applySdwanCli(dev(), rawT.lines);
+        const e = rawT.label === 'webfilter' ? applyWfCli(dev(), rawT.lines) : rawT.label === 'app' || rawT.label === 'ips' ? applyAppIpsCli(dev(), rawT.label, rawT.lines) : applySdwanCli(dev(), rawT.lines);
         if (e) { out.push(e, 'Command fail. Return code -651'); return res(); }
         changed = true;
         return res();
@@ -1044,6 +1047,8 @@ export function fortiSession(getDev, getState) {
         if (name === 'system sdwan' || name === 'system virtual-wan-link') { stack.push({ t: 'raw', label: 'sdwan', depth: 1, lines: [] }); return res(); }
         // 網頁過濾設定檔也有兩層（ftgd-wf → filters）：同樣整段收下來
         if (name === 'webfilter profile') { stack.push({ t: 'raw', label: 'webfilter', depth: 1, lines: [] }); return res(); }
+        if (name === 'application list') { stack.push({ t: 'raw', label: 'app', depth: 1, lines: [] }); return res(); }
+        if (name === 'ips sensor') { stack.push({ t: 'raw', label: 'ips', depth: 1, lines: [] }); return res(); }
         const sec = SEC[name];
         if (!sec || (sec.only && !sec.only(d))) return fail([...parseErr(tok[1] || ''), '（輸入 ? 可以看到有哪些設定區段）']);
         if (sec.single) stack.push({ t: 'edit', single: true, sec, label: label(name), name, key: '', ...clone({ f: {}, sub: {}, ...sec.read(d, st())[0] }) });

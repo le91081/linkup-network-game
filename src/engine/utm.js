@@ -1,4 +1,4 @@
-// FortiGate 的安全設定檔（NGFW）：FortiGuard 網頁過濾與 SSL 檢查
+// FortiGate 的安全設定檔（NGFW）：FortiGuard 網頁過濾、SSL 檢查、應用程式控管、IPS
 //
 // 網頁過濾設定檔：d.wf = { 名稱: { block: [類別編號], comment } }
 // 政策：p.utm（set utm-status enable）、p.wf（webfilter-profile）、p.ssl（ssl-ssh-profile：no-inspection / certificate-inspection / deep-inspection）
@@ -114,5 +114,116 @@ export function applyWfCli(d, lines) {
   }
   function commit() { if (filt && filt.cat != null) { cur.block = cur.block.filter((c) => c !== filt.cat); if (filt.act === 'block') cur.block.push(filt.cat); } filt = null; }
   if (Object.keys(wf).length) d.wf = wf; else delete d.wf;
+  return null;
+}
+
+// ── 應用程式控管（application list）：依特徵辨識應用程式，封鎖整個類別 ──
+// d.appList = { 名稱: { block: [類別編號] } }；政策 p.app
+export const APP_CATS = { 2: 'P2P', 5: 'Video/Audio', 6: 'Proxy', 8: 'Game', 23: 'Social.Media' };
+export const APP_CAT_ZH = { 2: '點對點下載', 5: '影音串流', 6: '代理 / 匿名網路', 8: '線上遊戲', 23: '社群媒體' };
+// 這個模擬認得的應用程式：用埠號或網址上的主機名稱辨識（真的 FortiGate 看封包內容的特徵）
+export const APPS = [
+  { name: 'BitTorrent', cat: 2, port: [6881, 6889] },
+  { name: 'Tor', cat: 6, port: [9001, 9001] },
+  { name: 'Tor', cat: 6, port: [9030, 9030] },
+  { name: 'Facebook', cat: 23, host: /(^|\.)facebook\./ },
+  { name: 'YouTube', cat: 5, host: /(^|\.)youtube\./ },
+  { name: 'Steam', cat: 8, port: [27015, 27015] },
+];
+/** 這個連線是哪個應用程式（認不出來就是 null） */
+export function appOf(pkt) {
+  return APPS.find((a) => (a.port && (pkt.proto === 'tcp' || pkt.proto === 'udp') && pkt.dport >= a.port[0] && pkt.dport <= a.port[1]) || (a.host && pkt.host && a.host.test(pkt.host))) || null;
+}
+
+// ── IPS：特徵比對；感測器決定封鎖哪些嚴重程度 ──
+// d.ips = { 名稱: { sev: ['high', 'critical'] } }；政策 p.ips
+export const IPS_SEV = ['info', 'low', 'medium', 'high', 'critical'];
+export const ATTACKS = {
+  log4j: { sig: 'Apache.Log4j.Error.Log.Remote.Code.Execution', sev: 'critical', cve: 'CVE-2021-44228' },
+  sqli: { sig: 'HTTP.URI.SQL.Injection', sev: 'high', cve: '' },
+  shellshock: { sig: 'Bash.Function.Definitions.Remote.Code.Execution', sev: 'critical', cve: 'CVE-2014-6271' },
+};
+
+/** 應用程式控管與 IPS（在網頁過濾之後檢查）：回傳 { drop, note } */
+export function appIpsCheck(dev, p, n, pkt) {
+  if (!p || !p.utm || pkt.reply || pkt.ack) return {};
+  if (pkt.attack && p.ips) {
+    const a = ATTACKS[pkt.attack], s = (dev.ips || {})[p.ips];
+    if (a && s && (s.sev || []).includes(a.sev)) return { drop: `IPS：偵測到攻擊 ${a.sig}${a.cve ? `（${a.cve}）` : ''}，嚴重程度 ${a.sev}，被政策 #${n} 的 IPS 感測器「${p.ips}」封鎖`, ips: a };
+    if (a && s) return { note: `IPS：偵測到 ${a.sig}（${a.sev}），但感測器「${p.ips}」沒有封鎖這個嚴重程度，只記錄` };
+  }
+  if (p.app) {
+    const app = appOf(pkt), l = (dev.appList || {})[p.app];
+    if (app && l && (l.block || []).map(Number).includes(app.cat)) {
+      if (app.host && pkt.dport === 443 && (p.ssl || 'no-inspection') === 'no-inspection') return { note: `應用程式控管：${app.name} 走 HTTPS，SSL 檢查是 no-inspection，辨識不出來` };
+      return { drop: `應用程式控管：辨識出 ${app.name}（${APP_CATS[app.cat]}，${APP_CAT_ZH[app.cat]}），被政策 #${n} 的「${p.app}」封鎖`, app };
+    }
+  }
+  return {};
+}
+
+// ── FortiOS：config application list / config ips sensor（兩層：entries） ──
+export function appIpsConfigLines(d) {
+  const o = [];
+  const apps = Object.entries(d.appList || {}), ips = Object.entries(d.ips || {});
+  if (apps.length) {
+    o.push('config application list');
+    for (const [n, l] of apps) {
+      o.push(`    edit "${n}"`, '        config entries');
+      if ((l.block || []).length) o.push('            edit 1', `                set category ${l.block.join(' ')}`, '                set action block', '            next');
+      o.push('        end', '    next');
+    }
+    o.push('end');
+  }
+  if (ips.length) {
+    o.push('config ips sensor');
+    for (const [n, s] of ips) {
+      o.push(`    edit "${n}"`, '        config entries');
+      if ((s.sev || []).length) o.push('            edit 1', `                set severity ${s.sev.join(' ')}`, '                set action block', '            next');
+      o.push('        end', '    next');
+    }
+    o.push('end');
+  }
+  return o;
+}
+
+/** 套用 config application list / ips sensor 的內容。kind：'app' | 'ips'。回傳錯誤訊息或 null */
+export function applyAppIpsCli(d, kind, lines) {
+  const key = kind === 'app' ? 'appList' : 'ips', field = kind === 'app' ? 'block' : 'sev';
+  const all = JSON.parse(JSON.stringify(d[key] || {}));
+  let cur = null, ent = null, inEnt = false;
+  const tok = (l) => (l.match(/"[^"]*"|\S+/g) || []).map((x) => x.replace(/^"|"$/g, ''));
+  const commit = () => {
+    if (!ent || !cur) return;
+    if (ent.vals && ent.act === 'block') cur[field] = [...new Set([...(cur[field] || []), ...ent.vals])];
+    if (ent.vals && ent.act !== 'block') cur[field] = (cur[field] || []).filter((x) => !ent.vals.includes(x));
+    ent = null;
+  };
+  for (const l of lines) {
+    const t = tok(l), w = (t[0] || '').toLowerCase();
+    if (!inEnt && w === 'edit') { cur = (all[t[1]] ||= { [field]: [] }); continue; }
+    if (!inEnt && w === 'delete') { delete all[t[1]]; continue; }
+    if (!cur) return `command parse error before '${t[0]}'`;
+    if (w === 'config') { if ((t[1] || '').toLowerCase() === 'entries') inEnt = true; continue; }
+    if (w === 'end') { if (inEnt) { commit(); inEnt = false; } continue; }
+    if (inEnt) {
+      if (w === 'edit') { commit(); ent = { vals: null, act: 'block' }; continue; }
+      if (w === 'next') { commit(); continue; }
+      if (w === 'set' && kind === 'app' && t[1] === 'category') {
+        const bad = t.slice(2).find((x) => !(x in APP_CATS));
+        if (bad) return `value parse error before '${bad}'（這個模擬認得的應用程式類別：${Object.entries(APP_CATS).map(([k, v]) => `${k} ${v}`).join('、')}）`;
+        ent.vals = t.slice(2).map(Number); continue;
+      }
+      if (w === 'set' && kind === 'ips' && t[1] === 'severity') {
+        const bad = t.slice(2).find((x) => !IPS_SEV.includes(x));
+        if (bad) return `value parse error before '${bad}'（severity：${IPS_SEV.join('、')}）`;
+        ent.vals = t.slice(2); continue;
+      }
+      if (w === 'set' && t[1] === 'action') { if (!['block', 'pass', 'monitor', 'reset', 'default'].includes(t[2])) return `value parse error before '${t[2]}'`; ent.act = t[2] === 'reset' ? 'block' : t[2]; continue; }
+      continue;
+    }
+    if (w === 'next') { cur = null; continue; }
+  }
+  if (Object.keys(all).length) d[key] = all; else delete d[key];
   return null;
 }

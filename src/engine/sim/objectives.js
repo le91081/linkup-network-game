@@ -175,7 +175,7 @@ export function runObjective(state, o) {
   const from = state.devices[o.from];
   const log = [], hops = [];
   const expect = o.expect ?? true;
-  const what = o.type === 'tcp' ? `TCP ${o.port} 的連線` : o.type === 'udp' ? `UDP ${o.port}` : o.type === 'ping' ? 'ping ' : '連線';
+  const what = o.attack ? `攻擊流量（${o.attack}）` : o.type === 'tcp' ? `TCP ${o.port} 的連線` : o.type === 'udp' ? `UDP ${o.port}` : o.type === 'ping' ? 'ping ' : '連線';
   const finish = (ok, reason, failDev) => ({ pass: ok === expect, ok, reason: ok && !expect ? `${what}成功了，但這應該要被擋下` : reason, failDev, log, hops });
   let dst;
   if (o.name) {
@@ -198,7 +198,7 @@ export function runObjective(state, o) {
   }
   const srcIp = o.srcIp ? parseIp(o.srcIp) : from.kind === 'internet' ? parseIp(from.inet.client) : undefined;
   const proto = o.type === 'ping' ? 'icmp' : o.type === 'speed' || o.type === 'https' ? 'tcp' : o.type;
-  const r = transact(state, o.from, { proto, dst, dport: o.type === 'speed' ? o.port ?? 5201 : o.port ?? 443, srcIp, ...(o.size ? { size: o.size } : {}), ...(o.df ? { df: true } : {}), ...(o.bulk != null ? { bulk: o.bulk } : o.type === 'speed' ? { bulk: 'up' } : {}), ...(o.name ? { host: o.name } : {}) });
+  const r = transact(state, o.from, { proto, dst, dport: o.type === 'speed' ? o.port ?? 5201 : o.port ?? 443, srcIp, ...(o.size ? { size: o.size } : {}), ...(o.df ? { df: true } : {}), ...(o.bulk != null ? { bulk: o.bulk } : o.type === 'speed' ? { bulk: 'up' } : {}), ...(o.name ? { host: o.name } : {}), ...(o.attack ? { attack: o.attack } : {}) });
   log.push(...r.log); hops.push(...r.hops);
   if (r.ok && o.type === 'speed') {
     // 傳輸速率測試（iperf3）：連得上之後，看路徑上最慢的那一段
