@@ -26,7 +26,9 @@ import { portByName } from '../engine/ios.js';
 import { isIos } from '../engine/ios.js';
 import { fmtMask } from '../engine/ip.js';
 import { route6Rows } from '../engine/sim6.js';
-import { CATALOG, MEDIA, peerOf, portOf, linkInfo, phyConfig } from '../engine/model.js';
+import { CATALOG, MEDIA, peerOf, portOf, linkInfo, phyConfig, fiberLink } from '../engine/model.js';
+import { xcvrAt, xcvrSerial, MEDIA_TYPE } from '../engine/optics.js';
+import { PLATFORM as PID_OF } from '../engine/dnac.js';
 import { iosSession, runningConfig, startupConfig, hostName as host, aclName, aclLine, aclSeqs } from '../engine/ios.js';
 import { ipMtu, l2Mtu, jumboNow, isCat2960, isCat9300, isNexus } from '../engine/mtu.js';
 import { tunByName, tunnelDetail, dmvpnLines, nhrpLines, nhsLines, ipsecProfileLines, cryptoSessionLines, transformSetLines, bfdLines, pkiCertLines, pkiTrustpointLines } from './cli-tun.js';
@@ -630,7 +632,8 @@ const SHOW = {
       // 前面有 a- 的是自動協商出來的結果，沒有的是手動寫死的設定
       const cfg = phyConfig(d, p.id);
       const dup = cfg.duplex || (li ? 'a-' + li.duplex : 'auto'), spd = cfg.speed != null ? String(cfg.speed) : li ? 'a-' + li.speed : 'auto';
-      o.push(pad(p.label, 14) + pad(status, 14) + pad(vlan, 8) + pad(dup, 9) + pad(spd, 9) + MEDIA[p.media].name);
+      const x = xcvrAt(st, d, p.id, fiberLink);
+      o.push(pad(p.label, 14) + pad(status, 14) + pad(vlan, 8) + pad(dup, 9) + pad(spd, 9) + (x ? MEDIA_TYPE[x.pn] || x.pn : p.media === 'rj45' ? '10/100/1000BaseTX' : MEDIA[p.media].name));
     }
     return o;
   },
@@ -654,6 +657,31 @@ const SHOW = {
     for (let k = 0; k < max; k++) {
       const x = list[k];
       o.push(`   ${String(k + 1).padEnd(9)}${x ? (d.archive.path.match(/^\w+:/) || ['flash:'])[0] + x.name + (k === list.length - 1 ? ' <- Most Recent' : '') : ''}`);
+    }
+    return o;
+  },
+  // 收發器的數位診斷 (DOM)：發射與接收的光功率；低於靈敏度標 --（low alarm），只差 1 dB 以內標 -（low warning）
+  'show interfaces transceiver': (st, d) => {
+    const rows = d.ports.map((p) => [p, xcvrAt(st, d, p.id, fiberLink)]).filter(([, x]) => x);
+    if (!rows.length) return ['（這台設備沒有插任何光纖收發器）'];
+    const o = ['If device is externally calibrated, only calibrated values are printed.', '++ : high alarm, +  : high warning, -  : low warning, -- : low alarm.', 'NA or N/A: not applicable, Tx: transmit, Rx: receive.', 'mA: milliamperes, dBm: decibels (milliwatts).', '',
+      '                                             Optical   Optical', '            Temperature  Voltage  Current   Tx Power  Rx Power', 'Port        (Celsius)    (Volts)  (mA)      (dBm)     (dBm)', '---------   -----------  -------  --------  --------  --------'];
+    for (const [p, x] of rows) {
+      const seed = [...(d.id + p.id)].reduce((s, ch) => s + ch.charCodeAt(0), 0);
+      const rx = x.link.down ? -40 : x.link.rx[x.end];
+      const flag = rx < x.o.rx ? ' --' : rx < x.o.rx + 1 ? ' -' : '';
+      o.push(pad(p.label, 12) + (28 + (seed % 70) / 10).toFixed(1).padStart(6) + '       3.29' + (5.5 + (seed % 25) / 10).toFixed(1).padStart(9) + x.o.tx.toFixed(1).padStart(10) + rx.toFixed(1).padStart(10) + flag);
+    }
+    return o;
+  },
+  'show inventory': (st, d) => {
+    const m = CATALOG[d.model] || {};
+    const o = [`NAME: "Chassis", DESCR: "${m.vendor || ''} ${m.title || d.model}"`, `PID: ${(PID_OF[d.model] || d.model.toUpperCase()).padEnd(18)}, VID: V02  , SN: ${xcvrSerial(d.model, d.id)}`, ''];
+    for (const p of d.ports) {
+      const x = xcvrAt(st, d, p.id, fiberLink);
+      if (!x) continue;
+      const third = x.o.vendor !== 'Cisco';
+      o.push(`NAME: "${longIf(p.label)}", DESCR: "${MEDIA_TYPE[x.pn] || x.pn}"`, `PID: ${x.pn.padEnd(18)}, VID: ${third ? '    ' : 'V02 '}, SN: ${xcvrSerial(x.pn, d.id + p.id)}${third ? '   （不是 Cisco 的料號）' : ''}`, '');
     }
     return o;
   },
@@ -1528,7 +1556,7 @@ function ifaceDetail(st, d, p) {
     `  MTU ${mtu} bytes, BW ${speed * 1000} Kbit/sec, DLY 10 usec,`,
     `     reliability ${inErr && c.ip ? Math.max(1, Math.round(255 * (1 - Math.min(1, inErr / Math.max(1, c.ip + inErr))))) : 255}/255, txload ${load(c.outRate)}/255, rxload ${load(c.inRate)}/255`,
     '  Encapsulation ARPA, loopback not set', '  Keepalive set (10 sec)',
-    `  ${dup}, ${speed >= 1000 ? speed / 1000 + '000' : speed}Mb/s, media type is ${p.media === 'rj45' ? '10/100/1000BaseTX' : 'SFP'}`,
+    `  ${dup}, ${speed >= 1000 ? speed / 1000 + '000' : speed}Mb/s, media type is ${p.media === 'rj45' ? '10/100/1000BaseTX' : (() => { const x = xcvrAt(st, d, p.id, fiberLink); return x ? MEDIA_TYPE[x.pn] || x.pn : p.media === 'qsfp' ? 'QSFP 100G CU' : 'SFP-10GBase-CU'; })()}`,
     `  Last input ${ago(c.lastIn)}, output ${ago(c.lastOut)}, output hang never`,
     `  Last clearing of "show interface" counters ${clr == null ? 'never' : hms(st.clock - clr)}`,
     '  Input queue: 0/75/0/0 (size/max/drops/flushes); Total output drops: 0', '  Queueing strategy: fifo', '  Output queue: 0/40 (size/max)',
@@ -1823,7 +1851,7 @@ function showOrPing(app, devId, line, print) {
     switchportLines(st, d, p).forEach((l) => print(l, l.startsWith('（') ? 'hint' : 'pre'));
     return true;
   }
-  if (tok[0].length >= 2 && 'show'.startsWith(tok[0]) && tok[1] && tok[1].length >= 3 && 'interfaces'.startsWith(tok[1]) && !(tok[2] && ['status', 'trunk', 'counters', 'switchport'].some((w) => tok[2].length >= 2 && w.startsWith(tok[2])))) {
+  if (tok[0].length >= 2 && 'show'.startsWith(tok[0]) && tok[1] && tok[1].length >= 3 && 'interfaces'.startsWith(tok[1]) && !(tok[2] && ['status', 'trunk', 'counters', 'switchport', 'transceiver'].some((w) => tok[2].length >= 2 && w.startsWith(tok[2])))) {
     const name = tok.slice(2).join('');
     const tu = name ? tunByName(d, name) : undefined;
     if (tu !== undefined) {

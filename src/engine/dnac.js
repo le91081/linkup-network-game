@@ -8,7 +8,7 @@ import { linkInfo, peerOf } from './model.js';
 import { ensureFlash } from './files.js';
 import { hostName, iosSession } from './ios.js';
 
-const PLATFORM = { c9300: 'C9300-24T', c2960: 'WS-C2960CX-8TC-L', c2960p: 'WS-C2960CX-8PC-L', isr4321: 'ISR4321/K9', isr4331: 'ISR4331/K9', c9800: 'C9800-L-F-K9', n93180: 'N9K-C93180YC-FX', n9332: 'N9K-C9332C' };
+export const PLATFORM = { c9300: 'C9300-24T', c2960: 'WS-C2960CX-8TC-L', c2960p: 'WS-C2960CX-8PC-L', isr4321: 'ISR4321/K9', isr4331: 'ISR4331/K9', c9800: 'C9800-L-F-K9', n93180: 'N9K-C93180YC-FX', n9332: 'N9K-C9332C' };
 const ROLE = { router: 'BORDER ROUTER', l3switch: 'DISTRIBUTION', mswitch: 'ACCESS', wlc: 'ACCESS' };
 const FAMILY = { router: 'Routers', l3switch: 'Switches and Hubs', mswitch: 'Switches and Hubs', wlc: 'Wireless Controller' };
 const TOKEN_LIFE = 3600;

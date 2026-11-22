@@ -32,11 +32,12 @@ export const LEVEL_TOPIC = {
   l55: 'wireless', l56: 'wireless', l57: 'wireless',
   l58: 'auto', l59: 'auto', l60: 'auto', l61: 'auto', l62: 'auto',
   l63: 'routing', l64: 'routing', l65: 'ops', l66: 'routing', l67: 'switching', l68: 'vpn', l69: 'security', l71: 'services',
-  l70: 'auto', l72: 'routing', l73: 'auto', l74: 'security', l75: 'switching', l76: 'vpn', l77: 'routing', l78: 'routing', l79: 'routing', l80: 'routing', l81: 'routing', l82: 'routing', l83: 'security', l84: 'security', l85: 'switching', l86: 'security', l87: 'ipv6', l88: 'vpn', l89: 'vpn', l90: 'vpn', l91: 'vpn', l92: 'vpn', l93: 'ipv6', l94: 'ipv6', l95: 'routing', l96: 'routing', l97: 'ops', l98: 'switching', l99: 'ops', l100: 'ops', l101: 'vpn', l102: 'security', l103: 'switching', l104: 'wireless', l105: 'wireless', l106: 'wireless', l107: 'wireless', l108: 'wireless', l109: 'auto', l110: 'auto', l111: 'auto', l112: 'auto', l113: 'auto', l114: 'auto',
+  l70: 'auto', l72: 'routing', l73: 'auto', l74: 'security', l75: 'switching', l76: 'vpn', l77: 'routing', l78: 'routing', l79: 'routing', l80: 'routing', l81: 'routing', l82: 'routing', l83: 'security', l84: 'security', l85: 'switching', l86: 'security', l87: 'ipv6', l88: 'vpn', l89: 'vpn', l90: 'vpn', l91: 'vpn', l92: 'vpn', l93: 'ipv6', l94: 'ipv6', l95: 'routing', l96: 'routing', l97: 'ops', l98: 'switching', l99: 'ops', l100: 'ops', l101: 'vpn', l102: 'security', l103: 'switching', l104: 'wireless', l105: 'wireless', l106: 'wireless', l107: 'wireless', l108: 'wireless', l109: 'auto', l110: 'auto', l111: 'auto', l112: 'auto', l113: 'auto', l114: 'auto', l115: 'basics',
 };
 
 export const QUESTIONS = {
   basics: [
+    { q: '光纖兩端都插了收發器，一端是 SFP-10G-SR（850 nm），另一端是 SFP-10G-LR（1310 nm），結果會怎樣？', a: ['可以連線，只是速率降到 1G', '連不起來：兩端的波長不同，對方發的光收不到', '可以連線，但距離只能 100 公尺', '只要用單模光纖就可以'], c: 1, e: '光纖兩端的收發器要成對：波長一樣（SR 850 nm 配多模、LR 1310 nm 配單模）、速率也一樣。實務上換收發器之後，還要用 show interfaces transceiver 看收到的光功率 (Rx) 是不是在靈敏度以上。', r: 'Network+ 1.5' },
     { q: '主機 192.168.1.130/26 位於哪一個子網路？', a: ['192.168.1.0', '192.168.1.64', '192.168.1.128', '192.168.1.192'], c: 2, e: '/26 每 64 個位址一塊：0、64、128、192。130 落在 128 – 191 這一塊。', r: 'CCNA 1.6' },
     { q: '一個 /27 的子網路有幾個可用的主機位址？', a: ['14', '30', '32', '62'], c: 1, e: '/27 剩下 5 個主機位元，2⁵ = 32，扣掉網路位址與廣播位址後是 30。', r: 'CCNA 1.6' },
     { q: '下列哪一個是私有 (RFC 1918) IPv4 位址？', a: ['172.32.1.1', '192.169.1.1', '10.200.1.1', '169.254.1.1'], c: 2, e: '私有範圍是 10.0.0.0/8、172.16.0.0/12（172.16 – 172.31）與 192.168.0.0/16。169.254.x.x 是 APIPA，不屬於 RFC 1918。', r: 'CCNA 1.7' },

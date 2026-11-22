@@ -3771,6 +3771,55 @@ console.log('\n用 Git 管理設定');
   void sim;
 }
 
+console.log('\n光纖收發器');
+{
+  const { fiberLink, linkInfo, makeDevice: MD, makeState: MS } = await import('../src/engine/model.js');
+  const { opticLink, defaultOptic } = await import('../src/engine/optics.js');
+  const { iosSession, runningConfig } = await import('../src/engine/ios.js');
+  const { counters } = await import('../src/engine/wire.js');
+  const sim = await import('../src/engine/sim.js');
+  const ok = (cond, title) => (cond ? console.log('  ✔ ' + title) : fail(title));
+  const lv = LEVELS.find((x) => x.id === 'l115');
+  const s = lv.setup(); settle(s);
+  const cab = (b) => s.cables.find((c) => [c.a.dev, c.b.dev].includes('core') && [c.a.dev, c.b.dev].includes(b));
+  ok(defaultOptic('mmf', 'sfp', 1000) === 'GLC-SX-MMD' && defaultOptic('mmf', 'sfp', 10000) === 'SFP-10G-SR' && defaultOptic('smf', 'qsfp', 100000) === 'QSFP-100G-LR4-S', '預設的收發器：依線材與兩端都支援的速率');
+  // l30：10G 的埠接 1G 的 SFP 埠，自動插 1G 的收發器
+  const l30 = LEVELS.find((x) => x.id === 'l30'), s30 = l30.setup(); l30.solve(s30); settle(s30);
+  const w30 = s30.cables.find((c) => c.kind === 'mmf');
+  ok(fiberLink(s30, w30).optics.a === 'GLC-SX-MMD' && s30.rt.cable[w30.id] === 'up' && linkInfo(s30, w30.a.dev, w30.a.port).speed === 1000, '10G 的 SFP+ 埠接 1G 的 SFP 埠：兩端都是 GLC-SX-MMD，跑 1G');
+  const cb = cab('sw-b');
+  ok(s.rt.cable[cb.id] === 'down' && s.devices['sw-b'].rt.err['Te1/1/1'] === 'gbic' && /gbic-invalid/.test(s.rt.why[cb.id]), '第三方的收發器：B 棟的 Te1/1/1 被關成 err-disabled (gbic-invalid)');
+  const log = ((s.dyn.log || {})['sw-b'] || []).map((x) => x.line).join('\n');
+  ok(/%PHY-4-UNSUPPORTED_TRANSCEIVER: Unsupported transceiver found in Te1\/1\/1/.test(log) && /%PM-4-ERR_DISABLE: gbic-invalid error detected on Te1\/1\/1/.test(log), '紀錄：%PHY-4-UNSUPPORTED_TRANSCEIVER 與 %PM-4-ERR_DISABLE gbic-invalid');
+  ok(/速率不同（SFP-10G-SR 是 10G、GLC-SX-MMD 是 1G）/.test(s.rt.why[cab('sw-w').id]), '一端 10G、一端 1G 的收發器：連不起來');
+  const fr = fiberLink(s, cab('sw-r'));
+  ok(s.rt.cable[cab('sw-r').id] === 'up' && fr.link.marginal && fr.link.rx[fr.link.marginal] < -11.1, `接頭髒了：燈有亮，但研發那端收到 ${fr.link.rx[fr.link.marginal]} dBm（低於靈敏度 -11.1）`);
+  const crcOf = (id, p) => (counters(s, id, p) || {}).crc || 0;
+  const before = crcOf('sw-r', 'Te1/1/1'), coreBefore = crcOf('core', 'Te1/1/3');
+  for (let k = 0; k < 20; k++) sim.transact(s, 'pc-r', { proto: 'icmp', dst: parseIp('192.168.1.10') });
+  ok(crcOf('sw-r', 'Te1/1/1') > before && crcOf('core', 'Te1/1/3') === coreBefore, `光功率不夠的那一端（研發 Te1/1/1）有 CRC 錯誤：${crcOf('sw-r', 'Te1/1/1')} 個；A 棟那端沒有`);
+  // 第三方：service unsupported-transceiver + shutdown / no shutdown
+  const s2 = lv.setup(); settle(s2);
+  const B = iosSession(() => s2.devices['sw-b'], () => s2);
+  for (const l of ['configure terminal', 'service unsupported-transceiver', 'end']) B.exec(l);
+  settle(s2);
+  ok(s2.rt.cable[s2.cables.find((c) => c.kind === 'smf').id] === 'down' && /原因已經排除/.test(s2.rt.why[s2.cables.find((c) => c.kind === 'smf').id]), 'service unsupported-transceiver：原因排除了，但 err-disabled 不會自己恢復');
+  for (const l of ['configure terminal', 'interface te1/1/1', 'shutdown', 'no shutdown', 'end']) B.exec(l);
+  settle(s2);
+  ok(s2.rt.cable[s2.cables.find((c) => c.kind === 'smf').id] === 'up' && /\nservice unsupported-transceiver/.test(runningConfig(s2, s2.devices['sw-b']).join('\n')), 'shutdown → no shutdown：上線了；running-config 有 service unsupported-transceiver');
+  // 規格
+  const ends = (o, m = 'sfp', sp = 10000) => ({ optics: o, portA: sp, portB: sp, media: m, nameA: 'A', nameB: 'B' });
+  ok(/要接多模光纖/.test(opticLink({ kind: 'smf' }, ends({ a: 'SFP-10G-SR', b: 'SFP-10G-SR' }), 100).down), 'SR（多模）的收發器接單模光纖：沒有燈號');
+  ok(/波長不同/.test(opticLink({ kind: 'mmf' }, ends({ a: 'SFP-10G-SR', b: 'SFP-10G-LR' }), 100).down || opticLink({ kind: 'smf' }, ends({ a: 'SFP-10G-SR', b: 'SFP-10G-LR' }), 100).down), 'SR 對 LR：波長不同');
+  ok(/最長 300 公尺/.test(opticLink({ kind: 'mmf' }, ends({ a: 'SFP-10G-SR', b: 'SFP-10G-SR' }), 400).down) && !opticLink({ kind: 'mmf' }, ends({ a: 'GLC-SX-MMD', b: 'GLC-SX-MMD' }, 'sfp', 1000), 400).down, '10G SR 最長 300 公尺；1G SX 可以到 550 公尺');
+  ok(/最高只支援 1G/.test(opticLink({ kind: 'mmf' }, { ...ends({ a: 'SFP-10G-SR', b: 'SFP-10G-SR' }), portA: 1000 }, 100).down), '1G 的 SFP 埠插 10G 的收發器：不支援');
+  const both = opticLink({ kind: 'mmf', dirty: { a: true, b: true } }, ends({ a: 'SFP-10G-SR', b: 'SFP-10G-SR' }), 290);
+  ok(!both.down && both.marginal && both.margin.a < 0 && both.margin.b < 0, `兩端的接頭都髒、距離又長：兩端都收到 ${both.rx.a} dBm，有 CRC 錯誤但還沒斷`);
+  ok(/Loss of Signal/.test(opticLink({ kind: 'mmf', dirty: { a: true } }, ends({ a: 'GLC-SX-MMD', b: 'SFP-10G-SR' }, 'sfp', 10000), 100).down || '') || /速率不同/.test(opticLink({ kind: 'mmf' }, ends({ a: 'GLC-SX-MMD', b: 'SFP-10G-SR' }), 100).down), '1G SX 對 10G SR：同樣 850 nm，但速率不同');
+  lv.solve(s); settle(s);
+  ok(['sw-b', 'sw-w', 'sw-r'].every((b) => s.rt.cable[cab(b).id] === 'up') && !fiberLink(s, cab('sw-r')).link.marginal, '參考解法：三條光纖都正常');
+}
+
 console.log('\nNetFlow 與 QoS 的 police');
 {
   const sim = await import('../src/engine/sim.js');

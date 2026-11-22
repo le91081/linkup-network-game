@@ -134,11 +134,16 @@ export const clearedAt = (state, devId, pid) => { const c = ((state.dyn.ifc || {
 
 function linkErrors(state, from, fromPort, to, toPort, frames) {
   const li = linkInfo(state, from, fromPort);
-  if (!li || li.down || !(li.half || li.mismatch)) return;
+  if (!li || li.down || !(li.half || li.mismatch || li.crcAt)) return;
   const acc = (state.dyn.ifcAcc ||= {}), key = [from + ':' + fromPort, to + ':' + toPort].sort().join('|');
   const before = acc[key] || 0;
   acc[key] = before + frames;
   const hits = (every) => Math.floor(acc[key] / every) - Math.floor(before / every);
+  // 光纖收到的光太弱（接頭髒了、太長、彎太多）：那一端收到的訊框有一部分位元錯誤，就是 CRC 錯誤（大約每 15 個一個）
+  if (li.crcAt) {
+    if (to === li.crcAt.dev && toPort === li.crcAt.port) { const n = hits(15); if (n > 0) ctr(state, to, toPort).crc += n; }
+    if (!li.half && !li.mismatch) return;
+  }
   if (li.mismatch) {
     // 雙工不一致：半雙工的那一端以為發生碰撞（而且是在訊框送到一半之後，所以是 late collision）；
     // 全雙工的那一端收到被打斷的訊框，就是 CRC 錯誤與過短的訊框 (runt)
@@ -280,6 +285,7 @@ export function onBulk(state, hops, mbps, secs, retr) {
       const a = ctr(state, half[0], half[1]), b = ctr(state, full[0], full[1]);
       a.late += Math.round(retr * 0.7); a.coll += retr; b.crc += Math.round(retr * 0.8); b.runts += Math.round(retr * 0.5);
     } else if (li && li.half) ctr(state, h.from, h.fromPort).coll += Math.round(pk * 0.03);
+    if (li && li.crcAt) ctr(state, li.crcAt.dev, li.crcAt.port).crc += Math.max(1, Math.round(pk * (li.crcAt.dev === h.to ? 0.02 : 0.004)));
   }
 }
 
@@ -312,6 +318,13 @@ export function background(state, { isBridge, ospfOn, uptime0 }) {
         const a = ctr(state, half[0], half[1]), b = ctr(state, full[0], full[1]);
         a.late += e; a.coll += e; b.crc += e; b.runts += Math.ceil(e * 0.6);
       }
+    }
+    // 光纖收到的光太弱：那一端收到的控制訊框也有一部分是 CRC 錯誤（閒置的時候 CRC 也會慢慢增加）
+    if (li && li.crcAt && li.crcAt.dev === l.dev && li.crcAt.port === l.port) {
+      const acc = (dyn.bgAcc ||= {}), k = 'crc>' + l.dev + ':' + l.port, before = acc[k] || 0;
+      acc[k] = before + n;
+      const e = Math.floor(acc[k] / 15) - Math.floor(before / 15);
+      if (e > 0) ctr(state, l.dev, l.port).crc += e;
     }
     // 剛好在擷取的主機：最近的幾個控制訊框也會出現在畫面上
     const cap = (dyn.cap || {})[l.dev];

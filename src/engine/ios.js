@@ -848,7 +848,12 @@ export function iosSession(getDev, getState, who = null) {
     ['no ip flow monitor <m> <dir>', ([, dir]) => onL3((i) => { const n = nfOf(), x = (n.ifMon || {})[i.id]; if (x) { delete x[/^in/i.test(dir) ? 'in' : 'out']; if (!Object.keys(x).length) delete n.ifMon[i.id]; } tidyNf(); })],
     ['crypto map <name>', ([name]) => onL3((i) => { i.cmap = name; })],
     ['no crypto map [...]', () => onL3((i) => { i.cmap = ''; })],
-    ['shutdown', () => each((t) => { if (t.pc) t.pc.shut = true; else if ((t.port || t.loop || t.tunnel) && t.iface) t.iface.shut = true; })],
+    // shutdown 也會清掉 err-disabled（之後 no shutdown，原因還在的話會馬上再被關）
+    ['shutdown', () => each((t) => {
+      if (t.pc) t.pc.shut = true; else if ((t.port || t.loop || t.tunnel) && t.iface) t.iface.shut = true;
+      const ed = (getState().dyn || {}).errdis;
+      if (ed && t.port) delete ed[dev().id + ':' + t.port.id];
+    })],
     ['no shutdown', () => each((t) => { if (t.pc) t.pc.shut = false; else if ((t.port || t.loop || t.tunnel) && t.iface) t.iface.shut = false; })],
     ['description [...]', () => undefined],
     ['no description', () => undefined],
@@ -2025,6 +2030,12 @@ export function iosSession(getDev, getState, who = null) {
       return undefined;
     }],
     ['enable secret <...>', () => undefined],
+    // 隱藏指令：接受第三方的收發器（Cisco 不保證、TAC 也不支援）。已經 err-disabled 的埠要 shutdown 再 no shutdown
+    ['service unsupported-transceiver', (args, out) => {
+      dev().unsupportedXcvr = true;
+      out.push('Warning: When Cisco determines that a fault or defect can be traced to the use of third-party transceivers', 'installed by a customer or reseller, then, at Cisco\'s discretion, Cisco may withhold support under', 'warranty or a Cisco support program.');
+    }],
+    ['no service unsupported-transceiver', () => { delete dev().unsupportedXcvr; }],
     ['service <...>', () => undefined],
     ['aaa <...>', () => undefined],
     ['dot1x system-auth-control', () => undefined],
@@ -4132,6 +4143,7 @@ export function runningConfig(state, dev) {
       if (!c) continue;
       o.push(c.off ? `no service timestamps ${k}` : !c.dt ? `service timestamps ${k} uptime` : `service timestamps ${k} datetime${c.msec ? ' msec' : ''}${c.local ? ' localtime' : ''}${c.tz ? ' show-timezone' : ''}${c.year ? ' year' : ''}`);
     }
+    if (dev.unsupportedXcvr) o.push('service unsupported-transceiver');
     if (m.tz && m.tz.name) o.push(`clock timezone ${m.tz.name} ${m.tz.off}`);
     if (+m.ntpMaster > 0) o.push(`ntp master ${+m.ntpMaster}`);
     if (m.ntp) o.push(`ntp server ${m.ntp}`);

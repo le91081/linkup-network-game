@@ -1,6 +1,7 @@
 // 供電與連線、err-disabled、DTP、語音 VLAN、LACP、STP 與連接埠的 STP 計時
 // （從 sim.js 拆出來的一部分；其他程式一律從 engine/sim.js 引入，不直接引入這裡）
-import { CABLES, CATALOG, DTP_MODELS, POE_CLASS_W, cableDist, cableKind, linkInfo } from '../model.js';
+import { CABLES, CATALOG, DTP_MODELS, POE_CLASS_W, cableDist, cableKind, linkInfo, fiberLink } from '../model.js';
+import { rejectsOptic } from '../optics.js';
 import { cdpOn, lldpRxOn, lldpTxOn, speaksCdp } from '../disc.js';
 import { spanDest } from '../wire.js';
 import { cmp, isTrunk, isVlanSw, macOf } from './core.js';
@@ -63,7 +64,7 @@ export function prepPhysical(state) {
       continue;
     }
     const kind = CABLES[cableKind(c)], meters = cableDist(state, c);
-    if (meters > kind.max) {
+    if (meters > kind.max && !fiberLink(state, c)) {
       rt.cable[c.id] = 'down';
       rt.why[c.id] = `${kind.name}最長只能拉 ${kind.max} 公尺，但這兩台設備相距 ${meters} 公尺`;
       continue;
@@ -122,15 +123,22 @@ export function prepPhysical(state) {
     const x = state.devices[l.dev];
     return isVlanSw(x) && !(x.sw.stp && x.sw.stp.on === false) && isBridgePort(x, l.port);
   };
-  const what = (c) => (c === 'bpdu' ? 'BPDU Guard 收到 BPDU' : c === 'storm' ? 'Storm Control 偵測到廣播風暴' : 'Port Security 違規');
-  const markErr = (d, pid, cause) => { d.rt.err[pid] = cause === 'bpdu' ? 'bpdu' : cause === 'storm' ? 'storm' : true; };
+  // 第三方的收發器：Cisco 的交換器不接受（gbic-invalid），除非 service unsupported-transceiver
+  const gbicPn = (d, pid) => {
+    const c = state.cables.find((x) => (x.a.dev === d.id && x.a.port === pid) || (x.b.dev === d.id && x.b.port === pid));
+    const f = c && fiberLink(state, c);
+    return f ? f.optics[c.a.dev === d.id && c.a.port === pid ? 'a' : 'b'] : null;
+  };
+  const gbicBad = (d, pid) => { const pn = gbicPn(d, pid); return !!pn && rejectsOptic(d, pn, (CATALOG[d.model] || {}).vendor); };
+  const what = (c) => (c === 'bpdu' ? 'BPDU Guard 收到 BPDU' : c === 'storm' ? 'Storm Control 偵測到廣播風暴' : c === 'gbic' ? '插了不支援的收發器 (gbic-invalid)' : 'Port Security 違規');
+  const markErr = (d, pid, cause) => { d.rt.err[pid] = cause === 'bpdu' ? 'bpdu' : cause === 'storm' ? 'storm' : cause === 'gbic' ? 'gbic' : true; };
   for (const [key, e] of Object.entries(ED)) {
     const k = key.indexOf(':'), d = state.devices[key.slice(0, k)], pid = key.slice(k + 1);
     if (!d || !isVlanSw(d) || !d.sw.ports[pid] || down[d.id] || shut(d, pid)) { delete ED[key]; continue; }
     const secs = errRecoverSecs(d, e.cause);
     // 計時器到了：埠重新打開，下面照常檢查，原因還在就再關一次
     if (secs && now >= e.at + secs - 1e-9) { retry[key] = e.n || 1; delete ED[key]; continue; }
-    const still = e.cause === 'bpdu' ? bpduBad(d, pid) : e.cause === 'storm' ? stormBad(d, pid) : psecBad(d, pid, true);
+    const still = e.cause === 'bpdu' ? bpduBad(d, pid) : e.cause === 'storm' ? stormBad(d, pid) : e.cause === 'gbic' ? gbicBad(d, pid) : psecBad(d, pid, true);
     markErr(d, pid, e.cause);
     const l = rt.links[key];
     if (l) {
@@ -156,6 +164,14 @@ export function prepPhysical(state) {
         const b = r.bad[0];
         errOn(d, pid, 'psec', `${d.name} 的 ${pid} 因為 Port Security 違規而被關閉 (err-disabled)：${b.flood ? `${(state.devices[b.dev] || {}).name || '後面的設備'} 在狂送來源 MAC 都不一樣的訊框 (MAC flooding)` : `看到第 ${r.max + 1} 個 MAC ${b.mac}（最多只允許 ${r.max} 個）`}`);
       }
+    }
+  }
+  // 第三方的收發器：插上去（線接好）就被關成 err-disabled
+  for (const d of Object.values(state.devices)) {
+    if (!isVlanSw(d)) continue;
+    for (const pid of Object.keys(d.sw.ports)) {
+      if (ED[d.id + ':' + pid] || !gbicBad(d, pid)) continue;
+      errOn(d, pid, 'gbic', `${d.name} 的 ${pid} 插的 ${gbicPn(d, pid)} 不是 Cisco 的收發器，交換器不接受，連接埠被關閉 (err-disabled，原因 gbic-invalid)：換成原廠的收發器，或設定 service unsupported-transceiver`);
     }
   }
   // Storm Control 的 shutdown：廣播超過門檻就把埠關掉（err-disabled，原因是 storm-control）
@@ -253,7 +269,7 @@ export function prepPhysical(state) {
 }
 
 /** errdisable recovery 認得的原因（IOS 的名稱） */
-export const ERR_CAUSES = { psec: 'psecure-violation', bpdu: 'bpduguard', storm: 'storm-control' };
+export const ERR_CAUSES = { psec: 'psecure-violation', bpdu: 'bpduguard', storm: 'storm-control', gbic: 'gbic-invalid' };
 export const ERR_RECOVERY_DEFAULT = 300;
 /** 這個原因有設定 errdisable recovery 的話，回傳計時器的秒數；沒有設定回傳 0 */
 export function errRecoverSecs(d, cause) {

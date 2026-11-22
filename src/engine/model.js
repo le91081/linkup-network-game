@@ -1,6 +1,7 @@
 // 設備型錄（以現實世界的機型為藍本）與設備物件工廠
 import { parseIp } from './ip.js';
 import { newVpc, CLOUD_REGION } from './cloud.js';
+import { opticsOf, opticLink, rejectsOptic } from './optics.js';
 
 const rj = (id, label = id, extra) => ({ id, label, media: 'rj45', ...extra });
 const sfp = (id, label = id) => ({ id, label, media: 'sfp' });
@@ -362,9 +363,9 @@ export function makeState(devices, cables = []) {
   const state = { devices: {}, cables: [], leases: {}, seq: 1 };
   for (const d of devices) state.devices[d.id] = d;
   for (const c of cables) {
-    const [a, b] = c;
+    const [a, b, kind] = c; // 第三個可以指定線材（mmf、smf、dac…）
     const [ad, ap] = a.split(':'), [bd, bp] = b.split(':');
-    const err = addCable(state, ad, ap, bd, bp);
+    const err = addCable(state, ad, ap, bd, bp, kind);
     if (err) throw new Error(`cable ${a} - ${b}: ${err}`);
   }
   return state;
@@ -435,6 +436,23 @@ export function phyConfig(dev, pid) {
 }
 const DUP = { full: '全雙工', half: '半雙工' };
 /**
+ * 光纖線材兩端的收發器與光的狀態：{ optics: { a, b }, link: opticLink 的結果（{ down } 或 { speed, rx, margin, marginal }） }；不是光纖回傳 null。
+ * Cisco 的路由器插第三方收發器：介面起不來（交換器則是 err-disabled，見 sim/phys.js）
+ */
+export function fiberLink(state, c) {
+  if (c.kind !== 'mmf' && c.kind !== 'smf') return null;
+  const A = state.devices[c.a.dev], B = state.devices[c.b.dev];
+  const pa = portOf(A, c.a.port), pb = portOf(B, c.b.port);
+  if (!pa || !pb) return null;
+  const sa = portSpeed(A, pa), sb = portSpeed(B, pb);
+  const optics = opticsOf(c, sa, sb, pa.media);
+  for (const [d, k] of [[A, 'a'], [B, 'b']]) {
+    if (!d.sw && rejectsOptic(d, optics[k], (CATALOG[d.model] || {}).vendor)) return { optics, link: { down: `${d.name} 不接受第三方的收發器 ${optics[k]}（%PHY-4-UNSUPPORTED_TRANSCEIVER）：換成原廠的，或設定 service unsupported-transceiver` } };
+  }
+  return { optics, link: opticLink(c, { optics, portA: sa, portB: sb, media: pa.media, nameA: `${A.name} 的 ${pa.label}`, nameB: `${B.name} 的 ${pb.label}` }, cableDist(state, c)) };
+}
+
+/**
  * 一條線兩端協商的結果，從 devId 這一端來看。
  * - 兩端都自動協商：用兩端都支援的最高速率、全雙工。
  * - 一端把速率和雙工都寫死（關閉協商）、另一端自動：自動的那一端量得出速率，但不知道對方的雙工，
@@ -456,7 +474,14 @@ export function linkInfo(state, devId, pid) {
     speed, duplex: da, peerDuplex: db, half: da === 'half' && db === 'half', mismatch: da !== db, downshift: broken && max0 > 100,
     text: `${fmtSpeed(speed)} · ${da === db ? DUP[da] : `雙工不一致（這一端${DUP[da]}、對端${DUP[db]}）`}${broken && max0 > 100 ? `（兩端都支援 ${fmtSpeed(max0)}，但只協商到 ${fmtSpeed(speed)}）` : ''}`,
   });
-  if (pa.media !== 'rj45') return done(max, 'full', 'full'); // 光纖與 DAC：速率由收發器決定，一律全雙工
+  // 光纖：兩端的收發器要相容、收到的光要夠強（見 optics.js）；光功率差一點點就有 CRC 錯誤
+  const fo = cab && fiberLink(state, cab);
+  if (fo) {
+    if (fo.link.down) return { down: fo.link.down };
+    const m = fo.link.marginal;
+    return { ...done(Math.min(max, fo.link.speed), 'full', 'full'), optic: fo, crcAt: m ? { dev: cab[m].dev, port: cab[m].port } : null };
+  }
+  if (pa.media !== 'rj45') return done(max, 'full', 'full'); // DAC：速率由埠決定，一律全雙工
   const ca = phyConfig(A, pid), cb = phyConfig(B, peer.port);
   if (broken && (ca.speed === 1000 || cb.speed === 1000)) return { down: '速率被寫死成 1000 Mbps，但這條網路線有線對斷了（1000BASE-T 要四對線都正常），連線建立不起來' };
   if (ca.speed != null && cb.speed != null && ca.speed !== cb.speed) return { down: `兩端的速率設定不同（${A.name} 是 ${ca.speed} Mbps、${B.name} 是 ${cb.speed} Mbps），連線建立不起來` };

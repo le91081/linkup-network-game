@@ -426,7 +426,7 @@ function snapshot(state, d) {
     const pc = d.sw && d.sw.ports[p.id], err = d.rt.err && d.rt.err[p.id];
     const ed = state.dyn.errdis && state.dyn.errdis[d.id + ':' + p.id];
     if (ed) s.errN[p.id] = ed.n || 1; // 第幾次被關：recovery 打開之後馬上又被關，前後的狀態一樣，要靠這個看出來
-    s.port[p.id] = (pc && pc.shut) || shutIf(p.id) ? 'admin' : err === 'root' ? 'rootinc' : err === 'bpdu' ? 'bpdu' : err === 'storm' ? 'storm' : err ? 'psec' : state.rt.links[d.id + ':' + p.id] ? 'up' : 'down';
+    s.port[p.id] = (pc && pc.shut) || shutIf(p.id) ? 'admin' : err === 'root' ? 'rootinc' : err === 'bpdu' ? 'bpdu' : err === 'storm' ? 'storm' : err === 'gbic' ? 'gbic' : err ? 'psec' : state.rt.links[d.id + ':' + p.id] ? 'up' : 'down';
     // Port Security 的 restrict：每次有新的違規 MAC 記一筆
     const pr = state.dyn.psec && state.dyn.psec[d.id + ':' + p.id];
     if (pr && pr.viol && pc && pc.ps && pc.ps.on && pc.ps.mode === 'restrict') s.psv[p.id] = pr.last;
@@ -491,7 +491,7 @@ function diffDevice(state, d, a, b) {
     const all = macsOn(pid), m = all.find((x) => !ok.includes(x)) || all[0];
     return m ? dotMac(m) : 'unknown';
   };
-  const ERR_TXT = { bpdu: 'bpduguard', psec: 'psecure-violation', storm: 'storm-control' };
+  const ERR_TXT = { bpdu: 'bpduguard', psec: 'psecure-violation', storm: 'storm-control', gbic: 'gbic-invalid' };
   for (const [pid, now] of Object.entries(b.port)) {
     let was = a.port[pid];
     const L = longIf(label(pid)), S = label(pid);
@@ -520,6 +520,10 @@ function diffDevice(state, d, a, b) {
     } else if (now === 'psec') {
       ev(4, 'PM-4-ERR_DISABLE', `psecure-violation error detected on ${S}, putting ${S} in err-disable state`);
       ev(2, 'PORT_SECURITY-2-PSECURE_VIOLATION', `Security violation occurred, caused by MAC address ${badMac(pid)} on port ${L}.`);
+      if (wasUp) linkMsg(pid, false);
+    } else if (now === 'gbic') {
+      ev(4, 'PHY-4-UNSUPPORTED_TRANSCEIVER', `Unsupported transceiver found in ${S}`);
+      ev(4, 'PM-4-ERR_DISABLE', `gbic-invalid error detected on ${S}, putting ${S} in err-disable state`);
       if (wasUp) linkMsg(pid, false);
     } else if (now === 'storm') {
       ev(3, 'STORM_CONTROL-3-SHUTDOWN', `A packet storm was detected on ${S}. The interface has been disabled.`);
@@ -655,6 +659,14 @@ export function opsAfter(state) {
       prev = { port: Object.fromEntries(d.ports.map((p) => [p.id, 'down'])), nbr: {}, nbr6: {}, norid6: false, vrrp: {}, tun: {}, dup: {}, dupIp: {}, pool: [], auth: {} };
     }
     if (prev && !boot) diffDevice(state, d, prev, snap);
+    else {
+      // 開機時就插著第三方的收發器：開機過程中就記下來了
+      for (const p of d.ports) {
+        if (snap.port[p.id] !== 'gbic') continue;
+        logEvent(state, d, 4, 'PHY-4-UNSUPPORTED_TRANSCEIVER', `Unsupported transceiver found in ${p.label}`);
+        logEvent(state, d, 4, 'PM-4-ERR_DISABLE', `gbic-invalid error detected on ${p.label}, putting ${p.label} in err-disable state`);
+      }
+    }
     snap.dupAt = (prev && prev.dupAt) || {};
     if (!boot) cdpNag(state, d, snap, snap.dupAt);
     dyn.ev[d.id] = snap;

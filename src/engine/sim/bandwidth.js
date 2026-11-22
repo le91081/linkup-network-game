@@ -25,6 +25,8 @@ export function linkCap(state, h, eff = 0.94) {
   let c;
   if (li.mismatch) c = { mbps: Math.min(li.speed * 0.01, 2), note: `${li.speed} Mbps，但兩端的雙工不一致 (duplex mismatch)`, loss: 35, retr: 1800 };
   else if (li.half) c = { mbps: li.speed * 0.4, note: `${li.speed} Mbps 半雙工，會發生碰撞`, loss: 3, retr: 60 };
+  // 光纖的光功率不夠：一部分訊框 CRC 錯誤被丟掉，TCP 一直以為塞車而降速（約 1% 的掉包就讓 TCP 只剩一百多 Mbps）
+  else if (li.crcAt) c = { mbps: Math.min(li.speed * 0.94, 120), note: `${li.speed >= 1000 ? li.speed / 1000 + ' Gbps' : li.speed + ' Mbps'}，但光纖收到的光太弱，訊框有 CRC 錯誤、會掉封包`, loss: 2, retr: 400 };
   else c = { mbps: li.speed * eff, note: `${li.speed >= 1000 ? li.speed / 1000 + ' Gbps' : li.speed + ' Mbps'} 全雙工`, loss: 0, retr: 0 };
   // 這段線路被廣播佔掉了（狂送廣播的設備）：TCP 只拿得到剩下的
   const bc = ((state.rt && state.rt.bcast) || {})[h.cable + '>' + h.to] || 0;

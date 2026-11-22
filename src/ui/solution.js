@@ -2,7 +2,7 @@
 // Cisco 設備用 running-config 的差異（和 show archive config differences 一樣的格式），其他設備列出改了哪些欄位。
 // 「示範」會把關卡重置、套用參考解法，再跑一次全部的測試給你看（不計星、不計分）。
 import { h, icon, button, toast } from './dom.js';
-import { cloneState } from '../engine/model.js';
+import { cloneState, fiberLink } from '../engine/model.js';
 import { settle } from '../engine/sim.js';
 import { isIos, runningConfig } from '../engine/ios.js';
 import { cfgDiff } from '../engine/archive.js';
@@ -111,6 +111,18 @@ export function solutionChanges(lv) {
     ...s1.cables.filter((c) => !k0.has(ck(c))).map((c) => `接線：${pl(s1, c.a)} ↔ ${pl(s1, c.b)}`),
     ...s0.cables.filter((c) => !k1.has(ck(c))).map((c) => `拔掉：${pl(s0, c.a)} ↔ ${pl(s0, c.b)}`),
   ];
+  // 同一條線：換了收發器、清了接頭
+  for (const c1 of s1.cables) {
+    const c0 = s0.cables.find((x) => ck(x) === ck(c1));
+    const f0 = c0 && fiberLink(s0, c0), f1 = fiberLink(s1, c1);
+    if (!f0 || !f1) continue;
+    const at = (c, e) => pl(s1, c[e]);
+    for (const e of ['a', 'b']) {
+      const end = c0.a.dev === c1[e].dev && c0.a.port === c1[e].port ? 'a' : 'b';
+      if (f0.optics[end] !== f1.optics[e]) cables.push(`收發器：${at(c1, e)} 從 ${f0.optics[end]} 換成 ${f1.optics[e]}`);
+    }
+    if (Object.keys(c0.dirty || {}).length && !Object.keys(c1.dirty || {}).length) cables.push(`清潔光纖接頭：${pl(s1, c1.a)} ↔ ${pl(s1, c1.b)}`);
+  }
   const devs = [];
   // 比對用的副本：拿掉執行期的狀態（rt），虛擬化主機的 vSwitch VLAN 是從連接埠群組算出來的，也不列
   const c0 = cloneState(s0), c1 = cloneState(s1);

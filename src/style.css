@@ -771,6 +771,9 @@ textarea.code.api-hdr { min-height: 52px; height: 52px; }
 .ans-bar { display: flex; align-items: center; gap: 8px; }
 .ans-bar .api-curl { flex: 1; min-width: 0; padding: 6px 9px; }
 .ans-bar .btn { flex: none; }
+.xcvr-box { display: grid; gap: 8px; margin: 4px 0; }
+.xcvr-end { display: grid; gap: 3px; }
+.xcvr-sel { font-size: 12px; padding: 4px 6px; }
 .tl.git { white-space: pre-wrap; word-break: normal; overflow-wrap: anywhere; tab-size: 4; }
 .tl.git.hunk { color: #7dd3fc; }
 .tl.git.commit { color: #fde68a; }

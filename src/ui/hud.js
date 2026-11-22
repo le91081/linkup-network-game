@@ -1,7 +1,8 @@
 // HUD：頂端列、任務面板、封包追蹤主控台、各種對話框
 import { h, icon, button, toast, faceplate } from './dom.js';
 import { LEVELS, CHAPTERS } from '../levels/index.js';
-import { CATALOG, CABLES, cableKinds, cableKind, pairDist, cableAt, portOf, removeCable, linkInfo } from '../engine/model.js';
+import { CATALOG, CABLES, cableKinds, cableKind, pairDist, cableAt, portOf, removeCable, linkInfo, fiberLink } from '../engine/model.js';
+import { OPTICS, FIBER } from '../engine/optics.js';
 import { fmtIp } from '../engine/ip.js';
 import { pendingOf, fmtDur } from '../engine/sim.js';
 import { renderSandbox } from './sandbox.js';
@@ -268,6 +269,27 @@ function openFrame(l, state, x, y) {
   setTimeout(() => document.addEventListener('pointerdown', onDocDown, true), 0);
 }
 
+/** 光纖的兩端：收發器（可以更換）、量到的光功率、清潔接頭 */
+function fiberBox(app, c, A, B, x, y) {
+  const st = app.state, f = fiberLink(st, c);
+  if (!f) return null;
+  const reopen = () => { app.changed(); app.renderPanel(); openCableMenu(app, c.id, x, y); };
+  const media = portOf(A, c.a.port).media;
+  const end = (k, D) => {
+    const o = OPTICS[f.optics[k]] || {};
+    const sel = h('select', { class: 'inp sel xcvr-sel', title: '更換這一端的收發器' }, Object.entries(OPTICS).filter(([, x]) => x.form === media).map(([pn, x]) =>
+      h('option', { value: pn, selected: pn === f.optics[k], text: `${pn}（${x.type}${x.vendor !== 'Cisco' ? '・第三方' : ''}）` })));
+    sel.addEventListener('change', () => { c.optics = { ...(c.optics || {}), ...f.optics, [k]: sel.value }; toast(`${D.name}：換上 ${sel.value}`); reopen(); });
+    const rx = !f.link.down && f.link.rx ? f.link.rx[k] : null;
+    return h('div', { class: 'xcvr-end' }, h('span', { class: 'mono', text: `${D.name} [${portOf(D, c[k].port).label}]` }), sel,
+      h('span', { class: 'muted', style: { fontSize: '12px' }, text: `${o.nm || '?'} nm · ${o.fiber === 'smf' ? '單模' : '多模'} · 最長 ${o.reach >= 1000 ? o.reach / 1000 + ' 公里' : o.reach + ' 公尺'}${rx != null ? ` · 收到 ${rx} dBm（靈敏度 ${o.rx} dBm）` : ''}` }));
+  };
+  return h('div', { class: 'xcvr-box' },
+    end('a', A), end('b', B),
+    f.link.marginal && h('span', { class: 'note warn', text: '收到的光太弱：燈有亮，但訊框有 CRC 錯誤、會掉封包。常見的原因是接頭髒了、光纖彎太多或太長。' }),
+    button('清潔兩端的光纖接頭', { ic: 'check', small: true, onclick: () => { const was = c.dirty && Object.keys(c.dirty).length; delete c.dirty; toast(was ? '用光纖清潔筆清過兩端的接頭：髒污清掉了' : '用光纖清潔筆清過兩端的接頭（本來就是乾淨的）'); reopen(); } }));
+}
+
 export function openCableMenu(app, cableId, x, y) {
   closePopover();
   const st = app.state;
@@ -275,19 +297,24 @@ export function openCableMenu(app, cableId, x, y) {
   if (!c) return;
   const A = st.devices[c.a.dev], B = st.devices[c.b.dev];
   const li = !st.rt.why[c.id] && st.rt.cable[c.id] !== 'down' && linkInfo(st, c.a.dev, c.a.port);
+  const fiber = !!fiberLink(st, c);
   popover = h('div', { class: 'popover', style: { left: Math.min(x + 6, innerWidth - 300) + 'px', top: Math.min(y + 10, innerHeight - 190) + 'px' } },
-    h('b', { text: CABLES[cableKind(c)].name }),
+    h('b', { text: fiber ? FIBER[c.kind] : CABLES[cableKind(c)].name }),
     h('span', { class: 'mono', text: `${A.name} [${portOf(A, c.a.port).label}]  ↔  ${B.name} [${portOf(B, c.b.port).label}]` }),
-    h('span', { class: 'muted', style: { fontSize: '12px' }, text: `兩端相距 ${pairDist(st, A.id, B.id)} 公尺 · 這種線材最長 ${CABLES[cableKind(c)].max} 公尺` }),
+    h('span', { class: 'muted', style: { fontSize: '12px' }, text: `兩端相距 ${pairDist(st, A.id, B.id)} 公尺 · ${fiber ? '能跑多遠由兩端的收發器決定' : `這種線材最長 ${CABLES[cableKind(c)].max} 公尺`}` }),
     li && h('span', { class: 'muted', style: { fontSize: '12px' }, text: `自動協商：${li.text}` }),
     +c.cir > 0 && h('span', { class: 'note warn', text: `電信業者的線路（例如 Metro Ethernet）：實體連線 ${li ? li.speed + ' Mbps' : ''}，合約頻寬只有 ${c.cir} Mbps。送超過合約的量，多出來的會在業者那端被管制丟掉 (policing)，語音也不例外；要在自己這端整形 (shape) 到合約以內。` }),
     li && li.half && h('span', { class: 'note warn', text: '半雙工：同一時間只能有一端傳送，否則會碰撞 (CSMA/CD)。' }),
     li && li.mismatch && h('span', { class: 'note warn', text: '雙工不一致 (duplex mismatch)：線是通的，但全雙工的那一端不會等對方，會造成大量碰撞與 CRC 錯誤，實際速度極慢。兩端都改成自動協商，或兩端寫死成一樣。' }),
     st.rt.why[c.id] && h('span', { class: 'note warn', text: '沒有燈號：' + st.rt.why[c.id] }),
     st.rt.cable[c.id] === 'blocked' && h('span', { class: 'note muted', text: '這條線被 STP 封鎖當作備援，其他路徑斷掉時會自動啟用。' }),
+    fiberBox(app, c, A, B, x, y),
     st.rt.cable[c.id] === 'susp' && h('span', { class: 'note warn', text: 'Port-channel 兩端的設定不相容，成員被暫停。' }),
     button('拔除這條線', { ic: 'unplug', small: true, onclick: () => { removeCable(st, cableId); closePopover(); toast('已拔除網路線'); app.changed(); app.renderPanel(); } }));
   document.body.append(popover);
+  // 光纖的選單比較高：超出視窗下緣就往上移
+  const r = popover.getBoundingClientRect();
+  if (r.bottom > innerHeight - 8) popover.style.top = Math.max(8, innerHeight - r.height - 8) + 'px';
   setTimeout(() => document.addEventListener('pointerdown', onDocDown, true), 0);
 }
 
