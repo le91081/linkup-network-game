@@ -153,3 +153,15 @@ test('控制器 N+1：AP 分頁可以填次要控制器，平常仍在 WLC-1', a
   expect(await page.evaluate(() => window.linkup.state.devices.ap1.rt.capwap.wlc)).toBe('wlc1');
   expect(await scan(page, '#panel', 'AP 分頁（N+1）')).toEqual([]);
 });
+
+test('FlexConnect：AP 分頁切換模式，說明改成本地交換與 Trunk', async ({ page }) => {
+  await boot(page);
+  await open(page, 'l107');
+  await clickDevice(page, 'ap1');
+  const card = page.locator('#panel .card', { hasText: '次要控制器' });
+  await expect(card).toContainText('Local：所有用戶端的流量都包在 CAPWAP 裡送回控制器');
+  await card.locator('select').first().selectOption('flex');
+  await expect(page.locator('#panel .card', { hasText: '次要控制器' })).toContainText('AP 接的埠要是 Trunk');
+  expect(await page.evaluate(() => window.linkup.state.devices.ap1.lwap.mode)).toBe('flex');
+  expect(await scan(page, '#panel', 'AP 分頁（FlexConnect）')).toEqual([]);
+});

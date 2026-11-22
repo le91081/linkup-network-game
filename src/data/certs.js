@@ -31,7 +31,7 @@ export const CERTS = [
           ['2.3', '第二層探索協定（CDP、LLDP）', ['l44', 'l46', 'l98', 'l103']],
           ['2.4', 'EtherChannel（LACP）', ['l24']],
           ['2.5', 'Rapid PVST+ 生成樹（根橋、埠的角色與狀態、BPDU Guard）', ['l23', 'l32', 'l67']],
-          ['2.6', 'Cisco 無線架構與 AP 模式', ['l55', 'l56']],
+          ['2.6', 'Cisco 無線架構與 AP 模式', ['l55', 'l56', 'l106', 'l107']],
           ['2.7', 'WLAN 元件的實體連接（AP、Access / Trunk 埠）', ['l14', 'l15', 'l55', 'l56', 'l106']],
           ['2.8', '設備管理存取（Telnet、SSH、HTTP、HTTPS、Console）', ['l19']],
           ['2.9', '以圖形介面設定 WLAN（建立 WLAN、安全設定）', ['l13', 'l14', 'l15', 'l55', 'l57']],
