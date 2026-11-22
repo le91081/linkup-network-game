@@ -32,7 +32,7 @@ export const LEVEL_TOPIC = {
   l55: 'wireless', l56: 'wireless', l57: 'wireless',
   l58: 'auto', l59: 'auto', l60: 'auto', l61: 'auto', l62: 'auto',
   l63: 'routing', l64: 'routing', l65: 'ops', l66: 'routing', l67: 'switching', l68: 'vpn', l69: 'security', l71: 'services',
-  l70: 'auto', l72: 'routing', l73: 'auto', l74: 'security', l75: 'switching', l76: 'vpn', l77: 'routing', l78: 'routing',
+  l70: 'auto', l72: 'routing', l73: 'auto', l74: 'security', l75: 'switching', l76: 'vpn', l77: 'routing', l78: 'routing', l79: 'routing', l80: 'routing', l81: 'routing', l82: 'routing',
 };
 
 export const QUESTIONS = {
@@ -69,6 +69,13 @@ export const QUESTIONS = {
     { q: '兩台交換器用 Trunk 相連，但 VLAN 30 只在其中一台建立。結果會怎樣？', a: ['VLAN 30 的流量過不了 Trunk', '另一台會自動建立 VLAN 30', '整條 Trunk 會斷線', '所有 VLAN 都受影響'], c: 0, e: '交換器只轉送自己認識的 VLAN。VLAN 必須在路徑上每一台交換器都建立。', r: 'CCNA 2.2' },
   ],
   routing: [
+    { q: '分公司的 area 10 只有一台 ABR 當出口，想讓分公司路由器的路由表只剩區域裡的路加一條預設路由，應該怎麼設定？', a: ['每一台都 area 10 nssa', '每一台都 area 10 stub，ABR 再加 no-summary（totally stubby）', '只在 ABR 上 area 10 stub', '把 area 10 改成 area 0'], c: 1, e: 'stub 讓 ABR 不送外部路由、改送預設路由；ABR 加上 no-summary 連區域間的路也不送。區域是不是 stub 寫在 Hello 裡，區域裡每一台都要設定，只設一台會連鄰居都建立不起來。', r: 'Network+ 2.1' },
+    { q: 'stub 區域裡的路由器上設定了 redistribute static subnets，會發生什麼事？', a: ['重分配的路以 Type-5 送進骨幹', '重分配的路送不出去：stub 區域不能有 Type-5，要改成 NSSA', 'ABR 會自動轉成 Type-3', '整個區域的鄰居關係都會斷'], c: 1, e: 'stub 區域不允許 Type-5 LSA，區域裡的 ASBR 重分配了也送不出去。NSSA 讓區域裡的 ASBR 改用 Type-7（O N2），再由 ABR 轉成 Type-5 送進骨幹。', r: 'Network+ 2.1' },
+    { q: '兩台邊界路由器用 Loopback 建立 iBGP，鄰居一直停在 Active。最可能漏了什麼？', a: ['ebgp-multihop', 'neighbor … update-source Loopback0', 'next-hop-self', 'network 敘述'], c: 1, e: '沒有 update-source 時，TCP 179 從出口介面的位址送出；對方設定的鄰居卻是 Loopback，連線被拒絕。用 Loopback 建立 iBGP，兩端都要 update-source。', r: 'Network+ 2.1' },
+    { q: 'iBGP 鄰居建立了，但 show ip bgp 裡從 iBGP 學到的那條路第一欄沒有 *，下一站是 ISP 那一端的位址。要怎麼修？', a: ['在送出它的邊界路由器上對 iBGP 鄰居設定 next-hop-self', '提高 local-preference', '加大 weight', '改用 eBGP'], c: 0, e: 'iBGP 送路由時下一站不會變，AS 裡的其他路由器查不到 ISP 那一端的位址（inaccessible），那條路就不能用。next-hop-self 讓下一站變成邊界路由器自己。', r: 'Network+ 2.1' },
+    { q: '為什麼 AS 裡跑 BGP 的路由器要全網狀 (full mesh) 或使用 route reflector？', a: ['因為 iBGP 不能跨越超過一台路由器', '因為從 iBGP 學到的路不會再送給其他 iBGP 鄰居（split horizon）', '因為 eBGP 的管理距離比較大', '因為 BGP 需要 DR'], c: 1, e: 'iBGP 沒有 AS path 可以偵測迴圈，所以規定 iBGP 學到的路不轉送給其他 iBGP 鄰居。中間的路由器沒有 BGP 的路就會變成黑洞；route reflector 可以替 client 轉送，省下全網狀的鄰居數量。', r: 'Network+ 2.1' },
+    { q: '路由器上的 router ospf 1 有 network 10.0.0.0 0.255.255.255 area 0，介面 Gi0/0/1 在 VRF TENANT-A、位址 10.0.1.1。這個介面會跑 OSPF 嗎？', a: ['會，因為位址在 network 敘述的範圍裡', '不會：router ospf 1 只涵蓋全域的介面，VRF 要有自己的程序（router ospf 2 vrf TENANT-A）', '會，但學到的路放進全域的路由表', '不會，VRF 的介面完全不能跑動態路由'], c: 1, e: 'OSPF 程序屬於某一個路由表。VRF 裡的介面要由 router ospf <pid> vrf <名稱> 涵蓋，學到的路只裝進那個 VRF 的路由表。', r: 'CCNA 1.12' },
+    { q: '要讓 VRF TENANT-A 的客戶連到放在全域路由表的共用伺服器（下一站 10.0.99.2 在全域），哪一條指令是對的？', a: ['ip route 10.99.0.0 255.255.255.0 10.0.99.2 vrf TENANT-A', 'ip route vrf TENANT-A 10.99.0.0 255.255.255.0 10.0.99.2 global', 'ip vrf forwarding global', 'ip route vrf global 10.99.0.0 255.255.255.0 10.0.99.2'], c: 1, e: 'ip route vrf <名稱> … <下一站> global 表示下一站要到全域的路由表找。回程也要一條：全域的路由表裡 ip route <客戶網段> <遮罩> <客戶那一側的介面> <下一站>。', r: 'CCNA 1.12' },
     { q: '在 OSPF 的 ASBR 上 redistribute static subnets 之後，其他 OSPF 路由器的路由表裡，這些網段會顯示成什麼？', a: ['O', 'O IA', 'O E2', 'S'], c: 2, e: '重分配進 OSPF 的路是外部路由 (Type-5 LSA)，預設是 E2：metric 固定（靜態與直連的種子 metric 是 20），不會隨著離 ASBR 的距離增加；改成 metric-type 1 就變成 O E1，會加上內部的 cost。', r: 'CCNA 3.1' },
     { q: '路由器上設定 redistribute static subnets，下列哪一筆不會被送進 OSPF？', a: ['10.50.0.0/16 的靜態路由', '指向 ISP 的 0.0.0.0/0 靜態預設路由', '192.168.99.0/24 的靜態路由', '浮動靜態路由（管理距離 200，目前在路由表裡）'], c: 1, e: '預設路由不會跟著 redistribute 出去，要另外用 default-information originate。其他在路由表裡的靜態路由都會被送出去，所以通常要搭配 route-map 只挑需要的網段。', r: 'CCNA 3.1' },
     { q: '想讓分公司 NAS 備份到總公司的流量走寬頻、其他流量照樣走專線，最適合的做法是？', a: ['把專線的 OSPF cost 調高', '政策路由：ACL 選出 NAS 到備份伺服器的流量，route-map set ip next-hop 寬頻那一端，套在分公司 LAN 的介面上', '加一條往備份伺服器的靜態路由', '在 NAS 上設兩個預設閘道'], c: 1, e: '路由表只看目的位址；要依「來源 + 目的 + 應用程式」選路就用 PBR。PBR 套在流量進來的介面（ip policy route-map），只影響那個方向；回程照對方的路由表走。改 cost 會讓所有流量一起改道。', r: 'CCNA 3.2' },

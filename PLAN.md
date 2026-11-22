@@ -31,7 +31,7 @@ README 說明「現在有什麼、怎麼玩」，這份文件說明「整體應�
 | --- | --- | --- | --- |
 | 1. 實體層與接線 | 9 | 1 | 4 |
 | 2. 第二層：交換 | 13 | 0 | 4 |
-| 3. 第三層：路由 | 13 | 1 | 3 |
+| 3. 第三層：路由 | 14 | 1 | 2 |
 | 4. IP 服務 | 11 | 3 | 0 |
 | 5. 網路安全 | 9 | 5 | 3 |
 | 6. VPN 與廣域網路 | 6 | 3 | 4 |
@@ -45,9 +45,9 @@ README 說明「現在有什麼、怎麼玩」，這份文件說明「整體應�
 | 14. 遊戲系統 | 16 | 1 | 5 |
 | 15. 介面與體驗 | 6 | 1 | 7 |
 | 16. 工程品質 | 5 | 1 | 4 |
-| **合計** | **137** | **29** | **49** |
+| **合計** | **138** | **29** | **48** |
 
-另外：關卡 78 關（第 17 節）、證照條目涵蓋情形（第 18 節）、建議的實作順序（第 19 節）。
+另外：關卡 82 關（第 17 節）、證照條目涵蓋情形（第 18 節）、建議的實作順序（第 19 節）。
 
 ---
 
@@ -102,14 +102,14 @@ README 說明「現在有什麼、怎麼玩」，這份文件說明「整體應�
 | 跨 VLAN 路由 | ✅ | 子介面 (router-on-a-stick)、SVI、routed port (`no switchport`) |
 | OSPF 單一區域 | ✅ | `network` 敘述或介面上的 `ip ospf … area`、cost、`default-information originate`；鄰居建立（乙太網路要等 40 秒的 Wait timer、點對點約 4 秒）、Dead timer 40 秒 |
 | TTL 與路徑追蹤 | ✅ | TTL 逐站遞減；主機有 `tracert` |
-| OSPF 進階 | ✅ | DR / BDR 選舉（priority、Router ID、不搶位、BDR 升上來、`clear ip ospf process`）、Router ID 在程序啟動時決定（Loopback）、Router ID 重複、`passive-interface [default]`、Hello / Dead 可調、network type、明文與 MD5 驗證、MTU 不一致卡在 EXSTART、參考頻寬、多區域與 ABR、`area range` 彙總、O IA 與 O*E2；`show ip ospf` / `neighbor` / `interface` / `database` |
+| OSPF 進階 | ✅ | DR / BDR 選舉（priority、Router ID、不搶位、BDR 升上來、`clear ip ospf process`）、Router ID 在程序啟動時決定（Loopback）、Router ID 重複、`passive-interface [default]`、Hello / Dead 可調、network type、明文與 MD5 驗證、MTU 不一致卡在 EXSTART、參考頻寬、多區域與 ABR、`area range` 彙總、O IA 與 O*E2；stub / totally stubby / NSSA / totally NSSA（Hello 的選項位元要一致、ABR 送預設的 Summary LSA、`default-cost`、Type-7 的 O N1 / N2、Router ID 最大的 NSSA ABR 轉成 Type-5 並帶 forwarding address、`default-information-originate`、`no-redistribution`）；`show ip ospf` / `neighbor` / `interface` / `database` |
 | ECMP（等價多路徑） | ✅ | cost 一樣的路最多 `maximum-paths` 條（預設 4）一起放進路由表；依來源與目的位址雜湊（CEF 的 per-destination），同一對位址永遠走同一條 |
 | ICMP 細節 | 🟡 | 分段與 DF、ICMP「需要分段」與 PMTUD（被 ACL 擋掉就是黑洞）、IPsec 的額外負擔（通道裡 1427）、PPPoE 1492、TCP 的 MSS 與 `ip tcp adjust-mss`、家用路由器自動調整 MSS、ACL 的 ICMP 類型（`packet-too-big`、`unreachable`、`echo`…）、`ping … size … df-bit source …`、`ping -f -l`、`ping -M do -s` 已完成；還沒有 Redirect、其他 Unreachable 類型的細節 |
 | IOS 的 `traceroute` | ✅ | 逐站顯示，每一站三個探測封包；ECMP 時跟著雜湊走 |
 | BGP（eBGP） | ✅ | TCP 179 的鄰居狀態（Idle / Active / OpenSent / Established）、remote-as 寫錯 (Bad Peer AS)、hold time 180 秒、路徑向量與迴圈偵測、最佳路徑（weight、local-preference、AS path、origin、MED）、route-map / prefix-list / as-path ACL、`default-originate`；雙 ISP 的轉運站問題 |
-| iBGP 與 BGP 進階 | ⬜ | iBGP 與 next-hop-self、route reflector、community、多跳 eBGP (`ebgp-multihop`) |
+| iBGP 與 BGP 進階 | ✅ | iBGP（AD 200、可以隔多台路由器、Loopback 與 `update-source`，一個方向對得上就能建立）、下一站不變與 `next-hop-self`、inaccessible 的路不能當最佳路徑、遞迴查下一站、iBGP split horizon 與 BGP 黑洞、route reflector（Originator、Cluster list）、最佳路徑補上 eBGP 優先與 IGP metric、MED 只比同一個鄰居 AS、`network` 的 MED 是 IGP metric、RIB-failure、`ebgp-multihop`（真的看 TTL）與 `disable-connected-check`、community（`set community … additive`、`ip community-list standard`、`match community`、`send-community`、no-export / no-advertise、`ip bgp-community new-format`）、`redistribute bgp` 不含 iBGP 的路（`bgp redistribute-internal`）、`show ip bgp <網段>`；BGP 還不分 VRF |
 | EIGRP、RIP | ⬜ | 優先度低：CCNA v1.1 只要求看得懂 |
-| VRF（VRF-Lite） | ✅ | `vrf definition`（`rd`、`address-family ipv4`）與舊式的 `ip vrf`；介面的 `vrf forwarding` 會清掉原本的 IP；同一個路由表裡網段重疊會被拒絕（`% … overlaps with …`），不同 VRF 可以重疊；`ip route vrf`、`show vrf`、`show ip route vrf`、`ping vrf`；圖形介面的 VRF 卡片與介面的 VRF 選單。OSPF / BGP 還不分 VRF，沒有 route leaking |
+| VRF（VRF-Lite） | ✅ | `vrf definition`（`rd`、`address-family ipv4`）與舊式的 `ip vrf`；介面的 `vrf forwarding` 會清掉原本的 IP；同一個路由表裡網段重疊會被拒絕（`% … overlaps with …`），不同 VRF 可以重疊；`ip route vrf`、`show vrf`、`show ip route vrf`、`ping vrf`；圖形介面的 VRF 卡片與介面的 VRF 選單；每個 VRF 自己的 OSPF 程序（`router ospf <pid> vrf <名稱>`，每個（路由器, VRF）是各自的節點，和 CE 的全域程序成為鄰居）；用靜態路由洩漏（`ip route vrf X … global`、出口介面在另一個 VRF）。BGP 還不分 VRF，沒有 MP-BGP 的 route-target 匯入匯出 |
 | 路由重分配、PBR | ✅ | `redistribute static \| connected \| bgp <AS>` 進 OSPF（ASBR、Type-5 LSA、O E2 固定 metric 與 O E1 加上內部 cost、種子 metric 20 / 1、預設路由不會跟著出去、IOS XE 自動補 subnets、`metric` / `metric-type` / `tag` / `route-map`）；`redistribute static \| connected \| ospf` 進 BGP（origin ?、MED 是原本的 cost、跑 OSPF 的直連網段也算）；route-map 的 `match ip address prefix-list \| <ACL>`、`match tag`、`set metric \| metric-type \| tag`；政策路由 `ip policy route-map`、`ip local policy route-map`、`set ip next-hop`（不通就照路由表）、`set ip default next-hop`；`show route-map`（Policy routing matches）、`show ip policy`、`show ip ospf database` 的 Type-5；路由分頁的重分配卡片與政策路由卡片。還沒有 EIGRP / RIP 之間的重分配與迴圈 |
 | IP SLA 與物件追蹤 | ✅ | 見第 9 節 |
 | 多播 | ⬜ | IGMP、PIM |
@@ -240,7 +240,7 @@ README 說明「現在有什麼、怎麼玩」，這份文件說明「整體應�
 | 圖形介面 | ✅ | 每一種設備都有對應的設定頁面與即時狀態 |
 | IOS CLI | ✅ | 模式切換（巢狀的子模式 `exit` 一次回一層，不認得的指令先往上一層找）、縮寫、`no`、Tab 補齊、`?` 說明、`do show`、管線過濾（include / exclude / begin / section / count）、一次貼上多行 |
 | IOS 的查看指令 | ✅ | 四十多個 `show` 指令，包含 MAC 位址表、NAT 轉換表、IPsec SA、時鐘、NTP、紀錄、介面計數器、SPAN、登入的使用者、flash、開機設定、SSH、SNMP |
-| 設定可以整份貼回 | ✅ | 測試對 114 台 Cisco 設備、6 台 FortiGate 逐一驗證 |
+| 設定可以整份貼回 | ✅ | 測試對 161 台 Cisco 設備、6 台 FortiGate 逐一驗證 |
 | running / startup-config | ✅ | `write memory`、`reload`、未存檔的提示、斷電後回到上一次存檔 |
 | FortiOS CLI | ✅ | `config` / `edit` / `set` / `next` / `end`、`show`、`get`、`diagnose`、`execute ping` |
 | 主機終端機 | ✅ | `ping`、`ipconfig`、`arp`、`tracert`、`nslookup`、`curl`、`iperf3` |
@@ -289,11 +289,11 @@ README 說明「現在有什麼、怎麼玩」，這份文件說明「整體應�
 
 | 功能 | 狀態 | 說明 |
 | --- | --- | --- |
-| 關卡 | ✅ | 17 章 78 關（清單見第 17 節） |
+| 關卡 | ✅ | 17 章 82 關（清單見第 17 節） |
 | 任務目標 | ✅ | ping、TCP、UDP、DHCP、設定檢查、故障演練、IPv6 ping、傳輸速率、遠端登入（SSH / Telnet 帳號密碼）、IP 電話註冊、通話品質 (MOS)、HTTPS（連得上之後還要通過憑證驗證）、路徑（一定要經過 / 不能經過某台設備）；TCP 的目標交握完還會送一個裝滿的資料區段（設了 DF），MTU 的問題才看得出來 |
 | 提示與星等 | ✅ | 每關 3 個提示，看一個少一顆星 |
 | 學習卡 | ✅ | 每關 2 到 4 張觀念說明 |
-| 題庫 | ✅ | 155 題觀念題、隨機產生的子網路計算題、過關後的小考 |
+| 題庫 | ✅ | 162 題觀念題、隨機產生的子網路計算題、過關後的小考 |
 | 證照地圖 | ✅ | 三種考試的條目與關卡對照、完成進度 |
 | 故障排除章 | ✅ | 網路已經設定好但被改壞，要自己找出原因 |
 | 自由模式 | ✅ | 自己擺設備、接線、設定；可以存目標、匯出與匯入 |
@@ -350,7 +350,7 @@ README 說明「現在有什麼、怎麼玩」，這份文件說明「整體應�
 
 ## 17. 關卡規劃
 
-### 現有的 78 關
+### 現有的 82 關
 
 | 章 | 關卡 |
 | --- | --- |
@@ -366,7 +366,7 @@ README 說明「現在有什麼、怎麼玩」，這份文件說明「整體應�
 | 10 故障排除 | 誰搶了我的 IP、樓層之間又斷了、分公司的求救電話、明明連得上，為什麼這麼慢、分公司的 OSPF 鄰居起不來、流量為什麼繞去實驗室、VPN 通了，資料卻過不去、DNS 改了，為什麼還連到舊的 |
 | 11 維運與管理 | 還好有備份、韌體升級、讓 SSH 能用、網路怎麼變慢了、是誰動了設定？、你的連線不是私人連線 |
 | 12 語音與 QoS | 電話接上了，然後呢？、語音斷斷續續 |
-| 13 進階路由 | 誰當 DR？、10G 和 1G 一樣快？、分公司自成一區、兩家 ISP 都要用、併購的工廠只會靜態路由（重分配）、備份走另一條線（PBR） |
+| 13 進階路由 | 誰當 DR？、10G 和 1G 一樣快？、分公司自成一區、兩家 ISP 都要用、併購的工廠只會靜態路由（重分配）、備份走另一條線（PBR）、分公司的路由表太大了（stub）、工廠接了一條供應商專線（NSSA）、兩個出口，同一個 AS（iBGP）、共用服務放在全域的路由表（VRF 的 OSPF 與路由洩漏） |
 | 14 無線控制器與無線環境 | AP 找不到控制器、牆後面收不到、走到另一頭就斷線 |
 | 15 網路自動化 | 用 API 管理路由器、一次設定四台交換器、控制器說哪裡有問題 |
 | 16 雲端網路 | 把網站搬上雲端、私有子網路與混合雲 |
@@ -379,7 +379,6 @@ README 說明「現在有什麼、怎麼玩」，這份文件說明「整體應�
 | 章 | 規劃的關卡 | 需要的功能 |
 | --- | --- | --- |
 | 補進第 11 章 | 對時與紀錄（用 NTP 與 Syslog 把事件順序對起來） | 第 4、11 節 |
-| 補進第 13 章 | iBGP、OSPF 的 stub 區域、VRF 裡跑 OSPF 與路由洩漏 | 第 3、9 節 |
 | 補進第 12 章 | 不看圖用 CDP / LLDP 把拓撲畫出來、PoE 預算不夠、雙 WAN 的 QoS | 第 1、2、10 節 |
 | 補進第 14 章 | 訪客入口 (Captive Portal)、分公司的 FlexConnect、控制器備援 (N+1) | 第 7、13 節 |
 | 補進第 15 章 | 用 Catalyst Center 的範本下發設定、NETCONF、用 Git 管理設定 | 第 12 節 |
@@ -424,7 +423,7 @@ CCNA v2.0 預計在 2027 年 2 月取代 v1.1，改版後整張對照表要重�
 | 11（已完成） | 虛擬化章節：vSwitch、連接埠群組、VM → 17-1；VRF-Lite → 17-2；Docker 的橋接網路與連接埠發佈 → 17-3。DNS 伺服器角色（A / CNAME / MX / PTR、TTL 與用戶端快取 → 10-8）。HTTP(S) 內容與憑證：信任、有效期間（用戶端的時鐘）、SAN、內部 CA → 11-6 | 補上 CCNA 1.12（伺服器虛擬化、容器、VRF 都有關卡）、Security+ 1.4 |
 | 12（已完成） | 第一次遊玩的導覽、參考解法示範、錯題本、2D 邏輯拓撲圖 | 新手體驗 |
 | 13（已完成） | 拆開 `sim.js`；路由重分配（靜態、直連、BGP ↔ OSPF）與政策路由 → 13-5、13-6 | 第 3 節最後幾個常見的企業路由功能 |
-| 14（進行中） | OSPF 的 stub / totally stubby / NSSA；iBGP（`update-source`、`next-hop-self`、route reflector、多跳 eBGP）；VRF 裡跑 OSPF 與 VRF 之間的路由洩漏 → 第 13 章補充關卡 | 接著第 13 階段與 VRF-Lite，補完企業與 ISP 邊界最常見的路由設計 |
+| 14（已完成） | OSPF 的 stub / totally stubby / NSSA；iBGP（`update-source`、`next-hop-self`、route reflector、多跳 eBGP、community）；VRF 裡跑 OSPF 與 VRF 之間的路由洩漏 → 13-7 到 13-10 | 接著第 13 階段與 VRF-Lite，補完企業與 ISP 邊界最常見的路由設計 |
 | 15 | 第二層安全：靜態 MAC、MAC flooding（CAM 表滿了變成泛洪）、雙重標籤、Storm Control、Private VLAN、RA Guard → 第 6 章補充關卡 | 引擎已經有 MAC 表與 Native VLAN，攻擊情境可以真的跑出來；補 Security+ |
 | 16 | GRE、GRE over IPsec、IOS VTI、DMVPN、NAT-T、IKEv2 的憑證驗證 → 第 7 章補充關卡 | 第 6 節最大的缺口，也是 CCNA 1.x / Network+ 的常考題 |
 | 17 | IPv6 補齊：DNS 的 AAAA、DHCPv6 Prefix Delegation、FortiGate 的 IPv6 政策、NAT64 / DNS64、IPv6 over VPN → 第 9 章補充關卡 | 第 8 節剩下的項目 |

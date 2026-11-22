@@ -24,13 +24,15 @@ export function vrfCard(ctx) {
       return h('div', { class: 'sub vrf' },
         h('div', { class: 'card-h' }, h('b', { class: 'mono', text: n }), h('span', { class: 'muted mono', text: v.rd ? `RD ${v.rd}` : '沒有 RD' }),
           del(() => {
-            for (const i of dev.ifaces) if (i.vrf === n) delete i.vrf;
+            for (const i of dev.ifaces) if (i.vrf === n) { delete i.vrf; i.ospf = false; }
             dev.routes = dev.routes.filter((r) => r.vrf !== n);
+            if (dev.ospfVrf) { delete dev.ospfVrf[n]; if (!Object.keys(dev.ospfVrf).length) delete dev.ospfVrf; }
             delete dev.vrfs[n];
             if (!Object.keys(dev.vrfs).length) delete dev.vrfs;
             ctx.commit(true);
           })),
         note(ifs.length ? 'muted' : 'warn', ifs.length ? `介面：${ifs.join('、')}` : '還沒有任何介面在這個 VRF 裡（在「介面」分頁選 VRF，或 CLI 的 vrf forwarding）'),
+        (dev.ospfVrf || {})[n] ? note('muted', `OSPF：router ospf ${dev.ospfVrf[n].pid} vrf ${n}（在下面的 OSPF 卡片切換到這個程序設定）`) : null,
         rows.length ? h('div', { class: 'vrf-rt mono' }, rows.map((r) => h('div', { text: `${r.type}  ${r.dst}  ${r.via === '直連' ? 'is directly connected, ' + r.iface : 'via ' + r.via}` }))) : null);
     }),
     h('div', { class: 'addrow' },

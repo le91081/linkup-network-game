@@ -320,20 +320,36 @@ export function ospfOn(d, i) {
   // 介面在 VRF 裡：要那個 VRF 有 OSPF 程序（router ospf <pid> vrf <名稱>）才算
   return ospfArea(d, i) != null;
 }
-/** 圖形介面的開關：關閉時連同涵蓋它的 network 敘述一起移除（其他被同一條敘述涵蓋的介面維持啟用） */
+/**
+ * 圖形介面的開關：關閉時連同涵蓋它的 network 敘述一起移除（其他被同一條敘述涵蓋的介面維持啟用）。
+ * 介面在 VRF 裡、那個 VRF 還沒有 OSPF 程序：自動建立一個（router ospf <下一個沒用過的編號> vrf <名稱>）
+ */
 export function setOspf(d, i, on) {
-  if (on) { i.ospf = true; return; }
+  const v = vrfOf(i);
+  if (on) {
+    if (v && !(d.ospfVrf || {})[v]) {
+      const used = new Set([1, ...Object.values(d.ospfVrf || {}).map((c) => +c.pid)]);
+      let pid = 2;
+      while (used.has(pid)) pid++;
+      (d.ospfVrf ||= {})[v] = { pid, ospfNets: [] };
+    }
+    i.ospf = true;
+    return;
+  }
+  const c = v ? (d.ospfVrf || {})[v] : d;
   const ip = i.rt && i.rt.ip != null ? i.rt.ip : parseIp(i.ip || '');
   const hit = (n) => ip != null && netOf(ip, n.bits) === n.net;
-  for (const x of d.ifaces) if (x !== i && !x.ospf && ospfOn(d, x) && (d.ospfNets || []).some((n) => hit(n) && netOf(x.rt && x.rt.ip != null ? x.rt.ip : parseIp(x.ip || '') ?? -1, n.bits) === n.net)) x.ospf = true;
-  if (d.ospfNets) d.ospfNets = d.ospfNets.filter((n) => !hit(n));
+  if (c) {
+    for (const x of d.ifaces) if (x !== i && vrfOf(x) === v && !x.ospf && ospfOn(d, x) && (c.ospfNets || []).some((n) => hit(n) && netOf(x.rt && x.rt.ip != null ? x.rt.ip : parseIp(x.ip || '') ?? -1, n.bits) === n.net)) x.ospf = true;
+    if (c.ospfNets) c.ospfNets = c.ospfNets.filter((n) => !hit(n));
+  }
   i.ospf = false;
 }
 
 export function routesAll(state) {
   for (const d of Object.values(state.devices)) buildRoutes(state, d);
   computeOspf(state, ospfOn);
-  computeBgp(state, { transact, logEvent, ospfOn });
+  computeBgp(state, { transact, logEvent, ospfOn, lookupRoute });
   // OSPF 先算的時候還沒有 BGP 的路：有設備把 BGP 重分配進 OSPF，就留著 BGP 的路、把 OSPF 的路拿掉再算一次
   const devs = Object.values(state.devices);
   if (devs.some((d) => (d.ospfRedist || []).some((r) => r.src === 'bgp') && d.rt && d.rt.routes.some((r) => r.type === 'B'))) {

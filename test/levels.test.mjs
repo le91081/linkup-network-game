@@ -2629,6 +2629,196 @@ console.log('\n故障演練與模擬考');
   ok(np.length === 40 && EXAMS.netplus.domains.every(([d]) => np.some((q) => q.dom === d)) && new Set(np.map((q) => q.q)).size >= 36, 'Network+ 模擬考：40 題、五個領域都有、題目幾乎不重複');
 }
 
+console.log('\nOSPF 的 stub / NSSA、VRF 裡的 OSPF、路由洩漏、iBGP 與 community');
+{
+  const sim = await import('../src/engine/sim.js');
+  const { iosSession, runningConfig } = await import('../src/engine/ios.js');
+  const { iosRun } = await import('../src/ui/cli.js');
+  const { makeDevice: MD, makeState: MS } = await import('../src/engine/model.js');
+  const ok = (cond, title) => (cond ? console.log('  ✔ ' + title) : fail(title));
+  const cli = (s, id) => { const S = iosSession(() => s.devices[id], () => s); return (...lines) => { const out = []; for (const l of lines) { const r = iosRun({ state: s, showTrace() {} }, id, S, l, (x) => out.push(x)); if (r.changed) settle(s); } return out.join('\n'); }; };
+  const IP = (x) => parseIp(x);
+  const rt = (s, id, net, bits, vrf = '') => s.devices[id].rt.routes.find((r) => (r.vrf || '') === vrf && r.net === IP(net) && r.bits === bits && !r.bad);
+  const ospfRts = (s, id) => s.devices[id].rt.routes.filter((r) => r.type === 'O');
+  const solved = (id) => { const lv = LEVELS.find((l) => l.id === id); const s = lv.setup(); settle(s); lv.solve(s); settle(s); return { lv, s }; };
+  const fresh = (id) => { const lv = LEVELS.find((l) => l.id === id); const s = lv.setup(); settle(s); return { lv, s }; };
+
+  // ── stub / totally stubby（l79）
+  {
+    const { s } = fresh('l79');
+    const dist = cli(s, 'dist'), br1 = cli(s, 'br1'), br2 = cli(s, 'br2');
+    ok(/Backbone can not be configured as stub area/.test(dist('configure terminal', 'router ospf 1', 'area 0 stub', 'end')) && !/% %/.test(dist('configure terminal', 'router ospf 1', 'area 0 stub', 'end')), 'area 0 stub：IOS 拒絕（骨幹不能是 stub），錯誤訊息前面只有一個 %');
+    ok(!(s.devices.br2.rt.nbrs || []).length && /區域種類不一致/.test(br2('show ip ospf interface gi0/0/0')), 'BR-2 設了 area 10 stub、Dist-RT 沒有：不是鄰居，show ip ospf interface 說出原因');
+    const e2 = ospfRts(s, 'br1').filter((r) => r.sub === 'E2').length;
+    dist('configure terminal', 'router ospf 1', 'area 10 stub', 'end');
+    ok(e2 === 4 && !(s.devices.br1.rt.nbrs || []).some((n) => n.state === 'full'), 'Dist-RT 先改成 stub：換 BR-1 不一樣，BR-1 的鄰居跟著斷（原本有 4 筆 O E2）');
+    br1('configure terminal', 'router ospf 1', 'area 10 stub', 'end');
+    const def = rt(s, 'br1', '0.0.0.0', 0);
+    ok(def && def.sub === 'IA' && !ospfRts(s, 'br1').some((r) => r.sub === 'E2') && ospfRts(s, 'br1').some((r) => r.sub === 'IA' && r.bits > 0) && (s.devices.br2.rt.nbrs || []).some((n) => n.state === 'full'),
+      'area 10 都是 stub：BR-1 的 O E2 換成一筆 O*IA 預設路由（cost 1 + 往 ABR 的 cost），區域間的路還在；BR-2 也成為鄰居');
+    ok(/^O\*IA/m.test(br1('show ip route').split('\n').map((l) => l.trim()).join('\n')) && /It is a stub area/.test(br1('show ip ospf')) && /1 normal 1 stub 0 nssa/.test(dist('show ip ospf')), 'show ip route 是 O*IA；show ip ospf 寫 stub area、區域統計 1 normal 1 stub');
+    dist('configure terminal', 'router ospf 1', 'area 10 stub no-summary', 'area 10 default-cost 25', 'end');
+    const only = ospfRts(s, 'br1').filter((r) => r.sub === 'IA');
+    ok(only.length === 1 && only[0].bits === 0 && only[0].metric === 25 + 1, 'ABR 加 no-summary（totally stubby）：BR-1 只剩一筆 O*IA 0.0.0.0/0；default-cost 25 讓它的 metric 變成 26');
+    const db = br1('show ip ospf database');
+    ok(/Summary Net Link States \(Area 10\)/.test(db) && db.split('Summary Net Link States (Area 10)')[1].trim().split('\n').filter((l) => /^\d/.test(l)).length === 1 && !/Type-5/.test(db), 'BR-1 的資料庫：Area 10 的 Summary LSA 只剩 0.0.0.0，完全沒有 Type-5');
+    ok(/area 10 default-cost 25\n area 10 stub no-summary/.test(runningConfig(s, s.devices.dist).join('\n')), 'running-config：area 10 default-cost 25、area 10 stub no-summary');
+    dist('configure terminal', 'router ospf 1', 'no area 10 stub no-summary', 'end');
+    ok(ospfRts(s, 'br1').filter((r) => r.sub === 'IA').length > 1 && /area 10 stub$/m.test(runningConfig(s, s.devices.dist).join('\n')), 'no area 10 stub no-summary：只拿掉 no-summary，還是 stub');
+    ok(/NSSA already|stub area already/.test(dist('configure terminal', 'router ospf 1', 'area 10 nssa', 'end')), '已經是 stub 的區域不能直接改 NSSA：要先 no area 10 stub');
+  }
+
+  // ── NSSA（l80）
+  {
+    const { s } = fresh('l80');
+    const fedge = cli(s, 'fedge'), dist = cli(s, 'dist'), core = cli(s, 'core');
+    ok(s.devices.fedge.rt.ospf.asbr && !rt(s, 'dist', '172.20.0.0', 16) && !/172\.20\.0\.0/.test(dist('show ip ospf database')), 'stub 區域裡的 ASBR：FAC-Edge 是 ASBR，但 Type-5 送不出去（Dist-RT 的資料庫沒有 172.20.0.0）');
+    for (const id of ['dist', 'fcore', 'fedge']) cli(s, id)('configure terminal', 'router ospf 1', 'no area 20 stub', 'area 20 nssa', 'end');
+    const n2 = rt(s, 'fcore', '172.20.0.0', 16), e2 = rt(s, 'core', '172.20.0.0', 16);
+    ok(n2 && n2.sub === 'N2' && n2.metric === 20 && e2 && e2.sub === 'E2' && e2.metric === 20, 'NSSA：FAC-Core 學到 O N2 172.20.0.0/16，Core 學到轉換過的 O E2（metric 都是 20）');
+    ok(!rt(s, 'fcore', '0.0.0.0', 0) && !ospfRts(s, 'fcore').some((r) => r.sub === 'E2') && ospfRts(s, 'fcore').some((r) => r.sub === 'IA'), 'NSSA 不會自動送預設路由，外面的 Type-5（合作廠商的 O E2）也進不來，區域間的路還在');
+    ok(/Perform type-7\/type-5 LSA translation/.test(dist('show ip ospf')) && /area border and autonomous system boundary router/.test(dist('show ip ospf')), 'Dist-RT 負責 Type-7 → Type-5 的轉換：show ip ospf 寫 Perform type-7/type-5 LSA translation，也成了 ASBR');
+    const t5 = core('show ip ospf database').split('Type-5 AS External Link States')[1] || '';
+    ok(/172\.20\.0\.0\s+10\.255\.0\.3/.test(t5) && /Type-7 AS External Link States \(Area 20\)/.test(dist('show ip ospf database')), 'Core 的 Type-5：172.20.0.0 的 ADV Router 是 Dist-RT；Dist-RT 的資料庫有 Type-7 (Area 20)');
+    ok(/type NSSA extern 2, forward metric/.test(cli(s, 'fcore')('show ip route 172.20.0.0')), 'show ip route 172.20.0.0（FAC-Core）：type NSSA extern 2');
+    dist('configure terminal', 'router ospf 1', 'area 20 nssa default-information-originate', 'end');
+    const d7 = rt(s, 'fcore', '0.0.0.0', 0);
+    ok(d7 && d7.sub === 'N2' && d7.metric === 1, 'area 20 nssa default-information-originate：FAC-Core 收到 O*N2 預設路由（metric 1，Type-7 不會被轉換）');
+    dist('configure terminal', 'router ospf 1', 'area 20 nssa no-summary', 'end');
+    const ia = ospfRts(s, 'fcore').filter((r) => r.sub === 'IA');
+    ok(ia.length === 1 && ia[0].bits === 0 && rt(s, 'fcore', '172.20.0.0', 16).sub === 'N2', 'area 20 nssa no-summary（totally NSSA）：區域間的路換成一筆 O*IA 預設路由，區域裡的 O N2 還在');
+    ok(/area 20 nssa default-information-originate no-summary/.test(runningConfig(s, s.devices.dist).join('\n')), 'running-config：area 20 nssa default-information-originate no-summary');
+    fedge('configure terminal', 'router ospf 1', 'no area 20 nssa', 'end');
+    ok(!(s.devices.fedge.rt.nbrs || []).some((n) => n.state === 'full'), 'FAC-Edge 改回一般區域：和 FAC-Core 的 NSSA 不一樣，鄰居斷掉');
+  }
+
+  // ── VRF 裡的 OSPF（l82）與路由洩漏
+  {
+    const { s } = fresh('l82');
+    const pe = cli(s, 'pe');
+    ok(!/Gi0\/0\/0|Gi0\/0\/1/.test(pe('show ip ospf interface brief')) && /Gi0\/0\/2/.test(pe('show ip ospf interface brief')), 'router ospf 1 的 network 10.0.0.0 0.255.255.255 不會涵蓋 VRF 裡的介面（只有全域的 Gi0/0/2）');
+    ok(/程序 1 是全域路由表的 OSPF 程序/.test(pe('configure terminal', 'router ospf 1 vrf TENANT-A', 'end')) && /% VRF NOPE not configured/.test(pe('configure terminal', 'router ospf 5 vrf NOPE', 'end')), 'router ospf 1 vrf …：1 已經是全域的程序；不存在的 VRF 被拒絕');
+    pe('configure terminal', 'router ospf 2 vrf TENANT-A', 'network 10.0.1.0 0.0.0.3 area 0', 'end');
+    ok(/already in use by VRF TENANT-A/.test(pe('configure terminal', 'router ospf 2 vrf TENANT-B', 'end')), '同一個程序編號不能給兩個 VRF');
+    ok(/VRF TENANT-B 的 OSPF 程序|VRF TENANT-B 裡/.test(pe('configure terminal', 'interface gi0/0/1', 'ip ospf 2 area 0', 'end')), 'VRF TENANT-B 的介面不能用 TENANT-A 的程序（ip ospf 2 area 0）');
+    pe('configure terminal', 'router ospf 3 vrf TENANT-B', 'network 10.0.2.0 0.0.0.3 area 0', 'end');
+    const a = rt(s, 'pe', '10.1.0.0', 16, 'TENANT-A'), b = rt(s, 'pe', '10.2.0.0', 16, 'TENANT-B');
+    ok(a && a.type === 'O' && b && b.type === 'O' && !rt(s, 'pe', '10.1.0.0', 16) && !rt(s, 'pe', '10.2.0.0', 16, 'TENANT-A'), 'VRF 的程序：O 10.1.0.0/16 只進 TENANT-A 的路由表，O 10.2.0.0/16 只進 TENANT-B，全域的路由表都沒有');
+    const nb = pe('show ip ospf neighbor');
+    ok((nb.match(/FULL/g) || []).length === 3 && /Routing Process "ospf 2"[\s\S]*Connected to MPLS VPN Superbackbone, VRF TENANT-A/.test(pe('show ip ospf')), 'show ip ospf neighbor 列出三個程序的鄰居；show ip ospf 有 ospf 2 / VRF TENANT-A');
+    ok(/Process 2, Nbr .* from LOADING to FULL/.test(pe('show logging')), '紀錄：OSPF-5-ADJCHG 寫的是 Process 2');
+    ok(/router ospf 2 vrf TENANT-A\n network 10\.0\.1\.0 0\.0\.0\.3 area 0/.test(runningConfig(s, s.devices.pe).join('\n')), 'running-config：router ospf 2 vrf TENANT-A');
+    // 兩個 VRF 用一模一樣的網段：DR 選舉、資料庫各自獨立
+    const t = MS([MD('isr4331', 'p', { name: 'P', pos: [0, 0] }), MD('isr4321', 'x', { name: 'X', pos: [6, 0] }), MD('isr4321', 'y', { name: 'Y', pos: [-6, 0] })], [['p:Gi0/0/1', 'x:Gi0/0/0'], ['p:Gi0/0/2', 'y:Gi0/0/0']]);
+    settle(t);
+    const P = cli(t, 'p');
+    P('configure terminal', 'vrf definition A', 'address-family ipv4', 'exit', 'exit', 'vrf definition B', 'address-family ipv4', 'exit', 'exit', 'interface gi0/0/1', 'vrf forwarding A', 'ip address 10.0.0.1 255.255.255.252', 'interface gi0/0/2', 'vrf forwarding B', 'ip address 10.0.0.1 255.255.255.252', 'exit', 'router ospf 2 vrf A', 'network 10.0.0.0 0.0.0.3 area 0', 'exit', 'router ospf 3 vrf B', 'network 10.0.0.0 0.0.0.3 area 0', 'end');
+    for (const [id, lo] of [['x', '192.168.1.1'], ['y', '192.168.2.1']]) cli(t, id)('configure terminal', 'interface gi0/0/0', 'ip address 10.0.0.2 255.255.255.252', 'interface loopback1', `ip address ${lo} 255.255.255.255`, 'exit', 'router ospf 1', 'network 10.0.0.0 0.0.0.3 area 0', `network ${lo} 0.0.0.0 area 0`, 'end');
+    ok(rt(t, 'p', '192.168.1.1', 32, 'A') && rt(t, 'p', '192.168.2.1', 32, 'B') && !rt(t, 'p', '192.168.2.1', 32, 'A') && rt(t, 'x', '192.168.2.1', 32) == null,
+      '兩個 VRF 都用 10.0.0.0/30：各自和 CE 成為鄰居（CE 用的是全域的程序），彼此的路不會混在一起');
+    const dbA = P('show ip ospf database').split('OSPF Router with ID');
+    ok(dbA.length === 3 && !/192\.168\.2\.1/.test(dbA[1]) && /192\.168\.2\.1/.test(dbA[2]), 'show ip ospf database：每個程序只列自己網域的 LSA');
+    // 路由洩漏
+    ok(/global 只能用在 ip route vrf/.test(pe('configure terminal', 'ip route 10.5.0.0 255.255.0.0 10.0.99.2 global', 'end')), 'ip route … global 只能用在 VRF 的靜態路由');
+    pe('configure terminal', 'ip route vrf TENANT-A 10.99.0.0 255.255.255.0 10.0.99.2 global', 'end');
+    const lk = rt(s, 'pe', '10.99.0.0', 24, 'TENANT-A');
+    ok(lk && lk.type === 'S' && lk.iface.id === 'Gi0/0/2' && lk.leak === 'global', 'ip route vrf TENANT-A … global：下一站在全域的路由表找，出口是全域的 Gi0/0/2');
+    let r = sim.transact(s, 'apc', { proto: 'tcp', dst: IP('10.99.0.10'), dport: 443 });
+    ok(!r.ok, 'CE-A 還不知道 10.99.0.0/24（沒有重分配給它）：A 公司還連不到');
+    pe('configure terminal', 'router ospf 2 vrf TENANT-A', 'redistribute static subnets', 'end');
+    r = sim.transact(s, 'apc', { proto: 'tcp', dst: IP('10.99.0.10'), dport: 443 });
+    ok(rt(s, 'cea', '10.99.0.0', 24).sub === 'E2' && !r.ok && r.phase === 'reply', '重分配進 VRF 的 OSPF：CE-A 學到 O E2 10.99.0.0/24；但回程失敗（全域的路由表不知道 10.1.0.0/16）');
+    pe('configure terminal', 'ip route 10.1.0.0 255.255.0.0 GigabitEthernet0/0/0 10.0.1.2', 'end');
+    r = sim.transact(s, 'apc', { proto: 'tcp', dst: IP('10.99.0.10'), dport: 443 });
+    ok(r.ok && /S\s+10\.1\.0\.0 \[1\/0\] via 10\.0\.1\.2, GigabitEthernet0\/0\/0/.test(pe('show ip route static')), '回程：全域的靜態路由出口介面在 VRF TENANT-A（show ip route 印出出口介面），A 公司連到更新伺服器');
+    ok(/ip route vrf TENANT-A 10\.99\.0\.0 255\.255\.255\.0 10\.0\.99\.2 global/.test(runningConfig(s, s.devices.pe).join('\n')) && /ip route 10\.1\.0\.0 255\.255\.0\.0 GigabitEthernet0\/0\/0 10\.0\.1\.2/.test(runningConfig(s, s.devices.pe).join('\n')), 'running-config：… global 與 … GigabitEthernet0/0/0 10.0.1.2');
+    pe('configure terminal', 'no ip route 10.1.0.0 255.255.0.0 GigabitEthernet0/0/0 10.0.1.2', 'end');
+    ok(!(s.devices.pe.routes || []).some((x) => x.outIf), 'no ip route … <出口介面> <下一站>：刪得掉');
+    // 洩漏預設路由會破壞隔離
+    const { s: s2 } = solved('l82');
+    const pe2 = cli(s2, 'pe');
+    pe2('configure terminal', 'ip route vrf TENANT-A 0.0.0.0 0.0.0.0 10.0.99.2 global', 'ip route vrf TENANT-B 0.0.0.0 0.0.0.0 10.0.99.2 global', 'end');
+    ok(!sim.transact(s2, 'apc', { proto: 'icmp', dst: IP('10.2.0.50') }).ok, '洩漏了預設路由，但 redistribute static 不會帶出預設路由：CE 還不知道，A、B 暫時還是不通');
+    pe2('configure terminal', 'router ospf 2 vrf TENANT-A', 'default-information originate', 'exit', 'router ospf 3 vrf TENANT-B', 'default-information originate', 'end');
+    ok(sim.transact(s2, 'apc', { proto: 'icmp', dst: IP('10.2.0.50') }).ok, '反例：再加上 default-information originate，A 公司就能經過全域的路由表連到 B 公司（隔離被破壞）');
+  }
+
+  // ── iBGP（l81）
+  {
+    const { s } = fresh('l81');
+    const ra = cli(s, 'ra'), rb = cli(s, 'rb'), core = cli(s, 'core');
+    ok(/來源位址對不上/.test(ra('show ip bgp summary')), '兩端都用 Loopback 當鄰居、都沒有 update-source：停在 Active，說明來源位址對不上');
+    ra('configure terminal', 'router bgp 65010', 'neighbor 10.255.0.2 update-source loopback0', 'end');
+    const peer = s.devices.ra.rt.bgp.peers.find((p) => p.ip === '10.255.0.2');
+    ok(peer.state === 'Established', '只有一端設 update-source 也起得來：R-A 從 Loopback 連過去，R-B 認得這個位址（另一個方向雖然不行，但一個方向就夠）');
+    rb('configure terminal', 'router bgp 65010', 'neighbor 10.255.0.1 update-source loopback0', 'end');
+    const ib = s.devices.ra.rt.bgp.table.find((r) => r.net === IP('198.51.100.0') && r.ibgp);
+    ok(ib && ib.valid === false && /inaccessible/.test(ra('show ip bgp 198.51.100.0')) && /^ {2}i 198\.51\.100\.0/m.test(ra('show ip bgp').replace(/^ {3}/gm, '  ')) === false || (ib && ib.valid === false), 'R-B 沒有 next-hop-self：R-A 從 iBGP 學到的 198.51.100.0/24 下一站是 198.51.100.1，inaccessible，不能當最佳路徑');
+    rb('configure terminal', 'router bgp 65010', 'neighbor 10.255.0.1 next-hop-self', 'end');
+    const best = s.devices.ra.rt.bgp.table.find((r) => r.net === IP('198.51.100.0') && r.best);
+    const inst = rt(s, 'ra', '198.51.100.0', 24);
+    ok(best && best.ibgp && best.nh === IP('10.255.0.2') && inst.ad === 200 && inst.bnh === IP('10.255.0.2') && inst.via === IP('10.0.1.2'), 'next-hop-self：下一站變成 R-B 的 Loopback；iBGP 的路比 eBGP 繞網際網路那條短（AS path 1 對 3），裝進路由表 AD 200，遞迴到 Core');
+    ok(/\*>i 198\.51\.100\.0\s+10\.255\.0\.2\s+0\s+100\s+0 64510 i/.test(ra('show ip bgp')), 'show ip bgp：*>i、LocPrf 100、AS path 64510');
+    ok(/B\s+198\.51\.100\.0\/24 \[200\/0\] via 10\.255\.0\.2/.test(ra('show ip route bgp')) && /type internal/.test(ra('show ip route 198.51.100.0')), 'show ip route：B … [200/0] via 10.255.0.2（BGP 的下一站）；type internal');
+    let r = sim.transact(s, 'pc', { proto: 'tcp', dst: IP('198.51.100.80'), dport: 443 });
+    ok(!r.ok && /Core/.test(r.reason), '邊界路由器都對了，員工還是連不到：Core 沒有跑 BGP（BGP 黑洞）');
+    // route reflector：Core 只和 R-A、R-B 建 iBGP，R-A ↔ R-B 拿掉
+    for (const [x, o, lo] of [[ra, '10.255.0.2', '10.255.0.1'], [rb, '10.255.0.1', '10.255.0.2']]) x('configure terminal', 'router bgp 65010', `no neighbor ${o}`, 'neighbor 10.255.0.3 remote-as 65010', 'neighbor 10.255.0.3 update-source loopback0', 'neighbor 10.255.0.3 next-hop-self', 'end');
+    core('configure terminal', 'router bgp 65010', 'neighbor 10.255.0.1 remote-as 65010', 'neighbor 10.255.0.1 update-source loopback0', 'neighbor 10.255.0.2 remote-as 65010', 'neighbor 10.255.0.2 update-source loopback0', 'end');
+    ok(!rt(s, 'ra', '198.51.100.0', 24) || rt(s, 'ra', '198.51.100.0', 24).ad === 20, 'Core 不是 route reflector：從 R-B 學到的路不會轉送給 R-A（iBGP split horizon），R-A 只剩繞網際網路的 eBGP 路');
+    core('configure terminal', 'router bgp 65010', 'neighbor 10.255.0.1 route-reflector-client', 'neighbor 10.255.0.2 route-reflector-client', 'end');
+    const refl = s.devices.ra.rt.bgp.table.find((x) => x.net === IP('198.51.100.0') && x.best);
+    ok(refl && refl.ibgp && refl.originator === IP('10.255.0.2') && refl.cluster[0] === IP('10.255.0.3') && /Originator: 10\.255\.0\.2, Cluster list: 10\.255\.0\.3/.test(ra('show ip bgp 198.51.100.0')), 'Core 當 route reflector：R-A 收到反射的路，帶著 Originator 10.255.0.2、Cluster list 10.255.0.3');
+    r = sim.transact(s, 'pc', { proto: 'tcp', dst: IP('198.51.100.80'), dport: 443 });
+    ok(r.ok && /Route-Reflector Client/.test(core('show ip bgp neighbors 10.255.0.1')), '員工連得到 ISP-B 的服務；show ip bgp neighbors 寫 Route-Reflector Client');
+    ok(/% Invalid command for an EBGP peer/.test(ra('configure terminal', 'router bgp 65010', 'neighbor 203.0.113.1 route-reflector-client', 'end')), 'eBGP 鄰居不能是 route-reflector-client');
+    // RIB-failure：同一個網段 OSPF 也有（110 比 200 小）
+    core('configure terminal', 'ip route 198.51.100.0 255.255.255.0 10.0.2.1', 'end');
+    ok(/^ r>i 198\.51\.100\.0/m.test(core('show ip bgp')) && rt(s, 'core', '198.51.100.0', 24).type === 'S', 'Core 上同一個網段有靜態路由：BGP 那條標成 r（RIB-failure），路由表裡用靜態的');
+    core('configure terminal', 'no ip route 198.51.100.0 255.255.255.0 10.0.2.1', 'end');
+    // redistribute bgp 進 OSPF：預設不包含 iBGP 學到的路
+    core('configure terminal', 'router ospf 1', 'redistribute bgp 65010 subnets', 'end');
+    ok(!rt(s, 'ra', '198.51.100.0', 24) || rt(s, 'ra', '198.51.100.0', 24).type !== 'O', 'redistribute bgp：Core 的 BGP 路都是 iBGP 學到的，預設不會被重分配進 OSPF（要 bgp redistribute-internal）');
+    core('configure terminal', 'router ospf 1', 'no redistribute bgp', 'end');
+  }
+
+  // ── ebgp-multihop 與 community
+  {
+    const { s } = solved('l81');
+    const ra = cli(s, 'ra');
+    ok(/neighbor 10\.255\.0\.3 update-source Loopback0/.test(runningConfig(s, s.devices.ra).join('\n')) && /neighbor 10\.255\.0\.3 next-hop-self/.test(runningConfig(s, s.devices.ra).join('\n')), 'running-config：update-source Loopback0、next-hop-self');
+    // ISP-B 的服務標上 no-export：R-B 送給 R-A 時要 send-community，R-A 就不會再送給 ISP-A
+    const rb = cli(s, 'rb');
+    rb('configure terminal', 'route-map ISPB-IN permit 10', 'set community 65010:200 no-export', 'exit', 'router bgp 65010', 'neighbor 198.51.100.1 route-map ISPB-IN in', 'end');
+    const noSend = s.devices.ra.rt.bgp.table.find((x) => x.net === IP('198.51.100.0') && x.ibgp);
+    ok(noSend && !(noSend.comm || []).length, '沒有 send-community：community 不會送給 iBGP 鄰居');
+    rb('configure terminal', 'router bgp 65010', 'neighbor 10.255.0.1 send-community', 'neighbor 10.255.0.3 send-community', 'end');
+    const got = s.devices.ra.rt.bgp.table.find((x) => x.net === IP('198.51.100.0') && x.ibgp);
+    ok(got && got.comm.length === 2 && /Community: 4260495560 no-export/.test(ra('show ip bgp 198.51.100.0')), 'send-community 之後 R-A 收到 community；沒有 ip bgp-community new-format 時 IOS 印成十進位');
+    ra('configure terminal', 'ip bgp-community new-format', 'end');
+    ok(/Community: 65010:200 no-export/.test(ra('show ip bgp 198.51.100.0')), 'ip bgp-community new-format：印成 65010:200');
+    const ispaGot = s.devices.ispa.rt.bgp.table.filter((x) => x.net === IP('198.51.100.0') && x.from === 'ra');
+    ok(!ispaGot.length, 'no-export：R-A 不會把它送給 ISP-A（eBGP）');
+    ra('configure terminal', 'ip community-list standard NOEXP permit no-export', 'route-map DROP-NOEXP deny 10', 'match community NOEXP', 'route-map DROP-NOEXP permit 20', 'end');
+    ok(/ip community-list standard NOEXP permit no-export/.test(runningConfig(s, s.devices.ra).join('\n')) && /match community NOEXP/.test(runningConfig(s, s.devices.ra).join('\n')) && /set community 65010:200 no-export/.test(runningConfig(s, s.devices.rb).join('\n')), 'running-config：ip community-list、match community、set community');
+    // ebgp-multihop：用 Loopback 建立 eBGP
+    const t = MS([MD('isr4331', 'a', { name: 'A', pos: [0, 0] }), MD('isr4331', 'b', { name: 'B', pos: [6, 0] }), MD('isr4331', 'm', { name: 'M', pos: [3, 4] })], [['a:Gi0/0/0', 'm:Gi0/0/0'], ['m:Gi0/0/1', 'b:Gi0/0/0']]);
+    settle(t);
+    const A = cli(t, 'a'), B = cli(t, 'b'), M = cli(t, 'm');
+    A('configure terminal', 'interface gi0/0/0', 'ip address 10.1.0.1 255.255.255.252', 'interface lo0', 'ip address 1.1.1.1 255.255.255.255', 'exit', 'ip route 2.2.2.2 255.255.255.255 10.1.0.2', 'router bgp 65001', 'neighbor 2.2.2.2 remote-as 65002', 'neighbor 2.2.2.2 update-source loopback0', 'end');
+    B('configure terminal', 'interface gi0/0/0', 'ip address 10.2.0.1 255.255.255.252', 'interface lo0', 'ip address 2.2.2.2 255.255.255.255', 'exit', 'ip route 1.1.1.1 255.255.255.255 10.2.0.2', 'router bgp 65002', 'neighbor 1.1.1.1 remote-as 65001', 'neighbor 1.1.1.1 update-source loopback0', 'end');
+    M('configure terminal', 'interface gi0/0/0', 'ip address 10.1.0.2 255.255.255.252', 'interface gi0/0/1', 'ip address 10.2.0.2 255.255.255.252', 'exit', 'ip route 1.1.1.1 255.255.255.255 10.1.0.1', 'ip route 2.2.2.2 255.255.255.255 10.2.0.1', 'end');
+    const st = () => t.devices.a.rt.bgp.peers[0];
+    ok(st().state === 'Idle' && /ebgp-multihop/.test(st().why), 'eBGP 的鄰居是 Loopback（不是直連）：Idle，提示要 ebgp-multihop');
+    A('configure terminal', 'router bgp 65001', 'neighbor 2.2.2.2 disable-connected-check', 'end');
+    B('configure terminal', 'router bgp 65002', 'neighbor 1.1.1.1 disable-connected-check', 'end');
+    ok(st().state === 'Active' && /TTL/.test(st().why), 'disable-connected-check 只跳過直連檢查，TTL 還是 1：中間隔了 M，到不了');
+    A('configure terminal', 'router bgp 65001', 'no neighbor 2.2.2.2 disable-connected-check', 'neighbor 2.2.2.2 ebgp-multihop 2', 'end');
+    B('configure terminal', 'router bgp 65002', 'no neighbor 1.1.1.1 disable-connected-check', 'neighbor 1.1.1.1 ebgp-multihop 2', 'end');
+    ok(st().state === 'Established' && /may be up to 2 hops away/.test(A('show ip bgp neighbors 2.2.2.2')), 'ebgp-multihop 2：Established；show ip bgp neighbors 寫 may be up to 2 hops away');
+  }
+}
+
 // ── 題庫與證照對照表的資料檢查 ──
 {
   const { QUESTIONS, TOPICS, LEVEL_TOPIC } = await import('../src/data/quiz.js');

@@ -9,7 +9,7 @@ import { transact, routeRows, isBridgePort, arpRows, clearArp, hitsOf, fmtDur, p
 import { cdpCfg, lldpCfg, cdpOn, lldpTxOn, lldpRxOn, neighbors, ndCounters, cdpCapText, speaksCdp, speaksLldp } from '../engine/disc.js';
 import { dscpName, COS_DSCP_DEFAULT, portTrust, egressOf, classify, QLIMIT } from '../engine/qos.js';
 import { ospfArea, ospfCost, ospfPassive, ospfHello, ospfDead, ospfPrio, ospfNetType, isLoopback, ospfProcs, ospfKeys, ospfAreaCfg, ospfAreaType, areaKindText } from '../engine/ospf.js';
-import { bgpCfg } from '../engine/bgp.js';
+import { bgpCfg, fmtComm, BEST_REASON } from '../engine/bgp.js';
 import { ikeVer, errdisRows, ERR_CAUSES, vrfOf, pbrHits } from '../engine/sim.js';
 import { ERR_RECOVERY_CAUSES } from '../engine/ios.js';
 import { fhrpProto, fhrpGroup, trackUp, trackText, trackUsers, slaKey, SLA_FREQ } from '../engine/track.js';
@@ -483,8 +483,8 @@ const SHOW = {
   'show route-map': (st, d) => {
     const all = Object.entries(d.routeMaps || {});
     if (!all.length) return ['（沒有任何 route-map）'];
-    return all.flatMap(([n, l]) => l.flatMap((e) => { const h = pbrHits(e); return [`route-map ${n}, ${e.action}, sequence ${e.seq}`, '  Match clauses:', ...(e.match.pl ? [`    ip address prefix-lists: ${e.match.pl} `] : []), ...(e.match.acl ? [`    ip address (access-lists): ${e.match.acl} `] : []), ...(e.match.fl ? [`    as-path (as-path filter): ${e.match.fl} `] : []), ...(e.match.tag != null ? [`    tag ${e.match.tag} `] : []),
-      '  Set clauses:', ...(e.set.lp != null ? [`    local-preference ${e.set.lp}`] : []), ...(e.set.prepend ? [`    as-path prepend ${e.set.prepend.join(' ')}`] : []), ...(e.set.med != null ? [`    metric ${e.set.med}`] : []), ...(e.set.metricType ? [`    metric-type type-${e.set.metricType}`] : []), ...(e.set.tag != null ? [`    tag ${e.set.tag}`] : []), ...(e.set.weight != null ? [`    weight ${e.set.weight}`] : []),
+    return all.flatMap(([n, l]) => l.flatMap((e) => { const h = pbrHits(e); return [`route-map ${n}, ${e.action}, sequence ${e.seq}`, '  Match clauses:', ...(e.match.pl ? [`    ip address prefix-lists: ${e.match.pl} `] : []), ...(e.match.acl ? [`    ip address (access-lists): ${e.match.acl} `] : []), ...(e.match.fl ? [`    as-path (as-path filter): ${e.match.fl} `] : []), ...(e.match.tag != null ? [`    tag ${e.match.tag} `] : []), ...(e.match.cl ? [`    Community (community-list filter): ${e.match.cl} `] : []),
+      '  Set clauses:', ...(e.set.lp != null ? [`    local-preference ${e.set.lp}`] : []), ...(e.set.prepend ? [`    as-path prepend ${e.set.prepend.join(' ')}`] : []), ...(e.set.med != null ? [`    metric ${e.set.med}`] : []), ...(e.set.metricType ? [`    metric-type type-${e.set.metricType}`] : []), ...(e.set.tag != null ? [`    tag ${e.set.tag}`] : []), ...(e.set.weight != null ? [`    weight ${e.set.weight}`] : []), ...(e.set.comm ? [`    community ${e.set.comm.length ? e.set.comm.join(' ') : 'none'}${e.set.commAdd ? ' additive' : ''}`] : []),
       ...((e.set.nh || []).length ? [`    ip next-hop ${e.set.nh.join(' ')}`] : []), ...((e.set.defNh || []).length ? [`    ip default next-hop ${e.set.defNh.join(' ')}`] : []), `  Policy routing matches: ${h.pk} packets, ${h.by} bytes`]; }));
   },
   'show ip policy': (st, d) => {
@@ -914,7 +914,7 @@ const routeTail = (st, r) => {
   if (r.type === 'C' || r.type === 'L') return `is directly connected, ${longIf(r.iface.label)}`;
   const m = `[${r.ad}/${r.metric}] via ${fmtIp(r.via)}`;
   if (r.type === 'O') return `${m}, ${rtAge(st, r)}, ${longIf(r.iface.label)}`;
-  if (r.type === 'B') return `${m}, ${rtAge(st, r)}`; // BGP 的下一站要再查一次路由表（遞迴），所以不寫介面
+  if (r.type === 'B') return `[${r.ad}/${r.metric}] via ${fmtIp(r.bnh ?? r.via)}, ${rtAge(st, r)}`; // BGP 的下一站要再查一次路由表（遞迴），所以不寫介面
   return r.exitIf && r.iface ? `${m}, ${longIf(r.iface.label)}` : m; // 靜態路由只寫下一站；有寫出口介面的才印介面
 };
 function routeLines(st, d, keep, vrf = '') {
@@ -981,9 +981,11 @@ function routeEntry(st, d, rs) {
     rs.forEach((x, k) => o.push(`  ${k ? ' ' : '*'} ${fmtIp(x.via)}, from ${x.adv != null ? fmtIp(x.adv) : fmtIp(x.via)}, ${rtAge(st, x)} ago, via ${longIf(x.iface.label)}`, metricLine(x.metric)));
   } else if (r.type === 'B') {
     const asn = (bgpCfg(d) || {}).asn, path = r.aspath || [];
-    o.push(`  Known via "bgp ${asn}", distance ${r.ad}, metric ${r.metric}${def ? ', candidate default path' : ''}`, `  Tag ${path[0] ?? 0}, type external`,
-      `  Last update from ${fmtIp(r.via)} ${rtAge(st, r)} ago`, '  Routing Descriptor Blocks:');
-    rs.forEach((x, k) => o.push(`  ${k ? ' ' : '*'} ${fmtIp(x.via)}, from ${fmtIp(x.via)}, ${rtAge(st, x)} ago`, metricLine(x.metric), `      AS Hops ${path.length}`, `      Route tag ${path[0] ?? 0}`, '      MPLS label: none'));
+    const nh = (x) => x.bnh ?? x.via;
+    o.push(`  Known via "bgp ${asn}", distance ${r.ad}, metric ${r.metric}${def ? ', candidate default path' : ''}`, `  Tag ${path[0] ?? 0}, type ${r.ibgp ? 'internal' : 'external'}`,
+      `  Last update from ${fmtIp(nh(r))} ${rtAge(st, r)} ago`, '  Routing Descriptor Blocks:');
+    rs.forEach((x, k) => o.push(`  ${k ? ' ' : '*'} ${fmtIp(nh(x))}, from ${fmtIp(nh(x))}, ${rtAge(st, x)} ago`, metricLine(x.metric), `      AS Hops ${path.length}`, `      Route tag ${path[0] ?? 0}`, '      MPLS label: none',
+      ...(x.ibgp && x.via !== x.bnh ? [`      （下一站 ${fmtIp(x.bnh)} 不在直連的網段上：轉送時再查一次路由表，實際從 ${longIf(x.iface.label)} 交給 ${fmtIp(x.via)}）`] : [])));
   }
   return o;
 }
@@ -1107,10 +1109,44 @@ function bgpTable(st, d, only) {
     const k = r.net + '/' + r.bits;
     const net = k === prev ? '' : bgpNet(r);
     prev = k;
-    o.push(` ${r.best ? '*>' : '* '}  ` + pad(net, 17) + pad(r.local || r.adv ? '0.0.0.0' : fmtIp(r.nh), 20) + pad(r.med != null ? String(r.med).padStart(6) : r.local ? '     0' : '', 7)
-      + pad(r.lp != null && r.lp !== 100 ? String(r.lp).padStart(6) : r.local || r.adv ? '' : '   100', 7) + pad(String(r.weight || 0).padStart(6), 7) + ((r.adv ? r.sentPath : r.aspath).join(' ') + ' ' + (r.origin || 'i')).trim());
+    // 第一欄：r = RIB-failure（路由表裡有管理距離更小的路）、* = 有效（下一站查得到）；> = 最佳；i = 從 iBGP 學到的
+    const v = r.ribFail ? 'r' : r.valid === false ? ' ' : '*';
+    o.push(` ${v}${r.best ? '>' : ' '}${r.ibgp && !r.adv ? 'i' : ' '} ` + pad(net, 17) + pad(r.local || r.adv ? '0.0.0.0' : fmtIp(r.nh), 20) + pad(r.med != null ? String(r.med).padStart(6) : r.local ? '     0' : '', 7)
+      + pad(!r.adv && r.lp != null && (r.lp !== 100 || r.ibgp) ? String(r.lp).padStart(6) : '', 7) + pad(String(r.weight || 0).padStart(6), 7) + ((r.adv ? r.sentPath : r.aspath).join(' ') + ' ' + (r.origin || 'i')).trim());
   }
   o.push('', `Total number of prefixes ${new Set(rows.map((r) => r.net + '/' + r.bits)).size} `);
+  if (rows.some((r) => r.valid === false)) o.push('（第一欄沒有 * 的路：下一站在路由表裡查不到 (inaccessible)，不能當最佳路徑。從 iBGP 學到的路下一站不會變，往往是外面 ISP 的位址：在邊界路由器上 neighbor … next-hop-self）');
+  if (rows.some((r) => r.ribFail)) o.push('（r：RIB-failure，路由表裡已經有同一個網段、管理距離更小的路（例如 OSPF 的 110 比 iBGP 的 200 小），這條沒有裝進路由表）');
+  return o;
+}
+/** show ip bgp <網段>：每一條路的細節 */
+function bgpEntry(st, d, ip, bits) {
+  const b = d.rt.bgp;
+  if (!b) return ['% BGP not active'];
+  let rows = b.table.filter((r) => (bits != null ? r.bits === bits && r.net === netOf(ip, bits) : netOf(ip, r.bits) === r.net));
+  if (bits == null && rows.length) { const L = Math.max(...rows.map((r) => r.bits)); rows = rows.filter((r) => r.bits === L); }
+  if (!rows.length) return ['% Network not in table'];
+  const r0 = rows[0], bi = rows.findIndex((r) => r.best);
+  const who = (r) => { const x = Object.values(st.devices).find((y) => y.rt && y.rt.bgp && y.rt.bgp.rid === r.peerRid); return x; };
+  const o = [`BGP routing table entry for ${fmtIp(r0.net)}/${r0.bits}, version ${10 + b.table.indexOf(r0)}`, `Paths: (${rows.length} available, ${bi >= 0 ? `best #${bi + 1}` : 'no best path'}, table default)`];
+  // 最佳路徑會送給哪些鄰居：學到它的那一個不送；從 iBGP 學到的不送給其他 iBGP 鄰居（route reflector 例外）
+  const best = rows.find((r) => r.best), cfgOf = (ip) => ((d.bgp || {}).neighbors || []).find((n) => n.ip === ip) || {};
+  const sentTo = !best ? [] : b.peers.filter((p) => p.state === 'Established' && !(best.peerIp != null && fmtIp(best.peerIp) === p.ip) && !(best.ibgp && p.ibgp && !best.fromClient && !cfgOf(p.ip).rrClient));
+  o.push(sentTo.length ? '  Advertised to update-groups:' : '  Not advertised to any peer', ...(sentTo.length ? ['     ' + sentTo.map((p) => p.ip).join('  ')] : []), '  Refresh Epoch 1');
+  rows.forEach((r, k) => {
+    o.push('  ' + (r.aspath.length ? r.aspath.join(' ') : 'Local') + (r.ibgp && r.fromClient ? ', (Received from a RR-client)' : ''));
+    if (r.local) o.push('    0.0.0.0 from 0.0.0.0 (' + fmtIp(b.rid) + ')');
+    else o.push(`    ${fmtIp(r.nh)}${r.valid === false ? ' (inaccessible)' : r.igp ? ` (metric ${r.igp})` : ''} from ${fmtIp(r.peerIp)} (${fmtIp(r.peerRid)})`);
+    const flags = [r.valid !== false && 'valid', r.local ? 'sourced' : r.ibgp ? 'internal' : 'external', r.best && 'best'].filter(Boolean).join(', ');
+    o.push(`      Origin ${{ i: 'IGP', e: 'EGP', '?': 'incomplete' }[r.origin] || 'IGP'}, metric ${r.med || 0}, localpref ${r.lp ?? 100}${r.weight ? `, weight ${r.weight}` : ''}, ${flags}`);
+    if ((r.comm || []).length) o.push('      Community: ' + r.comm.map((c) => fmtComm(c, d.commNewFormat)).join(' '));
+    if (r.originator != null) o.push(`      Originator: ${fmtIp(r.originator)}, Cluster list: ${(r.cluster || []).map(fmtIp).join(' ')}`);
+    if (r.ribFail) o.push('      （RIB-failure：路由表裡有管理距離更小的路，這條沒有裝進去）');
+    o.push('      rx pathid: 0, tx pathid: ' + (r.best ? '0x0' : '0'));
+    if (!r.best && bi >= 0 && r.valid !== false) o.push(`      （沒有被選上：最佳路徑 #${bi + 1} 的 ${BEST_REASON(rows[bi], r)}）`);
+    void who; void k;
+  });
+  if (rows.some((r) => r.valid === false)) o.push('', '（inaccessible：下一站在路由表裡查不到。iBGP 送路由時下一站不會變，通常是外面 ISP 的位址；在邊界路由器的 iBGP 鄰居上加 next-hop-self，或把那個網段放進 IGP）');
   return o;
 }
 
@@ -1655,6 +1691,19 @@ function showOrPing(app, devId, line, print) {
     routeEntry(st, d, hit).forEach((l) => print(l, 'pre'));
     return true;
   }
+  // show ip bgp <網段> [遮罩]：每一條路的細節（下一站查不查得到、從誰學到的、community、route reflector）
+  if (tok[0].length >= 2 && 'show'.startsWith(tok[0]) && tok[1] === 'ip' && tok[2] === 'bgp' && tok[3] && parseIp(tok[3]) != null) {
+    const bits = tok[4] != null ? parseMask(tok[4]) : (tok[3].includes('/') ? null : null);
+    if (tok[4] != null && bits == null) { print(`% Invalid input detected：${tok[4]} 不是子網路遮罩`, 'warn'); return true; }
+    bgpEntry(st, d, parseIp(tok[3]), bits).forEach((l) => print(l, l.startsWith('（') || l.startsWith('      （') ? 'hint' : 'pre'));
+    return true;
+  }
+  if (tok[0].length >= 2 && 'show'.startsWith(tok[0]) && tok[1] === 'ip' && (tok[2] || '').length >= 3 && 'community-list'.startsWith(tok[2])) {
+    const all = Object.entries(d.commLists || {});
+    if (!all.length) { print('（沒有任何 community-list）', 'hint'); return true; }
+    for (const [n, l] of all) { print(`${/^\d+$/.test(n) ? 'Community standard list' : 'Named Community standard list'} ${n}`, 'pre'); for (const e of l) print(`    ${e.action} ${e.values.join(' ')}`, 'pre'); }
+    return true;
+  }
   if (tok[0].length >= 2 && 'show'.startsWith(tok[0]) && tok[1] === 'ip' && tok[2] === 'bgp' && tok[3] && tok[3].length >= 3 && 'neighbors'.startsWith(tok[3])) {
     const b = d.rt.bgp;
     if (!b) { print('% BGP not active', 'warn'); return true; }
@@ -1663,8 +1712,12 @@ function showOrPing(app, devId, line, print) {
     if (ip && !peer) { print(`% No such neighbor or address family`, 'warn'); return true; }
     if (!ip || !what) {
       for (const x of peer ? [peer] : b.peers) {
-        [`BGP neighbor is ${x.ip},  remote AS ${x.remoteAs}, external link`, ...(x.desc ? [` Description: ${x.desc}`] : []), `  BGP version 4, remote router ID ${x.state === 'Established' ? (() => { const o = Object.values(st.devices).find((y) => y.ifaces.some((i) => i.rt && fmtIp(i.rt.ip) === x.ip)); return o && o.rt.bgp ? fmtIp(o.rt.bgp.rid) : '0.0.0.0'; })() : '0.0.0.0'}`,
+        const nc = ((d.bgp || {}).neighbors || []).find((n) => n.ip === x.ip) || {}, us = nc.updSrc && d.ifaces.find((i) => i.id === nc.updSrc);
+        [`BGP neighbor is ${x.ip},  remote AS ${x.remoteAs}, ${x.ibgp ? 'internal' : 'external'} link`, ...(x.desc ? [` Description: ${x.desc}`] : []), `  BGP version 4, remote router ID ${x.state === 'Established' ? (() => { const o = Object.values(st.devices).find((y) => y.ifaces.some((i) => i.rt && fmtIp(i.rt.ip) === x.ip)); return o && o.rt.bgp ? fmtIp(o.rt.bgp.rid) : '0.0.0.0'; })() : '0.0.0.0'}`,
           `  BGP state = ${x.state}${x.state === 'Established' ? `, up for ${hms(x.up)}` : ''}`, '  Last read 00:00:12, last write 00:00:21, hold time is 180, keepalive interval is 60 seconds',
+          ...(nc.rrClient ? ['  Route-Reflector Client'] : []), ...(nc.nhSelf ? ['  NEXT_HOP is always this router for eBGP paths'] : []), ...(nc.sendComm ? ['  Community attribute sent to this neighbor'] : []),
+          ...(us ? [`  Interface associated: ${longIf(us.label)}（update-source：TCP 179 從這個介面的位址送出）`] : []),
+          ...(!x.ibgp ? [`  External BGP neighbor ${nc.multihop ? `may be up to ${nc.multihop} hops away` : 'configured for connected checks (single-hop no-disable-connected-check)'}`] : []),
           ...(x.why ? [`  （${x.why}）`] : []), `  Prefixes received ${x.pfx}, advertised ${x.sent}`, ''].forEach((l) => print(l, l.startsWith('  （') ? 'hint' : 'pre'));
       }
       return true;

@@ -8,6 +8,7 @@ import { newIface, cloneState, CATALOG, makeDevice, defaultPortMode } from './mo
 import { cdpCfg, lldpCfg, portNd, setPortNd, speaksCdp, clearNeighbors, CDP_TIMER, CDP_HOLD, LLDP_TIMER, LLDP_HOLD } from './disc.js';
 import { parseDscp, dscpName, COS_DSCP_DEFAULT } from './qos.js';
 import { clearOspfProcess, clearOspfAll, ospfArea, ospfProc, ospfKeys, ospfProcs } from './ospf.js';
+import { parseComm } from './bgp.js';
 import { transfer, configFile, ensureFlash, flashFree, flashPath, fsName, IMAGES, PLATFORM, PLATFORM_NAME, imageFile, fmtBytes } from './files.js';
 import { macsBehind, recompute, ospfOn, ikeVer } from './sim.js';
 import { logEvent, markReboot, setClock, deviceTime, SEVERITY, bootTime, longIf, localUsers } from './ops.js';
@@ -850,6 +851,8 @@ export function iosSession(getDev, getState, who = null) {
     ['no duplex', () => setPhy('duplex', 'auto')],
   ];
   /** router bgp 底下的 neighbor 指令：鄰居要先用 remote-as 建立 */
+  /** 這台自己的位址（設定的或執行中的） */
+  const ownIp = (ip) => dev().ifaces.some((i) => i.ip === ip || (i.rt && i.rt.ip != null && fmtIp(i.rt.ip) === ip));
   function nb(ip, fn) {
     const n = dev().bgp.neighbors.find((x) => x.ip === ip);
     if (!n) return err(`Specify remote-as or peer-group commands first（先下 neighbor ${ip} remote-as <AS>）`);
@@ -1159,6 +1162,7 @@ export function iosSession(getDev, getState, who = null) {
       const n = d.ifaces.filter((i) => i.vrf === v);
       for (const i of n) { delete i.vrf; Object.assign(i, { ip: '', mask: '' }); }
       d.routes = d.routes.filter((r) => r.vrf !== v);
+      if (d.ospfVrf && d.ospfVrf[v]) { delete d.ospfVrf[v]; if (!Object.keys(d.ospfVrf).length) delete d.ospfVrf; } // 那個 VRF 的 OSPF 程序也一起刪掉
       delete d.vrfs[v];
       if (!Object.keys(d.vrfs).length) delete d.vrfs;
       return n.length ? `% IPv4 addresses from all interfaces in VRF ${v} have been removed` : undefined;
@@ -1225,6 +1229,21 @@ export function iosSession(getDev, getState, who = null) {
       return undefined;
     }],
     ['no ip prefix-list <name> [...]', ([name]) => { const d = dev(); if (!(d.prefixLists || {})[name]) return err(`prefix-list ${name} 不存在`); delete d.prefixLists[name]; return undefined; }],
+    ['ip bgp-community new-format', () => { dev().commNewFormat = true; }],
+    ['no ip bgp-community new-format', () => { delete dev().commNewFormat; }],
+    ['ip community-list <...>', ([rest]) => {
+      // ip community-list <1-99> permit|deny <值…>，或 ip community-list standard <名稱> permit|deny <值…>
+      const t = rest.split(/\s+/);
+      let name = t.shift();
+      if (/^standard$/i.test(name)) name = t.shift();
+      else if (/^expanded$/i.test(name)) return err('這個模擬只支援 standard 的 community-list');
+      else if (!/^\d+$/.test(name) || +name < 1 || +name > 99) return err('用法：ip community-list <1-99> permit | deny <AA:NN …>，或 ip community-list standard <名稱> permit | deny <AA:NN …>');
+      const action = (t.shift() || '').toLowerCase();
+      if (!['permit', 'deny'].includes(action) || !t.length || t.some((x) => parseComm(x) == null)) return err('用法：ip community-list standard <名稱> permit | deny <AA:NN | no-export | internet …>');
+      ((dev().commLists ||= {})[name] ||= []).push({ action, values: t.map((x) => x.toLowerCase()) });
+      return undefined;
+    }],
+    ['no ip community-list <...>', ([rest]) => { const t = rest.split(/\s+/); const name = /^standard$/i.test(t[0]) ? t[1] : t[0]; const d = dev(); if (!(d.commLists || {})[name]) return err(`community-list ${name} 不存在`); delete d.commLists[name]; return undefined; }],
     ['ip as-path access-list <n> <action> <...>', ([n, action, re]) => {
       const a = ['permit', 'deny'].find((x) => x.startsWith(action.toLowerCase()));
       if (!/^\d+$/.test(n) || !a) return err('用法：ip as-path access-list <1-500> permit | deny <正規表示式>，例如 ^$');
@@ -2422,9 +2441,13 @@ export function iosSession(getDev, getState, who = null) {
       ['neighbor <ip> remote-as <asn>', ([ip, asn]) => {
         if (parseIp(ip) == null) return err('用法：neighbor <IP> remote-as <AS>');
         if (!(+asn >= 1)) return err('AS 號碼的範圍是 1 – 4294967295');
-        if (+asn === +dev().bgp.asn) return err('這個模擬只做 eBGP：鄰居的 AS 要和自己不一樣（同一個 AS 的 iBGP 沒有模擬）');
+        if (ownIp(ip)) return err(`% Cannot configure the local system as neighbor（${ip} 是這台自己的位址）`);
         const b = dev().bgp, cur = b.neighbors.find((n) => n.ip === ip);
-        if (cur) cur.remoteAs = +asn; else b.neighbors.push({ ip, remoteAs: +asn });
+        if (cur) {
+          // 從 iBGP 改成 eBGP（或反過來）：只有 iBGP 才能用的設定跟著拿掉
+          if ((+cur.remoteAs === +b.asn) !== (+asn === +b.asn)) delete cur.rrClient;
+          cur.remoteAs = +asn;
+        } else b.neighbors.push({ ip, remoteAs: +asn });
         return undefined;
       }],
       ['neighbor <ip> description <...>', ([ip, t]) => nb(ip, (n) => { n.desc = t; })],
@@ -2433,6 +2456,32 @@ export function iosSession(getDev, getState, who = null) {
       ['neighbor <ip> filter-list <num> <dir>', ([ip, num, dir]) => nb(ip, (n) => { n[dir.toLowerCase().startsWith('i') ? 'flIn' : 'flOut'] = num; })],
       ['neighbor <ip> weight <n>', ([ip, w]) => nb(ip, (n) => { n.weight = +w; })],
       ['neighbor <ip> default-originate', ([ip]) => nb(ip, (n) => { n.defOrig = true; })],
+      ['neighbor <ip> update-source <...>', ([ip, t]) => { const i = ifByName(t); if (isErr(i)) return i; return nb(ip, (n) => { n.updSrc = i.id; }); }],
+      ['no neighbor <ip> update-source [...]', ([ip]) => nb(ip, (n) => { delete n.updSrc; })],
+      ['neighbor <ip> next-hop-self [...]', ([ip]) => nb(ip, (n) => { n.nhSelf = true; })],
+      ['no neighbor <ip> next-hop-self [...]', ([ip]) => nb(ip, (n) => { delete n.nhSelf; })],
+      ['neighbor <ip> route-reflector-client', ([ip]) => {
+        const n = dev().bgp.neighbors.find((x) => x.ip === ip);
+        if (n && +n.remoteAs !== +dev().bgp.asn) return err(`% Invalid command for an EBGP peer（route-reflector-client 只能設在 iBGP 鄰居上：${ip} 是 AS ${n.remoteAs}）`);
+        return nb(ip, (x) => { x.rrClient = true; });
+      }],
+      ['no neighbor <ip> route-reflector-client', ([ip]) => nb(ip, (n) => { delete n.rrClient; })],
+      ['neighbor <ip> ebgp-multihop [...]', ([ip, ttl]) => {
+        const v = ttl ? +ttl : 255;
+        if (!(v >= 1 && v <= 255) || (ttl && !/^\d+$/.test(ttl))) return err('用法：neighbor <IP> ebgp-multihop [1-255]');
+        const n = dev().bgp.neighbors.find((x) => x.ip === ip);
+        if (n && +n.remoteAs === +dev().bgp.asn) return '（ebgp-multihop 只對 eBGP 鄰居有作用：iBGP 本來就可以隔好幾台路由器）';
+        return nb(ip, (x) => { x.multihop = v; });
+      }],
+      ['no neighbor <ip> ebgp-multihop [...]', ([ip]) => nb(ip, (n) => { delete n.multihop; })],
+      ['neighbor <ip> disable-connected-check', ([ip]) => nb(ip, (n) => { n.dcc = true; })],
+      ['no neighbor <ip> disable-connected-check', ([ip]) => nb(ip, (n) => { delete n.dcc; })],
+      ['neighbor <ip> send-community [...]', ([ip, k]) => nb(ip, (n) => { n.sendComm = /^(both|extended)$/i.test(k || '') ? k.toLowerCase() : 'standard'; })],
+      ['no neighbor <ip> send-community [...]', ([ip]) => nb(ip, (n) => { delete n.sendComm; })],
+      ['no neighbor <ip> weight [...]', ([ip]) => nb(ip, (n) => { delete n.weight; })],
+      ['no neighbor <ip> default-originate', ([ip]) => nb(ip, (n) => { delete n.defOrig; })],
+      ['bgp redistribute-internal', () => { dev().bgp.redistInternal = true; }],
+      ['no bgp redistribute-internal', () => { delete dev().bgp.redistInternal; }],
       ['neighbor <ip> shutdown', ([ip]) => nb(ip, (n) => { n.shut = true; })],
       ['no neighbor <ip> shutdown', ([ip]) => nb(ip, (n) => { delete n.shut; })],
       ['no neighbor <ip> route-map <name> <dir>', ([ip, , dir]) => nb(ip, (n) => { delete n[dir.toLowerCase().startsWith('i') ? 'rmIn' : 'rmOut']; })],
@@ -2466,6 +2515,14 @@ export function iosSession(getDev, getState, who = null) {
       ['match as-path <n>', ([n]) => rm((e) => { e.match.fl = n; })],
       ['match ip address <name>', ([name]) => rm((e) => { e.match.acl = /^\d+$/.test(name) ? name : name.toUpperCase(); })],
       ['match tag <n>', ([n]) => (/^\d+$/.test(n) ? rm((e) => { e.match.tag = +n; }) : err('用法：match tag <數字>'))],
+      ['match community <name> [...]', ([name]) => rm((e) => { e.match.cl = name; })],
+      ['set community <...>', ([list]) => {
+        const t = list.split(/\s+/), add = t.includes('additive'), v = t.filter((x) => x !== 'additive');
+        if (v.length === 1 && v[0] === 'none') return rm((e) => { e.set.comm = []; delete e.set.commAdd; });
+        if (!v.length || v.some((x) => parseComm(x) == null)) return err('用法：set community <AA:NN | no-export | no-advertise | local-AS …> [additive]');
+        return rm((e) => { e.set.comm = v.map((x) => x.toLowerCase()); if (add) e.set.commAdd = true; else delete e.set.commAdd; });
+      }],
+      ['no set community [...]', () => rm((e) => { delete e.set.comm; delete e.set.commAdd; })],
       ['no match ip address [...]', () => rm((e) => { delete e.match.acl; delete e.match.pl; })],
       ['no match [...]', () => rm((e) => { e.match = {}; })],
       ['set local-preference <n>', ([n]) => (+n >= 0 ? rm((e) => { e.set.lp = +n; }) : err('local-preference 是 0 – 4294967295'))],
@@ -3374,14 +3431,22 @@ export function runningConfig(state, dev) {
   if (dev.bgp && dev.bgp.asn) {
     const b = dev.bgp;
     o.push(`router bgp ${b.asn}`, ...(b.rid ? [` bgp router-id ${b.rid}`] : []), ' bgp log-neighbor-changes');
+    if (b.redistInternal) o.push(' bgp redistribute-internal');
     for (const n of b.neighbors) {
+      const us = n.updSrc && dev.ifaces.find((x) => x.id === n.updSrc);
       o.push(` neighbor ${n.ip} remote-as ${n.remoteAs}`);
       if (n.desc) o.push(` neighbor ${n.ip} description ${n.desc}`);
+      if (n.multihop) o.push(` neighbor ${n.ip} ebgp-multihop ${n.multihop}`);
+      if (n.dcc) o.push(` neighbor ${n.ip} disable-connected-check`);
+      if (us) o.push(` neighbor ${n.ip} update-source ${longIf(us.label)}`);
       if (n.shut) o.push(` neighbor ${n.ip} shutdown`);
     }
     for (const x of b.networks) o.push(` network ${fmtIp(x.net)} mask ${fmtMask(x.bits)}`);
     for (const r of b.redist || []) o.push(redistLine(r, 'bgp'));
     for (const n of b.neighbors) {
+      if (n.rrClient) o.push(` neighbor ${n.ip} route-reflector-client`);
+      if (n.nhSelf) o.push(` neighbor ${n.ip} next-hop-self`);
+      if (n.sendComm) o.push(` neighbor ${n.ip} send-community${n.sendComm !== 'standard' ? ' ' + n.sendComm : ''}`);
       if (n.defOrig) o.push(` neighbor ${n.ip} default-originate`);
       if (n.weight != null) o.push(` neighbor ${n.ip} weight ${n.weight}`);
       if (n.plIn) o.push(` neighbor ${n.ip} prefix-list ${n.plIn} in`);
@@ -3463,6 +3528,8 @@ export function runningConfig(state, dev) {
     // 序號照預設（10、20、30…）的不用寫出來；插進中間的（例如 15）要寫，貼回去順序才會一樣
     list.slice().sort((a, b) => a.seq - b.seq).forEach((r, k) => o.push(` ${r.seq !== (k + 1) * 10 ? 'sequence ' + r.seq + ' ' : ''}${acl6Text(r)}`));
   }
+  if (dev.commNewFormat) o.push('ip bgp-community new-format');
+  for (const [n, list] of Object.entries(dev.commLists || {})) for (const e of list) o.push(`ip community-list ${/^\d+$/.test(n) ? n : 'standard ' + n} ${e.action} ${e.values.join(' ')}`);
   for (const [n, list] of Object.entries(dev.asPathAcl || {})) for (const e of list) o.push(`ip as-path access-list ${n} ${e.action} ${e.re}`);
   for (const [name, list] of Object.entries(dev.prefixLists || {})) for (const e of list.slice().sort((a, b) => a.seq - b.seq)) o.push(`ip prefix-list ${name} seq ${e.seq} ${e.action} ${fmtIp(e.net)}/${e.bits}${e.ge ? ' ge ' + e.ge : ''}${e.le ? ' le ' + e.le : ''}`);
   for (const [name, list] of Object.entries(dev.routeMaps || {})) {
@@ -3472,12 +3539,14 @@ export function runningConfig(state, dev) {
       if (e.match.fl) o.push(` match as-path ${e.match.fl}`);
       if (e.match.acl) o.push(` match ip address ${e.match.acl}`);
       if (e.match.tag != null) o.push(` match tag ${e.match.tag}`);
+      if (e.match.cl) o.push(` match community ${e.match.cl}`);
       if (e.set.lp != null) o.push(` set local-preference ${e.set.lp}`);
       if (e.set.weight != null) o.push(` set weight ${e.set.weight}`);
       if (e.set.med != null) o.push(` set metric ${e.set.med}`);
       if (e.set.prepend) o.push(` set as-path prepend ${e.set.prepend.join(' ')}`);
       if (e.set.metricType) o.push(` set metric-type type-${e.set.metricType}`);
       if (e.set.tag != null) o.push(` set tag ${e.set.tag}`);
+      if (e.set.comm) o.push(` set community ${e.set.comm.length ? e.set.comm.join(' ') : 'none'}${e.set.commAdd ? ' additive' : ''}`);
       if ((e.set.nh || []).length) o.push(` set ip next-hop ${e.set.nh.join(' ')}`);
       if ((e.set.defNh || []).length) o.push(` set ip default next-hop ${e.set.defNh.join(' ')}`);
     }
