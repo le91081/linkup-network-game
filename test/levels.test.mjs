@@ -3537,6 +3537,21 @@ console.log('\n5 GHz 的頻道寬度與 DFS');
   ok(!C.rt.dfs && lv.objectives.every((o) => o.test(s) === true), '之後雷達再掃過來也沒影響（不在 DFS 頻道上）');
 }
 
+console.log('\n6 GHz (Wi-Fi 6E)');
+{
+  const ok = (cond, title) => (cond ? console.log('  ✔ ' + title) : fail(title));
+  const lv = LEVELS.find((x) => x.id === 'l105');
+  const s = lv.setup(); settle(s);
+  const a = (id) => s.devices[id].ifaces.map((i) => i.rt.assoc).find(Boolean);
+  ok(a('nbNew').band === '5GHz' && a('prn') && a('nbOld').band === '5GHz', 'WPA2 的 SSID：6E 的新筆電也只能連 5 GHz');
+  s.devices.ap.wifi.ssids[0].sec = 'wpa3'; settle(s);
+  ok(a('nbNew').band === '6GHz' && a('nbNew').rate === 1441 && a('nbNew').width === 160 && !a('prn') && /不支援 WPA3/.test(s.devices.prn.ifaces.find((i) => i.bind.t === 'wlan').rt.note), '純 WPA3：新筆電上 6 GHz（160 MHz、1441 Mbps），只支援 WPA2 的印表機連不上');
+  s.devices.ap.wifi.ssids[0].sec = 'wpa2wpa3'; settle(s);
+  ok(a('nbNew').band === '6GHz' && a('prn').band === '5GHz' && a('nbOld').band === '5GHz' && lv.objectives.filter((o) => o.type === 'check').every((o) => o.test(s) === true), 'WPA2 / WPA3 混合：6E 的筆電走 6 GHz，舊筆電與印表機留在 5 GHz');
+  s.devices.nbNew.pos = [-6, 1]; settle(s);
+  ok(a('nbNew') && a('nbNew').band === '5GHz', '6 GHz 傳得比較近：離 AP 6 公尺，5 GHz 還收得到、6 GHz 就退回 5 GHz');
+}
+
 console.log('\nNetFlow 與 QoS 的 police');
 {
   const sim = await import('../src/engine/sim.js');

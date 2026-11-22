@@ -32,6 +32,15 @@ export function blockOf(ch, w) {
 const fitWidth = (ch, w) => (blockOf(ch, w).length * 20);
 /** 5 GHz 的速率（2x2，依訊號分三級），單位 Mbps */
 const RATE5 = { 20: [173, 117, 58], 40: [400, 270, 135], 80: [866, 585, 292], 160: [1733, 1170, 585] };
+// ── 6 GHz (Wi-Fi 6E) ──
+// 只有三頻的基地台與支援 6E 的用戶端才用得到；傳得比 5 GHz 更近；規定一定要 WPA3（或 OWE），WPA2 的 SSID 不會在 6 GHz 廣播。
+// 頻道用 PSC（每 80 MHz 一個主頻道），這裡固定 160 MHz 寬
+export const CH6 = [5, 21, 37, 53, 69, 85, 101, 117, 133, 149, 165, 181, 197, 213, 229];
+const RATE6 = [2402, 1441, 720];
+const block6 = (ch) => Math.floor((ch - 1) / 32);
+/** 這個 SSID 會不會在 6 GHz 廣播：WPA3 或混合模式（6 GHz 那一邊只用 WPA3） */
+export const on6 = (s) => s.sec === 'wpa3' || s.sec === 'wpa2wpa3';
+export const has6 = (ap) => !!(CATALOG[ap.model] || {}).band6;
 
 // ── 牆面衰減 ──
 // state.walls = [{ id, a: [x, y], b: [x, y], mat }]。每穿過一道牆就少掉一些訊號，5 GHz 穿牆比 2.4 GHz 差
@@ -65,7 +74,8 @@ export function rfAt(state, ap, pos) {
   const w = wallsBetween(state, ap.pos, pos);
   const r24 = Math.round(base - w.db24), r5 = Math.round(base - w.db5);
   const band = r5 >= -68 ? '5GHz' : r24 >= -78 ? '2.4GHz' : null;
-  return { dist, rssi24: r24, rssi5: r5, band, rssi: band === '5GHz' ? r5 : r24, walls: w.walls, db: band === '5GHz' ? w.db5 : w.db24 };
+  const r6 = Math.round(base - 4 - w.db5 * 1.2);
+  return { dist, rssi24: r24, rssi5: r5, rssi6: r6, band, rssi: band === '5GHz' ? r5 : r24, walls: w.walls, db: band === '5GHz' ? w.db5 : w.db24 };
 }
 // ── 無線控制器 (WLC) 與輕量型 AP ──
 // 輕量型 AP (d.lwap = { mode: 'local' | 'flex', primary }) 自己沒有 SSID：拿到 IP 之後找 WLC（手動指定、DHCP option 43、
@@ -168,6 +178,7 @@ export function prepWifi(state) {
       if (Math.abs(chOf(a, '2.4GHz') - chOf(b, '2.4GHz')) < 5) bands.push('2.4GHz');
       const A5 = blockOf(chOf(a, '5GHz'), a.rt.width5), B5 = blockOf(chOf(b, '5GHz'), b.rt.width5);
       if (A5.some((c) => B5.includes(c))) bands.push('5GHz');
+      if (has6(a) && has6(b) && block6(+a.wifi.ch6 || 37) === block6(+b.wifi.ch6 || 37)) bands.push('6GHz');
       for (const band of bands) { a.rt.interf.push({ dev: b.id, band }); b.rt.interf.push({ dev: a.id, band }); }
     }
   }
@@ -194,11 +205,14 @@ export function prepWifi(state) {
             if ((s.pass || '').length < 8) { why = `「${s.name}」的密碼少於 8 個字元，基地台無法啟用加密`; return; }
             if ((w.pass || '') !== s.pass) { why = `無線網路「${s.name}」的密碼錯誤`; return; }
           }
+          // 6 GHz：基地台與用戶端都支援、SSID 用 WPA3（用戶端也要會 WPA3）、訊號 -65 dBm 以上就優先用
+          const six = has6(ap) && (CATALOG[d.model] || {}).band6 && on6(s) && caps.includes('wpa3') && rf.rssi6 >= -65;
+          const band = six ? '6GHz' : rf.band, rssi = six ? rf.rssi6 : rf.rssi;
           const cw = ap.rt.capwap, central = !!(cw && cw.joined && cw.mode === 'local');
-          const c = { ap: ap.id, idx, dist, key: +s.vlan > 0 ? +s.vlan : central ? 1 : 'u', isolate: !!s.isolate, sec: s.sec || 'open', rssi: rf.rssi, band: rf.band, walls: rf.walls.map((x) => x.mat), wallDb: rf.db, kv: !!s.kv, ft: !!s.ft, ssid: s.name };
+          const c = { ap: ap.id, idx, dist, key: +s.vlan > 0 ? +s.vlan : central ? 1 : 'u', isolate: !!s.isolate, sec: s.sec || 'open', rssi, band, walls: rf.walls.map((x) => x.mat), wallDb: rf.db, kv: !!s.kv, ft: !!s.ft, ssid: s.name };
           if (central) Object.assign(c, { via: cw.wlc, capwap: cw.path });
           cands.push(c);
-          if (!best || rf.rssi > best.rssi) best = c;
+          if (!best || rssi > best.rssi) best = c;
         });
       }
       if (!best) { i.rt.note = why; delete assocMem[d.id + '/' + i.id]; continue; }
@@ -216,10 +230,12 @@ export function prepWifi(state) {
 
       const noisy = apd.rt.interf.some((x) => x.band === best.band);
       const R5 = RATE5[apd.rt.width5 || 80] || RATE5[80];
-      best.rate = Math.round((best.band === '5GHz' ? (best.rssi > -52 ? R5[0] : best.rssi > -62 ? R5[1] : R5[2]) : best.rssi > -72 ? 144 : 72) * (noisy ? 0.5 : 1));
+      const tier = (R) => (best.rssi > -52 ? R[0] : best.rssi > -62 ? R[1] : R[2]);
+      best.rate = Math.round((best.band === '6GHz' ? tier(RATE6) : best.band === '5GHz' ? tier(R5) : best.rssi > -72 ? 144 : 72) * (noisy ? 0.5 : 1));
       best.noisy = noisy;
       best.ch = chOf(apd, best.band);
       if (best.band === '5GHz') best.width = apd.rt.width5 || 80;
+      if (best.band === '6GHz') { best.width = 160; best.ch = +apd.wifi.ch6 || 37; }
       i.rt.assoc = best;
       if (best.via) {
         // Local 模式：用戶端掛在 WLC 上（流量經 CAPWAP 回到 WLC 才放進 VLAN）。動畫照實際的隧道路徑走

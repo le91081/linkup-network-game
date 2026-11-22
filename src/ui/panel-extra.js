@@ -9,7 +9,7 @@ import {
 } from './form.js';
 import { fmtIp } from '../engine/ip.js';
 import { CATALOG, peerOf, portOf, newSsid, cableAt, linkInfo } from '../engine/model.js';
-import { visibleSsids, WIFI_SEC, macsBehind, isBridgePort, hitsOf, P1, accessOf, portfastOn, macRows, clearMac, macAgeOf, saInfo, fmtDur, isTrunk, dtpSpeaker, WALL_MATS, errdisRows, bouncePort, ERR_CAUSES, ERR_RECOVERY_DEFAULT, CH5, DFS, blockOf } from '../engine/sim.js';
+import { visibleSsids, WIFI_SEC, macsBehind, isBridgePort, hitsOf, P1, accessOf, portfastOn, macRows, clearMac, macAgeOf, saInfo, fmtDur, isTrunk, dtpSpeaker, WALL_MATS, errdisRows, bouncePort, ERR_CAUSES, ERR_RECOVERY_DEFAULT, CH5, DFS, blockOf, CH6, on6, has6 } from '../engine/sim.js';
 import { cdpCfg, lldpCfg, cdpOn, lldpTxOn, lldpRxOn, portNd, setPortNd, neighbors, speaksCdp, speaksLldp } from '../engine/disc.js';
 import { ntpInfo, deviceTime, plainStamp, logRows, clearLog, syslogStats, NTP_POLL } from '../engine/ops.js';
 import * as M from './panel-more.js';
@@ -192,7 +192,9 @@ export function radioCard(ctx) {
       field('2.4GHz 頻道', sel(ctx, ...bind(w, 'ch24', Number), Array.from({ length: 11 }, (_, n) => [n + 1, `頻道 ${n + 1}${[1, 6, 11].includes(n + 1) ? '（不重疊）' : ''}`]))),
       field('5GHz 頻道', sel(ctx, ...bind(w, 'ch5', Number), CH5.map((c) => [c, `頻道 ${c}${DFS.has(c) ? '（DFS）' : ''}`]))),
       field('5GHz 頻道寬度', sel(ctx, () => (w.width5 ? String(w.width5) : ''), (v) => { if (v) w.width5 = +v; else delete w.width5; }, [['', '自動（附近有人就縮窄）'], ['20', '20 MHz'], ['40', '40 MHz'], ['80', '80 MHz'], ['160', '160 MHz']])),
+      has6(ctx.dev) && field('6GHz 頻道（160 MHz）', sel(ctx, ...bind(w, 'ch6', Number), CH6.map((c) => [c, `頻道 ${c}`]))),
       field('發射功率', sel(ctx, ...bind(w, 'power'), [['low', '低（涵蓋範圍小）'], ['mid', '中'], ['high', '高（涵蓋範圍大）']]))),
+    has6(ctx.dev) && note('muted', '6 GHz（Wi-Fi 6E）規定要用 WPA3：加密方式是 WPA3 或 WPA2 / WPA3 混合的 SSID 才會在 6 GHz 廣播（混合模式在 6 GHz 那一邊只用 WPA3），只支援 6E 的用戶端才看得到。'),
     ctx.live(() => {
       const rt = ctx.dev.rt || {}, ch = (rt.dfs && rt.dfs.to) || +w.ch5 || 36, wd = rt.width5;
       const out = [];
@@ -232,6 +234,7 @@ export function ssidTab(ctx, body) {
       (!s.sec || s.sec === 'open') && note('warn', '開放網路沒有任何加密，任何人都能連線，也能側錄別人的流量。'),
       s.sec === 'wep' && note('warn', 'WEP 的加密早已被破解，幾分鐘內就能算出密碼，不應該再使用。'),
       s.sec === 'wpa3' && note('muted', '純 WPA3 最安全，但比較舊的設備可能不支援。'),
+      dev.kind === 'ap' && has6(dev) && !on6(s) && note('warn', '這個 SSID 不會在 6 GHz 廣播：6 GHz 規定要 WPA3。要讓支援 Wi-Fi 6E 的設備用 6 GHz，改成 WPA3 或 WPA2 / WPA3 混合。'),
       s.sec === 'wpa2ent' && note('muted', 'WPA2-Enterprise 沒有共用密碼，每個人用自己的帳號登入。請在下方設定 RADIUS 伺服器。'),
       +s.vlan > 0 && note('muted', `這個 SSID 的流量會貼上 VLAN ${s.vlan} 的標籤，交換器接 AP 的埠必須是 Trunk。`)));
   });

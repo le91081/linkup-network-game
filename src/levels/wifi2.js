@@ -82,4 +82,65 @@ export const LEVELS32 = [
     },
     recap: ['頻道越寬越快，但也越容易和別人重疊；AP 多的地方用 20 / 40 MHz，讓每台都有自己的一塊。', 'DFS 頻道遇到雷達就得換，機場、港口附近或要求穩定的會議室，選非 DFS 的頻道。'],
   },
+  {
+    id: 'l105', chapter: 5, title: '新筆電明明支援 Wi-Fi 6E', subtitle: '6 GHz 一定要 WPA3：混合模式讓舊設備也連得上', tags: ['Wi-Fi 6E', '6 GHz', 'WPA3', 'WPA2', '相容性'],
+    brief: '設計部換了支援 6 GHz 的三頻 AP，也買了支援 Wi-Fi 6E 的新筆電，要直接從 NAS 開大型的設計檔。可是新筆電一直連在 5 GHz，速度和舊筆電差不多。Studio 這個 SSID 用的是 WPA2，因為角落那台無線印表機只支援 WPA2。請讓新筆電用上 6 GHz，舊筆電和印表機也都要連得上。',
+    given: [
+      ['AP-設計部', 'Ubiquiti U6 Enterprise（2.4 / 5 / 6 GHz 三頻）· SSID Studio（WPA2-Personal）'], ['新筆電', 'Wi-Fi 6E（支援 6 GHz 與 WPA3）'],
+      ['舊筆電', 'Wi-Fi 6（支援 WPA3）'], ['無線印表機', '只支援 WPA2'],
+    ],
+    learn: [
+      { t: '6 GHz (Wi-Fi 6E)', d: '6 GHz 是新開放的頻段，頻寬多、沒有舊設備干擾，可以放心開 160 MHz。代價是傳得比 5 GHz 更近，而且只有支援 6E 的 AP 與用戶端用得到。' },
+      { t: '6 GHz 規定要 WPA3', d: 'Wi-Fi 聯盟規定 6 GHz 不能用 WPA2 或開放網路：一定要 WPA3（開放網路要用 OWE）。WPA2 的 SSID 在三頻 AP 上只會出現在 2.4 / 5 GHz，6E 的筆電當然只能連 5 GHz。' },
+      { t: 'WPA2 / WPA3 混合模式', d: '混合模式 (transition mode) 在 2.4 / 5 GHz 同時接受 WPA2 與 WPA3，舊設備照樣用 WPA2 連；在 6 GHz 那一邊只用 WPA3。這是設備還沒全部換新之前的折衷做法。' },
+    ],
+    setup() {
+      const s = makeState([
+        D('erx', 'rt', {
+          name: 'Router', pos: [-9, -6],
+          init(d) {
+            Object.assign(d.ifaces[1], { ip: '192.168.30.1', mask: '255.255.255.0' });
+            Object.assign(d.ifaces[1].dhcp, { on: true, start: '192.168.30.100', end: '192.168.30.199', dns: '192.168.30.1' });
+          },
+        }),
+        D('c2960p', 'sw', { name: 'PoE Switch', pos: [0, -5] }),
+        D('nas', 'nas', { name: '設計檔 NAS', pos: [9, -6], ip: '192.168.30.10', gw: '192.168.30.1', services: [{ proto: 'tcp', port: 445, name: 'SMB' }] }),
+        D('ap6e', 'ap', { name: 'AP-設計部', pos: [0, 1], init(d) { d.wifi.ssids = [newSsid({ name: 'Studio', sec: 'wpa2', pass: 'Studio#2026' })]; } }),
+        D('laptop6e', 'nbNew', { name: '新筆電（6E）', pos: [-2.5, 3.5], wifi: { ssid: 'Studio', pass: 'Studio#2026' } }),
+        D('laptop', 'nbOld', { name: '舊筆電', pos: [3, 4], wifi: { ssid: 'Studio', pass: 'Studio#2026' } }),
+        D('wprinter', 'prn', { name: '無線印表機', pos: [6, 0.5], wifi: { ssid: 'Studio', pass: 'Studio#2026' } }),
+      ], [['rt:eth1', 'sw:Gi0/9'], ['nas:eth0', 'sw:Gi0/10'], ['ap:eth0', 'sw:Gi0/1']]);
+      return s;
+    },
+    objectives: [
+      {
+        type: 'check', label: '新筆電連在 6 GHz，連線速率至少 1000 Mbps',
+        test(s) {
+          const a = dev(s, 'nbNew').ifaces.map((i) => i.rt.assoc).find(Boolean);
+          if (!a) return '新筆電沒有連上 Wi-Fi';
+          if (a.band !== '6GHz') return `新筆電連在 ${a.band}：Studio 用 ${a.sec === 'wpa2' ? 'WPA2，6 GHz 不會廣播它' : a.sec}`;
+          return a.rate >= 1000 ? true : `新筆電在 6 GHz 只有 ${a.rate} Mbps`;
+        },
+      },
+      ...[['nbOld', '舊筆電'], ['prn', '無線印表機（只支援 WPA2）']].map(([id, who]) => ({
+        type: 'check', label: `${who}也連得上`,
+        test(s) {
+          const i = dev(s, id).ifaces.find((x) => x.bind.t === 'wlan');
+          return (i && i.rt.assoc) ? true : `${dev(s, id).name} 連不上：${(i && i.rt.note) || '沒有無線網路卡'}`;
+        },
+      })),
+      { type: 'tcp', from: 'nbNew', to: 'nas', port: 445, label: '新筆電打得開 NAS 上的設計檔' },
+      {
+        type: 'check', label: 'Studio 仍然有加密（不能改成開放網路）',
+        test: (s) => { const x = dev(s, 'ap').wifi.ssids.find((y) => y.name === 'Studio'); return !x ? '找不到 Studio 這個 SSID' : x.sec && x.sec !== 'open' ? true : 'Studio 變成開放網路了'; },
+      },
+    ],
+    hints: [
+      'AP-設計部的「無線網路」：Studio 用 WPA2，卡片上寫著它不會在 6 GHz 廣播。6 GHz 規定一定要 WPA3。',
+      '改成純 WPA3 的話，新筆電會上 6 GHz，可是只支援 WPA2 的印表機就連不上了。',
+      '加密方式選「WPA2 / WPA3 混合」：2.4 / 5 GHz 同時接受 WPA2 與 WPA3（印表機照樣連），6 GHz 那一邊用 WPA3。',
+    ],
+    solve(s) { dev(s, 'ap').wifi.ssids[0].sec = 'wpa2wpa3'; },
+    recap: ['6 GHz 只接受 WPA3；WPA2 的 SSID 不會出現在 6 GHz。', '設備還沒全部支援 WPA3 之前，用 WPA2 / WPA3 混合模式：舊設備走 WPA2，6E 的設備在 6 GHz 走 WPA3。'],
+  },
 ];

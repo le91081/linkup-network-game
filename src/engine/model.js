@@ -52,6 +52,10 @@ export const CATALOG = {
     kind: 'host', shape: 'laptop', vendor: 'Lenovo', title: 'Lenovo ThinkPad T14',
     tagline: '筆記型電腦 · 1GbE + Wi-Fi 6', ports: [rj('eth0', '乙太網路')], wlan: true,
   },
+  laptop6e: {
+    kind: 'host', shape: 'laptop', vendor: 'Lenovo', title: 'Lenovo ThinkPad T14 Gen 5',
+    tagline: '筆記型電腦 · 1GbE + Wi-Fi 6E（支援 6 GHz）', ports: [rj('eth0', '乙太網路')], wlan: true, band6: true,
+  },
   phone: {
     kind: 'host', shape: 'phone', vendor: 'Apple', title: 'Apple iPhone 15',
     tagline: '智慧型手機 · Wi-Fi 6', ports: [], wlan: true,
@@ -120,6 +124,10 @@ export const CATALOG = {
   ap: {
     kind: 'ap', shape: 'ap', vendor: 'Ubiquiti', title: 'Ubiquiti UniFi U6 Lite',
     tagline: 'Wi-Fi 6 無線基地台 · 需要 PoE 供電 (802.3af)', ports: [rj('eth0', 'LAN / PoE')], needsPoe: true, poe: { cls: 0, watts: 12 },
+  },
+  ap6e: {
+    kind: 'ap', shape: 'ap', vendor: 'Ubiquiti', title: 'Ubiquiti UniFi U6 Enterprise',
+    tagline: 'Wi-Fi 6E 三頻基地台（2.4 / 5 / 6 GHz）· 需要 PoE+ 供電 (802.3at)', ports: [rj('eth0', 'LAN / PoE')], needsPoe: true, poe: { cls: 4, watts: 22 }, band6: true,
   },
   erx: {
     kind: 'router', shape: 'router-s', vendor: 'Ubiquiti', title: 'Ubiquiti EdgeRouter X',
@@ -241,6 +249,7 @@ export function makeDevice(model, id, o = {}) {
     case 'ap':
       d.sw = { mode: 'plain', ports: Object.fromEntries(d.ports.map((p) => [p.id, {}])) };
       d.wifi = newWifi();
+      if (m.band6) d.wifi.ch6 = 37; // 6 GHz 的 PSC 頻道
       d.ifaces = [iface('mgmt', '管理介面', { t: 'bridge' }, { mode: 'dhcp' })];
       d.radius = { ip: '', secret: '' };
       if (m.lwap) d.lwap = { mode: 'local', primary: '' };

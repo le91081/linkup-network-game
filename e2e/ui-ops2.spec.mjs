@@ -124,3 +124,16 @@ test('頻道寬度與 DFS：無線電卡片列出 DFS 頻道、實際寬度，�
   await expect(card).toContainText('實際使用 40 MHz（頻道 36、40）');
   expect(await scan(page, '#panel', '無線電卡片')).toEqual([]);
 });
+
+test('Wi-Fi 6E：WPA2 的 SSID 不在 6 GHz 廣播，改成混合模式後新筆電連上 6 GHz、印表機照樣連', async ({ page }) => {
+  await boot(page);
+  await open(page, 'l105');
+  await clickDevice(page, 'ap');
+  const card = page.locator('#panel .card', { hasText: 'SSID 1' });
+  await expect(card).toContainText('這個 SSID 不會在 6 GHz 廣播');
+  await card.locator('select').first().selectOption('wpa2wpa3');
+  await expect(page.locator('#panel .card', { hasText: 'SSID 1' })).not.toContainText('不會在 6 GHz 廣播');
+  await page.evaluate(() => window.linkup.settleNow());
+  expect(await page.evaluate(() => ['nbNew', 'prn'].map((id) => (window.linkup.state.devices[id].ifaces.map((i) => i.rt.assoc).find(Boolean) || {}).band))).toEqual(['6GHz', '5GHz']);
+  expect(await scan(page, '#panel', 'SSID 卡片（6 GHz）')).toEqual([]);
+});
