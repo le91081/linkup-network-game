@@ -4208,6 +4208,40 @@ console.log('\nIOS 的 Zone-Based Firewall');
   ok(/Class-map IN-OUT-CM is being used/.test((() => { const S = iosSession(() => s2.devices.r1, () => s2); const o = []; for (const l of ['configure terminal', 'no class-map type inspect IN-OUT-CM', 'end']) o.push(...S.exec(l).out); return o.join('\n'); })()), '還在 policy-map 裡的 class-map 不能刪');
 }
 
+console.log('\nFortiGate 的網頁過濾與 SSL 檢查');
+{
+  const { fortiSession, fortiConfig } = await import('../src/engine/fortios.js');
+  const sim = await import('../src/engine/sim.js');
+  const ok = (cond, title) => (cond ? console.log('  ✔ ' + title) : fail(title));
+  const lv = LEVELS.find((x) => x.id === 'l124');
+  const s = lv.setup(); settle(s);
+  const F = () => fortiSession(() => s.devices.fg, () => s);
+  const cli = (lines) => { const S = F(); const o = []; for (const l of lines) o.push(...S.exec(l).out); settle(s); return o.join('\n'); };
+  const run = (n) => sim.runObjective(s, lv.objectives[n]);
+  ok([2, 3, 4].every((n) => !run(n).pass) && run(0).pass, '一開始博弈與惡意網站都開得了');
+  ok(/要先 set utm-status enable/.test(cli(['config firewall policy', 'edit 1', 'set webfilter-profile "corp-wf"', 'next', 'abort', 'end'])), 'utm-status 沒開：不能指定 webfilter-profile');
+  ok(/沒有網頁過濾設定檔「corp-wf」/.test(cli(['config firewall policy', 'edit 1', 'set utm-status enable', 'set webfilter-profile "corp-wf"', 'next', 'abort', 'end'])), '設定檔不存在');
+  ok(/value parse error before '999'/.test(cli(['config webfilter profile', 'edit "corp-wf"', 'config ftgd-wf', 'config filters', 'edit 1', 'set category 999', 'set action block', 'next', 'end', 'end', 'next', 'end'])), '不認得的類別編號');
+  cli(['config webfilter profile', 'edit "corp-wf"', 'config ftgd-wf', 'config filters', 'edit 1', 'set category 11', 'set action block', 'next', 'edit 2', 'set category 26', 'set action block', 'next', 'end', 'end', 'next', 'end']);
+  ok(s.devices.fg.wf['corp-wf'].block.join() === '11,26', 'config webfilter profile：封鎖 11 與 26');
+  cli(['config firewall policy', 'edit 1', 'set utm-status enable', 'set webfilter-profile "corp-wf"', 'next', 'end']);
+  const h = run(2), x = run(3);
+  ok(h.pass && /Gambling/.test(h.reason) && !x.pass && x.log.some((l) => /no-inspection：HTTPS 是加密的/.test(l.text)), 'no-inspection：HTTP 被擋，HTTPS 看不到網址照樣通');
+  cli(['config firewall policy', 'edit 1', 'set ssl-ssh-profile "deep-inspection"', 'next', 'end']);
+  const d0 = run(0);
+  ok(!d0.pass && /Fortinet_CA_SSL/.test(d0.reason) && run(3).pass, 'deep-inspection：博弈網站擋下了，但一般網站跳憑證錯誤（電腦沒有信任 Fortinet_CA_SSL）');
+  s.devices.pc1.trust = ['Fortinet_CA_SSL']; settle(s);
+  ok(run(0).pass, '電腦安裝 Fortinet_CA_SSL 之後，deep-inspection 的憑證就被信任');
+  delete s.devices.pc1.trust;
+  cli(['config firewall policy', 'edit 1', 'set ssl-ssh-profile "certificate-inspection"', 'next', 'end']);
+  ok(lv.objectives.every((o) => sim.runObjective(s, o).pass), 'certificate-inspection：HTTPS 依 SNI 封鎖、不用解密，五個目標都通過');
+  const t = fortiConfig(s, s.devices.fg).join('\n');
+  ok(/config webfilter profile\n    edit "corp-wf"\n        config ftgd-wf\n            config filters\n                edit 1\n                    set category 11\n                    set action block\n                next/.test(t) && t.indexOf('config webfilter profile') < t.indexOf('config firewall policy')
+    && /set utm-status enable\n\s+set ssl-ssh-profile "certificate-inspection"\n\s+set webfilter-profile "corp-wf"/.test(t), 'show：config webfilter profile 印在政策前面，政策有 utm-status / ssl-ssh-profile / webfilter-profile');
+  cli(['config firewall policy', 'edit 1', 'unset utm-status', 'next', 'end']);
+  ok(!s.devices.fg.policies[0].utm && !s.devices.fg.policies[0].wf && !run(2).pass, 'unset utm-status：安全設定檔不再作用');
+}
+
 console.log('\nNetFlow 與 QoS 的 police');
 {
   const sim = await import('../src/engine/sim.js');

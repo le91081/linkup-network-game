@@ -97,7 +97,7 @@ import { portalGate } from '../portal.js';
 function transactInner(state, fromId, spec) {
   const ctx = { ct: {}, log: [], hops: [], l3: [], cid: spec.keep || null, vrf: spec.vrf || '', vrfDev: fromId };
   const src = state.devices[fromId];
-  const done = (r) => ({ ...r, log: ctx.log, hops: ctx.hops, l3: ctx.l3 });
+  const done = (r) => ({ ...r, log: ctx.log, hops: ctx.hops, l3: ctx.l3, ...(ctx.deep ? { deep: ctx.deep } : {}), ...(ctx.wfBlock ? { wfBlock: ctx.wfBlock } : {}) });
   let srcIp = spec.srcIp;
   if (srcIp == null) {
     if (isLocal(src, spec.dst, spec.vrf || '')) {
@@ -120,7 +120,7 @@ function transactInner(state, fromId, spec) {
   }
   const id = 1000 + (pktSeq++ % 20000);
   const icmp = spec.proto === 'icmp';
-  const pkt = { proto: spec.proto, src: srcIp, dst: spec.dst, sport: icmp ? id : spec.sport ?? 30000 + id, dport: icmp ? 0 : spec.dport, ttl: spec.ttl || 64, reply: false, data: spec.data || null, ...(spec.size ? { len: +spec.size } : {}), ...(spec.df ? { df: true } : {}) };
+  const pkt = { proto: spec.proto, src: srcIp, dst: spec.dst, sport: icmp ? id : spec.sport ?? 30000 + id, dport: icmp ? 0 : spec.dport, ttl: spec.ttl || 64, reply: false, data: spec.data || null, ...(spec.size ? { len: +spec.size } : {}), ...(spec.df ? { df: true } : {}), ...(spec.host ? { host: spec.host } : {}) };
   ctx.log.push({ dev: fromId, kind: 'tx', text: `送出 ${pktDesc(pkt)}` });
   const a = forward(state, ctx, fromId, pkt);
   if (!a.ok && a.local) return done({ ok: false, reason: a.reason, failDev: fromId, phase: 'request', dfLocal: a.mtu });

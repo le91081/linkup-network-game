@@ -11,6 +11,7 @@ import { ZONE, sdwanOn, diagHealth, diagService, sdwanConfigLines, applySdwanCli
 import { recompute } from './sim.js';
 import { transfer, configFile, IMAGES, PLATFORM, PLATFORM_NAME, ensureFlash } from './files.js';
 import { newHa, haOn, haStatusLines } from './ha.js';
+import { SSL_PROFILES, wfConfigLines, applyWfCli } from './utm.js';
 
 // HA 的密碼在設定裡顯示成 ENC <十六進位>（貼回來也認得），也可以直接打明文
 const encPass = (p) => Array.from(new TextEncoder().encode(p)).map((b) => b.toString(16).padStart(2, '0')).join('');
@@ -702,7 +703,7 @@ const SEC = {
     remove(d) { d.vpnServer.subnets = ''; },
   },
   'firewall policy': {
-    numeric: true, fields: { name: 'q', srcintf: 'q', dstintf: 'q', srcaddr: 'q', dstaddr: 'q', srcaddr6: 'q', dstaddr6: 'q', action: 'b', schedule: 'q', service: 'q', nat: 'b', status: 'b', logtraffic: 'b', comments: 'q', groups: 'q' },
+    numeric: true, fields: { name: 'q', srcintf: 'q', dstintf: 'q', srcaddr: 'q', dstaddr: 'q', srcaddr6: 'q', dstaddr6: 'q', action: 'b', schedule: 'q', service: 'q', 'utm-status': 'b', 'ssl-ssh-profile': 'q', 'webfilter-profile': 'q', nat: 'b', status: 'b', logtraffic: 'b', comments: 'q', groups: 'q' },
     read(d) {
       ensureIds(d);
       return d.policies.map((p) => ({
@@ -713,6 +714,7 @@ const SEC = {
           ...(String(p.src || '').trim() ? { srcaddr: specNames(d, p.src, false), dstaddr: specNames(d, p.dst, true) } : {}),
           ...(p.src6 ? { srcaddr6: list(p.src6), dstaddr6: list(p.dst6 || 'all') } : {}),
           action: [p.action === 'accept' ? 'accept' : 'deny'], schedule: ['always'], service: list(p.service || 'ALL'),
+          ...(p.utm ? { 'utm-status': ['enable'], 'ssl-ssh-profile': [p.ssl || 'no-inspection'], ...(p.wf ? { 'webfilter-profile': [p.wf] } : {}) } : {}),
           ...(p.action === 'accept' && p.nat ? { nat: ['enable'] } : {}), ...(p.off ? { status: ['disable'] } : {}),
         },
       }));
@@ -733,9 +735,19 @@ const SEC = {
       if (bad) return notFound(`沒有 ${bad} 這個服務；可用的服務：${SERVICE_NAMES.join('、')}`);
       const action = (f.action || ['deny'])[0].toLowerCase();
       if (!['accept', 'deny'].includes(action)) return ERR('action 必須是 accept 或 deny');
+      // 安全設定檔：utm-status enable 之後才能指定（SSL 檢查預設 no-inspection）
+      const utm = (f['utm-status'] || [])[0] === 'enable';
+      // 原本就開著、這次 unset / disable：設定檔跟著拿掉；原本沒開卻直接指定設定檔：和 FortiOS 一樣不接受
+      const was = d.policies.find((p) => String(p.id) === key);
+      if (!utm && (has('webfilter-profile') || has('ssl-ssh-profile')) && !(was && was.utm)) return ERR('要先 set utm-status enable，才能設定 ssl-ssh-profile 與 webfilter-profile');
+      const ssl = (f['ssl-ssh-profile'] || ['no-inspection'])[0], wfp = (f['webfilter-profile'] || [])[0];
+      if (utm && !SSL_PROFILES.includes(ssl)) return notFound(`沒有 SSL 檢查設定檔「${ssl}」；內建的有：${SSL_PROFILES.join('、')}`);
+      if (utm && wfp && !(d.wf || {})[wfp]) return notFound(`沒有網頁過濾設定檔「${wfp}」：先用 config webfilter profile 建立`);
       const val = { name: (f.name || [''])[0], srcIf, dstIf, src, dst, src6: has('srcaddr6') ? f.srcaddr6.join(' ') : '', dst6: has('dstaddr6') ? f.dstaddr6.join(' ') : '', service: svc.includes('ALL') ? 'ALL' : svc.join(', '), action, nat: action === 'accept' && (f.nat || [])[0] === 'enable', off: (f.status || [])[0] === 'disable' };
+      Object.assign(val, utm ? { utm: true, ssl, wf: wfp || '' } : { utm: false, ssl: '', wf: '' });
       const cur = d.policies.find((p) => String(p.id) === key);
-      if (cur) Object.assign(cur, val); else d.policies.push({ id: +key, ...val });
+      const tidy = (p) => { for (const k of ['utm', 'ssl', 'wf']) if (!p[k]) delete p[k]; return p; };
+      if (cur) tidy(Object.assign(cur, val)); else d.policies.push(tidy({ id: +key, ...val }));
       return undefined;
     },
     remove(d, key) { ensureIds(d); const n = d.policies.length; d.policies = d.policies.filter((p) => String(p.id) !== key); return d.policies.length < n ? undefined : notFound(`沒有編號 ${key} 的政策`); },
@@ -827,7 +839,7 @@ export function fortiConfig(state, dev) {
     if (sec.only && !sec.only(dev)) continue;
     const entries = sec.read(dev, state);
     // 和 FortiOS 一樣，SD-WAN 印在防火牆政策前面（政策會用到 virtual-wan-link）
-    if (name === 'firewall policy') o.push(...sdwanConfigLines(dev));
+    if (name === 'firewall policy') o.push(...wfConfigLines(dev), ...sdwanConfigLines(dev));
     if (hasContent(entries)) o.push(...block(name, sec, entries));
   }
   return o;
@@ -1011,7 +1023,7 @@ export function fortiSession(getDev, getState) {
       if (w === 'config') rawT.depth++;
       if (w === 'end' && --rawT.depth === 0) {
         stack.pop();
-        const e = applySdwanCli(dev(), rawT.lines);
+        const e = rawT.label === 'webfilter' ? applyWfCli(dev(), rawT.lines) : applySdwanCli(dev(), rawT.lines);
         if (e) { out.push(e, 'Command fail. Return code -651'); return res(); }
         changed = true;
         return res();
@@ -1030,6 +1042,8 @@ export function fortiSession(getDev, getState) {
       if (!t) {
         // SD-WAN 的設定有好幾層（members、health-check 底下的 sla…）：整段收下來，最後的 end 再一次套用
         if (name === 'system sdwan' || name === 'system virtual-wan-link') { stack.push({ t: 'raw', label: 'sdwan', depth: 1, lines: [] }); return res(); }
+        // 網頁過濾設定檔也有兩層（ftgd-wf → filters）：同樣整段收下來
+        if (name === 'webfilter profile') { stack.push({ t: 'raw', label: 'webfilter', depth: 1, lines: [] }); return res(); }
         const sec = SEC[name];
         if (!sec || (sec.only && !sec.only(d))) return fail([...parseErr(tok[1] || ''), '（輸入 ? 可以看到有哪些設定區段）']);
         if (sec.single) stack.push({ t: 'edit', single: true, sec, label: label(name), name, key: '', ...clone({ f: {}, sub: {}, ...sec.read(d, st())[0] }) });

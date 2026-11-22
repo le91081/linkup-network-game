@@ -510,3 +510,30 @@ test('ZBF：ACL 分頁建立 zone、指派介面、zone-pair 放行 https 與 dn
   await typeCmd(page, 'ping 8.8.8.8');
   await expect(page.locator('#panel .term-out')).toContainText('class-default');
 });
+
+test('網頁過濾：安全設定檔分頁建立設定檔、政策啟用並選 certificate-inspection；curl 博弈網站看到封鎖頁面', async ({ page }) => {
+  await boot(page);
+  await open(page, 'l124');
+  await clickDevice(page, 'fg');
+  await page.locator('#panel .tab', { hasText: '安全設定檔' }).click();
+  const name = page.locator('#panel .card', { hasText: '新增網頁過濾設定檔' }).locator('input');
+  await name.fill('corp-wf'); await name.press('Enter');
+  for (const c of ['線上博弈（11）', '惡意網站（26）']) await page.locator('#panel .card.wf-prof label.switch', { hasText: c }).click();
+  await expect(page.locator('#panel .card.wf-prof')).toContainText('封鎖 2 個類別');
+  await page.locator('#panel .tab', { hasText: '政策' }).click();
+  const pol = page.locator('#panel .card.policy').first();
+  await pol.locator('label.switch', { hasText: '安全設定檔' }).click();
+  await page.locator('#panel .card.policy').first().locator('label.field', { hasText: '網頁過濾' }).locator('select').selectOption('corp-wf');
+  await expect(page.locator('#panel .card.policy').first().locator('.note.warn')).toContainText('no-inspection');
+  await page.locator('#panel .card.policy').first().locator('label.field', { hasText: 'SSL 檢查' }).locator('select').selectOption('certificate-inspection');
+  await expect(page.locator('#panel .card.policy').first().locator('.note.warn')).toHaveCount(0);
+  expect(await scan(page, '#panel', 'FortiGate 的政策（安全設定檔）')).toEqual([]);
+  await clickDevice(page, 'pc1');
+  await page.locator('#panel .tab', { hasText: '終端機' }).click();
+  await typeCmd(page, 'curl http://www.lucky-casino.example');
+  const out = page.locator('#panel .term-out');
+  await expect(out).toContainText('Web Page Blocked!');
+  await expect(out).toContainText('Gambling');
+  await typeCmd(page, 'curl https://www.example.com');
+  await expect(out).toContainText('HTTP/1.1 200 OK');
+});

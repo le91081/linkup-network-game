@@ -16,6 +16,7 @@ import { isApiCurl, curlApi, ansibleCmd, fileCmd, netconfCmd, terraformCmd, tfAn
 import { dockerCmd } from './term-docker.js';
 import { dockerDeliver } from '../engine/docker.js';
 import { tlsCheck, fmtDate, certSelf, CORP_CA, PUBLIC_CAS } from '../engine/web.js';
+import { FG_CATS } from '../engine/utm.js';
 import { ipMtu, jumboCapable } from '../engine/mtu.js';
 
 const V6SRC = { slaac: '（SLAAC）', dhcp6: '（DHCPv6）' };
@@ -735,10 +736,17 @@ export function buildTerminal(ctx, body) {
       } else {
         r = resolve(host);
         if (!r.ok) { print(`curl: (6) Could not resolve host: ${host}`, 'bad'); print('  ↳ ' + r.reason, 'hint'); return; }
-        res = transact(st(), dev.id, { proto: 'tcp', dst: r.ip, dport: port });
+        res = transact(st(), dev.id, { proto: 'tcp', dst: r.ip, dport: port, ...(parseIp(host) == null ? { host } : {}) });
         app.showTrace(`${dev.name}> curl ${u}`, [...r.log, ...res.log], [...r.hops, ...res.hops], res);
       }
       const shown = r.ip6 != null ? fmtIp6(r.ip6) : fmtIp(r.ip);
+      // FortiGate 的網頁過濾：HTTP 收到一頁封鎖頁面，HTTPS（沒有解密）只能把連線重設
+      if (!res.ok && res.wfBlock) {
+        if (res.wfBlock.http) { print('HTTP/1.1 403 Forbidden', 'bad'); print('<h1>Web Page Blocked!</h1>', 'pre'); print(`<p>The page you have requested has been blocked because the URL is categorized as ${FG_CATS[res.wfBlock.cat] || 'Unrated'}.</p>`, 'pre'); }
+        else print('curl: (35) Recv failure: Connection reset by peer', 'bad');
+        print('  ↳ ' + res.reason, 'hint');
+        return;
+      }
       if (!res.ok) {
         const reset = /連線被重設/.test(res.reason || ''), refused = /拒絕|沒有在/.test(res.reason || '');
         print(reset ? 'curl: (56) Recv failure: Connection reset by peer' : `curl: (${refused ? 7 : 28}) ${refused ? `Failed to connect to ${host} port ${port}: Connection refused` : `Failed to connect to ${host} port ${port} after 21032 ms: Timed out`}`, 'bad');
@@ -751,7 +759,7 @@ export function buildTerminal(ctx, body) {
       if (!https && port === 443) { print('HTTP/1.1 400 Bad Request', 'warn'); print('<center>The plain HTTP request was sent to HTTPS port</center>', 'pre'); print('  ↳ 443 是 HTTPS：網址要寫 https://', 'hint'); return; }
       if (https && port === 80) { print('curl: (35) OpenSSL/3.0.13: error:0A00010B:SSL routines::wrong version number', 'bad'); print('  ↳ 80 是明文的 HTTP：要用 https:// 就連 443，或把網址改成 http://', 'hint'); return; }
       if (https) {
-        const t = tlsCheck(st(), dev, srv, host);
+        const t = tlsCheck(st(), dev, srv, host, res.deep && st().devices[res.deep.dev]);
         if (verbose && t.cert) {
           print('* SSL connection using TLSv1.3 / TLS_AES_256_GCM_SHA384', 'dim');
           print('* Server certificate:', 'dim');

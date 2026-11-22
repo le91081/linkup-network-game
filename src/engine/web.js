@@ -44,12 +44,14 @@ export function certOf(server, host) {
   return { ...PUBLIC_CERT(host), assumed: true };
 }
 
-export function tlsCheck(state, client, server, host) {
-  const cert = certOf(server, host);
+export function tlsCheck(state, client, server, host, deepBy) {
+  const real = certOf(server, host);
+  // SSL deep inspection：FortiGate 先和網站完成 TLS，再用自己的 CA 簽一張同名的憑證給電腦
+  const cert = deepBy && real ? { cn: host, san: [host], issuer: 'Fortinet_CA_SSL', from: real.from, to: real.to, resigned: deepBy.name } : real;
   if (!cert) return { ok: false, code: 35, msg: 'OpenSSL SSL_connect: SSL_ERROR_SYSCALL', why: `${server.name} 的 443 有在聽，但沒有設定 HTTPS 憑證，TLS 交握失敗` };
   const trust = new Set([...PUBLIC_CAS, ...(client.trust || [])]);
   if (certSelf(cert)) return { ok: false, cert, code: 60, msg: 'SSL certificate problem: self-signed certificate', why: `${server.name} 的憑證是自簽的（簽發者就是它自己），${client.name} 不信任${cert.factory ? '。網路設備的管理網頁出廠都是自簽憑證，正式環境要換成內部 CA 簽的' : ''}` };
-  if (!trust.has(cert.issuer)) return { ok: false, cert, code: 60, msg: 'SSL certificate problem: unable to get local issuer certificate', why: `${server.name} 的憑證是「${cert.issuer}」簽的，${client.name} 的信任清單裡沒有這個 CA` };
+  if (!trust.has(cert.issuer)) return { ok: false, cert, code: 60, msg: 'SSL certificate problem: unable to get local issuer certificate', why: cert.resigned ? `${cert.resigned} 做 SSL deep inspection：連線被它解密，電腦收到的是 FortiGate 用「Fortinet_CA_SSL」重新簽發的憑證，${client.name}沒有安裝這張 CA（要用群組原則發給每台電腦，或改用 certificate-inspection）` : `${server.name} 的憑證是「${cert.issuer}」簽的，${client.name} 的信任清單裡沒有這個 CA` };
   const now = deviceTime(state, client).ms;
   if (now < cert.from) return { ok: false, cert, code: 60, msg: 'SSL certificate problem: certificate is not yet valid', why: `${client.name} 的時鐘是 ${fmtDate(now)}，憑證 ${fmtDate(cert.from)} 才開始生效（用戶端的時間不對，也會讓憑證「還沒生效」）` };
   if (now > cert.to) return { ok: false, cert, code: 60, msg: 'SSL certificate problem: certificate has expired', why: `${server.name} 的憑證 ${fmtDate(cert.to)} 就到期了` };

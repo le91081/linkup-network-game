@@ -68,6 +68,8 @@ export function clientTlsCard(ctx) {
     h('div', { class: 'chips' }, PUBLIC_CAS.map((n) => h('span', { class: 'chip', text: n }))),
     toggle(ctx, () => trust.includes(CORP_CA), (v) => { dev.trust = v ? [...new Set([...trust, CORP_CA])] : trust.filter((x) => x !== CORP_CA); },
       `安裝公司的根憑證「${CORP_CA}」（加入網域的電腦由群組原則自動安裝；自己帶的電腦要手動匯入）`, { rerender: true }),
+    toggle(ctx, () => trust.includes('Fortinet_CA_SSL'), (v) => { dev.trust = v ? [...new Set([...trust, 'Fortinet_CA_SSL'])] : trust.filter((x) => x !== 'Fortinet_CA_SSL'); },
+      '安裝 FortiGate 的 SSL 檢查憑證「Fortinet_CA_SSL」（防火牆做 deep inspection 時才需要）', { rerender: true }),
     h('div', { class: 'acl-h' }, h('span', { text: '日期與時間' }), h('em', { text: `${t.date} ${t.time}` })),
     toggle(ctx, () => sync, (v) => { dev.clock = { ...(clk || {}), sync: v }; }, '自動設定時間（與 time.windows.com 同步）', { rerender: true }),
     !sync && note('warn', `自動校時關著，這台的時鐘差了 ${Math.round(Math.abs(+(clk && clk.skew) || 0) / 86400)} 天：憑證的有效期間是用這個時間判斷的。`));

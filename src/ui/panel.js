@@ -4,6 +4,7 @@ import { sdwanTab } from './panel-sdwan.js';
 import { haTab } from './panel-ha.js';
 import { vtpCard } from './panel-vtp.js';
 import { vtpOf } from '../engine/vtp.js';
+import { utmTab, policyUtmFields } from './panel-utm.js';
 import { ZONE, sdwanOn } from '../engine/sdwan.js';
 import * as CL from './panel-cloud.js';
 import * as W from './panel-wlc.js';
@@ -591,6 +592,7 @@ function fwPolicies(ctx, body) {
       ctx.state.v6 && grid2(
         field('IPv6 來源位址 (srcaddr6)', inp(ctx, () => p.src6 || '', (v) => { p.src6 = v; }, { ph: '留空＝不比對 IPv6；all 或 2001:db8::/32' })),
         field('IPv6 目的位址 (dstaddr6)', inp(ctx, () => p.dst6 || '', (v) => { p.dst6 = v; }, { ph: '留空＝不比對 IPv6；all 或 2001:db8::/32' }))),
+      p.action === 'accept' && policyUtmFields(ctx, p),
       h('div', { class: 'toggles' },
         p.action === 'accept' && toggle(ctx, ...bind(p, 'nat'), 'NAT（來源位址換成出口介面的 IP）'),
         p.off && toggle(ctx, () => !p.off, (v) => { p.off = !v; }, '啟用這條政策（目前是停用狀態）', { rerender: true }))));
@@ -662,7 +664,7 @@ function baseTabs(dev) {
     case 'l3switch': return [T.swports, T.vlan, T.l3, T.route, T.sec, ['qos', 'QoS', V.qosTab], T.mgmt, T.status];
     case 'router': return [T.ifs, T.route, T.nat, T.acl, T.vpn, ['qos', 'QoS', V.qosTab], T.mgmt, T.status];
     case 'homerouter': return [['wan', '網際網路 (WAN)', hrWan], ['lan', '區域網路 (LAN)', hrLan], ['wifi', '無線網路', X.ssidTab], ['nat', '連接埠轉發', forwardsTab], T.status];
-    case 'firewall': return [['if', '介面', fwIfaces], ['sdwan', 'SD-WAN', sdwanTab], ['pol', '政策', fwPolicies], ['nat', '虛擬 IP', forwardsTab], T.vpn, T.route, ['ha', 'HA', haTab], T.mgmt, ['log', '紀錄', M.logTab], T.status, ['fcli', 'CLI', buildFortiCli]];
+    case 'firewall': return [['if', '介面', fwIfaces], ['sdwan', 'SD-WAN', sdwanTab], ['pol', '政策', fwPolicies], ['utm', '安全設定檔', utmTab], ['nat', '虛擬 IP', forwardsTab], T.vpn, T.route, ['ha', 'HA', haTab], T.mgmt, ['log', '紀錄', M.logTab], T.status, ['fcli', 'CLI', buildFortiCli]];
     default: return [['info', '線路資訊', inetInfo]];
   }
 }

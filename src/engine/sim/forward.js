@@ -19,6 +19,7 @@ import { lookupRoute } from './l3.js';
 import { GRE_OVERHEAD, greRx, greTarget, isTun, nhrpRedirect, tunMode } from './gre.js';
 import { haLostNote } from '../ha.js';
 import { zbfActive, zbfCheck, zbfNeeds } from '../zbf.js';
+import { utmCheck } from '../utm.js';
 
 // ───────────────────────────── 封包轉送 ─────────────────────────────
 
@@ -576,6 +577,13 @@ export function forward(state, ctx, startId, pkt) {
       if (stateful && !ctx.mid) sess(dev, { act: v.ok ? 'allow' : 'deny', proto: pkt.proto, ...o, rule: v.rule || 0, inIf: inIf.label, outIf: outIf.label });
       if (!v.ok) { denyLog(state, dev, pkt, o, inIf, outIf, v.rule); return drop(v.reason); }
       if (v.rule) log.push({ dev: dev.id, kind: 'fwd', text: `符合政策 #${v.rule}，放行（${inIf.label} → ${outIf.label}）` });
+      // 安全設定檔（網頁過濾、SSL 檢查）
+      if (v.rule && dev.kind === 'firewall') {
+        const u = utmCheck(state, dev, dev.policies[v.rule - 1], v.rule, pkt);
+        if (u.note) log.push({ dev: dev.id, kind: 'info', text: u.note });
+        if (u.deep) ctx.deep = { dev: dev.id, rule: v.rule };
+        if (u.drop) { T('fw_forward_handler', `webfilter block, policy-${v.rule}`); if (u.block) ctx.wfBlock = { ...u.block, dev: dev.id }; return drop(u.drop); }
+      }
       if (v.zbf) log.push({ dev: dev.id, kind: 'fwd', text: `ZBF：zone-pair ${v.zbf.pair} 的 class ${v.zbf.cls} → ${v.zbf.act}${pkt.reply ? '' : v.zbf.act === 'inspect' ? '（記下連線，回程自動放行）' : '（無狀態：回程要另外放行）'}` });
       if (!pkt.reply) {
         let nSrc = pkt.src;

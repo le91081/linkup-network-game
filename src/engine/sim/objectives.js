@@ -192,7 +192,7 @@ export function runObjective(state, o) {
   }
   const srcIp = o.srcIp ? parseIp(o.srcIp) : from.kind === 'internet' ? parseIp(from.inet.client) : undefined;
   const proto = o.type === 'ping' ? 'icmp' : o.type === 'speed' || o.type === 'https' ? 'tcp' : o.type;
-  const r = transact(state, o.from, { proto, dst, dport: o.type === 'speed' ? o.port ?? 5201 : o.port ?? 443, srcIp, ...(o.size ? { size: o.size } : {}), ...(o.df ? { df: true } : {}), ...(o.bulk != null ? { bulk: o.bulk } : o.type === 'speed' ? { bulk: 'up' } : {}) });
+  const r = transact(state, o.from, { proto, dst, dport: o.type === 'speed' ? o.port ?? 5201 : o.port ?? 443, srcIp, ...(o.size ? { size: o.size } : {}), ...(o.df ? { df: true } : {}), ...(o.bulk != null ? { bulk: o.bulk } : o.type === 'speed' ? { bulk: 'up' } : {}), ...(o.name ? { host: o.name } : {}) });
   log.push(...r.log); hops.push(...r.hops);
   if (r.ok && o.type === 'speed') {
     // 傳輸速率測試（iperf3）：連得上之後，看路徑上最慢的那一段
@@ -203,7 +203,7 @@ export function runObjective(state, o) {
   }
   if (r.ok && o.type === 'https') {
     // HTTPS：TCP 連得上之後還要 TLS 交握，用戶端用自己的信任清單與時鐘驗證憑證
-    const t = tlsCheck(state, from, state.devices[r.responder], o.name || fmtIp(dst));
+    const t = tlsCheck(state, from, state.devices[r.responder], o.name || fmtIp(dst), r.deep && state.devices[r.deep.dev]);
     if (!t.ok) {
       log.push({ dev: o.from, kind: 'drop', text: `TLS 交握失敗：${t.msg}（${t.why}）` });
       return finish(false, `憑證錯誤：${t.why}`, o.from);
