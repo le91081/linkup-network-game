@@ -1,6 +1,6 @@
 # LinkUp 功能規劃
 
-最後更新：2026-11-19
+最後更新：2026-11-22
 
 README 說明「現在有什麼、怎麼玩」，這份文件說明「整體應該做到什麼、目前做到哪裡、還差多少」。
 每完成或新增一項功能，請同時更新這裡的狀態。
@@ -29,7 +29,7 @@ README 說明「現在有什麼、怎麼玩」，這份文件說明「整體應�
 
 | 領域 | ✅ 已完成 | 🟡 部分完成 | ⬜ 尚未開始 |
 | --- | --- | --- | --- |
-| 1. 實體層與接線 | 8 | 1 | 5 |
+| 1. 實體層與接線 | 9 | 1 | 4 |
 | 2. 第二層：交換 | 13 | 0 | 4 |
 | 3. 第三層：路由 | 13 | 1 | 3 |
 | 4. IP 服務 | 11 | 3 | 0 |
@@ -44,8 +44,8 @@ README 說明「現在有什麼、怎麼玩」，這份文件說明「整體應�
 | 13. 設備型錄 | 10 | 2 | 1 |
 | 14. 遊戲系統 | 16 | 1 | 5 |
 | 15. 介面與體驗 | 6 | 1 | 7 |
-| 16. 工程品質 | 5 | 0 | 5 |
-| **合計** | **136** | **28** | **51** |
+| 16. 工程品質 | 5 | 1 | 4 |
+| **合計** | **137** | **29** | **49** |
 
 另外：關卡 78 關（第 17 節）、證照條目涵蓋情形（第 18 節）、建議的實作順序（第 19 節）。
 
@@ -67,7 +67,7 @@ README 說明「現在有什麼、怎麼玩」，這份文件說明「整體應�
 | 分歧線 (breakout) | ⬜ | 40G / 100G 拆成 4 條 10G / 25G |
 | Console 線與帶外管理 | ⬜ | Console 埠、管理埠 (mgmt)、帶外管理網路 |
 | MTU 與 Jumbo Frame | ✅ | 主機網卡的 MTU（Windows 的 `netsh … set subinterface … mtu=`、Linux 的 `ip link set … mtu`、網路設定分頁）、路由器的 `mtu` / `ip mtu`、Catalyst 2960 的 `system mtu jumbo`（存檔、重新開機才生效）、Catalyst 9300 的 `system mtu`、Nexus 每個埠的 `mtu`、ESXi 的 vSwitch 與 vmk MTU；交換器收到太大的訊框當成 giant 丟掉（計數器、不回 ICMP）；`show system mtu`、`show interfaces` 的 MTU 與 giants；Jumbo Frame 讓傳輸速率從 94% 提高到 98% |
-| err-disabled 自動復原 | ⬜ | 目前被關閉的埠要手動 `shutdown` / `no shutdown` |
+| err-disabled 自動復原 | ✅ | `errdisable recovery cause` / `interval`，見第 5 節 |
 | 機櫃與配線架視圖 | ⬜ | 機櫃、配線架、樓層平面圖上的實體位置 |
 
 ## 2. 第二層：交換
@@ -344,7 +344,7 @@ README 說明「現在有什麼、怎麼玩」，這份文件說明「整體應�
 | 打包體積 | ✅ | 分成 three.js、引擎、關卡與題庫、介面四個檔案（各 220 – 520 KB），改關卡時不用重新下載 three.js 與引擎；還沒有依章節延遲載入 |
 | 大型拓撲效能 | ⬜ | 每次變更都全部重算，還沒有量過上百台設備的表現 |
 | 存檔格式遷移 | ⬜ | 設定結構改版時，舊存檔沒有遷移機制 |
-| 部署 | ⬜ | GitHub Pages 之類的靜態網站 |
+| 部署 | 🟡 | `npm run build:artifact` 產生可以發佈成 Claude Artifact 的頁面（three.js 從 jsDelivr 載入、匯出改成複製、窄螢幕提示）；還沒有 GitHub Pages 之類的靜態網站 |
 
 ---
 
@@ -424,4 +424,15 @@ CCNA v2.0 預計在 2027 年 2 月取代 v1.1，改版後整張對照表要重�
 | 11（已完成） | 虛擬化章節：vSwitch、連接埠群組、VM → 17-1；VRF-Lite → 17-2；Docker 的橋接網路與連接埠發佈 → 17-3。DNS 伺服器角色（A / CNAME / MX / PTR、TTL 與用戶端快取 → 10-8）。HTTP(S) 內容與憑證：信任、有效期間（用戶端的時鐘）、SAN、內部 CA → 11-6 | 補上 CCNA 1.12（伺服器虛擬化、容器、VRF 都有關卡）、Security+ 1.4 |
 | 12（已完成） | 第一次遊玩的導覽、參考解法示範、錯題本、2D 邏輯拓撲圖 | 新手體驗 |
 | 13（已完成） | 拆開 `sim.js`；路由重分配（靜態、直連、BGP ↔ OSPF）與政策路由 → 13-5、13-6 | 第 3 節最後幾個常見的企業路由功能 |
+| 14（進行中） | OSPF 的 stub / totally stubby / NSSA；iBGP（`update-source`、`next-hop-self`、route reflector、多跳 eBGP）；VRF 裡跑 OSPF 與 VRF 之間的路由洩漏 → 第 13 章補充關卡 | 接著第 13 階段與 VRF-Lite，補完企業與 ISP 邊界最常見的路由設計 |
+| 15 | 第二層安全：靜態 MAC、MAC flooding（CAM 表滿了變成泛洪）、雙重標籤、Storm Control、Private VLAN、RA Guard → 第 6 章補充關卡 | 引擎已經有 MAC 表與 Native VLAN，攻擊情境可以真的跑出來；補 Security+ |
+| 16 | GRE、GRE over IPsec、IOS VTI、DMVPN、NAT-T、IKEv2 的憑證驗證 → 第 7 章補充關卡 | 第 6 節最大的缺口，也是 CCNA 1.x / Network+ 的常考題 |
+| 17 | IPv6 補齊：DNS 的 AAAA、DHCPv6 Prefix Delegation、FortiGate 的 IPv6 政策、NAT64 / DNS64、IPv6 over VPN → 第 9 章補充關卡 | 第 8 節剩下的項目 |
+| 18 | 高可用進階：BFD、GLBP、FortiGate HA（Active-Passive、連線同步）、堆疊 / vPC | 第 9 節剩下的項目 |
+| 19 | 維運與語音補充：NTP + Syslog 對時關卡、用 CDP / LLDP 畫拓撲、PoE 預算、雙 WAN 的 QoS、NetFlow、其他 `debug`、排程事件 → 第 11、12 章補充關卡 | 讓故障排除的工具與劇本更完整 |
+| 20 | 無線補充：頻道寬度、6 GHz 與 DFS、訪客入口 (Captive Portal)、FlexConnect 分公司、控制器 N+1 → 第 14 章補充關卡 | 第 7 節剩下的項目 |
+| 21 | 自動化與雲端補充：NETCONF、Catalyst Center 範本、用 Git 管理設定、VPC peering 與 Transit Gateway、負載平衡器、Terraform → 第 15、16 章補充關卡 | 第 12 節的延伸 |
+| 22 | 實體層與其他：收發器不相容、breakout、Console 與帶外管理、STP 進階、VTP、EIGRP / RIP、多播、TACACS+、ZBF、NGFW、SD-WAN、其他設備與廠牌 | 剩下的引擎項目 |
+| 23 | 介面與體驗（第 15 節）、工程品質（第 16 節：CI、靜態檢查、存檔格式遷移、大型拓撲效能、部署） | 引擎穩定之後再整理介面與工程 |
+| 最後 | 遊戲系統（第 14 節）：成就、預算與採購、名詞表、帳號與雲端存檔、多人、關卡編輯器補齊（學習卡、已知資訊、設定檢查目標） | 依使用者的決定排在最後，等關卡與引擎都齊了再做 |
 | 隨時 | CI、存檔格式遷移（`sim.js` 的拆分與分塊載入已完成） | CI 要遠端儲存庫，要另外決定 |
