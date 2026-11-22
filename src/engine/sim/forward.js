@@ -15,6 +15,7 @@ import { VRRP_MAC, answerMac, arpTtl, floodPorts, l2Explore, learnPath, learns, 
 import { daiBlock } from './auth.js';
 import { findTunnel } from './tunnels.js';
 import { lookupRoute } from './l3.js';
+import { GRE_OVERHEAD, greRx, greTarget, isTun, nhrpRedirect, tunMode } from './gre.js';
 
 // ───────────────────────────── 封包轉送 ─────────────────────────────
 
@@ -75,7 +76,7 @@ export function pktDesc(p) {
     p.icmpErr ? `ICMP 需要分段 (type 3 code 4，MTU ${p.mtu})`
     : p.proto === 'icmp' ? (p.reply ? 'ICMP Echo Reply' : 'ICMP Echo Request')
       : p.proto === 'tcp' ? (p.bulk ? `TCP 資料 ${p.len} 位元組${p.df ? '（DF）' : ''}` : p.ack ? `TCP ACK → 埠 ${p.dport}` : p.reply ? `TCP SYN-ACK（來自埠 ${p.sport}）` : `TCP SYN → 埠 ${p.dport}`)
-        : p.proto === 'esp' ? 'ESP 加密封包'
+        : p.proto === 'esp' ? 'ESP 加密封包' : p.proto === 'gre' ? 'GRE 封包' : p.natt ? 'NAT-T（UDP 4500 裡的 ESP）'
           : (p.reply ? `UDP 回應（來自埠 ${p.sport}）` : `UDP → 埠 ${p.dport}`);
   return `${what}　${fmtIp(p.src)} → ${fmtIp(p.dst)}`;
 }
@@ -229,12 +230,25 @@ function filter(dev, inIf, outIf, pkt, dnat) {
   return { ok: true, nat: outIf.nat };
 }
 
+/** NAT 設備替後面的 NAT-T 對端留著的轉換：外面送進來的 UDP 4500 轉給 NAT 後面那台路由器 */
+function nattMap(state, dev, pkt) {
+  if (!pkt.natt) return null;
+  const m = (state.rt.natt || []).find((x) => x.by === dev.id && x.peer === pkt.src);
+  return m ? { ip: m.local, port: 4500, natt: true } : null;
+}
+
 function deliver(dev, inIf, pkt) {
   const ok = { ok: true, dev: dev.id };
   const no = (reason) => ({ ok: false, dev: dev.id, reason });
-  if (pkt.proto === 'esp') {
-    const t = dev.rt.tunnels.find((x) => x.up && x.peerIp === pkt.src);
+  if (pkt.proto === 'esp' || (pkt.proto === 'udp' && pkt.natt)) {
+    // 同一個對端可能有好幾個 SA（crypto map、VTI、DMVPN）：用 SPI 找出是哪一個
+    const cand = dev.rt.tunnels.filter((x) => x.up && x.peerIp === pkt.src);
+    const t = cand.find((x) => x.peer && hash(x.peer.dev + '/' + x.peer.name) === pkt.spi) || cand[0];
     return t ? { ok: true, dev: dev.id, tun: t } : no(`${dev.name} 收到來源不明的加密封包，直接丟棄`);
+  }
+  if (pkt.proto === 'gre') {
+    const g = greRx(null, dev, pkt);
+    return g.iface ? { ok: true, dev: dev.id, gre: g.iface } : no(g.why);
   }
   if (pkt.reply || pkt.icmpErr) return ok;
   const PROTO = pkt.proto.toUpperCase();
@@ -257,7 +271,7 @@ function deliver(dev, inIf, pkt) {
     if (pkt.dport === 53 && dev.dnsProxy && !fromWan) return ok;
     if (pkt.dport === 67 && dev.dhcpScopes) return ok;
     if ((pkt.dport === 1812 || pkt.dport === 1813) && dev.radiusServer) return ok;
-    if ((pkt.dport === 500 || pkt.dport === 4500) && dev.vpns && dev.vpns.length) return ok;
+    if ((pkt.dport === 500 || pkt.dport === 4500) && dev.vpns && (dev.vpns.length || dev.ifaces.some((x) => isTun(x) && x.tun && x.tun.prot))) return ok;
     if (pkt.dport === 123 && dev.rt.ntpServe) return ok; // 設成 ntp master，或自己已經對好時的設備可以替別人報時
     if ((pkt.dport === 5246 || pkt.dport === 5247) && dev.kind === 'wlc') return ok; // CAPWAP 控制 / 資料
     if (pkt.dport === 161 && dev.mgmt && agentOn(dev)) {
@@ -362,10 +376,10 @@ export function forward(state, ctx, startId, pkt) {
         pkt.src = e.dst; pkt.sport = e.dport; pkt.dst = e.src; pkt.dport = e.sport;
       } else if (!pkt.reply) {
         const sn = (dev.staticNat || []).find((x) => parseIp(x.pub || '') === pkt.dst && parseIp(x.priv || '') != null);
-        dnat = sn ? { ip: parseIp(sn.priv), port: pkt.dport, stat: true } : matchPortForward(dev, inIf, pkt);
+        dnat = sn ? { ip: parseIp(sn.priv), port: pkt.dport, stat: true } : matchPortForward(dev, inIf, pkt) || nattMap(state, dev, pkt);
         if (dnat) {
           sess(dev, { act: 'dnat', proto: pkt.proto, src: pkt.src, sport: pkt.sport, dst: pkt.dst, dport: pkt.dport, ndst: dnat.ip, ndport: dnat.port });
-          log.push({ dev: dev.id, kind: 'nat', text: dnat.stat ? `靜態 NAT：目的位址 ${fmtIp(pkt.dst)} 換成 ${fmtIp(dnat.ip)}` : `連接埠轉發：${fmtIp(pkt.dst)}:${pkt.dport} → ${fmtIp(dnat.ip)}:${dnat.port}` });
+          log.push({ dev: dev.id, kind: 'nat', text: dnat.stat ? `靜態 NAT：目的位址 ${fmtIp(pkt.dst)} 換成 ${fmtIp(dnat.ip)}` : dnat.natt ? `NAT 還原（NAT-T）：UDP 4500 的轉換一直有 IPsec 的封包在用，${fmtIp(pkt.dst)}:4500 轉回裡面的 ${fmtIp(dnat.ip)}:4500` : `連接埠轉發：${fmtIp(pkt.dst)}:${pkt.dport} → ${fmtIp(dnat.ip)}:${dnat.port}` });
           pkt.dst = dnat.ip; pkt.dport = dnat.port;
         }
       }
@@ -388,13 +402,13 @@ export function forward(state, ctx, startId, pkt) {
       }
       if (!dev.routing) return drop(`${dev.name} 收到不是給自己的封包（目的 ${fmtIp(pkt.dst)}），它不是路由器所以直接丟棄`);
       if (--pkt.ttl <= 0) return drop('TTL 歸零，封包被丟棄（可能有路由迴圈）');
-      if (!pkt.reply && !pkt.ack && pkt.proto !== 'esp') ctx.l3.push({ dev: dev.id, ip: inIf.rt.ip });
+      if (!pkt.reply && !pkt.ack && pkt.proto !== 'esp' && !pkt.natt && !pkt.outer) ctx.l3.push({ dev: dev.id, ip: inIf.rt.ip });
     } else if (!cloud && isLocal(dev, pkt.dst, dev.id === ctx.vrfDev ? ctx.vrf : '')) {
       return { ok: true, dev: dev.id };
     }
 
     // VPN：符合通道的本地 / 遠端網段就加密後送給對端
-    let tun = cloud ? cloud.tunnel || null : pkt.proto !== 'esp' && findTunnel(dev, pkt);
+    let tun = cloud ? cloud.tunnel || null : pkt.proto !== 'esp' && !pkt.natt && findTunnel(dev, pkt);
     if (tun && dev.kind === 'router' && inIf && !pkt.reply && tun.up) {
       // 路由器的處理順序是「先 NAT，再比對要不要加密」。來源位址一旦被換掉，就不再符合 VPN 的加密範圍
       const wan = lookupRoute(dev, tun.peerIp);
@@ -442,7 +456,8 @@ export function forward(state, ctx, startId, pkt) {
       T('esp_output4', `IPsec encrypt/auth`);
       T('ipsec_output_finish', `send to ${fmtIp(tun.peerIp)} via intf-${tun.cfg && tun.cfg.wan ? tun.cfg.wan : 'wan1'}`);
       log.push({ dev: dev.id, kind: 'vpn', text: `加密：整個封包包進 ${ssl ? 'TLS（SSL-VPN 的 TCP 連線）' : 'ESP'}，外層位址 ${fmtIp(tun.localIp)} → ${fmtIp(tun.peerIp)}` });
-      const r = forward(state, ctx, dev.id, { proto: 'esp', src: tun.localIp, dst: tun.peerIp, sport: 0, dport: 0, ttl: 64, reply: pkt.reply, ssl, spi: hash(dev.id + '/' + tun.name), ...(espLen ? { len: espLen } : {}) });
+      if (tun.natT) log.push({ dev: dev.id, kind: 'vpn', text: `NAT-T：中間有 NAT，ESP 再包進 UDP 4500（${fmtIp(tun.localIp)}:4500 → ${fmtIp(tun.peerIp)}:4500）才穿得過 PAT` });
+      const r = forward(state, ctx, dev.id, { ...(tun.natT ? { proto: 'udp', sport: 4500, dport: 4500, natt: true } : { proto: 'esp', sport: 0, dport: 0 }), src: tun.localIp, dst: tun.peerIp, ttl: 64, reply: pkt.reply, ssl, spi: hash(dev.id + '/' + tun.name), ...(espLen ? { len: espLen + (tun.natT ? 8 : 0) } : {}) });
       if (!r.ok) {
         if (!tun.stale) return r;
         return drop(`VPN 通道「${tun.name}」在 ${dev.name} 上看起來還是 Up（SA 還沒過期），封包照樣加密送了出去，但對端已經失聯：${tun.stale.why}。${dev.name} 還要 ${fmtDur(tun.stale.until - state.clock)} 才會發現${tun.stale.dpd ? '（DPD 探測中）' : '（沒有設定 keepalive，只能等 SA 到期）'}`);
@@ -490,7 +505,11 @@ export function forward(state, ctx, startId, pkt) {
         let nSrc = pkt.src;
         const st = (dev.staticNat || []).find((x) => parseIp(x.priv || '') === pkt.src && outIf.rt.vips.includes(parseIp(x.pub || '')));
         if (st) nSrc = parseIp(st.pub); // 靜態 NAT 的主機固定用自己的公用 IP 出去
-        else if (v.nat && outIf !== inIf && outIf.rt.ip != null && natPermits(dev, outIf, pkt)) nSrc = outIf.rt.ip;
+        else if (v.nat && outIf !== inIf && outIf.rt.ip != null && natPermits(dev, outIf, pkt)) {
+          // ESP（IP 協定 50）沒有連接埠號碼：PAT（多對一）沒辦法替它轉換。家用路由器多半有「IPsec passthrough」可以讓一條通過
+          if (pkt.proto === 'esp' && !pkt.ssl && dev.kind !== 'homerouter') return drop(`${dev.name} 做的是 PAT（多個位址共用 ${outIf.label} 的位址）：ESP 封包沒有連接埠號碼，PAT 沒辦法替它轉換，只好丟掉。中間有 NAT 時兩端都要用 NAT-T（ESP 包在 UDP 4500 裡）`);
+          nSrc = outIf.rt.ip;
+        }
         if (nSrc !== pkt.src || dnat || stateful) {
           track(state, ctx, dev, { proto: pkt.proto, ...o, nSrc, nSport: pkt.sport, nDst: pkt.dst, nDport: pkt.dport, inIf: inIf.label, outIf: outIf.label, rule: v.rule || 0 });
         }
@@ -525,6 +544,40 @@ export function forward(state, ctx, startId, pkt) {
           pkt.len = m;
         }
       }
+    }
+
+    // Tunnel 介面：GRE 再包一層 IP 標頭送給對面（mGRE 靠 NHRP 找出對面的 NBMA 位址）；VTI 直接用 IPsec 加密
+    if (isTun(outIf)) {
+      const mode = tunMode(outIf);
+      if (mode === 'mgre' && inIf && inIf === outIf) nhrpRedirect(state, ctx, dev, outIf, pkt, ctx.greFrom, nh);
+      if (mode === 'ipsec') {
+        const T = dev.rt.tunnels.find((t) => t.tif === outIf.id);
+        if (!T || !T.up) return drop(`${dev.name} 的 ${outIf.label} 沒有 IPsec SA：${T ? T.why : '找不到 tunnel protection 的設定'}`);
+        log.push({ dev: dev.id, kind: 'vpn', text: `加密（VTI）：路由指向 ${outIf.label}，整個封包包進 ESP，外層位址 ${fmtIp(T.localIp)} → ${fmtIp(T.peerIp)}` });
+        const r = forward(state, ctx, dev.id, { ...(T.natT ? { proto: 'udp', sport: 4500, dport: 4500, natt: true } : { proto: 'esp', sport: 0, dport: 0 }), src: T.localIp, dst: T.peerIp, ttl: 64, reply: pkt.reply, outer: true, spi: hash(dev.id + '/' + T.name), len: ipLen(pkt) + IPSEC_OVERHEAD + (T.natT ? 8 : 0) });
+        if (!r.ok) return r;
+        if (!r.tun) return drop(`${state.devices[r.dev].name} 收到了 ESP 封包，但沒有對應的 IPsec SA`);
+        if (!QUIET) { const a = state.dyn.sa[dev.id + '/' + T.name], b = state.dyn.sa[r.dev + '/' + r.tun.name]; if (a) a.tx++; if (b) b.rx++; }
+        dev = state.devices[r.dev];
+        inIf = r.tun.iface;
+        log.push({ dev: dev.id, kind: 'vpn', text: `解密：還原出內層封包 ${fmtIp(pkt.src)} → ${fmtIp(pkt.dst)}（從 ${inIf.label} 進來）` });
+        continue;
+      }
+      const g = greTarget(state, ctx, dev, outIf, nh, pkt);
+      if (g.drop) return drop(g.drop);
+      const src = outIf.rt.tun.src, key = outIf.tun.key != null && outIf.tun.key !== '' ? +outIf.tun.key : null;
+      log.push({ dev: dev.id, kind: 'vpn', text: `GRE 封裝：從 ${outIf.label} 送出，外面再包一層 ${fmtIp(src)} → ${fmtIp(g.nbma)}（IP 協定 47${key != null ? `，key ${key}` : ''}）${g.viaHub ? '，先送給 hub' : ''}。GRE 本身不加密，裡面的封包沿路都看得到` });
+      const r = forward(state, ctx, dev.id, {
+        proto: 'gre', src, dst: g.nbma, sport: 0, dport: 0, ttl: 255, reply: pkt.reply, outer: true, greKey: key, len: ipLen(pkt) + GRE_OVERHEAD,
+        gre: { key, inner: { proto: pkt.proto, src: pkt.src, dst: pkt.dst, sport: pkt.sport, dport: pkt.dport, reply: !!pkt.reply, ttl: pkt.ttl } },
+      });
+      if (!r.ok) return r;
+      if (!r.gre) return drop(`${state.devices[r.dev].name} 收到 GRE 封包，但沒有交給任何 Tunnel 介面`);
+      ctx.greFrom = { dev: dev.id, iface: outIf.id };
+      dev = state.devices[r.dev];
+      inIf = r.gre;
+      log.push({ dev: dev.id, kind: 'vpn', text: `GRE 解封裝：拿掉外層標頭，還原出 ${fmtIp(pkt.src)} → ${fmtIp(pkt.dst)}（從 ${inIf.label} 進來）` });
+      continue;
     }
 
     const eps = l2Explore(state, dev.id, outIf);
@@ -589,7 +642,7 @@ export function forward(state, ctx, startId, pkt) {
       text: (route.via != null ? `查路由 → 下一站 ${fmtIp(nh)}：` : '') + names.join(' → ') + (tags.length ? `　[802.1Q VLAN ${tags.join(',')}]` : '')
         + (tgt.path.some((h) => h.wifi) ? '　[Wi-Fi]' : ''),
       // 這一段第二層旅程上的訊框內容，給「封包檢視」用
-      frame: { smac: outIf.rt.mac, dmac: tmac, tags, src: pkt.src, dst: pkt.dst, ttl: pkt.ttl, proto: pkt.proto, sport: pkt.sport, dport: pkt.dport, reply: pkt.reply, ack: !!pkt.ack, ssl: !!pkt.ssl, wifi: tgt.path.some((h) => h.wifi) },
+      frame: { smac: outIf.rt.mac, dmac: tmac, tags, src: pkt.src, dst: pkt.dst, ttl: pkt.ttl, proto: pkt.proto, sport: pkt.sport, dport: pkt.dport, reply: pkt.reply, ack: !!pkt.ack, ssl: !!pkt.ssl, wifi: tgt.path.some((h) => h.wifi), ...(pkt.gre ? { gre: pkt.gre } : {}), ...(pkt.natt ? { natt: true } : {}) },
     });
     // 沿路的交換器從進來的埠學到來源 MAC。目的 MAC 不在表裡（太久沒看到而過期）的話，只能往整個 VLAN 泛洪
     const keys = learnPath(state, path, outIf.rt.mac);
@@ -610,11 +663,11 @@ export function forward(state, ctx, startId, pkt) {
         leaked = true;
         log.push({ dev: h.from, kind: 'info', text: `${state.devices[h.from].name} 是 Hub：訊框被複製到其他所有連接埠，${leak.map((x) => state.devices[x.to].name).join('、')} 也收到了，發現不是給自己的就丟棄` });
       }
-      hops.push({ ...h, reply: pkt.reply, proto: pkt.proto, ssl: !!pkt.ssl, leak });
+      hops.push({ ...h, reply: pkt.reply, proto: pkt.proto, ssl: !!pkt.ssl, leak, ...(pkt.natt ? { natt: true } : {}) });
       if (!QUIET) {
         onHop(state, h, {
           proto: pkt.proto, smac: outIf.rt.mac, dmac: tmac, src: pkt.src, dst: pkt.dst, sport: pkt.sport, dport: pkt.dport, ttl: pkt.ttl,
-          reply: !!pkt.reply, ack: !!pkt.ack, ssl: !!pkt.ssl, data: pkt.data || null, spi: pkt.spi,
+          reply: !!pkt.reply, ack: !!pkt.ack, ssl: !!pkt.ssl, data: pkt.data || null, spi: pkt.spi, ...(pkt.gre ? { gre: pkt.gre } : {}), ...(pkt.natt ? { natt: true } : {}),
           ...(pkt.len ? { len: pkt.len } : {}), ...(pkt.df ? { df: true } : {}), ...(pkt.bulk ? { bulk: true } : {}), ...(pkt.icmpErr ? { icmpErr: pkt.icmpErr, mtu: pkt.mtu } : {}),
         }, leak);
       }

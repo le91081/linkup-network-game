@@ -28,8 +28,10 @@ import { route6Rows } from '../engine/sim6.js';
 import { CATALOG, MEDIA, peerOf, portOf, linkInfo, phyConfig } from '../engine/model.js';
 import { iosSession, runningConfig, startupConfig, hostName as host, aclName, aclLine } from '../engine/ios.js';
 import { ipMtu, l2Mtu, jumboNow, isCat2960, isCat9300, isNexus } from '../engine/mtu.js';
+import { tunByName, tunnelDetail, dmvpnLines, nhrpLines, nhsLines, ipsecProfileLines, cryptoSessionLines } from './cli-tun.js';
 
 const pad = (s, n) => String(s).padEnd(n);
+const isTunIf = (i) => i.bind && i.bind.t === 'gre';
 const isSw = (d) => !!d.sw && d.sw.mode === 'vlan';
 const dotMac = (m) => m.replace(/:/g, '').replace(/(.{4})(?=.)/g, '$1.');
 const hms = (s) => { s = Math.max(0, Math.floor(s)); return [Math.floor(s / 3600), Math.floor((s % 3600) / 60), s % 60].map((n) => String(n).padStart(2, '0')).join(':'); };
@@ -38,7 +40,7 @@ const upText = (s) => {
   return [d && `${d} day${d > 1 ? 's' : ''}`, (d || h) && `${h} hour${h === 1 ? '' : 's'}`, `${m} minute${m === 1 ? '' : 's'}`].filter(Boolean).join(', ');
 };
 /** 站對站通道（有設定的那種），連同它從哪個介面出去 */
-const cryptoTunnels = (d) => (d.rt.tunnels || []).filter((t) => t.cfg).map((t) => ({ t, iface: d.ifaces.find((i) => i.rt && i.rt.ip != null && i.rt.ip === t.localIp) }));
+const cryptoTunnels = (d) => (d.rt.tunnels || []).filter((t) => t.cfg).map((t) => ({ t, iface: t.tif ? d.ifaces.find((i) => i.id === t.tif) : d.ifaces.find((i) => i.rt && i.rt.ip != null && i.rt.ip === t.localIp) }));
 
 const SHOW = {
   'show running-config': (st, d) => runningConfig(st, d),
@@ -67,7 +69,7 @@ const SHOW = {
       const pc = d.sw && i.bind.port && d.sw.ports[i.bind.port];
       const adm = (pc && pc.shut) || i.shut;
       o.push(pad(i.bind.t === 'svi' ? 'Vlan' + i.bind.vlan : longIf(i.label), 24) + pad(i.rt.ip != null ? fmtIp(i.rt.ip) : 'unassigned', 16)
-        + pad((i.rt.ip != null ? 'YES ' : 'NO  ') + (i.mode === 'static' ? (i.rt.ip != null ? 'manual' : 'unset') : i.mode.toUpperCase()), 11) + pad(adm ? 'administratively down' : i.rt.link ? 'up' : 'down', 22) + (i.rt.link ? 'up' : 'down'));
+        + pad((i.rt.ip != null ? 'YES ' : 'NO  ') + (i.mode === 'static' ? (i.rt.ip != null ? 'manual' : 'unset') : i.mode.toUpperCase()), 11) + pad(adm ? 'administratively down' : i.rt.link || i.bind.t === 'gre' ? 'up' : 'down', 22) + (i.rt.link ? 'up' : 'down'));
     }
     if (isSw(d)) {
       for (const p of d.ports) {
@@ -354,6 +356,15 @@ const SHOW = {
     if (o.length === 3) o.push('', '（沒有任何 IKEv2 SA' + (list.length ? '：' + list.map(({ t }) => `${t.name} — ${t.why || '尚未建立'}`).join('；') : '：crypto map 要 set ikev2-profile 才會用 IKEv2') + '）');
     return o;
   },
+  'show dmvpn': (st, d) => dmvpnLines(st, d),
+  'show dmvpn detail': (st, d) => dmvpnLines(st, d),
+  'show ip nhrp': (st, d) => nhrpLines(st, d, false),
+  'show ip nhrp brief': (st, d) => nhrpLines(st, d, true),
+  'show ip nhrp nhs': (st, d) => nhsLines(st, d),
+  'show ip nhrp nhs detail': (st, d) => nhsLines(st, d),
+  'show crypto ipsec profile': (st, d) => ipsecProfileLines(st, d),
+  'show crypto session': (st, d) => cryptoSessionLines(st, d),
+  'show crypto session detail': (st, d) => cryptoSessionLines(st, d),
   'show crypto ikev2 profile': (st, d) => {
     const profs = Object.entries((d.ikev2 || {}).profs || {});
     if (!profs.length) return ['（沒有任何 IKEv2 profile）'];
@@ -366,16 +377,18 @@ const SHOW = {
     const o = [];
     for (const { t, iface } of list) {
       const sa = saInfo(st, d.id, t.name);
-      const id = (c) => `(${fmtIp(c.net)}/${fmtMask(c.bits)}/0/0)`;
-      o.push(`interface: ${iface ? longIf(iface.label) : '(none)'}`, `    Crypto map tag: ${t.cfg.cmap || 'CMAP'}, local addr ${t.localIp != null ? fmtIp(t.localIp) : '0.0.0.0'}`, '');
+      const id = (c) => `(${fmtIp(c.net)}/${fmtMask(c.bits)}/${t.proto === 'gre' ? 47 : 0}/0)`;
+      const ts = t.prot ? (d.tsets || {})[((d.ipsecProfiles || {})[t.cfg.prot] || {}).tset] : (d.tsets || {})[t.cfg.tset];
+      o.push(`interface: ${iface ? longIf(iface.label) : '(none)'}`, `    Crypto map tag: ${t.prot ? `${iface ? iface.label : 'Tunnel'}-head-0` : t.cfg.cmap || 'CMAP'}, local addr ${t.localIp != null ? fmtIp(t.localIp) : '0.0.0.0'}`, '');
       t.local.forEach((l, k) => {
         const r = t.remote[k] || t.remote[0];
         o.push(`   local  ident (addr/mask/prot/port): ${id(l)}`, `   remote ident (addr/mask/prot/port): ${r ? id(r) : '(0.0.0.0/0.0.0.0/0/0)'}`,
-          `   current_peer ${t.peerIp != null ? fmtIp(t.peerIp) : '0.0.0.0'} port 500`,
+          `   current_peer ${t.peerIp != null ? fmtIp(t.peerIp) : '0.0.0.0'} port ${t.natT ? 4500 : 500}`,
           `    #pkts encaps: ${sa ? sa.tx : 0}, #pkts encrypt: ${sa ? sa.tx : 0}, #pkts digest: ${sa ? sa.tx : 0}`,
           `    #pkts decaps: ${sa ? sa.rx : 0}, #pkts decrypt: ${sa ? sa.rx : 0}, #pkts verify: ${sa ? sa.rx : 0}`);
         if (sa) {
           o.push(`     local crypto endpt.: ${fmtIp(t.localIp)}, remote crypto endpt.: ${fmtIp(t.peerIp)}`,
+            `     in use settings ={${t.natT ? 'Tunnel UDP-Encaps' : ts && ts.mode === 'transport' && !t.vti ? 'Transport' : 'Tunnel'}, }`,
             '     inbound esp sas:', `        sa timing: remaining key lifetime (k/sec): (4608000/${sa.left2})`, '        Status: ACTIVE(ACTIVE)',
             '     outbound esp sas:', `        sa timing: remaining key lifetime (k/sec): (4608000/${sa.left2})`, '        Status: ACTIVE(ACTIVE)',
             ...(sa.rekey2 ? [`     （這組金鑰已經重新協商過 ${sa.rekey2} 次，每 ${sa.life2} 秒一次）`] : []));
@@ -1005,6 +1018,8 @@ const routeTail = (st, r) => {
   const m = `[${r.ad}/${r.metric}] via ${fmtIp(r.via)}`;
   if (r.type === 'O') return `${m}, ${rtAge(st, r)}, ${longIf(r.iface.label)}`;
   if (r.type === 'B') return `[${r.ad}/${r.metric}] via ${fmtIp(r.bnh ?? r.via)}, ${rtAge(st, r)}`; // BGP 的下一站要再查一次路由表（遞迴），所以不寫介面
+  if (r.type === 'H') return `${m}, ${rtAge(st, r)}, ${longIf(r.iface.label)}`;
+  if (r.via == null && r.iface) return `is directly connected, ${longIf(r.iface.label)}`; // ip route … Tunnel0：只寫出口介面
   return r.exitIf && r.iface ? `${m}, ${longIf(r.iface.label)}` : m; // 靜態路由只寫下一站；有寫出口介面的才印介面
 };
 function routeLines(st, d, keep, vrf = '') {
@@ -1016,7 +1031,7 @@ function routeLines(st, d, keep, vrf = '') {
   }
   const { rib, out } = ribOf(d, vrf);
   const def = rib.filter((r) => r.bits === 0).sort((a, b) => a.ad - b.ad)[0];
-  const o = [...(vrf ? ['', `Routing Table: ${vrf}`] : []), ...ROUTE_CODES, def ? `Gateway of last resort is ${fmtIp(def.via)} to network 0.0.0.0` : 'Gateway of last resort is not set', ''];
+  const o = [...(vrf ? ['', `Routing Table: ${vrf}`] : []), ...ROUTE_CODES, def ? `Gateway of last resort is ${def.via != null ? fmtIp(def.via) : '0.0.0.0'} to network 0.0.0.0` : 'Gateway of last resort is not set', ''];
   // 依主網段分組；比主網段還大的（預設路由、supernet）自己一組、不印標題
   const groups = [];
   for (const r of rib.filter(keep)) {
@@ -1046,7 +1061,7 @@ function routeLines(st, d, keep, vrf = '') {
   if (hidden.length) {
     o.push('');
     for (const r of hidden) {
-      const what = `${routeCode(r)} ${fmtIp(r.net)}/${r.bits} [${r.ad}/${r.metric}] via ${fmtIp(r.via)}`;
+      const what = `${routeCode(r)} ${fmtIp(r.net)}/${r.bits} [${r.ad}/${r.metric}] ${r.via != null ? `via ${fmtIp(r.via)}` : `is directly connected, ${r.exitIf && !r.iface ? '(介面 down)' : longIf((r.iface || { label: '' }).label)}`}`;
       o.push(r.bad ? `（沒有放進路由表：${what}。${r.bad}）` : `（沒有放進路由表：${what}。同一個網段已經有管理距離更小的路，這條是備援，平常不會用到）`);
     }
   }
@@ -1061,7 +1076,7 @@ function routeEntry(st, d, rs) {
     o.push(`  Known via "connected", distance 0, metric 0 (connected${r.type === 'C' ? ', via interface' : ''})`, '  Routing Descriptor Blocks:', `  * directly connected, via ${longIf(r.iface.label)}`, metricLine(0));
   } else if (r.type === 'S' || r.type === 'D') {
     o.push(`  Known via "static", distance ${r.ad}, metric 0${def ? ', candidate default path' : ''}`, '  Routing Descriptor Blocks:');
-    rs.forEach((x, k) => o.push(`  ${k ? ' ' : '*'} ${fmtIp(x.via)}`, metricLine(0)));
+    rs.forEach((x, k) => o.push(`  ${k ? ' ' : '*'} ${x.via != null ? fmtIp(x.via) : `directly connected, via ${longIf(x.iface.label)}`}`, metricLine(0)));
   } else if (r.type === 'O') {
     const type = { IA: 'inter area', E2: 'extern 2', E1: 'extern 1', N2: 'NSSA extern 2', N1: 'NSSA extern 1' }[r.sub] || 'intra area';
     const pid = r.vrf ? +((d.ospfVrf || {})[r.vrf] || {}).pid || 1 : 1;
@@ -1736,6 +1751,18 @@ function showOrPing(app, devId, line, print) {
     print(`Total Mac Addresses for this criterion: ${rows.length + (bg ? bg.n : 0)}`, 'pre');
     return true;
   }
+  // show running-config interface <名稱>：只印那一個介面的設定（名稱可以縮寫：tu0、gi0/0/1、lo0）
+  if (tok[0].length >= 2 && 'show'.startsWith(tok[0]) && (tok[1] || '').length >= 3 && 'running-config'.startsWith(tok[1]) && (tok[2] || '').length >= 3 && 'interface'.startsWith(tok[2]) && tok[3]) {
+    const want = tok.slice(3).join('').toLowerCase().match(/^([a-z-]+)([\d/.:]+)$/);
+    const lines = runningConfig(st, d);
+    const at = want ? lines.findIndex((l) => { const k = (l.match(/^interface (\S+)$/) || [])[1]; const m = k && k.toLowerCase().match(/^([a-z-]+)([\d/.:]+)$/); return !!m && m[1].startsWith(want[1]) && m[2] === want[2]; }) : -1;
+    if (at < 0) { print(`% 找不到介面「${tok.slice(3).join(' ')}」`, 'warn'); return true; }
+    let end = at + 1;
+    while (end < lines.length && lines[end].startsWith(' ')) end++;
+    const block = lines.slice(at, end);
+    ['Building configuration...', '', `Current configuration : ${block.join('\n').length + 1} bytes`, '!', ...block, 'end'].forEach((l) => print(l, 'pre'));
+    return true;
+  }
   // show interfaces [名稱]、show monitor session <n>
   if (tok[0].length >= 2 && 'show'.startsWith(tok[0]) && tok[1] && tok[1].length >= 3 && 'interfaces'.startsWith(tok[1]) && tok.length >= 4 && tok[tok.length - 1].length >= 2 && 'switchport'.startsWith(tok[tok.length - 1])) {
     const p = portByName(d, tok.slice(2, -1).join(''));
@@ -1746,9 +1773,16 @@ function showOrPing(app, devId, line, print) {
   }
   if (tok[0].length >= 2 && 'show'.startsWith(tok[0]) && tok[1] && tok[1].length >= 3 && 'interfaces'.startsWith(tok[1]) && !(tok[2] && ['status', 'trunk', 'counters', 'switchport'].some((w) => tok[2].length >= 2 && w.startsWith(tok[2])))) {
     const name = tok.slice(2).join('');
+    const tu = name ? tunByName(d, name) : undefined;
+    if (tu !== undefined) {
+      if (!tu) { print(`% 找不到介面「${tok.slice(2).join(' ')}」`, 'warn'); return true; }
+      tunnelDetail(st, d, tu).forEach((l) => print(l, l.startsWith('（') ? 'hint' : 'pre'));
+      return true;
+    }
     const ports = name ? [portByName(d, name)] : d.ports.filter((p) => st.rt.links[d.id + ':' + p.id] || (d.sw && d.sw.ports[p.id] && d.sw.ports[p.id].shut));
     if (name && !ports[0]) { print(`% 找不到介面「${tok.slice(2).join(' ')}」`, 'warn'); return true; }
     for (const p of ports) ifaceDetail(st, d, p).forEach((l) => print(l, l.startsWith('（') ? 'hint' : 'pre'));
+    if (!name) for (const i of d.ifaces.filter(isTunIf)) tunnelDetail(st, d, i).forEach((l) => print(l, l.startsWith('（') ? 'hint' : 'pre'));
     return true;
   }
   if (tok[0].length >= 2 && 'show'.startsWith(tok[0]) && (tok[1] || '').length >= 3 && 'policy-map'.startsWith(tok[1]) && tok[2] && tok[2].length >= 3 && 'interface'.startsWith(tok[2]) && tok[3]) {

@@ -33,6 +33,7 @@ export { ERR_CAUSES, ERR_RECOVERY_DEFAULT, bouncePort, dtpSpeaker, errRecoverSec
 export { CAPWAP_JOIN, WALL_MATS, WIFI_SEC, apRange, rfAt, ssidsOf, visibleSsids, wallsBetween, wlansOf } from './sim/wifi.js';
 export { DEFAULT_LEASE, dhcpRelease, dhcpRenew, dhcpTrace, lookupRoute, ospfOn, routeRows, routesTo, setOspf } from './sim/l3.js';
 export { IKE_TIME, P1, P2, ikeVer, pskOf, saInfo } from './sim/tunnels.js';
+export { GRE_OVERHEAD, MODE_TEXT, NHRP_HOLD, isTun, nhrpCache, tunMode, tunOverhead } from './sim/gre.js';
 export { SERVICE_NAMES, accessOf, clearSessions, sessionRows, sessionTtl } from './sim/forward.js';
 export { closeFlow, flowSend, transact } from './sim/transact.js';
 export { dnsQuery, resolveName } from './sim/resolve.js';
@@ -160,6 +161,7 @@ function computePass(state, auth) {
       else if (b.t === 'port' || b.t === 'sub') i.rt.link = !!state.rt.links[d.id + ':' + b.port];
       else if (b.t === 'wlan') i.rt.link = !!i.rt.assoc;
       else if (b.t === 'loop') i.rt.link = !i.shut;
+      else if (b.t === 'gre') i.rt.link = false; // Tunnel 的 line protocol 等外層的路由算好才知道（sim/l3.js 的 routesAll）
       if (!i.rt.active || i.mode !== 'static') continue;
       const ip = parseIp(i.ip), bits = parseMask(i.mask);
       if (ip == null || bits == null) continue;

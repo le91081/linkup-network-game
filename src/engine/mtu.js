@@ -59,6 +59,7 @@ export function ipMtu(state, d, i) {
   if (+i.mtu > 0) return +i.mtu;
   const b = i.bind || {};
   if (b.t === 'loop') return MTU_DEF;
+  if (b.t === 'gre') return (i.rt && i.rt.tun && i.rt.tun.mtu) || MTU_DEF - 24; // Tunnel：外層介面的 MTU 扣掉 GRE / IPsec 的標頭
   let m = MTU_DEF;
   if (d.kind === 'l3switch') {
     if (isNexus(d)) m = b.t === 'port' ? +((d.sw.ports[b.port] || {}).mtu) || MTU_DEF : MTU_DEF;

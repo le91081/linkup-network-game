@@ -87,8 +87,8 @@ class CableCurve extends THREE.Curve {
   }
 }
 
-const PKT_COLOR = { req: 0x7df3ff, reply: 0x7dffb0, dns: 0xc9b0ff, esp: 0xffc857, arp: 0xff9f5a, dhcp: 0xff8fd0 };
-const PKT_TAG = { arp: 'ARP', dhcp: 'DHCP' };
+const PKT_COLOR = { req: 0x7df3ff, reply: 0x7dffb0, dns: 0xc9b0ff, esp: 0xffc857, arp: 0xff9f5a, dhcp: 0xff8fd0, gre: 0x9fd4ff };
+const PKT_TAG = { arp: 'ARP', dhcp: 'DHCP', gre: 'GRE' };
 
 export class Scene3D {
   constructor(host, handlers) {
@@ -916,7 +916,7 @@ export class Scene3D {
       }
       const c = this.seg(h);
       if (!c) continue;
-      const esp = h.proto === 'esp';
+      const esp = h.proto === 'esp' || !!h.natt;
       const color = esp ? PKT_COLOR.esp : PKT_TAG[h.proto] ? PKT_COLOR[h.proto] : h.reply ? PKT_COLOR.reply : h.proto === 'udp' ? PKT_COLOR.dns : PKT_COLOR.req;
       this.pktMat.color.setHex(color);
       this.pktGlow.material.color.setHex(color);

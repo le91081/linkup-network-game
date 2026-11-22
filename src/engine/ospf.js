@@ -86,7 +86,8 @@ export const ospfPassive = (d, i) => {
   const c = ospfProcOf(d, i) || {};
   return (c.ospfPassiveDefault ? !(c.ospfNoPassive || []).includes(i.id) : (c.ospfPassive || []).includes(i.id)) || isLoopback(i);
 };
-export const ospfNetType = (i) => (isLoopback(i) ? 'loopback' : i.ospfNet === 'p2p' ? 'point-to-point' : 'broadcast');
+/** Tunnel 介面（GRE、mGRE、VTI）預設是 point-to-point；DMVPN 的 hub 和 spoke 常改成 broadcast */
+export const ospfNetType = (i) => (isLoopback(i) ? 'loopback' : i.ospfNet === 'p2p' ? 'point-to-point' : i.ospfNet === 'broadcast' ? 'broadcast' : i.bind && i.bind.t === 'gre' ? 'point-to-point' : 'broadcast');
 export const ospfHello = (i) => +i.ospfHello || 10;
 export const ospfDead = (i) => +i.ospfDead || 4 * ospfHello(i);
 export const ospfPrio = (i) => (i.ospfPrio == null || i.ospfPrio === '' ? 1 : +i.ospfPrio);
@@ -94,6 +95,7 @@ export const ospfPrio = (i) => (i.ospfPrio == null || i.ospfPrio === '' ? 1 : +i
 function bwOf(state, d, i) {
   if (+i.bandwidth > 0) return +i.bandwidth / 1000;
   if (isLoopback(i)) return 8000000;
+  if (i.bind.t === 'gre') return 0.1; // Tunnel 介面預設 bandwidth 100 Kbit/sec：OSPF cost 1000，比實體線路差很多
   const li = (i.bind.t === 'port' || i.bind.t === 'sub') && linkInfo(state, d.id, i.bind.port);
   return li && li.speed ? li.speed : 1000;
 }
@@ -109,7 +111,7 @@ function authOf(d, i, area) {
   const k = t === 'none' ? '' : t === 'md5' ? `${(i.ospfKey || {}).id || ''}:${(i.ospfKey || {}).key || ''}` : (i.ospfKey || {}).key || '';
   return { t, k };
 }
-const mtuOf = (i) => +i.mtu || +i.l2mtu || 1500;
+const mtuOf = (i) => +i.mtu || (i.bind && i.bind.t === 'gre' && i.rt && i.rt.tun ? i.rt.tun.mtu : 0) || +i.l2mtu || 1500;
 
 // ───────────────────────── Router ID ─────────────────────────
 
@@ -343,10 +345,17 @@ function computeOspfAf(state, af) {
         if (seenPair.has(k)) continue;
         seenPair.add(k);
         if (af.passive(x.dev, j)) continue; // 對面不送 Hello
-        const why = af.mismatch(d.dev, i, x.dev, j, af.area(d.dev, i), af.area(x.dev, j)) || (rid[d.id] === rid[x.id] ? `Router ID 重複（兩台都是 ${fmtIp(rid[d.id])}）` : '');
+        const why = e.oneWay || af.mismatch(d.dev, i, x.dev, j, af.area(d.dev, i), af.area(x.dev, j)) || (rid[d.id] === rid[x.id] ? `Router ID 重複（兩台都是 ${fmtIp(rid[d.id])}）` : '');
         pairs.push({ a: { d, i }, b: { d: x, i: j }, area: af.area(d.dev, i), why, k });
       }
     }
+  }
+  // point-to-point 的介面只能有一個鄰居：mGRE（DMVPN 的 hub）沿用 Tunnel 預設的 point-to-point，鄰居會一直被重設
+  const p2pOn = {};
+  for (const p of pairs) if (!p.why) for (const s of [p.a, p.b]) if (af.netType(s.i) === 'point-to-point') (p2pOn[key(s.d, s.i)] ||= { s, ps: [] }).ps.push(p);
+  for (const { s, ps } of Object.values(p2pOn)) {
+    if (ps.length < 2) continue;
+    for (const p of ps) p.why ||= `${s.d.name} 的 ${s.i.label} 是 point-to-point 網路類型，一個介面只能有一個鄰居，卻聽到 ${ps.length} 台：鄰居關係一直被重設 (Adjacency forced to reset)。${s.i.bind && s.i.bind.t === 'gre' ? 'DMVPN 的 hub 和 spoke 都要改成 ip ospf network broadcast（spoke 設 ip ospf priority 0）' : '多台路由器的網段要用 broadcast'}`;
   }
   // 2. 廣播網段：同一個子網路、互相聽得到的介面是一組，選 DR / BDR
   const parent = {};
@@ -394,10 +403,29 @@ function computeOspfAf(state, af) {
     for (const s of list) { const k = key(s.d, s.i); role[k] = !seg.dr && !seg.bdr ? 'WAITING' : k === seg.dr ? 'DR' : k === seg.bdr ? 'BDR' : 'DROTHER'; segOf[k] = seg; }
   }
   for (const k of Object.keys(segT)) if (!seenSeg.has(k)) delete segT[k];
+  // DMVPN（mGRE 上的 broadcast 網段）：spoke 之間互相聽不到 Hello。DR 選到某個 spoke，其他 spoke 就聽不到 DR
+  const pk = (x, y) => [x, y].sort().join('~');
+  const okPair = new Set(pairs.filter((p) => !p.why).map((p) => p.k));
+  const nbmaSegs = [];
+  for (const members of Object.values(groups)) {
+    const list = [...members.values()];
+    if (!list.some((x) => x.i.bind && x.i.bind.t === 'gre')) continue;
+    const dr = (segOf[key(list[0].d, list[0].i)] || {}).dr;
+    if (!dr) continue;
+    const drS = list.find((x) => key(x.d, x.i) === dr);
+    nbmaSegs.push({ list, dr });
+    const deaf = new Set(list.map((x) => key(x.d, x.i)).filter((k) => k !== dr && !okPair.has(pk(k, dr))));
+    if (!deaf.size) continue;
+    for (const p of pairs) {
+      if (p.why || !(deaf.has(key(p.a.d, p.a.i)) || deaf.has(key(p.b.d, p.b.i)))) continue;
+      const x = deaf.has(key(p.a.d, p.a.i)) ? p.a : p.b;
+      p.why = `${x.d.name} 聽不到 DR（${drS.d.name}）：DMVPN 的 spoke 之間沒有直接的 Hello，DR 選到 spoke 的話其他 spoke 跟它建不起鄰居、算不出路。在每個 spoke 的 Tunnel 上設 ip ospf priority 0，讓 hub 當 DR`;
+    }
+  }
 
   // 3. 每一對鄰居的狀態：計時、FULL / 2WAY / EXSTART
   const adj = {}; // 區域 → 設備 → [{ to, iface, via, cost }]
-  const seen = new Set();
+  const seen = new Set(), fullK = new Set();
   const edge = (area, a, b, stale) => {
     ((adj[area] ||= {})[a.d.id] ||= []).push({ to: b.d.id, iface: a.i, via: af.addr(b.i), cost: af.cost(state, a.d.dev, a.i), stale });
   };
@@ -440,11 +468,21 @@ function computeOspfAf(state, af) {
     }
     if (left(st)) state.rt.pending.push({ at: now + left(st), dev: a.d.dev.id, kind: 'ospf', text: `${a.d.name} ↔ ${b.d.name}：${af.name} 鄰居關係建立中` });
     // 網路類型不一致：鄰居是 FULL，但兩邊的 LSA 對不起來，SPF 算不出經過這條線的路
+    if (st === 'FULL' && !typeBad) fullK.add(p.k);
     if (st !== 'FULL' && st !== '2WAY') continue;
     if (typeBad) continue;
     if (!p2p && !(segOf[key(a.d, a.i)] || {}).dr) continue;
     edge(p.area, a, b); edge(p.area, b, a);
     function left(x) { return x === 'INIT' ? seg.since + OSPF_WAIT - now : x === 'LOADING' ? up : 0; }
+  }
+  // DMVPN phase 2：同一個 mGRE 網段上和 DR 都是 FULL 的路由器，SPF 經過那個網段（Type-2 LSA）直接以彼此為下一站，
+  // 雖然 spoke 之間沒有鄰居關係。封包要直接送到另一個 spoke，就靠 NHRP 問出它的 NBMA 位址
+  for (const { list, dr } of nbmaSegs) {
+    const on = list.filter((x) => key(x.d, x.i) === dr || fullK.has(pk(key(x.d, x.i), dr)));
+    for (const x of on) for (const y of on) {
+      if (x === y || okPair.has(pk(key(x.d, x.i), key(y.d, y.i)))) continue;
+      edge(af.area(x.d.dev, x.i), x, y);
+    }
   }
   for (const d of nodes) for (const [id, inf] of Object.entries(O(d).ifs)) {
     if (inf.state === 'PASSIVE' || inf.state === 'LOOP') continue;

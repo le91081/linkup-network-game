@@ -234,7 +234,7 @@ export function closePopover() {
 }
 
 const PORT_NAMES = { 22: 'SSH', 23: 'Telnet', 53: 'DNS', 67: 'DHCP', 80: 'HTTP', 123: 'NTP', 161: 'SNMP', 443: 'HTTPS', 500: 'IKE', 514: 'Syslog', 1812: 'RADIUS', 3306: 'MySQL', 3389: 'RDP', 4500: 'IPsec NAT-T' };
-const PROTO_NO = { icmp: 1, tcp: 6, udp: 17, esp: 50 };
+const PROTO_NO = { icmp: 1, tcp: 6, udp: 17, esp: 50, gre: 47 };
 
 /** 封包檢視：追蹤紀錄裡某一段訊框的第二、三、四層標頭 */
 function openFrame(l, state, x, y) {
@@ -248,8 +248,10 @@ function openFrame(l, state, x, y) {
     ? layer(3, 'ICMP', f.reply ? 'Echo Reply（type 0）' : 'Echo Request（type 8）', `識別碼 ${f.reply ? f.dport : f.sport} · ICMP 沒有埠號，靠識別碼配對請求與回應`)
     : f.proto === 'esp' && f.ssl
       ? layer(4, 'TCP + TLS（SSL-VPN）', '加密的內容', '原本的封包包在用戶端與 VPN 伺服器之間的 TLS 連線裡。對中途的設備來說，這只是一條普通的 TCP 連線，所以可以穿過 NAT')
-      : f.proto === 'esp'
-      ? layer(3, 'ESP（IPsec）', '加密的內容', '原本的 IP 標頭、埠號與資料都包在裡面，中途的設備只看得到兩端 VPN 閘道的位址')
+      : f.proto === 'esp' || f.natt
+      ? layer(3, f.natt ? 'UDP 4500 + ESP（NAT-T）' : 'ESP（IPsec）', '加密的內容', f.natt ? '中間有 NAT：ESP 再包進 UDP 4500，PAT 才有埠號可以轉換。裡面的內容一樣是加密的' : '原本的 IP 標頭、埠號與資料都包在裡面，中途的設備只看得到兩端 VPN 閘道的位址')
+      : f.proto === 'gre'
+      ? layer(3, 'GRE', `裡面：${fmtIp((f.gre && f.gre.inner && f.gre.inner.src) || 0)}  →  ${fmtIp((f.gre && f.gre.inner && f.gre.inner.dst) || 0)}`, '原本的封包外面再包一層 IP + GRE 標頭（多 24 位元組），沒有加密：中途的設備看得到裡面的位址與內容')
       : layer(4, f.proto.toUpperCase(), `埠 ${port(f.sport)}  →  埠 ${port(f.dport)}`,
         f.proto === 'tcp' ? (f.ack ? '旗標 ACK：三向交握的第三步，連線建立完成' : f.reply ? '旗標 SYN + ACK：三向交握的第二步' : '旗標 SYN：三向交握的第一步，請求建立連線') : 'UDP 不建立連線，直接送出');
   popover = h('div', { class: 'popover frame', style: { left: Math.max(12, Math.min(x - 60, innerWidth - 404)) + 'px' } },

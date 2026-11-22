@@ -46,6 +46,8 @@ export function protoName(f) {
   if (f.proto === 'dhcp') return 'DHCP';
   if (f.proto === 'icmp') return 'ICMP';
   if (f.proto === 'esp') return f.ssl ? 'TLSv1.3' : 'ESP';
+  if (f.proto === 'gre') return 'GRE';
+  if (f.natt) return 'ESP';
   if (f.proto === 'udp') return p(53) ? 'DNS' : p(123) ? 'NTP' : p(514) ? 'Syslog' : p(500) || p(4500) ? 'ISAKMP' : p(1812) ? 'RADIUS' : p(69) || (f.data && f.data.kind === 'tftp') ? 'TFTP' : p(161) || p(162) ? 'SNMP' : 'UDP';
   if (f.proto === 'tcp' && f.data) return p(23) ? 'TELNET' : p(22) ? 'SSHv2' : p(21) ? 'FTP' : p(443) || p(10443) ? 'TLSv1.3' : p(80) ? 'HTTP' : 'TCP';
   return f.proto.toUpperCase();
@@ -64,6 +66,12 @@ export function infoOf(f) {
   if (f.proto === 'icmp' && f.icmpErr) return `Destination unreachable (Fragmentation needed)  next-hop MTU=${f.mtu}`;
   if (f.proto === 'icmp') return `Echo (ping) ${f.reply ? 'reply  ' : 'request'}  id=0x${(f.reply ? f.dport : f.sport).toString(16).padStart(4, '0')}, seq=1/256, ttl=${f.ttl}`;
   if (f.proto === 'esp') return f.ssl ? 'Application Data（SSL-VPN 的加密內容）' : `ESP (SPI=0x${(f.spi || 0).toString(16).padStart(8, '0')})`;
+  if (f.natt) return `UDP 4500 → 4500  ESP (SPI=0x${(f.spi || 0).toString(16).padStart(8, '0')})（NAT-T：ESP 包在 UDP 裡）`;
+  if (f.proto === 'gre') {
+    const q = (f.gre && f.gre.inner) || {};
+    const what = q.proto === 'icmp' ? `ICMP Echo (ping) ${q.reply ? 'reply' : 'request'}` : q.proto ? `${q.proto.toUpperCase()} ${q.sport} → ${q.dport}` : 'IP';
+    return `GRE${f.gre && f.gre.key != null ? ` (key ${f.gre.key})` : ''}  裡面：${q.src != null ? fmtIp(q.src) : '?'} → ${q.dst != null ? fmtIp(q.dst) : '?'}  ${what}`;
+  }
   const name = protoName(f);
   if (f.proto === 'tcp' && f.data) {
     if (name === 'TELNET') {
@@ -383,7 +391,7 @@ export function bpf(text) {
     const [a, b, c] = t;
     const ipOk = (x) => parseIp(x) != null;
     const ips = (f) => (f.proto === 'arp' ? [f.arp.sip, f.arp.tip] : [f.src, f.dst]);
-    if (t.length === 1 && ['icmp', 'tcp', 'udp', 'arp', 'esp', 'stp'].includes(a)) return wrap((f) => f.proto === a);
+    if (t.length === 1 && ['icmp', 'tcp', 'udp', 'arp', 'esp', 'stp', 'gre'].includes(a)) return wrap((f) => f.proto === a || (a === 'esp' && !!f.natt));
     if (a === 'host' && ipOk(b) && t.length === 2) return wrap((f) => ips(f).includes(parseIp(b)));
     if ((a === 'src' || a === 'dst') && b === 'host' && ipOk(c)) return wrap((f) => (a === 'src' ? ips(f)[0] : ips(f)[1]) === parseIp(c));
     if ((a === 'src' || a === 'dst') && ipOk(b) && t.length === 2) return wrap((f) => (a === 'src' ? ips(f)[0] : ips(f)[1]) === parseIp(b));

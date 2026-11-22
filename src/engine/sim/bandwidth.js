@@ -172,6 +172,7 @@ export function throughput(state, hops, mss = 1460) {
     if (mbps < best) { best = mbps; dev = h.from; where = `${state.devices[h.from].name} ↔ ${state.devices[h.to].name}（${note}）`; }
   }
   if (best === Infinity) return { mbps: 0, where: '', dev: null, loss: 0, retr: 0 };
-  if (hops.some((h) => h.proto === 'esp')) best *= 0.9; // 加密與多一層標頭的負擔
+  if (hops.some((h) => h.proto === 'esp' || h.natt)) best *= 0.9; // 加密與多一層標頭的負擔
+  else if (hops.some((h) => h.proto === 'gre')) best *= 0.98; // GRE 多 24 位元組的標頭
   return { mbps: best >= 10 ? Math.round(best) : Math.round(best * 10) / 10, where, dev, loss, retr };
 }

@@ -10,6 +10,8 @@ import { buildWave } from './forward.js';
 import { cmp, dnsList, hash, isVlanSw, vrfOf } from './core.js';
 import { l2Explore, learnPath, reversed } from './l2.js';
 import { transact } from './transact.js';
+import { greLines, greReach, greRecursion, isTun, nhrpRoutes, tunIfaces } from './gre.js';
+import { prepTunnels } from './tunnels.js';
 
 // ───────────────────────── 位址取得 / 路由表 ─────────────────────────
 
@@ -272,8 +274,16 @@ function buildRoutes(state, d) {
   }
   for (const s of d.routes || []) {
     const dst = parseIp(s.dst), bits = parseMask(s.mask), via = parseIp(s.via);
-    if (dst == null || bits == null || via == null) continue;
+    if (dst == null || bits == null) continue;
     if (s.track != null && s.track !== '' && !trackUp(state, d, s.track).up) continue; // 追蹤的物件 Down：這條路由從路由表撤掉
+    if (via == null) {
+      // ip route <網段> <遮罩> Tunnel0：只寫出口介面（點對點的介面不需要下一站）
+      const out = s.outIf ? d.ifaces.find((x) => x.id === s.outIf) : null;
+      if (!out || !isTun(out)) continue;
+      r.push({ net: netOf(dst, bits), bits, via: null, iface: up(out) ? out : null, type: 'S', ad: Math.max(1, +s.ad || 1), metric: 0, vrf: s.vrf || '', exitIf: true,
+        bad: up(out) ? null : `出口介面 ${out.label} 是 line protocol down（${(out.rt.tun && out.rt.tun.why) || '沒有 IP'}）` });
+      continue;
+    }
     // ip route vrf X …：下一站要在同一個 VRF 的直連網段上。VRF 之間的路由洩漏有兩種寫法：
     //   ip route vrf X <網段> <遮罩> <下一站> global：下一站在全域的路由表找
     //   ip route [vrf X] <網段> <遮罩> <出口介面> <下一站>：出口介面可以在別的 VRF（或全域）
@@ -288,6 +298,7 @@ function buildRoutes(state, d) {
         : `下一站 ${fmtIp(via)} 不在${s.global ? '全域路由表的' : v ? ` VRF ${v} 的` : '任何已連線的'}直連網段上`,
     });
   }
+  r.push(...nhrpRoutes(state, d)); // DMVPN phase 3 的 NHRP 捷徑
   d.rt.routes = r;
 }
 
@@ -346,15 +357,58 @@ export function setOspf(d, i, on) {
   i.ospf = false;
 }
 
-export function routesAll(state) {
-  for (const d of Object.values(state.devices)) buildRoutes(state, d);
+/** 算一次所有設備的路由表：直連 / 靜態 → OSPF → BGP。quiet：試算（不記 BGP 的事件） */
+function routesOnce(state, quiet) {
+  for (const d of Object.values(state.devices)) {
+    for (const k of Object.keys(d.rt)) if (/^(ospf|nbrs)(@.*)?$/.test(k)) delete d.rt[k];
+    d.rt.nbrs = [];
+    delete d.rt.bgp;
+    buildRoutes(state, d);
+  }
   computeOspf(state, ospfOn);
-  computeBgp(state, { transact, logEvent, ospfOn, lookupRoute });
+  computeBgp(state, { transact, logEvent: quiet ? () => {} : logEvent, ospfOn, lookupRoute });
   // OSPF 先算的時候還沒有 BGP 的路：有設備把 BGP 重分配進 OSPF，就留著 BGP 的路、把 OSPF 的路拿掉再算一次
   const devs = Object.values(state.devices);
   if (devs.some((d) => (d.ospfRedist || []).some((r) => r.src === 'bgp') && d.rt && d.rt.routes.some((r) => r.type === 'B'))) {
     for (const d of devs) if (d.rt && d.rt.routes) d.rt.routes = d.rt.routes.filter((r) => r.type !== 'O');
     computeOspf(state, ospfOn);
+  }
+}
+
+// OSPF / BGP 跨次計算的狀態：試算之前先存起來，試算完還原（不然鄰居的計時會被試算打斷）
+const dynSnap = (state) => Object.fromEntries(Object.keys(state.dyn).filter((k) => /^(adj|seg|lsa|rid|bgp)/.test(k)).map((k) => [k, JSON.stringify(state.dyn[k])]));
+function dynRestore(state, snap) {
+  for (const k of Object.keys(state.dyn)) if (/^(adj|seg|lsa|rid|bgp)/.test(k) && !(k in snap)) delete state.dyn[k];
+  for (const [k, v] of Object.entries(snap)) state.dyn[k] = JSON.parse(v);
+}
+
+/**
+ * 有 Tunnel 介面時：Tunnel 的 line protocol 要看「外層」的路由，Tunnel 上跑的 OSPF / BGP 又會改變路由表。
+ * 先把 Tunnel 當成 down 算出外層的路由 → 決定每個 Tunnel 的狀態（IPsec、keepalive、NHRP 註冊）→ 還原計時、正式算一次 →
+ * 通往 tunnel destination 的路改走 Tunnel 自己（recursive routing）的話，把那個 Tunnel 暫停、再算一次
+ */
+export function routesAll(state) {
+  const tifs = tunIfaces(state);
+  if (!tifs.length) routesOnce(state);
+  else {
+    const snap = dynSnap(state), pend = state.rt.pending.length;
+    for (const { i } of tifs) i.rt.link = false;
+    routesOnce(state, true);
+    state.rt.pending.length = pend; // 試算的收斂計時不算數
+    greLines(state, tifs);
+    prepTunnels(state);
+    greReach(state, tifs);
+    dynRestore(state, snap);
+    for (const { i } of tifs) i.rt.link = i.rt.tun.up;
+    const pend2 = state.rt.pending.length;
+    routesOnce(state);
+    const pend3 = state.rt.pending.length;
+    if (greRecursion(state, tifs)) {
+      dynRestore(state, snap);
+      state.rt.pending.splice(pend2, pend3 - pend2); // 這一輪 OSPF / BGP 的計時作廢，留下 recursive routing 的暫停計時
+      for (const { i } of tifs) i.rt.link = i.rt.tun.up;
+      routesOnce(state);
+    }
   }
   // show ip route 的「00:03:43」：OSPF / BGP 的路從什麼時候開始在路由表裡
   const since = (state.dyn.rtSince ||= {});
@@ -406,7 +460,7 @@ export function dhcpTrace(state, devId) {
 }
 /** 給「狀態」分頁用的路由表文字 */
 export function routeRows(dev, vrf = '') {
-  const name = { C: '直連', S: '靜態', D: '自動', O: 'OSPF', B: 'BGP' };
+  const name = { C: '直連', S: '靜態', D: '自動', O: 'OSPF', B: 'BGP', H: 'NHRP 捷徑' };
   return dev.rt.routes
     .filter((r) => (r.vrf || '') === vrf)
     .sort((a, b) => a.ad - b.ad || a.net - b.net)

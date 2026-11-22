@@ -94,13 +94,19 @@ function layers(f) {
     out.push(L('Cisco Discovery Protocol', [['Device ID', f.cdp.id], ['Port ID', f.cdp.port], ['說明', '每 60 秒一次，裡面有設備名稱、型號、介面與 IP。攻擊者也看得到，所以接使用者的埠常會關掉 CDP']], 'warn'));
     return out;
   }
-  const PN = { icmp: 1, tcp: 6, udp: 17, esp: 50, dhcp: 17 };
+  const PN = { icmp: 1, tcp: 6, udp: 17, esp: 50, dhcp: 17, gre: 47 };
   out.push(L('Internet Protocol Version 4', [['來源', fmtIp(f.src)], ['目的', f.dst === 0xffffffff ? '255.255.255.255（廣播）' : fmtIp(f.dst)], f.ttl != null && ['TTL', String(f.ttl)], ['Protocol', `${PN[f.proto]} (${f.proto === 'dhcp' ? 'UDP' : f.proto.toUpperCase()})`]]));
   if (f.proto === 'icmp') out.push(L('ICMP', [['Type', f.reply ? '0 (Echo reply)' : '8 (Echo request)'], ['Identifier', '0x' + (f.reply ? f.dport : f.sport).toString(16)]]));
   if (f.proto === 'tcp') out.push(L('Transmission Control Protocol', [['埠', `${f.sport} → ${f.dport}`], ['Flags', f.data ? 'PSH, ACK' : f.ack ? 'ACK' : f.reply ? 'SYN, ACK' : 'SYN']]));
   if (f.proto === 'udp' || f.proto === 'dhcp') out.push(L('User Datagram Protocol', [['埠', `${f.sport} → ${f.dport}`]]));
   if (f.proto === 'dhcp') out.push(L('Dynamic Host Configuration Protocol', [['Message type', { discover: 'Discover (1)', offer: 'Offer (2)', request: 'Request (3)', ack: 'ACK (5)' }[f.dhcp.type]], ['Transaction ID', '0x' + f.dhcp.xid], f.dhcp.ip != null && ['Your IP', fmtIp(f.dhcp.ip)]]));
-  if (f.proto === 'esp') out.push(L(f.ssl ? 'TLS（SSL-VPN）' : 'Encapsulating Security Payload', [['內容', '加密過的資料：看不到裡面原本的 IP、埠號與內容'], !f.ssl && ['SPI', '0x' + (f.spi || 0).toString(16)]]));
+  if (f.proto === 'esp' || f.natt) out.push(L(f.ssl ? 'TLS（SSL-VPN）' : 'Encapsulating Security Payload', [f.natt && ['NAT-T', 'ESP 包在 UDP 4500 裡（中間有 NAT，PAT 要靠 UDP 的埠號才能轉換）'], ['內容', '加密過的資料：看不到裡面原本的 IP、埠號與內容'], !f.ssl && ['SPI', '0x' + (f.spi || 0).toString(16)]]));
+  if (f.proto === 'gre') {
+    const q = (f.gre && f.gre.inner) || {};
+    out.push(L('Generic Routing Encapsulation (IP)', [['Flags and Version', f.gre && f.gre.key != null ? '0x2000（有 Key）' : '0x0000'], f.gre && f.gre.key != null && ['Key', String(f.gre.key)], ['Protocol Type', 'IP (0x0800)']]));
+    out.push(L('Internet Protocol Version 4（GRE 裡面的封包）', [['來源', q.src != null ? fmtIp(q.src) : '?'], ['目的', q.dst != null ? fmtIp(q.dst) : '?'], ['Protocol', (q.proto || 'ip').toUpperCase()], q.sport != null && q.proto !== 'icmp' && ['埠', `${q.sport} → ${q.dport}`],
+      ['說明', 'GRE 只是再包一層標頭，完全沒有加密：線路上看得到裡面原本的位址、埠號與內容。要保密就加上 tunnel protection（IPsec）']], 'warn'));
+  }
   const name = protoName(f);
   if (name === 'TELNET') {
     const d = f.data;

@@ -10,7 +10,7 @@ import { parseDscp, dscpName, COS_DSCP_DEFAULT } from './qos.js';
 import { clearOspfProcess, clearOspfAll, ospfArea, ospfProc, ospfKeys, ospfProcs } from './ospf.js';
 import { parseComm } from './bgp.js';
 import { transfer, configFile, ensureFlash, flashFree, flashPath, fsName, IMAGES, PLATFORM, PLATFORM_NAME, imageFile, fmtBytes } from './files.js';
-import { macsBehind, recompute, ospfOn, ikeVer } from './sim.js';
+import { macsBehind, recompute, ospfOn, ikeVer, isTun, tunMode } from './sim.js';
 import { logEvent, markReboot, setClock, deviceTime, SEVERITY, bootTime, longIf, localUsers } from './ops.js';
 import { isNexus, isCat2960, isCat9300, ICMP_TYPES } from './mtu.js';
 import { spanDest } from './wire.js';
@@ -99,7 +99,7 @@ const TYPES = { gi: 'gigabitethernet', te: 'tengigabitethernet', fa: 'fastethern
 const PROMPT = {
   exec: '#', config: '(config)#', if: '(config-if)#', vlan: '(config-vlan)#', raguard: '(config-ra-guard)#', router: '(config-router)#', dhcp: '(dhcp-config)#',
   line: '(config-line)#', acl: '(config-ext-nacl)#', stdacl: '(config-std-nacl)#', radius: '(config-radius-server)#',
-  isakmp: '(config-isakmp)#', tset: '(cfg-crypto-trans)#', cmap: '(config-crypto-map)#',
+  isakmp: '(config-isakmp)#', tset: '(cfg-crypto-trans)#', cmap: '(config-crypto-map)#', ipsecprof: '(ipsec-profile)#',
   ikev2prop: '(config-ikev2-proposal)#', ikev2pol: '(config-ikev2-policy)#', ikev2kr: '(config-ikev2-keyring)#', ikev2peer: '(config-ikev2-keyring-peer)#', ikev2prof: '(config-ikev2-profile)#', track: '(config-track)#', vrfdef: '(config-vrf)#', vrfaf: '(config-vrf-af)#', ipvrf: '(config-vrf)#', archive: '(config-archive)#', archlog: '(config-archive-log-cfg)#', ipsla: '(config-ip-sla)#', slaecho: '(config-ip-sla-echo)#', bgp: '(config-router)#', rmap: '(config-route-map)#', qcmap: '(config-cmap)#', pmap: '(config-pmap)#', pmapc: '(config-pmap-c)#',
 };
 const SERVICE_PORT = { www: 80, http: 80, https: 443, domain: 53, dns: 53, ssh: 22, telnet: 23, ftp: 21, smtp: 25, ntp: 123, snmp: 161, snmptrap: 162, tftp: 69, bgp: 179, syslog: 514, isakmp: 500, bootps: 67, bootpc: 68, 'non500-isakmp': 4500 };
@@ -294,6 +294,16 @@ function resolveIf(dev, text) {
     if (!i) { i = newIface(id, 'Loopback' + n, { t: 'loop', n }); dev.ifaces.push(i); }
     return { name: 'Loopback' + n, iface: i, loop: true };
   }
+  const tu = s.match(/^tu[a-z]*(\d+)$/);
+  if (tu) {
+    if (dev.kind !== 'router') return err('這個模擬只有路由器可以建立 Tunnel 介面');
+    const n = +tu[1];
+    if (n > 2147483647) return err('Tunnel 介面的編號是 0 – 2147483647');
+    let i = dev.ifaces.find((x) => x.bind.t === 'gre' && x.bind.n === n);
+    if (!i) { i = newIface('Tu' + n, 'Tunnel' + n, { t: 'gre', n }); i.tun = {}; dev.ifaces.push(i); }
+    i.tun ||= {};
+    return { name: 'Tunnel' + n, iface: i, tunnel: true };
+  }
   const vl = s.match(/^vl[a-z]*(\d+)$/);
   if (vl) {
     const v = +vl[1];
@@ -382,7 +392,7 @@ function parseAclRule(tok) {
   if (/^\d+$/.test(tok[0])) n++;
   const action = ['permit', 'deny'].find((a) => a.startsWith((tok[n] || ' ').toLowerCase()));
   const proto = (tok[n + 1] || '').toLowerCase();
-  if (!action || !['ip', 'tcp', 'udp', 'icmp'].includes(proto)) return null;
+  if (!action || !['ip', 'tcp', 'udp', 'icmp', 'esp', 'gre', 'ahp'].includes(proto)) return null; // esp = IP 協定 50、gre = 47、ahp = 51
   n += 2;
   const addr = () => {
     const t = (tok[n] || '').toLowerCase();
@@ -436,7 +446,7 @@ const HELP = {
   router: ['network <網段> <萬用遮罩> area 0', 'default-information originate', 'redistribute static | connected | bgp <AS> [subnets] [metric <n>] [metric-type 1|2] [route-map <名稱>]'],
   dhcp: ['network <網段> <遮罩>', 'default-router <IP>', 'dns-server <IP> [IP]', 'option 150 ip <TFTP 伺服器>（IP 電話下載設定檔）', 'option 43 hex f104.<WLC 的 IP（十六進位）>（Cisco AP 找無線控制器）', 'lease <天> [小時] [分鐘]', 'host <IP> <遮罩> 加上 hardware-address <MAC>（保留位址）'],
   line: ['transport input ssh | telnet | all | none', 'access-class <名稱> in', 'login local'],
-  acl: ['permit|deny <ip|tcp|udp|icmp> <來源> <目的> [eq <埠>]', 'ICMP 可以指定類型：echo、echo-reply、unreachable、packet-too-big、time-exceeded', '來源 / 目的的寫法：any、host <IP>、<網段> <萬用遮罩>', 'no <序號>   刪除一條規則'],
+  acl: ['permit|deny <ip|tcp|udp|icmp|esp|gre> <來源> <目的> [eq <埠>]', 'ICMP 可以指定類型：echo、echo-reply、unreachable、packet-too-big、time-exceeded', '來源 / 目的的寫法：any、host <IP>、<網段> <萬用遮罩>', 'no <序號>   刪除一條規則'],
   stdacl: ['permit <網段> <萬用遮罩> | permit host <IP>'],
   radius: ['address ipv4 <IP>', 'key <共用密鑰>'],
   isakmp: ['encryption aes | aes 256', 'hash sha | sha256', 'group 2 | 5 | 14 | 19', 'authentication pre-share'],
@@ -496,6 +506,92 @@ export function iosSession(getDev, getState, who = null) {
     (i.aclNames ||= {})[dir] = name;
     if (!i[key]) i[key] = [];
   };
+
+  // ── Tunnel 介面（GRE、mGRE、IPsec VTI）與 DMVPN 的 NHRP ──
+  const onTun = (fn) => each((t) => (t.iface && isTun(t.iface) ? fn(t.iface, t) : err(`${t.name} 不是 Tunnel 介面`)));
+  const nhrpOf = (i) => (i.nhrp ||= {});
+  const tidyNhrp = (i) => { const n = i.nhrp; if (!n) return; for (const k of Object.keys(n)) if (n[k] == null || n[k] === false || (Array.isArray(n[k]) && !n[k].length)) delete n[k]; if (!Object.keys(n).length) delete i.nhrp; };
+  const TUN_IF = [
+    ['tunnel source <...>', ([x]) => onTun((i) => {
+      if (parseIp(x) != null) { i.tun.src = x; return undefined; }
+      const t = resolveIf(dev(), x);
+      if (isErr(t)) return t;
+      if (!t.iface) return err(`${t.name} 不是第三層介面`);
+      if (isTun(t.iface)) return err('% tunnel source 不能是另一個 Tunnel 介面');
+      i.tun.src = t.iface.id;
+      return undefined;
+    })],
+    ['no tunnel source [...]', () => onTun((i) => { delete i.tun.src; })],
+    ['tunnel destination <x>', ([x]) => (parseIp(x) == null ? err('用法：tunnel destination <對端的 IP 位址>') : onTun((i) => {
+      if (tunMode(i) === 'mgre') return err('% Tunnel destination is not allowed for multipoint GRE tunnels（mGRE 的對端由 NHRP 決定）');
+      i.tun.dst = x;
+      return undefined;
+    }))],
+    ['no tunnel destination [...]', () => onTun((i) => { delete i.tun.dst; })],
+    ['tunnel mode <...>', ([m]) => {
+      const w = m.toLowerCase().split(/\s+/);
+      const v = w[0] === 'gre' && (!w[1] || w[1] === 'ip') ? 'gre' : w[0] === 'gre' && /^multi/.test(w[1] || '') ? 'mgre' : w[0] === 'ipsec' && (!w[1] || w[1] === 'ipv4') ? 'ipsec' : null;
+      if (!v) return err('這個模擬支援：tunnel mode gre ip、tunnel mode gre multipoint、tunnel mode ipsec ipv4');
+      return onTun((i) => {
+        if (v === 'gre') delete i.tun.mode; else i.tun.mode = v;
+        if (v === 'mgre' && i.tun.dst) { delete i.tun.dst; return '（multipoint GRE 不用 tunnel destination，已經移除；對端的位址由 NHRP 決定）'; }
+        return undefined;
+      });
+    }],
+    ['no tunnel mode [...]', () => onTun((i) => { delete i.tun.mode; })],
+    ['tunnel key <n>', ([n]) => (/^\d+$/.test(n) && +n <= 4294967295 ? onTun((i) => { i.tun.key = +n; }) : err('用法：tunnel key <0-4294967295>'))],
+    ['no tunnel key [...]', () => onTun((i) => { delete i.tun.key; })],
+    ['tunnel protection ipsec profile <name> [...]', ([n]) => onTun((i) => {
+      if (!(dev().ipsecProfiles || {})[n]) return err(`% IPSEC profile ${n} not found（先用 crypto ipsec profile ${n} 建立）`);
+      i.tun.prot = n;
+      return undefined;
+    })],
+    ['no tunnel protection [...]', () => onTun((i) => { delete i.tun.prot; })],
+    ['keepalive [...]', ([rest]) => {
+      const w = String(rest || '').split(/\s+/).filter(Boolean);
+      const sec = w[0] != null ? +w[0] : 10, retry = w[1] != null ? +w[1] : 3;
+      if (!(sec >= 1 && sec <= 32767) || !(retry >= 1 && retry <= 255)) return err('用法：keepalive [週期 1-32767 秒] [重試次數 1-255]（預設 10 秒、3 次）');
+      return onTun((i) => { if (tunMode(i) === 'ipsec') return err('% Keepalive is not supported on IPsec tunnel（VTI 的 line protocol 本來就跟著 IPsec SA）'); i.tun.ka = { sec, retry }; return undefined; });
+    }],
+    ['no keepalive [...]', () => onTun((i) => { delete i.tun.ka; })],
+    ['ip nhrp network-id <n>', ([n]) => (/^\d+$/.test(n) && +n >= 1 ? onTun((i) => { nhrpOf(i).id = +n; }) : err('用法：ip nhrp network-id <1-4294967295>'))],
+    ['no ip nhrp network-id [...]', () => onTun((i) => { if (i.nhrp) delete i.nhrp.id; tidyNhrp(i); })],
+    ['ip nhrp authentication <s>', ([x]) => (x.length > 8 ? err('% NHRP 的驗證字串最多 8 個字元') : onTun((i) => { nhrpOf(i).auth = x; }))],
+    ['no ip nhrp authentication [...]', () => onTun((i) => { if (i.nhrp) delete i.nhrp.auth; tidyNhrp(i); })],
+    ['ip nhrp holdtime <n>', ([n]) => (/^\d+$/.test(n) && +n >= 1 && +n <= 65535 ? onTun((i) => { if (+n === 7200) delete nhrpOf(i).hold; else nhrpOf(i).hold = +n; }) : err('用法：ip nhrp holdtime <1-65535 秒>（預設 7200）'))],
+    ['no ip nhrp holdtime [...]', () => onTun((i) => { if (i.nhrp) delete i.nhrp.hold; tidyNhrp(i); })],
+    ['ip nhrp nhs <ip> [...]', ([ip, rest]) => {
+      if (parseIp(ip) == null) return err('用法：ip nhrp nhs <NHS 的 Tunnel 位址> [nbma <NHS 的公用 IP>] [multicast]');
+      const w = String(rest || '').split(/\s+/).filter(Boolean);
+      const k = w.findIndex((x) => /^nbma$/i.test(x)), nbma = k >= 0 ? w[k + 1] : '';
+      if (k >= 0 && parseIp(nbma || '') == null) return err('用法：ip nhrp nhs <NHS 的 Tunnel 位址> nbma <NHS 的公用 IP> [multicast]');
+      return onTun((i) => {
+        const n = nhrpOf(i), list = (n.nhs ||= []);
+        const e = list.find((x) => x.ip === ip) || (list.push({ ip }), list[list.length - 1]);
+        if (nbma) e.nbma = nbma;
+        if (w.some((x) => /^multicast$/i.test(x))) e.mcast = true;
+        return undefined;
+      });
+    }],
+    ['no ip nhrp nhs [...]', ([ip]) => onTun((i) => { if (i.nhrp) i.nhrp.nhs = ip ? (i.nhrp.nhs || []).filter((x) => x.ip !== ip.split(/\s+/)[0]) : []; tidyNhrp(i); })],
+    ['ip nhrp map multicast <x>', ([x]) => (x.toLowerCase() !== 'dynamic' && parseIp(x) == null ? err('用法：ip nhrp map multicast dynamic | <對端的 NBMA 位址>') : onTun((i) => {
+      const n = nhrpOf(i), v = x.toLowerCase() === 'dynamic' ? 'dynamic' : x;
+      n.mcast = [...new Set([...(n.mcast || []), v])];
+      return undefined;
+    }))],
+    ['no ip nhrp map multicast <x>', ([x]) => onTun((i) => { if (i.nhrp) i.nhrp.mcast = (i.nhrp.mcast || []).filter((y) => y !== (x.toLowerCase() === 'dynamic' ? 'dynamic' : x)); tidyNhrp(i); })],
+    ['ip nhrp map <ip> <nbma>', ([ip, nbma]) => (parseIp(ip) == null || parseIp(nbma) == null ? err('用法：ip nhrp map <對端的 Tunnel 位址> <對端的 NBMA 位址>') : onTun((i) => {
+      const n = nhrpOf(i), list = (n.maps ||= []);
+      const e = list.find((x) => x.ip === ip);
+      if (e) e.nbma = nbma; else list.push({ ip, nbma });
+      return undefined;
+    }))],
+    ['no ip nhrp map <ip> [...]', ([ip]) => onTun((i) => { if (i.nhrp) i.nhrp.maps = (i.nhrp.maps || []).filter((x) => x.ip !== ip); tidyNhrp(i); })],
+    ['ip nhrp redirect [...]', () => onTun((i) => { nhrpOf(i).redirect = true; })],
+    ['no ip nhrp redirect [...]', () => onTun((i) => { if (i.nhrp) delete i.nhrp.redirect; tidyNhrp(i); })],
+    ['ip nhrp shortcut', () => onTun((i) => { nhrpOf(i).shortcut = true; })],
+    ['no ip nhrp shortcut', () => onTun((i) => { if (i.nhrp) delete i.nhrp.shortcut; tidyNhrp(i); })],
+  ];
 
   const IF = [
     ['description <...>', ([t]) => each((x) => { if (x.pc) x.pc.desc = t; else if (x.iface) x.iface.desc = t; })],
@@ -570,8 +666,9 @@ export function iosSession(getDev, getState, who = null) {
     ['ip ospf dead-interval <n>', ([n]) => (+n >= 1 && +n <= 65535 ? onL3((i) => { i.ospfDead = +n; }) : err('dead-interval 的範圍是 1 – 65535 秒'))],
     ['no ip ospf dead-interval [...]', () => onL3((i) => { delete i.ospfDead; })],
     ['ip ospf network <t>', ([t]) => {
+      if ('point-to-multipoint'.startsWith(t.toLowerCase()) && t.length > 8) return err('% 這個模擬還不支援 point-to-multipoint（DMVPN 請用 broadcast，spoke 設 ip ospf priority 0）');
       const v = ['point-to-point', 'broadcast'].find((x) => x.startsWith(t.toLowerCase()));
-      return v ? onL3((i) => { if (v === 'broadcast') delete i.ospfNet; else i.ospfNet = 'p2p'; }) : err('用法：ip ospf network point-to-point | broadcast');
+      return v ? onL3((i) => { if (v === 'broadcast') { if (isTun(i)) i.ospfNet = 'broadcast'; else delete i.ospfNet; } else i.ospfNet = 'p2p'; }) : err('用法：ip ospf network point-to-point | broadcast');
     }],
     ['no ip ospf network [...]', () => onL3((i) => { delete i.ospfNet; })],
     ['ip ospf authentication message-digest', () => onL3((i) => { i.ospfAuth = 'md5'; })],
@@ -709,10 +806,11 @@ export function iosSession(getDev, getState, who = null) {
       t.iface.bind.vlan = +v;
       return undefined;
     })],
+    ...TUN_IF,
     ['crypto map <name>', ([name]) => onL3((i) => { i.cmap = name; })],
     ['no crypto map [...]', () => onL3((i) => { i.cmap = ''; })],
-    ['shutdown', () => each((t) => { if (t.pc) t.pc.shut = true; else if (t.port && t.iface) t.iface.shut = true; })],
-    ['no shutdown', () => each((t) => { if (t.pc) t.pc.shut = false; else if (t.port && t.iface) t.iface.shut = false; })],
+    ['shutdown', () => each((t) => { if (t.pc) t.pc.shut = true; else if ((t.port || t.loop || t.tunnel) && t.iface) t.iface.shut = true; })],
+    ['no shutdown', () => each((t) => { if (t.pc) t.pc.shut = false; else if ((t.port || t.loop || t.tunnel) && t.iface) t.iface.shut = false; })],
     ['description [...]', () => undefined],
     ['no description', () => undefined],
     // ── 第二層 ──
@@ -1026,8 +1124,8 @@ export function iosSession(getDev, getState, who = null) {
       if (w[0] && /^\d+\/[\d/.]+$|^\d+$/.test(w[0]) && parseIp(w[0]) == null && !/\d$/.test(via)) via += w.shift();
       const i = ifByName(via);
       if (isErr(i)) return err(`${ROUTE_USAGE}（「${via}」不是 IP 位址，也不是這台的介面）`);
-      if (parseIp(w[0] || '') == null) return err(`% 寫了出口介面 ${i.label}，後面還要接下一站的 IP（乙太網路介面只寫出口介面要靠 Proxy ARP，這個模擬不支援）`);
-      outIf = i.id; via = w.shift();
+      if (parseIp(w[0] || '') == null && !isTun(i)) return err(`% 寫了出口介面 ${i.label}，後面還要接下一站的 IP（乙太網路介面只寫出口介面要靠 Proxy ARP，這個模擬不支援；點對點的 Tunnel 介面可以只寫介面）`);
+      outIf = i.id; via = parseIp(w[0] || '') != null ? w.shift() : '';
     }
     let ad = '', track = null, global = false;
     for (let k = 0; k < w.length; k++) {
@@ -1120,7 +1218,13 @@ export function iosSession(getDev, getState, who = null) {
       }
       const lo = s.match(/^lo[a-z]*(\d+)$/);
       if (lo) d.ifaces = d.ifaces.filter((i) => !(i.bind.t === 'loop' && i.bind.n === +lo[1]));
-      return d.ifaces.length < before ? undefined : err('只能刪除子介面、VLAN 介面或 Loopback，而且它必須存在');
+      const tu = s.match(/^tu[a-z]*(\d+)$/);
+      if (tu) {
+        const gone = d.ifaces.find((i) => i.bind.t === 'gre' && i.bind.n === +tu[1]);
+        d.ifaces = d.ifaces.filter((i) => i !== gone);
+        if (gone) d.routes = (d.routes || []).filter((r) => r.outIf !== gone.id);
+      }
+      return d.ifaces.length < before ? undefined : err('只能刪除子介面、VLAN 介面、Loopback 或 Tunnel，而且它必須存在');
     }],
     ['vlan <id>', ([id]) => {
       const e = needSw(); if (e) return e;
@@ -1503,7 +1607,7 @@ export function iosSession(getDev, getState, who = null) {
         else if (parseIp(a) != null) { const bits = t[2] ? wildBits(t[2]) : 32; if (bits != null) src = bits === 32 ? a : `${fmtIp(netOf(parseIp(a), bits))}/${bits}`; }
         if (action && src) rule = { action, proto: 'ip', src, dst: 'any', port: '' };
       } else rule = parseAclRule(t);
-      if (!rule) return err(+n < 100 ? '用法：access-list <1-99> permit|deny <any | host IP | 網段 萬用遮罩>' : '用法：access-list <100-199> permit|deny <ip|tcp|udp|icmp> <來源> <目的> [eq <埠>]');
+      if (!rule) return err(+n < 100 ? '用法：access-list <1-99> permit|deny <any | host IP | 網段 萬用遮罩>' : '用法：access-list <100-199> permit|deny <ip|tcp|udp|icmp|esp|gre> <來源> <目的> [eq <埠>]');
       if (n === '1' && !(d.aclDefs || {})['1'] && same(rule, { action: 'permit', proto: 'ip', src: 'any', dst: 'any', port: '' })) return undefined; // 預設的 NAT 清單
       addUnique(((d.aclDefs ||= {})[n] ||= []), rule);
       syncVpnAcl(d, n);
@@ -1954,7 +2058,7 @@ export function iosSession(getDev, getState, who = null) {
       const set = { enc2: w[ei + 1] === '256' ? 'aes256' : 'aes128', hash2 };
       (d.tsets ||= {})[name] = set;
       for (const v of d.vpns) if (v.tset === name) Object.assign(v, set);
-      enter('tset', null);
+      enter('tset', name);
       return undefined;
     }],
     ['no crypto ipsec transform-set <name>', ([name]) => {
@@ -1963,6 +2067,23 @@ export function iosSession(getDev, getState, who = null) {
       if (d.tsets) delete d.tsets[name];
       return undefined;
     }],
+    ['crypto ipsec profile <name>', ([n]) => {
+      const d = dev();
+      if (!d.vpns || d.kind !== 'router') return err('這台設備不支援 IPsec VPN');
+      (d.ipsecProfiles ||= {})[n] ||= {};
+      enter('ipsecprof', n);
+      return undefined;
+    }],
+    ['no crypto ipsec profile <name>', ([n]) => {
+      const d = dev();
+      if (d.ifaces.some((i) => isTun(i) && i.tun && i.tun.prot === n)) return err(`% IPSEC profile ${n} 正被 Tunnel 介面使用，先 no tunnel protection`);
+      if (d.ipsecProfiles) { delete d.ipsecProfiles[n]; if (!Object.keys(d.ipsecProfiles).length) delete d.ipsecProfiles; }
+      return undefined;
+    }],
+    ['crypto ipsec nat-transparency udp-encapsulation', () => { delete dev().noNatT; }],
+    ['no crypto ipsec nat-transparency udp-encapsulation', () => { if (!dev().vpns) return err('這台設備不支援 IPsec VPN'); dev().noNatT = true; return '（關掉 NAT-T：中間有 NAT 的時候，ESP 會被 PAT 擋掉）'; }],
+    ['crypto isakmp nat keepalive <sec>', ([n]) => (/^\d+$/.test(n) && +n >= 5 && +n <= 3600 ? (dev().natKa = +n, undefined) : err('用法：crypto isakmp nat keepalive <5-3600 秒>'))],
+    ['no crypto isakmp nat keepalive [...]', () => { delete dev().natKa; }],
     ['crypto map <name> <seq> ipsec-isakmp', (a) => cmapEnter(a)],
     ['crypto map <name> <seq>', (a) => cmapEnter(a)],
     ['no crypto map <name> [...]', ([name, seq]) => {
@@ -1986,7 +2107,7 @@ export function iosSession(getDev, getState, who = null) {
       delete v.profs[n];
       return undefined;
     }],
-    ['crypto <...>', () => err('這個模擬支援的 VPN 指令：crypto isakmp policy、crypto isakmp key、crypto ipsec transform-set、crypto ikev2 proposal / policy / keyring / profile、crypto map')],
+    ['crypto <...>', () => err('這個模擬支援的 VPN 指令：crypto isakmp policy、crypto isakmp key、crypto ipsec transform-set、crypto ipsec profile、crypto ikev2 proposal / policy / keyring / profile、crypto map')],
   ];
 
   function setRsvMac(text) {
@@ -2361,7 +2482,7 @@ export function iosSession(getDev, getState, who = null) {
       ['<...>', ([line]) => {
         const t = line.split(/\s+/);
         const rule = parseAclRule(t);
-        if (!rule) return err('用法：[序號] permit|deny <ip|tcp|udp|icmp> <來源> <目的> [eq <埠> | ICMP 類型]，位址寫 any、host <IP> 或 <網段> <萬用遮罩>');
+        if (!rule) return err('用法：[序號] permit|deny <ip|tcp|udp|icmp|esp|gre> <來源> <目的> [eq <埠> | ICMP 類型]，位址寫 any、host <IP> 或 <網段> <萬用遮罩>');
         const seq = /^\d+$/.test(t[0]) ? +t[0] : null;
         const lists = aclLists(dev(), S.cur);
         if (seq != null && seq % 10 === 0 && lists.some((l) => l[seq / 10 - 1] && !same(l[seq / 10 - 1], rule))) return err('% Duplicate sequence number');
@@ -2410,7 +2531,35 @@ export function iosSession(getDev, getState, who = null) {
       }],
       ['no lifetime [...]', () => { delete S.cur.life; }],
     ],
-    tset: [['mode <m>', () => undefined]],
+    tset: [['mode <m>', ([m]) => {
+      const ts = (dev().tsets || {})[S.cur];
+      if (!/^(tunnel|transport)$/i.test(m)) return err('用法：mode tunnel | transport');
+      if (ts) { if (/^transport$/i.test(m)) ts.mode = 'transport'; else delete ts.mode; }
+      return undefined;
+    }]],
+    ipsecprof: [
+      ['set transform-set <name>', ([n]) => {
+        if (!(dev().tsets || {})[n]) return err(`ERROR: transform set with tag ${n} does not exist.（先用 crypto ipsec transform-set 定義）`);
+        dev().ipsecProfiles[S.cur].tset = n;
+        return undefined;
+      }],
+      ['no set transform-set [...]', () => { delete dev().ipsecProfiles[S.cur].tset; }],
+      ['set pfs <g>', ([g]) => { const m = g.toLowerCase().match(/^group(2|5|14|19)$/); if (!m) return err('用法：set pfs group14（支援 group2、group5、group14、group19）'); dev().ipsecProfiles[S.cur].pfs = m[1]; return undefined; }],
+      ['no set pfs', () => { delete dev().ipsecProfiles[S.cur].pfs; }],
+      ['set ikev2-profile <name>', ([n]) => {
+        if (!(((dev().ikev2 || {}).profs) || {})[n]) return err(`% IKEv2 profile ${n} does not exist（先用 crypto ikev2 profile 定義）`);
+        dev().ipsecProfiles[S.cur].ikev2 = n;
+        return undefined;
+      }],
+      ['no set ikev2-profile [...]', () => { delete dev().ipsecProfiles[S.cur].ikev2; }],
+      ['set security-association lifetime seconds <n>', ([n]) => {
+        if (!/^\d+$/.test(n) || +n < 120 || +n > 86400) return err('用法：set security-association lifetime seconds <120-86400>');
+        dev().ipsecProfiles[S.cur].life2 = +n;
+        return undefined;
+      }],
+      ['no set security-association lifetime [...]', () => { delete dev().ipsecProfiles[S.cur].life2; }],
+      ['description <...>', ([t]) => { dev().ipsecProfiles[S.cur].desc = t; }],
+    ],
     ikev2prop: [
       ['encryption <...>', ([list]) => {
         const w = list.toLowerCase().split(/\s+/), v = w.map((x) => ENC_V2[x]);
@@ -3351,7 +3500,7 @@ export function runningConfig(state, dev) {
   const vp = dev.vpns || [];
   const cmIf = new Map(); // 圖形介面建立的通道沒有明確套用 crypto map：視為套用在通往對端的那個介面上
   for (const T of (dev.rt && dev.rt.tunnels) || []) {
-    const i = T.cfg && !T.cfg.cmap && T.localIp != null && dev.ifaces.find((x) => x.rt && x.rt.ip === T.localIp);
+    const i = T.cfg && !T.cfg.cmap && !T.prot && T.localIp != null && dev.ifaces.find((x) => x.rt && x.rt.ip === T.localIp);
     if (i) cmIf.set(i, cmapOf(T.cfg));
   }
   const v2 = ikev2Objects(dev);
@@ -3366,16 +3515,25 @@ export function runningConfig(state, dev) {
     }
     for (const [n, x] of Object.entries(V.profs)) o.push(`crypto ikev2 profile ${n}`, ...(x.remote ? [` match identity remote address ${x.remote} 255.255.255.255`] : []), ' authentication remote pre-share', ' authentication local pre-share', ...(x.keyring ? [` keyring local ${x.keyring}`] : []), ...(+x.life > 0 ? [` lifetime ${x.life}`] : []), '!');
   }
-  if (vp.length || (dev.isakmp && dev.isakmp.length)) {
+  const profs = Object.entries(dev.ipsecProfiles || {});
+  if (vp.length || (dev.isakmp && dev.isakmp.length) || profs.length || Object.keys(dev.ikeKeys || {}).length || Object.keys(dev.tsets || {}).length) {
     for (const p of isakmpOf(dev)) o.push(`crypto isakmp policy ${p.n}`, ` encryption ${ENC_IOS[p.enc] || 'aes'}`, ` hash ${HASH_IOS[p.hash] || 'sha'}`, ' authentication pre-share', ` group ${p.dh}`, ...(+p.life > 0 && +p.life !== 86400 ? [` lifetime ${+p.life}`] : []));
-    for (const t of vp) if (t.psk && t.peer && ikeVer(dev, t) === 1) o.push(`crypto isakmp key ${t.psk} address ${t.peer}`);
+    const keys = new Map();
+    for (const t of vp) if (t.psk && t.peer && ikeVer(dev, t) === 1) keys.set(t.peer, t.psk);
+    for (const [peer, k] of Object.entries(dev.ikeKeys || {})) if (!keys.has(peer) && (peer === '0.0.0.0' || !vp.some((t) => t.peer === peer && ikeVer(dev, t) === 2))) keys.set(peer, k);
+    for (const [peer, k] of keys) o.push(`crypto isakmp key ${k} address ${peer}`);
+    if (+dev.natKa > 0) o.push(`crypto isakmp nat keepalive ${+dev.natKa}`);
     if (dev.ikeKeepalive && +dev.ikeKeepalive.sec > 0) o.push(`crypto isakmp keepalive ${dev.ikeKeepalive.sec} ${dev.ikeKeepalive.retry || 2}`);
     if (+dev.ipsecLife > 0 && +dev.ipsecLife !== 3600) o.push(`crypto ipsec security-association lifetime seconds ${+dev.ipsecLife}`);
     o.push('!');
     const sets = new Map(Object.entries(dev.tsets || {}));
     for (const t of vp) if (!sets.has(tsetOf(t))) sets.set(tsetOf(t), { enc2: t.enc2 || t.enc || 'aes128', hash2: t.hash2 || t.hash || 'sha1' });
-    for (const [name, s] of sets) o.push(`crypto ipsec transform-set ${name} esp-${ENC_IOS[s.enc2]} esp-${HASH_IOS[s.hash2]}-hmac`, ' mode tunnel');
+    for (const [name, s] of sets) o.push(`crypto ipsec transform-set ${name} esp-${ENC_IOS[s.enc2]} esp-${HASH_IOS[s.hash2]}-hmac`, ` mode ${s.mode || 'tunnel'}`);
     if (sets.size) o.push('!');
+    if (dev.noNatT) o.push('no crypto ipsec nat-transparency udp-encapsulation', '!');
+    for (const [n, p] of profs) {
+      o.push(`crypto ipsec profile ${n}`, ...(p.desc ? [` description ${p.desc}`] : []), ...(p.tset ? [` set transform-set ${p.tset}`] : []), ...(p.pfs ? [` set pfs group${p.pfs}`] : []), ...(p.ikev2 ? [` set ikev2-profile ${p.ikev2}`] : []), ...(+p.life2 > 0 ? [` set security-association lifetime seconds ${+p.life2}`] : []), '!');
+    }
     for (const t of vp) {
       o.push(`crypto map ${cmapOf(t)} ${seqOf(dev, t)} ipsec-isakmp`);
       if (t.name && t.name !== `${cmapOf(t)}-${seqOf(dev, t)}`) o.push(` description ${t.name}`);
@@ -3410,6 +3568,7 @@ export function runningConfig(state, dev) {
     if (i.ospfKey && i.ospfKey.id !== '' && i.ospfKey.id != null) l.push(` ip ospf message-digest-key ${i.ospfKey.id} md5 7 ${hex(i.ospfKey.key || '')}`);
     else if (i.ospfKey) l.push(` ip ospf authentication-key 7 ${hex(i.ospfKey.key || '')}`);
     if (i.ospfNet === 'p2p') l.push(' ip ospf network point-to-point');
+    if (i.ospfNet === 'broadcast') l.push(' ip ospf network broadcast');
     if (i.ospfPrio != null && i.ospfPrio !== '') l.push(` ip ospf priority ${i.ospfPrio}`);
     if (i.ospfHello) l.push(` ip ospf hello-interval ${i.ospfHello}`);
     if (i.ospfDead) l.push(` ip ospf dead-interval ${i.ospfDead}`);
@@ -3449,6 +3608,20 @@ export function runningConfig(state, dev) {
     o.push(t.type === 'sla' ? `track ${n} ip sla ${t.sla} reachability` : `track ${n} interface ${longIf(ti ? ti.label : t.iface)} line-protocol`, '!');
   }
   for (const i of dev.ifaces.filter((x) => x.bind.t === 'loop').sort((a, b) => a.bind.n - b.bind.n)) o.push(`interface Loopback${i.bind.n}`, ...(i.desc ? [` description ${i.desc}`] : []), ...l3lines(i).filter((x) => !/ip nat (inside|outside)/.test(x)), ...(i.shut ? [' shutdown'] : []), '!');
+  for (const i of dev.ifaces.filter((x) => x.bind.t === 'gre').sort((a, b) => a.bind.n - b.bind.n)) {
+    const t = i.tun || {}, n = i.nhrp || {};
+    const srcIf = t.src && dev.ifaces.find((x) => x.id === t.src);
+    o.push(`interface Tunnel${i.bind.n}`, ...(i.desc ? [` description ${i.desc}`] : []), ...l3lines(i).filter((x) => !/ip nat (inside|outside)/.test(x)),
+      ...(n.auth ? [` ip nhrp authentication ${n.auth}`] : []), ...(n.mcast || []).map((x) => ` ip nhrp map multicast ${x}`), ...(n.maps || []).map((m) => ` ip nhrp map ${m.ip} ${m.nbma}`),
+      ...(n.id != null ? [` ip nhrp network-id ${n.id}`] : []), ...(+n.hold > 0 ? [` ip nhrp holdtime ${+n.hold}`] : []),
+      ...(n.nhs || []).map((x) => ` ip nhrp nhs ${x.ip}${x.nbma ? ` nbma ${x.nbma}` : ''}${x.mcast ? ' multicast' : ''}`),
+      ...(n.redirect ? [' ip nhrp redirect'] : []), ...(n.shortcut ? [' ip nhrp shortcut'] : []),
+      ...(t.ka ? [` keepalive ${t.ka.sec} ${t.ka.retry}`] : []),
+      ...(t.src ? [` tunnel source ${srcIf ? longIf(srcIf.label) : t.src}`] : []), ...(t.dst ? [` tunnel destination ${t.dst}`] : []),
+      ...(t.mode === 'mgre' ? [' tunnel mode gre multipoint'] : t.mode === 'ipsec' ? [' tunnel mode ipsec ipv4'] : []),
+      ...(t.key != null ? [` tunnel key ${t.key}`] : []), ...(t.prot ? [` tunnel protection ipsec profile ${t.prot}`] : []),
+      ...(i.shut ? [' shutdown'] : []), '!');
+  }
   for (const p of dev.ports) {
     const peer = state.cables.find((c) => (c.a.dev === dev.id && c.a.port === p.id) || (c.b.dev === dev.id && c.b.port === p.id));
     const other = peer && state.devices[peer.a.dev === dev.id ? peer.b.dev : peer.a.dev];
@@ -3584,9 +3757,9 @@ export function runningConfig(state, dev) {
   }
   for (const i of dev.ifaces) if (i.mode === 'static' && i.gateway && dev.routing) o.push(`ip route 0.0.0.0 0.0.0.0 ${i.gateway}`);
   for (const r of dev.routes || []) {
-    if (!r.dst || !r.via) continue;
     const oi = r.outIf && dev.ifaces.find((x) => x.id === r.outIf);
-    o.push(`ip route ${r.vrf ? 'vrf ' + r.vrf + ' ' : ''}${r.dst} ${parseMask(r.mask || '') != null ? fmtMask(parseMask(r.mask)) : r.mask} ${oi ? longIf(oi.label) + ' ' : ''}${r.via}${r.global ? ' global' : ''}${+r.ad > 1 ? ' ' + r.ad : ''}${r.track != null && r.track !== '' ? ' track ' + r.track : ''}`);
+    if (!r.dst || (!r.via && !oi)) continue; // 沒有下一站的只有「ip route … Tunnel0」
+    o.push(`ip route ${r.vrf ? 'vrf ' + r.vrf + ' ' : ''}${r.dst} ${parseMask(r.mask || '') != null ? fmtMask(parseMask(r.mask)) : r.mask} ${oi ? longIf(oi.label) + (r.via ? ' ' : '') : ''}${r.via || ''}${r.global ? ' global' : ''}${+r.ad > 1 ? ' ' + r.ad : ''}${r.track != null && r.track !== '' ? ' track ' + r.track : ''}`);
   }
   if (dev.localPolicy) o.push(`ip local policy route-map ${dev.localPolicy}`);
   for (const [n, op] of Object.entries(dev.sla || {})) {

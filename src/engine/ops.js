@@ -399,7 +399,7 @@ export function routerId(d) {
 }
 
 function snapshot(state, d) {
-  const s = { port: {}, errN: {}, nbr: {}, nbr6: {}, norid6: false, vrrp: {}, tun: {}, dup: {}, dupIp: {}, pool: [], auth: {}, psv: {}, stormF: {} };
+  const s = { port: {}, errN: {}, nbr: {}, nbr6: {}, norid6: false, vrrp: {}, tun: {}, gre: {}, dup: {}, dupIp: {}, pool: [], auth: {}, psv: {}, stormF: {} };
   const shutIf = (pid) => d.ifaces.some((i) => i.shut && i.bind.t === 'port' && i.bind.port === pid);
   for (const p of d.ports) {
     const pc = d.sw && d.sw.ports[p.id], err = d.rt.err && d.rt.err[p.id];
@@ -422,6 +422,8 @@ function snapshot(state, d) {
   for (const n of d.rt.nbrs6 || []) if (n.state === 'full' || n.state === 'dying') s.nbr6[n.dev + '|' + n.iface] = { st: n.state, rid: n.rid };
   s.norid6 = !!(d.rt.ospf6 && d.rt.ospf6.norid);
   for (const i of d.ifaces) {
+    // Tunnel 介面的 line protocol（recursive routing 的暫停次數也記下來，才看得出又被關了一次）
+    if (i.bind.t === 'gre' && i.rt && i.rt.tun) s.gre[i.id] = { up: !!i.rt.link, admin: !!i.rt.tun.admin, recur: i.rt.tun.recur ? ((state.dyn.greRecur || {})[d.id + '/' + i.id] || {}).n || 1 : 0 };
     if (i.vrrp && i.vrrp.on && i.rt.vrrp) s.vrrp[i.id] = i.rt.vrrp.state;
     if (i.rt.conflict) s.dupIp[i.id] = i.rt.ip;
   }
@@ -507,6 +509,14 @@ function diffDevice(state, d, a, b) {
   const dot = (m) => m.replace(/:/g, '').replace(/(.{4})(?=.)/g, '$1.');
   for (const [pid, mac] of Object.entries(b.psv || {})) if ((a.psv || {})[pid] !== mac) ev(2, 'PORT_SECURITY-2-PSECURE_VIOLATION', `Security violation occurred, caused by MAC address ${mac === 'macof' ? '00ff.1a2b.3c4d' : dot(mac)} on port ${longIf(label(pid))}.`);
   for (const pid of Object.keys(b.stormF || {})) if (!(a.stormF || {})[pid]) ev(3, 'STORM_CONTROL-3-FILTERED', `A packet storm was detected on ${label(pid)}. A packet filter action has been applied on the interface.`);
+  // Tunnel 介面
+  for (const [id, now] of Object.entries(b.gre || {})) {
+    const was = (a.gre || {})[id];
+    if (!was || !ios) continue;
+    const L = longIf(ifLabel(id));
+    if (now.recur && now.recur !== was.recur) ev(5, 'TUN-5-RECURDOWN', `${L} temporarily disabled due to recursive routing`);
+    if (now.up !== was.up && !now.admin) ev(5, 'LINEPROTO-5-UPDOWN', `Line protocol on Interface ${L}, changed state to ${now.up ? 'up' : 'down'}`);
+  }
   // OSPF 鄰居
   for (const [k, n] of Object.entries(b.nbr)) {
     if (!a.nbr[k]) ev(5, 'OSPF-5-ADJCHG', `Process ${n.pid || 1}, Nbr ${fmtIp(n.rid)} on ${longIf(ifLabel(k.split('|')[1]))} from LOADING to FULL, Loading Done`);

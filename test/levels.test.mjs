@@ -2920,6 +2920,198 @@ console.log('\n第二層安全：Port Security、MAC flooding、靜態 MAC、Sto
   void NI;
 }
 
+console.log('\nTunnel 介面：GRE、keepalive、recursive routing、GRE over IPsec、VTI、DMVPN（NHRP）、NAT-T');
+{
+  const sim = await import('../src/engine/sim.js');
+  const { iosSession, runningConfig } = await import('../src/engine/ios.js');
+  const { iosRun } = await import('../src/ui/cli.js');
+  const { makeDevice: MD, makeState: MS, setLine: SL, cloneState: CS } = await import('../src/engine/model.js');
+  const ok = (cond, title) => (cond ? console.log('  ✔ ' + title) : fail(title));
+  const cli = (s, id) => { const S = iosSession(() => s.devices[id], () => s); return (...lines) => { const out = []; for (const l of lines) { const r = iosRun({ state: s, showTrace() {}, refreshLive() {} }, id, S, l, (x) => out.push(x)); if (r.changed) settle(s); } return out.join('\n'); }; };
+  const IP = (x) => parseIp(x);
+  const ping = (s, from, to) => sim.transact(s, from, { proto: 'icmp', dst: IP(to) });
+  const hops = (r) => r.l3.map((h) => fmtIpT(h.ip)).join(' → ');
+  const tun = (s, id, n = 0) => s.devices[id].ifaces.find((i) => i.id === 'Tu' + n);
+  const ip4 = (d, port, ip, mask = '255.255.255.0') => Object.assign(d.ifaces.find((i) => i.id === port), { ip, mask });
+
+  // ── 兩個據點經過 ISP 的路由器：GRE + OSPF
+  const two = () => {
+    const s = MS([
+      MD('isr4331', 'r1', { name: 'R1', pos: [-6, 0], init(d) { ip4(d, 'Gi0/0/0', '203.0.113.1', '255.255.255.252'); ip4(d, 'Gi0/0/1', '10.1.0.1'); d.routes.push({ dst: '0.0.0.0', mask: '0.0.0.0', via: '203.0.113.2' }); } }),
+      MD('isr4331', 'isp', { name: 'ISP', pos: [0, -4], init(d) { ip4(d, 'Gi0/0/0', '203.0.113.2', '255.255.255.252'); ip4(d, 'Gi0/0/1', '198.51.100.2', '255.255.255.252'); } }),
+      MD('isr4331', 'r2', { name: 'R2', pos: [6, 0], init(d) { ip4(d, 'Gi0/0/0', '198.51.100.1', '255.255.255.252'); ip4(d, 'Gi0/0/1', '10.2.0.1'); d.routes.push({ dst: '0.0.0.0', mask: '0.0.0.0', via: '198.51.100.2' }); } }),
+      MD('pc', 'pc1', { name: 'PC1', pos: [-8, 5], ip: '10.1.0.10', gw: '10.1.0.1' }), MD('pc', 'pc2', { name: 'PC2', pos: [8, 5], ip: '10.2.0.10', gw: '10.2.0.1' }),
+    ], [['r1:Gi0/0/0', 'isp:Gi0/0/0'], ['r2:Gi0/0/0', 'isp:Gi0/0/1'], ['pc1:eth0', 'r1:Gi0/0/1'], ['pc2:eth0', 'r2:Gi0/0/1']]);
+    settle(s);
+    cli(s, 'r1')('configure terminal', 'interface Tunnel0', 'ip address 10.0.0.1 255.255.255.252', 'tunnel source Gi0/0/0', 'tunnel destination 198.51.100.1', 'exit', 'router ospf 1', 'network 10.0.0.0 0.0.0.3 area 0', 'network 10.1.0.0 0.0.0.255 area 0', 'end');
+    cli(s, 'r2')('configure terminal', 'interface Tunnel0', 'ip address 10.0.0.2 255.255.255.252', 'tunnel source Gi0/0/0', 'tunnel destination 203.0.113.1', 'exit', 'router ospf 1', 'network 10.0.0.0 0.0.0.3 area 0', 'network 10.2.0.0 0.0.0.255 area 0', 'end');
+    return s;
+  };
+  const g = two();
+  const R1 = cli(g, 'r1');
+  ok(tun(g, 'r1').rt.link && tun(g, 'r1').rt.tun.mtu === 1476 && /Tunnel0\s+10\.0\.0\.1\s+YES manual up\s+up/.test(R1('show ip interface brief')), 'GRE：Tunnel0 up/up，Tunnel 的 MTU 是 1500 − 24 = 1476');
+  const r = ping(g, 'pc1', '10.2.0.10');
+  ok(r.ok && hops(r) === '10.1.0.1 → 10.0.0.2' && r.log.some((l) => /GRE 封裝/.test(l.text)), `PC1 → PC2 走 GRE：traceroute 只看到兩站（${hops(r)}），ISP 那一段在外層`);
+  ok(g.devices.r1.rt.nbrs.some((n) => n.iface === 'Tu0' && n.state === 'full') && /O\s+10\.2\.0\.0\/24 \[110\/1001\] via 10\.0\.0\.2, \S+, Tunnel0/.test(R1('show ip route')), 'OSPF 在 Tunnel0 上 FULL（預設 point-to-point），學到 10.2.0.0/24，cost 1000 + 1');
+  ok(/Tunnel0 is up, line protocol is up/.test(R1('show interfaces tunnel 0')) && /Tunnel source 203\.0\.113\.1 \(GigabitEthernet0\/0\/0\), destination 198\.51\.100\.1/.test(R1('show interfaces tu0')) && /Tunnel protocol\/transport GRE\/IP/.test(R1('show interfaces tu0')), 'show interfaces Tunnel0：source、destination、GRE/IP');
+  // 沒有 keepalive：對面關掉了，這一端照樣 up/up
+  const g2 = CS(g); settle(g2);
+  cli(g2, 'r2')('configure terminal', 'interface Tunnel0', 'shutdown', 'end');
+  ok(tun(g2, 'r1').rt.link && /GRE 封包送不到對面/.test(cli(g2, 'r1')('show interfaces tunnel0')), '沒有 keepalive：R2 的 Tunnel0 shutdown，R1 的 Tunnel0 還是 up/up（只要有路到 destination）');
+  cli(g2, 'r1')('configure terminal', 'interface Tunnel0', 'keepalive 5 3', 'end');
+  ok(!tun(g2, 'r1').rt.link && /keepalive/.test(tun(g2, 'r1').rt.tun.why) && /LINEPROTO-5-UPDOWN: Line protocol on Interface Tunnel0, changed state to down/.test(cli(g2, 'r1')('show logging')), 'keepalive 5 3：15 秒沒有回應，line protocol down');
+  cli(g2, 'r2')('configure terminal', 'interface Tunnel0', 'no shutdown', 'end');
+  ok(tun(g2, 'r1').rt.link, '對面恢復：keepalive 有回應，馬上 up');
+  // tunnel key
+  const g3 = CS(g); settle(g3);
+  cli(g3, 'r1')('configure terminal', 'interface Tunnel0', 'tunnel key 100', 'end');
+  const rk = ping(g3, 'r1', '10.0.0.2');
+  ok(!rk.ok && /tunnel key 不一致/.test(rk.reason), 'tunnel key 只設一端：GRE 封包被對面丟掉');
+  // recursive routing
+  const g4 = CS(g); settle(g4);
+  cli(g4, 'r2')('configure terminal', 'router ospf 1', 'network 198.51.100.0 0.0.0.3 area 0', 'end');
+  sim.advance(g4, 10);
+  const rc = tun(g4, 'r1').rt.tun;
+  ok(rc.recur && !tun(g4, 'r1').rt.link && /O 198\.51\.100\.0\/30/.test(rc.why) && /TUN-5-RECURDOWN: Tunnel0 temporarily disabled due to recursive routing/.test(cli(g4, 'r1')('show logging')), 'R2 把 WAN 也放進 OSPF：R1 從 Tunnel 學到 tunnel destination 的網段 → recursive routing，Tunnel0 被暫停');
+  sim.advance(g4, 31);
+  const up = tun(g4, 'r1').rt.link;
+  sim.advance(g4, 10);
+  ok(up && !tun(g4, 'r1').rt.link && g4.dyn.greRecur['r1/Tu0'].n >= 2, '暫停時間到了又起來、OSPF 學到路之後又被關掉：一直 flapping');
+  cli(g4, 'r2')('configure terminal', 'router ospf 1', 'no network 198.51.100.0 0.0.0.3 area 0', 'end');
+  sim.advance(g4, 60); settle(g4);
+  ok(tun(g4, 'r1').rt.link && ping(g4, 'pc1', '10.2.0.10').ok, '拿掉 WAN 的 network 敘述：Tunnel 穩定、恢復通訊');
+  // ip route … Tunnel0（只寫出口介面）
+  const g5 = two();
+  for (const id of ['r1', 'r2']) cli(g5, id)('configure terminal', 'no router ospf 1', 'end');
+  cli(g5, 'r1')('configure terminal', 'ip route 10.2.0.0 255.255.255.0 Tunnel0', 'end');
+  cli(g5, 'r2')('configure terminal', 'ip route 10.1.0.0 255.255.255.0 Tunnel0', 'end');
+  ok(ping(g5, 'pc1', '10.2.0.10').ok && /S\s+10\.2\.0\.0\/24 is directly connected, Tunnel0/.test(cli(g5, 'r1')('show ip route')) && runningConfig(g5, g5.devices.r1).includes('ip route 10.2.0.0 255.255.255.0 Tunnel0'), 'ip route 10.2.0.0 255.255.255.0 Tunnel0：點對點的 Tunnel 可以只寫出口介面');
+
+  // ── hub 與兩個 spoke 接在網際網路上
+  const three = () => {
+    const lines3 = [1, 2, 3].map((n) => ({ id: 'line' + n, label: '線路 ' + n, media: 'rj45' }));
+    const inet = MD('internet', 'inet', { name: '網際網路', pos: [0, -9], ports: lines3 });
+    SL(inet, 'line1', { type: 'static', gw: '203.0.113.1', mask: '255.255.255.252', assign: '203.0.113.2' });
+    SL(inet, 'line2', { type: 'static', gw: '198.51.100.1', mask: '255.255.255.252', assign: '198.51.100.2' });
+    SL(inet, 'line3', { type: 'static', gw: '192.0.2.1', mask: '255.255.255.252', assign: '192.0.2.2' });
+    const rt = (id, name, wan, gw, lan) => MD('isr4331', id, { name, pos: [0, 0], init(d) { ip4(d, 'Gi0/0/0', wan, '255.255.255.252'); ip4(d, 'Gi0/0/1', lan); d.routes.push({ dst: '0.0.0.0', mask: '0.0.0.0', via: gw }); } });
+    const s = MS([inet, rt('hub', 'HUB', '203.0.113.2', '203.0.113.1', '10.0.1.1'), rt('s1', 'SPOKE1', '198.51.100.2', '198.51.100.1', '10.1.1.1'), rt('s2', 'SPOKE2', '192.0.2.2', '192.0.2.1', '10.2.1.1'),
+      MD('pc', 'pch', { name: 'PC-H', pos: [0, 4], ip: '10.0.1.10', gw: '10.0.1.1' }), MD('pc', 'pc1', { name: 'PC1', pos: [-8, 5], ip: '10.1.1.10', gw: '10.1.1.1' }), MD('pc', 'pc2', { name: 'PC2', pos: [8, 5], ip: '10.2.1.10', gw: '10.2.1.1' })],
+    [['inet:line1', 'hub:Gi0/0/0'], ['inet:line2', 's1:Gi0/0/0'], ['inet:line3', 's2:Gi0/0/0'], ['pch:eth0', 'hub:Gi0/0/1'], ['pc1:eth0', 's1:Gi0/0/1'], ['pc2:eth0', 's2:Gi0/0/1']]);
+    settle(s);
+    return s;
+  };
+  const CRYPTO = ['crypto isakmp policy 10', 'encryption aes 256', 'hash sha256', 'authentication pre-share', 'group 14', 'exit', 'crypto isakmp key Dmvpn!26 address 0.0.0.0',
+    'crypto ipsec transform-set TS esp-aes 256 esp-sha256-hmac', 'mode transport', 'exit', 'crypto ipsec profile PROT', 'set transform-set TS', 'exit'];
+  // GRE over IPsec
+  const gi = three();
+  cli(gi, 'hub')('configure terminal', ...CRYPTO, 'interface Tunnel1', 'ip address 10.255.1.1 255.255.255.252', 'tunnel source Gi0/0/0', 'tunnel destination 198.51.100.2', 'tunnel protection ipsec profile PROT', 'exit', 'ip route 10.1.1.0 255.255.255.0 Tunnel1', 'end');
+  cli(gi, 's1')('configure terminal', ...CRYPTO, 'interface Tunnel1', 'ip address 10.255.1.2 255.255.255.252', 'tunnel source Gi0/0/0', 'tunnel destination 203.0.113.2', 'tunnel protection ipsec profile PROT', 'exit', 'ip route 10.0.1.0 255.255.255.0 Tunnel1', 'end');
+  const ri = ping(gi, 'pc1', '10.0.1.10');
+  ok(ri.ok && ri.log.some((l) => /GRE 封裝/.test(l.text)) && ri.log.some((l) => /^加密：/.test(l.text)) && tun(gi, 'hub', 1).rt.tun.mtu === 1403, 'GRE over IPsec：先包 GRE、再整個加密成 ESP；Tunnel 的 MTU 扣掉兩層標頭剩 1403');
+  const HI = cli(gi, 'hub');
+  ok(/Session status: UP-ACTIVE/.test(HI('show crypto session')) && /permit 47 host 203\.0\.113\.2 host 198\.51\.100\.2/.test(HI('show crypto session')) && /in use settings =\{Transport, \}/.test(HI('show crypto ipsec sa')) && /\(203\.0\.113\.2\/255\.255\.255\.255\/47\/0\)/.test(HI('show crypto ipsec sa')), 'show crypto session / ipsec sa：proxy ID 是 GRE（協定 47）、transport mode');
+  HI('configure terminal', 'ip access-list extended EDGE', 'permit udp any host 203.0.113.2 eq isakmp', 'permit esp any host 203.0.113.2', 'exit', 'interface Gi0/0/0', 'ip access-group EDGE in', 'end');
+  ok(ping(gi, 'pc1', '10.0.1.10').ok, '外部 ACL 只放 UDP 500 和 ESP（不用放 GRE：GRE 包在 ESP 裡面）');
+  // VTI
+  const gv = three();
+  const vti = (id, me, peer, lanNet) => cli(gv, id)('configure terminal', ...CRYPTO, 'interface Tunnel2', `ip address ${me} 255.255.255.252`, 'tunnel source Gi0/0/0', `tunnel destination ${peer}`, 'tunnel mode ipsec ipv4', 'tunnel protection ipsec profile PROT', 'exit', 'router ospf 1', 'network 10.255.2.0 0.0.0.3 area 0', `network ${lanNet} 0.0.0.255 area 0`, 'end');
+  vti('hub', '10.255.2.1', '192.0.2.2', '10.0.1.0'); vti('s2', '10.255.2.2', '203.0.113.2', '10.2.1.0');
+  const rv = ping(gv, 'pc2', '10.0.1.10');
+  ok(rv.ok && rv.log.some((l) => /加密（VTI）/.test(l.text)) && !rv.log.some((l) => /GRE 封裝/.test(l.text)) && tun(gv, 's2', 2).rt.tun.mtu === 1427 && gv.devices.s2.rt.nbrs.some((n) => n.iface === 'Tu2' && n.state === 'full'), 'VTI（tunnel mode ipsec ipv4）：沒有 GRE，直接 ESP；OSPF 在 VTI 上 FULL');
+  cli(gv, 's2')('configure terminal', 'crypto ipsec transform-set TS esp-aes esp-sha-hmac', 'end');
+  ok(!tun(gv, 's2', 2).rt.link && /第二階段 \(IPsec\) 的加密提案不一致/.test(cli(gv, 's2')('show interfaces tunnel2')), 'transform-set 不一致：IPsec SA 建不起來，VTI 就是 line protocol down（show interfaces 寫出原因）');
+  ok(/Keepalive is not supported on IPsec tunnel/.test(cli(gv, 's2')('configure terminal', 'interface Tunnel2', 'keepalive', 'end')), 'VTI 不能設 keepalive');
+
+  // ── DMVPN phase 2
+  const dm = (opts = {}) => {
+    const s = three();
+    cli(s, 'hub')('configure terminal', ...CRYPTO, 'interface Tunnel0', 'ip address 10.0.0.1 255.255.255.0', 'ip nhrp network-id 1', 'ip nhrp authentication NHRP26', ...(opts.noMcast ? [] : ['ip nhrp map multicast dynamic']), ...(opts.p2p ? [] : ['ip ospf network broadcast', 'ip ospf priority 255']),
+      'tunnel source Gi0/0/0', 'tunnel mode gre multipoint', 'tunnel key 100', 'tunnel protection ipsec profile PROT', 'exit', 'router ospf 1', 'network 10.0.0.0 0.0.0.255 area 0', 'network 10.0.1.0 0.0.0.255 area 0', 'end');
+    for (const [id, ip, lan] of [['s1', '10.0.0.11', '10.1.1.0'], ['s2', '10.0.0.12', '10.2.1.0']]) {
+      cli(s, id)('configure terminal', ...CRYPTO, 'interface Tunnel0', `ip address ${ip} 255.255.255.0`, 'ip nhrp network-id 1', 'ip nhrp authentication NHRP26', 'ip nhrp nhs 10.0.0.1 nbma 203.0.113.2 multicast', ...(opts.p2p ? [] : ['ip ospf network broadcast', 'ip ospf priority 0']),
+        'tunnel source Gi0/0/0', 'tunnel mode gre multipoint', 'tunnel key 100', 'tunnel protection ipsec profile PROT', 'exit', 'router ospf 1', 'network 10.0.0.0 0.0.0.255 area 0', `network ${lan} 0.0.0.255 area 0`, 'end');
+    }
+    return s;
+  };
+  const d2 = dm();
+  const S1 = cli(d2, 's1');
+  ok(/1 198\.51\.100\.2\s+10\.0\.0\.11\s+UP \S+\s+D/.test(cli(d2, 'hub')('show dmvpn')) && /Type:Hub, NHRP Peers:2/.test(cli(d2, 'hub')('show dmvpn')) && /10\.0\.0\.1\s+RE\s+NBMA Address: 203\.0\.113\.2/.test(S1('show ip nhrp nhs')), 'DMVPN：兩個 spoke 向 hub 註冊（show dmvpn 是 D、show ip nhrp nhs 是 RE）');
+  ok(/O\s+10\.2\.1\.0\/24 \[110\/1001\] via 10\.0\.0\.12/.test(S1('show ip route')), 'OSPF broadcast + spoke priority 0（hub 是 DR）：SPOKE1 往 SPOKE2 內網的下一站是 SPOKE2 的 Tunnel 位址（phase 2）');
+  const p1 = ping(d2, 'pc1', '10.2.1.10');
+  ok(p1.ok && hops(p1) === '10.1.1.1 → 10.0.0.1 → 10.0.0.12' && p1.log.some((l) => /Resolution Request/.test(l.text)), '第一個封包：NHRP 還不知道 SPOKE2 的 NBMA 位址，先經過 hub，同時發出 Resolution Request');
+  sim.advance(d2, 1);
+  const p2 = ping(d2, 'pc1', '10.2.1.10');
+  ok(p2.ok && hops(p2) === '10.1.1.1 → 10.0.0.1 → 10.0.0.12' && p2.log.some((l) => /IPsec 還在協商/.test(l.text)), '一秒後：知道 NBMA 位址了，但 spoke 之間的 IPsec 還在協商，繼續經過 hub');
+  settle(d2);
+  const p3 = ping(d2, 'pc1', '10.2.1.10');
+  ok(p3.ok && hops(p3) === '10.1.1.1 → 10.0.0.12' && /1 192\.0\.2\.2\s+10\.0\.0\.12\s+UP \S+\s+D/.test(S1('show dmvpn')), 'IPsec 建好之後：SPOKE1 直接送到 SPOKE2（spoke 之間的動態通道）');
+  ok(/Tunnel0-192\.0\.2\.2/.test(JSON.stringify(d2.devices.s1.rt.tunnels.map((t) => t.name))) && d2.devices.s1.rt.tunnels.every((t) => t.up), 'SPOKE1 有兩組 IPsec SA：往 hub、往 SPOKE2');
+  const d3 = dm({ noMcast: true });
+  ok(!d3.devices.s1.rt.nbrs.length && /沒有 ip nhrp map multicast dynamic/.test(JSON.stringify(d3.devices.hub.rt.ospf.ifs.Tu0.why)), 'hub 少了 ip nhrp map multicast dynamic：OSPF 的 Hello 只有單向，鄰居建不起來');
+  const d4 = dm({ p2p: true });
+  ok(/Adjacency forced to reset/.test(JSON.stringify(d4.devices.hub.rt.ospf.ifs.Tu0.why)), 'mGRE 沿用 Tunnel 預設的 point-to-point：hub 一個介面聽到兩個鄰居，鄰居一直被重設');
+  const d5 = dm();
+  cli(d5, 'hub')('configure terminal', 'interface Tunnel0', 'ip ospf priority 1', 'end');
+  cli(d5, 's2')('configure terminal', 'interface Tunnel0', 'ip ospf priority 50', 'end');
+  cli(d5, 'hub')('clear ip ospf process', 'yes');
+  sim.advance(d5, 60); settle(d5);
+  ok(/聽不到 DR（SPOKE2）/.test(JSON.stringify(d5.devices.s1.rt.ospf.ifs.Tu0.why)) || /聽不到 DR（SPOKE2）/.test(JSON.stringify(d5.devices.hub.rt.ospf.ifs.Tu0.why)), 'spoke 搶到 DR：其他 spoke 聽不到 DR，路算不出來');
+  // phase 3
+  const d6 = three();
+  const base = (ip) => ['interface Tunnel0', `ip address ${ip} 255.255.255.0`, 'ip nhrp network-id 1', 'tunnel source Gi0/0/0', 'tunnel mode gre multipoint'];
+  cli(d6, 'hub')('configure terminal', ...base('10.0.0.1'), 'ip nhrp map multicast dynamic', 'ip nhrp redirect', 'exit', 'ip route 10.1.1.0 255.255.255.0 10.0.0.11', 'ip route 10.2.1.0 255.255.255.0 10.0.0.12', 'end');
+  for (const [id, ip] of [['s1', '10.0.0.11'], ['s2', '10.0.0.12']]) cli(d6, id)('configure terminal', ...base(ip), 'ip nhrp nhs 10.0.0.1 nbma 203.0.113.2 multicast', 'exit', 'ip route 10.0.0.0 255.0.0.0 10.0.0.1', 'end');
+  ping(d6, 'pc1', '10.2.1.10'); settle(d6);
+  ok(hops(ping(d6, 'pc1', '10.2.1.10')) === '10.1.1.1 → 10.0.0.1 → 10.0.0.12', 'phase 3 少了 spoke 的 ip nhrp shortcut：收到 Redirect 也不建捷徑，一直經過 hub');
+  for (const id of ['s1', 's2']) cli(d6, id)('configure terminal', 'interface Tunnel0', 'ip nhrp shortcut', 'end');
+  const q1 = ping(d6, 'pc1', '10.2.1.10');
+  settle(d6);
+  const q2 = ping(d6, 'pc1', '10.2.1.10');
+  ok(q1.log.some((l) => /NHRP Redirect/.test(l.text)) && hops(q2) === '10.1.1.1 → 10.0.0.12' && /H\s+10\.2\.1\.0\/24 \[250\/1\] via 10\.0\.0\.12, \S+, Tunnel0/.test(cli(d6, 's1')('show ip route')), 'phase 3：hub 送 Redirect、spoke 解析整個網段，路由表多一筆 H（NHRP），之後直接走');
+  // running-config 貼回全新的路由器
+  for (const [st, id] of [[d2, 's1'], [d2, 'hub'], [gv, 's2'], [g5, 'r1']]) {
+    const txt = runningConfig(st, st.devices[id]);
+    const fresh = MS([MD('isr4331', 'x', { name: 'X', pos: [0, 0] })], []); settle(fresh);
+    const X = cli(fresh, 'x');
+    X('configure terminal', ...txt.filter((l) => l !== '!' && !/^(end|version|Building|Current configuration)/.test(l)), 'end');
+    const again = runningConfig(fresh, fresh.devices.x).filter((l) => !/^hostname/.test(l));
+    const want = txt.filter((l) => !/^hostname/.test(l));
+    const tunnelPart = (ls) => ls.filter((l) => /^(interface Tunnel|crypto|ip route)/.test(l) || /^ (ip nhrp|tunnel|ip ospf|set |mode |keepalive)/.test(l)).join('\n');
+    ok(tunnelPart(again) === tunnelPart(want), `${st.devices[id].name} 的 Tunnel / crypto / NHRP 設定貼回全新的路由器，running-config 一模一樣`);
+  }
+
+  // ── NAT-T：分公司在大樓的 PAT 後面
+  const nt = (opts = {}) => {
+    const lines2 = [1, 2].map((n) => ({ id: 'line' + n, label: '線路 ' + n, media: 'rj45' }));
+    const inet = MD('internet', 'inet', { name: '網際網路', pos: [0, -9], ports: lines2 });
+    SL(inet, 'line1', { type: 'static', gw: '203.0.113.1', mask: '255.255.255.252', assign: '203.0.113.2' });
+    SL(inet, 'line2', { type: 'static', gw: '198.51.100.1', mask: '255.255.255.252', assign: '198.51.100.2' });
+    const s = MS([inet, MD('isr4331', 'hq', { name: 'HQ', pos: [-6, -4] }), MD('isr4331', 'cpe', { name: 'BLDG', pos: [6, -4] }), MD('isr4331', 'br', { name: 'BR', pos: [6, 0] }),
+      MD('pc', 'pch', { name: 'PC-H', pos: [-6, 4], ip: '10.1.0.10', gw: '10.1.0.1' }), MD('pc', 'pcb', { name: 'PC-B', pos: [6, 5], ip: '10.2.0.10', gw: '10.2.0.1' })],
+    [['inet:line1', 'hq:Gi0/0/0'], ['inet:line2', 'cpe:Gi0/0/0'], ['cpe:Gi0/0/1', 'br:Gi0/0/0'], ['pch:eth0', 'hq:Gi0/0/1'], ['pcb:eth0', 'br:Gi0/0/1']]);
+    const vpn = (lan, peerLan, peer) => ['crypto isakmp policy 10', 'encryption aes 256', 'hash sha256', 'authentication pre-share', 'group 14', 'exit', `crypto isakmp key NatT!2026 address ${peer}`,
+      'crypto ipsec transform-set TS esp-aes 256 esp-sha256-hmac', 'exit', 'ip access-list extended VPN', `permit ip ${lan} 0.0.0.255 ${peerLan} 0.0.0.255`, 'exit', 'crypto map CM 10 ipsec-isakmp', `set peer ${peer}`, 'set transform-set TS', 'match address VPN', 'exit', 'interface Gi0/0/0', 'crypto map CM', 'exit'];
+    const S = (id, lines) => { const x = iosSession(() => s.devices[id], () => s); for (const l of lines) x.exec(l); };
+    S('hq', ['configure terminal', 'interface Gi0/0/0', 'ip address 203.0.113.2 255.255.255.252', 'interface Gi0/0/1', 'ip address 10.1.0.1 255.255.255.0', 'exit', 'ip route 0.0.0.0 0.0.0.0 203.0.113.1', ...vpn('10.1.0.0', '10.2.0.0', '198.51.100.2'),
+      ...(opts.acl ? ['ip access-list extended EDGE', 'permit udp any host 203.0.113.2 eq isakmp', 'permit esp any host 203.0.113.2', 'exit', 'interface Gi0/0/0', 'ip access-group EDGE in', 'exit'] : []), 'end']);
+    S('cpe', ['configure terminal', 'interface Gi0/0/0', 'ip address 198.51.100.2 255.255.255.252', 'ip nat outside', 'interface Gi0/0/1', 'ip address 192.168.10.1 255.255.255.0', 'ip nat inside', 'exit', 'ip route 0.0.0.0 0.0.0.0 198.51.100.1', 'access-list 1 permit 192.168.10.0 0.0.0.255', 'ip nat inside source list 1 interface Gi0/0/0 overload', 'end']);
+    S('br', ['configure terminal', 'interface Gi0/0/0', 'ip address 192.168.10.2 255.255.255.0', 'interface Gi0/0/1', 'ip address 10.2.0.1 255.255.255.0', 'exit', 'ip route 0.0.0.0 0.0.0.0 192.168.10.1', ...vpn('10.2.0.0', '10.1.0.0', '203.0.113.2'), ...(opts.noNatT ? ['no crypto ipsec nat-transparency udp-encapsulation'] : []), 'end']);
+    settle(s);
+    return s;
+  };
+  const n1 = nt();
+  const nb = ping(n1, 'pcb', '10.1.0.10'), nh = ping(n1, 'pch', '10.2.0.10');
+  ok(nb.ok && nh.ok && n1.devices.br.rt.tunnels[0].natT && nb.log.some((l) => /NAT-T/.test(l.text)) && nh.log.some((l) => /NAT 還原（NAT-T）/.test(l.text)), 'NAT-T：BR 在 PAT 後面，ESP 包進 UDP 4500；分公司、總公司兩邊主動連線都通');
+  ok(/Peer: 198\.51\.100\.2 port 4500/.test(cli(n1, 'hq')('show crypto session')) && /in use settings =\{Tunnel UDP-Encaps, \}/.test(cli(n1, 'br')('show crypto ipsec sa')), 'show crypto session 的 port 4500、show crypto ipsec sa 的 Tunnel UDP-Encaps');
+  const n2 = nt({ noNatT: true });
+  const nx = ping(n2, 'pcb', '10.1.0.10');
+  ok(n2.devices.br.rt.tunnels[0].up && !nx.ok && /PAT 沒辦法替它轉換/.test(nx.reason), '關掉 NAT-T：IKE 還是建得起來，ESP 卻被 PAT 丟掉（沒有連接埠號碼）');
+  const n3 = nt({ acl: true });
+  ok(!n3.devices.br.rt.tunnels[0].up && /UDP 4500 過不去/.test(n3.devices.br.rt.tunnels[0].why), '總公司的 ACL 只放 UDP 500 與 ESP：偵測到 NAT 改用 UDP 4500 之後就被擋掉');
+  ok(/permit esp any host 203\.0\.113\.2/.test(runningConfig(n3, n3.devices.hq).join('\n')), 'ACL 可以寫 esp（IP 協定 50）、gre（47）');
+}
+
 // ── 題庫與證照對照表的資料檢查 ──
 {
   const { QUESTIONS, TOPICS, LEVEL_TOPIC } = await import('../src/data/quiz.js');

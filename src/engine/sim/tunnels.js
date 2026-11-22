@@ -5,6 +5,7 @@ import { cidrList, selMatch } from './core.js';
 import { findOwner } from './forward.js';
 import { leaseFrom, lookupRoute } from './l3.js';
 import { transact } from './transact.js';
+import { isTun, protPeers, tunMode } from './gre.js';
 
 // ───────────────────────────── VPN 通道 ─────────────────────────────
 
@@ -30,7 +31,7 @@ export function pskOf(d, t) {
   const o = v2obj(d, t);
   if (o) {
     const kr = (o.v.krs || {})[o.prof.keyring];
-    const peer = kr && Object.values(kr.peers || {}).find((x) => x.address === t.peer);
+    const peer = kr && (Object.values(kr.peers || {}).find((x) => x.address === t.peer) || Object.values(kr.peers || {}).find((x) => x.address === '0.0.0.0'));
     if (!peer) return { loc: '', rem: '', why: o.prof.keyring ? `keyring ${o.prof.keyring} 裡沒有對端 ${t.peer} 的金鑰` : `ikev2 profile ${t.ikev2} 沒有指定 keyring` };
     return { loc: peer.pskLocal || peer.psk || '', rem: peer.pskRemote || peer.psk || '' };
   }
@@ -149,9 +150,39 @@ export function saInfo(state, devId, name) {
 }
 const tunIface = (id, label) => ({ id, label, bind: { t: 'tun' }, rt: { ip: null, vips: [], link: true }, nat: false });
 
+/** NAT-T：IOS 預設開啟（no crypto ipsec nat-transparency udp-encapsulation 關掉），FortiGate 預設也開 */
+const nattOn = (d) => !d.noNatT;
+/** crypto isakmp key：先找對端的位址，沒有就用萬用的 0.0.0.0（DMVPN 的 spoke 之間要靠它） */
+const ikeKey = (d, peer) => ((d.ikeKeys || {})[peer] ?? (d.ikeKeys || {})['0.0.0.0'] ?? '');
+/**
+ * Tunnel 介面上的 tunnel protection ipsec profile：把 profile 換算成和 crypto map 一樣的通道設定。
+ * GRE 的 proxy ID 是「gre host 本端 host 對端」，VTI（tunnel mode ipsec ipv4）是 0.0.0.0/0 ↔ 0.0.0.0/0
+ */
+function protT(d, i, peerIp, responder) {
+  const prof = (d.ipsecProfiles || {})[i.tun.prot] || {};
+  const ts = (d.tsets || {})[prof.tset] || {};
+  const vti = tunMode(i) === 'ipsec', peer = fmtIp(peerIp), src = i.rt.tun.src;
+  const name = tunMode(i) === 'mgre' ? `${i.label}-${peer}` : i.label;
+  const cfg = {
+    name, peer, psk: ikeKey(d, peer), ...(prof.ikev2 ? { ikev2: prof.ikev2 } : {}),
+    ...(ts.enc2 ? { enc2: ts.enc2, hash2: ts.hash2 } : {}), pfs: prof.pfs || '', ...(prof.life2 ? { life2: prof.life2 } : {}),
+    local: vti ? '0.0.0.0/0' : `${fmtIp(src)}/32`, remote: vti ? '0.0.0.0/0' : `${peer}/32`, prot: i.tun.prot, tif: i.id,
+  };
+  const T = {
+    name, cfg, dev: d.id, up: false, why: '', local: cidrList(cfg.local), remote: cidrList(cfg.remote),
+    iface: vti ? i : tunIface('vpn:' + name, `IPsec ${i.label}`), peerIp, localIp: src, tif: i.id, prot: true, responder: !!responder,
+    ...(vti ? { vti: true } : { proto: 'gre' }),
+  };
+  if (prof.tset && !(d.tsets || {})[prof.tset]) T.why = `IPsec profile ${i.tun.prot} 用的 transform-set ${prof.tset} 不存在`;
+  else if (prof.ikev2 && !v2obj(d, cfg)) T.why = `IPsec profile ${i.tun.prot} 指定的 ikev2 profile「${prof.ikev2}」不存在`;
+  else if (!pskOf(d, cfg).loc) T.why = pskOf(d, cfg).why || `沒有給 ${peer} 的預先共用金鑰（crypto isakmp key <金鑰> address ${peer}${tunMode(i) === 'mgre' ? '，DMVPN 的 spoke 之間要用 address 0.0.0.0' : ''}）`;
+  return T;
+}
+
 export function prepTunnels(state) {
   const devs = Object.values(state.devices);
   const all = [];
+  for (const d of devs) d.rt.tunnels = []; // 有 Tunnel 介面時這裡會跑兩次（外層的路由算好時、全部算好之後）
   for (const d of devs) {
     for (const t of d.vpns || []) {
       const name = t.name || 'VPN';
@@ -165,7 +196,7 @@ export function prepTunnels(state) {
       else if (T.peerIp == null) T.why = '尚未設定對端的公用 IP';
       else if (!T.local.length || !T.remote.length) T.why = '尚未設定本地 / 遠端網段';
       else if (t.ikev2 && !v2obj(d, t)) T.why = `crypto map 指定的 ikev2 profile「${t.ikev2}」不存在`;
-      else if (t.ikev2 && v2obj(d, t).prof.remote && v2obj(d, t).prof.remote !== t.peer) T.why = `ikev2 profile「${t.ikev2}」的 match identity remote address 是 ${v2obj(d, t).prof.remote}，和對端 ${t.peer} 不符：IKEv2 找不到可用的 profile`;
+      else if (t.ikev2 && v2obj(d, t).prof.remote && v2obj(d, t).prof.remote !== '0.0.0.0' && v2obj(d, t).prof.remote !== t.peer) T.why = `ikev2 profile「${t.ikev2}」的 match identity remote address 是 ${v2obj(d, t).prof.remote}，和對端 ${t.peer} 不符：IKEv2 找不到可用的 profile`;
       else if (!pskOf(d, t).loc) T.why = pskOf(d, t).why || '尚未設定預先共用金鑰 (PSK)';
       else {
         const r = lookupRoute(d, T.peerIp);
@@ -175,11 +206,41 @@ export function prepTunnels(state) {
       }
     }
   }
+  // Tunnel 介面的 tunnel protection：點對點（GRE、VTI）兩端各自建；mGRE 的 spoke 主動找 hub 與解析到的 spoke，hub 被動接受
+  for (const d of devs) for (const i of d.ifaces) {
+    if (!isTun(i) || !i.tun || !i.tun.prot || !i.rt.tun || !i.rt.tun.base) continue;
+    for (const ip of protPeers(state, d, i)) { const T = protT(d, i, ip); d.rt.tunnels.push(T); all.push(T); }
+  }
+  for (const T of all.slice()) {
+    if (!T.prot || T.why) continue;
+    const pd = findOwner(state, T.peerIp);
+    if (!pd || all.some((x) => x.dev === pd.id && x.peerIp === T.localIp)) continue;
+    const j = pd.ifaces.find((x) => isTun(x) && tunMode(x) === 'mgre' && x.tun.prot && x.rt.tun && x.rt.tun.base && x.rt.tun.src === T.peerIp);
+    if (j) { const R = protT(pd, j, T.localIp, true); pd.rt.tunnels.push(R); all.push(R); }
+  }
+  // NAT 偵測（NAT-D）：這一端在 NAT 後面，IKE 從 UDP 500 出去之後，對端看到的來源位址就不是這一端自己的位址
+  for (const T of all) {
+    if (T.why || T.responder) continue;
+    const pd = findOwner(state, T.peerIp);
+    if (pd && all.some((x) => x.dev === pd.id && x.peerIp === T.localIp)) continue;
+    const r = transact(state, T.dev, { proto: 'udp', dst: T.peerIp, dport: 500, quiet: true });
+    if (r.ok && r.seenSrc != null && r.seenSrc !== T.localIp) {
+      const by = findOwner(state, r.seenSrc);
+      T.nat = { seen: r.seenSrc, by: by ? by.id : null, peerDev: r.responder };
+    }
+  }
   for (const T of all) {
     if (T.why) continue;
-    const pd = findOwner(state, T.peerIp);
-    const P = pd && all.find((x) => x.dev === pd.id && x.peerIp === T.localIp);
+    let pd = findOwner(state, T.peerIp);
+    let P = pd && (all.find((x) => x.dev === pd.id && x.peerIp === T.localIp && !!x.vti === !!T.vti) || all.find((x) => x.dev === pd.id && x.peerIp === T.localIp));
+    // 這一端在 NAT 後面：對端的設定要指向 NAT 之後的位址
+    if (!P && T.nat) { const Q = all.find((x) => x.dev === T.nat.peerDev && x.peerIp === T.nat.seen); if (Q) { P = Q; pd = state.devices[Q.dev]; } }
+    // 對端在 NAT 後面：設定的對端位址是那台 NAT 設備的公用位址，真正的對端由它主動來連
+    let viaNat = null;
+    if (!P) { const Q = all.find((x) => x.nat && x.nat.seen === T.peerIp && x.peerIp === T.localIp && x.nat.peerDev === T.dev); if (Q) { P = Q; pd = state.devices[Q.dev]; viaNat = Q.nat; } }
+    const nat = T.nat || viaNat;
     if (!pd) { T.why = `對端 ${fmtIp(T.peerIp)} 沒有回應`; T.dead = true; }
+    else if (!P && T.nat) T.why = `這一端在 NAT 後面：${pd.name} 看到的來源位址是 ${fmtIp(T.nat.seen)}（不是 ${fmtIp(T.localIp)}），它那一端的通道設定要指向 ${fmtIp(T.nat.seen)}`;
     else if (!P) T.why = `${pd.name} 上沒有指向 ${fmtIp(T.localIp)} 的通道設定`;
     else if (P.cfg.off) T.why = `${pd.name} 那一端的通道已停用`;
     else if (ikeVer(state.devices[T.dev], T.cfg) !== ikeVer(pd, P.cfg)) {
@@ -195,21 +256,31 @@ export function prepTunnels(state) {
     } else if (ikeVer(pd, P.cfg) === 2 && !strip6(p2set(T.cfg)).some((x) => strip6(p2set(P.cfg)).includes(x))) {
       T.why = `CHILD_SA 的加密提案不一致（本端 ${strip6(p2set(T.cfg)).join('、')}，對端 ${strip6(p2set(P.cfg)).join('、')}）— IKE SA 建好了，但 IPsec SA 建不起來 (NO_PROPOSAL_CHOSEN)`;
     } else if (ikeVer(pd, P.cfg) === 1 && !p2set(T.cfg).some((x) => p2set(P.cfg).includes(x))) T.why = `第二階段 (IPsec) 的加密提案不一致（本端 ${p2set(T.cfg).join('、')}，對端 ${p2set(P.cfg).join('、')}）— IKE 通過了，但資料通道建不起來`;
-    else if (!sameSel(T.local, P.remote) || !sameSel(T.remote, P.local)) T.why = '兩端的本地 / 遠端網段沒有互相對應';
+    else if (!!T.vti !== !!P.vti) T.why = `一端是 tunnel mode ipsec ipv4（VTI，proxy ID 是 0.0.0.0/0）、另一端是 GRE（proxy ID 是 gre host … host …）：IPsec 的 proxy ID 對不起來，第二階段建不起來`;
+    else if (!sameSel(T.local, P.remote) || !sameSel(T.remote, P.local)) T.why = T.prot || P.prot ? `IPsec 的 proxy ID 對不起來（本端 ${T.cfg.local} → ${T.cfg.remote}，對端 ${P.cfg.local} → ${P.cfg.remote}）` : '兩端的本地 / 遠端網段沒有互相對應';
     else {
-      const r = transact(state, T.dev, { proto: 'udp', dst: T.peerIp, dport: 500, quiet: true });
+      // 對端在 NAT 後面時，IKE 由它主動發起（從外面連不進 NAT 裡面），這一端不用自己試
+      const r = viaNat ? { ok: true } : transact(state, T.dev, { proto: 'udp', dst: T.peerIp, dport: 500, quiet: true });
+      // NAT-T（RFC 3948）：偵測到 NAT，兩端都支援就改用 UDP 4500，把 ESP 包在 UDP 裡穿過 PAT
+      const natT = nat && nattOn(state.devices[T.dev]) && nattOn(pd);
+      const r2 = natT && !viaNat ? transact(state, T.dev, { proto: 'udp', dst: T.peerIp, dport: 4500, quiet: true }) : { ok: true };
       if (!r.ok) { T.why = 'IKE 封包到不了對端：' + r.reason; T.dead = true; }
+      else if (!r2.ok) { T.why = `偵測到 NAT（對端看到的來源是 ${fmtIp(nat.seen)}），IKE 改用 UDP 4500 (NAT-T)，但 UDP 4500 過不去：${r2.reason}`; T.dead = true; }
       else {
         T.peer = P;
+        if (nat) T.natInfo = { seen: nat.seen, by: nat.by, natT: !!natT, behind: !!T.nat };
+        if (natT) T.natT = true;
         // IKEv2：兩端的 PFS 不同時，現在建得起來，第一次重新協商才會失敗
         if (ikeVer(pd, P.cfg) === 2 && !p2set(T.cfg).some((x) => p2set(P.cfg).includes(x))) T.pfsBad = `兩端的 PFS 設定不同（本端 ${pfsText(T.cfg)}，對端 ${pfsText(P.cfg)}）`;
       }
     }
   }
+  // 對端在 NAT 後面：NAT 設備替 UDP 4500 留著轉換（keepalive 讓它不過期），外面送進來的 NAT-T 封包才轉得回去
+  state.rt.natt = all.filter((T) => T.natT && T.nat && T.nat.by).map((T) => ({ by: T.nat.by, peer: T.peerIp, local: T.localIp, dev: T.dev }));
   tunnelTimers(state, all);
   for (const T of all) {
     T.up = !T.why;
-    T.cfg.rt = { up: T.up, why: T.why, nego: T.nego || 0, stale: T.stale ? T.stale.until : 0, staleWhy: T.stale ? T.stale.why : '', ver: ikeVer(state.devices[T.dev], T.cfg), rekeyFail: T.up && T.rekeyFail ? T.rekeyFail : 0, pfsBad: T.up ? T.pfsBad || '' : '' };
+    T.cfg.rt = { natT: !!T.natT, nat: T.natInfo ? fmtIp(T.natInfo.seen) : '', up: T.up, why: T.why, nego: T.nego || 0, stale: T.stale ? T.stale.until : 0, staleWhy: T.stale ? T.stale.why : '', ver: ikeVer(state.devices[T.dev], T.cfg), rekeyFail: T.up && T.rekeyFail ? T.rekeyFail : 0, pfsBad: T.up ? T.pfsBad || '' : '' };
   }
 
   // 遠端存取 VPN（用戶端撥入）
@@ -245,6 +316,7 @@ export function prepTunnels(state) {
 export function findTunnel(dev, pkt) {
   let hit = null;
   for (const t of dev.rt.tunnels) {
+    if (t.vti || (t.proto && pkt.proto !== t.proto)) continue; // VTI 只加密路由到 Tunnel 介面的封包；GRE 的 proxy ID 只比對 GRE
     if (!selMatch(t.local, pkt.src) || !selMatch(t.remote, pkt.dst)) continue;
     // 用 CLI 建立的 FortiGate 通道是 route-based：除了第二階段的網段要符合，還要有一筆靜態路由把目的地指向通道
     if (t.cfg && t.cfg.manualRoute && !selMatch(cidrList((t.cfg.routes || []).join(',')), pkt.dst)) continue;
