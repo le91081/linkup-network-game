@@ -81,11 +81,28 @@ export function iosClock(state, d) {
   const t = deviceTime(state, d), p = parts(t);
   return `${flagOf(t)}${p.hms}.${p.ms} ${t.tz.name} ${DAY[p.x.getUTCDay()]} ${MON[p.x.getUTCMonth()]} ${p.x.getUTCDate()} ${p.x.getUTCFullYear()}`;
 }
-/** 紀錄用的時間戳記：*Mar  1 00:01:23.000 */
-export function iosStamp(state, d) {
-  const t = deviceTime(state, d), p = parts(t);
-  return `${flagOf(t)}${MON[p.x.getUTCMonth()]} ${String(p.x.getUTCDate()).padStart(2)} ${p.hms}.${p.ms}`;
+/**
+ * service timestamps log | debug：IOS 15 的預設是 datetime msec，而且用 UTC — 設了 clock timezone 也一樣，要加 localtime 才用當地時間。
+ * { dt: false } 是 uptime（開機多久）；{ off: true } 是 no service timestamps
+ */
+export const STAMP_DEFAULT = { dt: true, msec: true, local: false, tz: false, year: false };
+export const stampCfg = (d, kind = 'log') => ({ ...STAMP_DEFAULT, ...(((d.mgmt && d.mgmt.stamps) || {})[kind] || {}) });
+/** 開機多久的寫法：一天以內 00:12:34，一週以內 1d02h，再久是 2w3d */
+export function uptimeStamp(sec) {
+  const s = Math.floor(sec), dd = Math.floor(s / 86400);
+  if (dd >= 7) return `${Math.floor(dd / 7)}w${dd % 7}d`;
+  if (dd >= 1) return `${dd}d${two(Math.floor((s % 86400) / 3600))}h`;
+  return `${two(Math.floor(s / 3600))}:${two(Math.floor((s % 3600) / 60))}:${two(s % 60)}`;
 }
+/** 紀錄用的時間戳記：*Mar  1 00:01:23.000（沒有時間戳記時回傳空字串） */
+export function iosStamp(state, d, kind = 'log') {
+  const c = stampCfg(d, kind);
+  if (c.off) return '';
+  if (!c.dt) return uptimeStamp(uptimeOf(state, d));
+  const t0 = deviceTime(state, d), t = c.local ? t0 : { ...t0, tz: { name: 'UTC', off: 0 } }, p = parts(t);
+  return `${flagOf(t)}${MON[p.x.getUTCMonth()]} ${String(p.x.getUTCDate()).padStart(2)}${c.year ? ' ' + p.x.getUTCFullYear() : ''} ${p.hms}${c.msec ? '.' + p.ms : ''}${c.tz ? ' ' + t.tz.name : ''}`;
+}
+const stampPre = (state, d, kind) => { const x = iosStamp(state, d, kind); return x ? x + ': ' : ''; };
 /** 一般的日期時間：2026-01-05 09:00:12 */
 export function plainStamp(state, d) {
   const p = parts(deviceTime(state, d));
@@ -195,7 +212,7 @@ export function logEvent(state, d, sev, tag, msg, forti) {
   let line;
   if (isIos(d)) {
     if (!tag) return; // 只有 FortiGate 才有的事件
-    line = `${iosStamp(state, d)}: %${tag}: ${msg}`;
+    line = `${stampPre(state, d, 'log')}%${tag}: ${msg}`;
   } else if (d.kind === 'firewall' && forti) {
     const s = plainStamp(state, d);
     line = `date=${s.date} time=${s.time} devname="${d.name}" ${forti}`;
@@ -237,7 +254,7 @@ export function rawLog(state, d, sev, text) {
   if (!state.dyn || !state.dyn.log || !d || !isIos(d)) return;
   const n = (state.dyn.logSeq = (state.dyn.logSeq || 0) + 1);
   const buf = (state.dyn.log[d.id] ||= []);
-  const line = `${iosStamp(state, d)}: ${text}`;
+  const line = `${stampPre(state, d, sev === 7 ? 'debug' : 'log')}${text}`;
   buf.push({ n, t: state.clock, sev, line });
   if (buf.length > LOG_MAX) buf.shift();
   const srv = d.mgmt && parseIp(d.mgmt.syslog || ''), trap = d.mgmt && d.mgmt.logTrap != null && d.mgmt.logTrap !== '' ? +d.mgmt.logTrap : 6;
@@ -400,7 +417,7 @@ export function routerId(d) {
 }
 
 function snapshot(state, d) {
-  const s = { port: {}, errN: {}, nbr: {}, nbr6: {}, norid6: false, vrrp: {}, tun: {}, gre: {}, dup: {}, dupIp: {}, pool: [], auth: {}, psv: {}, stormF: {} };
+  const s = { port: {}, errN: {}, nbr: {}, nbr6: {}, norid6: false, vrrp: {}, tun: {}, gre: {}, dup: {}, dupIp: {}, pool: [], auth: {}, psv: {}, stormF: {}, poe: {} };
   const shutIf = (pid) => d.ifaces.some((i) => i.shut && i.bind.t === 'port' && i.bind.port === pid);
   for (const p of d.ports) {
     const pc = d.sw && d.sw.ports[p.id], err = d.rt.err && d.rt.err[p.id];
@@ -414,6 +431,8 @@ function snapshot(state, d) {
     if (li && li.mismatch) s.dup[p.id] = li.duplex + '|' + li.peerDuplex;
     const a = pc && pc.dot1x && state.rt.auth && state.rt.auth.dot1x[d.id + ':' + p.id];
     if (a && state.rt.links[d.id + ':' + p.id]) s.auth[p.id] = a.ok ? 'ok' : 'fail';
+    const pe = p.poe && state.rt.poe && state.rt.poe[d.id + ':' + p.id];
+    if (pe) s.poe[p.id] = pe.state;
   }
   for (const n of d.rt.nbrs || []) if (n.state === 'full' || n.state === 'dying') s.nbr[n.dev + '|' + n.iface] = { st: n.state, rid: routerId(state.devices[n.dev]) ?? n.ip };
   // VRF 裡的 OSPF 程序（介面各自不同，鍵不會和全域的撞在一起）
@@ -510,6 +529,14 @@ function diffDevice(state, d, a, b) {
   const dot = (m) => m.replace(/:/g, '').replace(/(.{4})(?=.)/g, '$1.');
   for (const [pid, mac] of Object.entries(b.psv || {})) if ((a.psv || {})[pid] !== mac) ev(2, 'PORT_SECURITY-2-PSECURE_VIOLATION', `Security violation occurred, caused by MAC address ${mac === 'macof' ? '00ff.1a2b.3c4d' : dot(mac)} on port ${longIf(label(pid))}.`);
   for (const pid of Object.keys(b.stormF || {})) if (!(a.stormF || {})[pid]) ev(3, 'STORM_CONTROL-3-FILTERED', `A packet storm was detected on ${label(pid)}. A packet filter action has been applied on the interface.`);
+  // PoE：受電設備插上之後偵測、分配電力；預算不夠就拒絕；拔掉
+  if (ios && a.poe) for (const pid of new Set([...Object.keys(a.poe), ...Object.keys(b.poe || {})])) {
+    const was = a.poe[pid], now = (b.poe || {})[pid];
+    if (was === now) continue;
+    if (now === 'on') { ev(7, 'ILPOWER-7-DETECT', `Interface ${label(pid)}: Power Device detected: IEEE PD`); ev(5, 'ILPOWER-5-POWER_GRANTED', `Interface ${label(pid)}: Power granted`); }
+    else if (now === 'denied') ev(5, 'ILPOWER-5-ILPOWER_POWER_DENY', `Interface ${label(pid)}: inline power denied. Reason: insufficient power`);
+    else if (was === 'on' && !now) ev(5, 'ILPOWER-5-IEEE_DISCONNECT', `Interface ${label(pid)}: PD removed`);
+  }
   // Tunnel 介面
   for (const [id, now] of Object.entries(b.gre || {})) {
     const was = (a.gre || {})[id];

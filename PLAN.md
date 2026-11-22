@@ -47,7 +47,7 @@ README 說明「現在有什麼、怎麼玩」，這份文件說明「整體應�
 | 16. 工程品質 | 5 | 1 | 4 |
 | **合計** | **151** | **25** | **39** |
 
-另外：關卡 97 關（第 17 節）、證照條目涵蓋情形（第 18 節）、建議的實作順序（第 19 節）。
+另外：關卡 99 關（第 17 節）、證照條目涵蓋情形（第 18 節）、建議的實作順序（第 19 節）。
 
 ---
 
@@ -58,7 +58,7 @@ README 說明「現在有什麼、怎麼玩」，這份文件說明「整體應�
 | 線材種類與距離上限 | ✅ | Cat6 銅纜、DAC、多模光纖 (OM4 + SR)、單模光纖 (OS2 + LR)；超過距離就沒有燈號 |
 | 連接埠型式 | ✅ | RJ45、SFP+ / SFP28、QSFP28，線材要和連接埠相符 |
 | 速率與雙工協商 | ✅ | 自動協商、寫死 `speed` / `duplex`、duplex mismatch、兩端速率寫死成不同值時連線建立不起來 |
-| PoE 供電 | ✅ | 只有 PoE 埠能供電；依等級保留瓦數、Cisco 設備用 CDP 協商實際用量、交換器的總預算、`power inline never`、`show power inline`；受電設備插電後才開機，交換器重開它們也跟著重開。沒有 802.3bt / UPOE |
+| PoE 供電 | ✅ | 只有 PoE 埠能供電；依等級保留瓦數、Cisco 的電話與 AP 用 CDP（AP 也可以用 LLDP）協商實際用量、`%ILPOWER` 的供電與拒絕紀錄（→ 12-3）、交換器的總預算、`power inline never`、`show power inline`；受電設備插電後才開機，交換器重開它們也跟著重開。沒有 802.3bt / UPOE |
 | 設備電源、介面 shutdown | ✅ | 任何設備可以關機，介面可以停用，錯誤訊息會指出是哪一台 |
 | 連線狀態與原因 | ✅ | 點網路線可以看線材、距離、協商結果與斷線原因 |
 | 線路故障 | 🟡 | 故障演練會切斷指定的線路；線對斷掉的網路線會自動降到 100 Mbps（寫死 1000 時連不起來）；沒有接觸不良、光衰過大這類造成 CRC 錯誤與間歇掉包的故障 |
@@ -127,7 +127,7 @@ README 說明「現在有什麼、怎麼玩」，這份文件說明「整體應�
 | NAT | ✅ | PAT、一對一靜態 NAT、連接埠轉發、用 ACL 指定範圍、NAT 例外；可以查看轉換表 |
 | NAT 進階 | 🟡 | 轉換表的閒置逾時已完成（依協定不同，可以用 `ip nat translation` 調整）；還沒有位址池 (pool)、Hairpin NAT |
 | PPPoE | 🟡 | 帳號密碼驗證與撥接；IOS 沒有 Dialer 介面，只能在圖形介面設定 |
-| NTP | ✅ | 每台設備有自己的時鐘；每 64 秒輪詢，IOS 約四分鐘後才採信；`ntp master`、`clock set`、`clock timezone`；伺服器失聯八次輪詢後失去同步 |
+| NTP | ✅ | 每台設備有自己的時鐘；每 64 秒輪詢，IOS 約四分鐘後才採信；`ntp master`、`clock set`、`clock timezone`；伺服器失聯八次輪詢後失去同步；`service timestamps log | debug`（datetime / msec / localtime / show-timezone / year、uptime，預設和 IOS 15 一樣用 UTC → 11-8） |
 | Syslog | ✅ | 設備記下介面、OSPF、VRRP、VPN、err-disabled 等事件，用 UDP 514 送到伺服器；`logging trap` 設定門檻；伺服器有收件畫面 |
 | SNMP | ✅ | v2c community（RO / RW、綁標準 ACL）、v3 的 group / user（SHA + AES）、Trap（linkUp / linkDown / coldStart / authenticationFailure）；網管伺服器每 60 秒輪詢、依計數器差值算使用率；FortiGate 的 sysinfo / community / hosts / user 與 allowaccess snmp；沒有 MIB 瀏覽器與 SET |
 | TFTP / FTP / SCP | 🟡 | TFTP（UDP 69，512 位元組區塊，速度看來回時間）與 FTP（帳號密碼、明文）：設定備份與還原、映像檔下載、伺服器的檔案分頁；沒有 SCP / SFTP |
@@ -240,7 +240,7 @@ README 說明「現在有什麼、怎麼玩」，這份文件說明「整體應�
 | 圖形介面 | ✅ | 每一種設備都有對應的設定頁面與即時狀態 |
 | IOS CLI | ✅ | 模式切換（巢狀的子模式 `exit` 一次回一層，不認得的指令先往上一層找）、縮寫、`no`、Tab 補齊、`?` 說明、`do show`、管線過濾（include / exclude / begin / section / count）、一次貼上多行 |
 | IOS 的查看指令 | ✅ | 四十多個 `show` 指令，包含 MAC 位址表、NAT 轉換表、IPsec SA、時鐘、NTP、紀錄、介面計數器、SPAN、登入的使用者、flash、開機設定、SSH、SNMP |
-| 設定可以整份貼回 | ✅ | 測試對 190 台 Cisco 設備、6 台 FortiGate 逐一驗證 |
+| 設定可以整份貼回 | ✅ | 測試對 197 台 Cisco 設備、10 台 FortiGate 逐一驗證 |
 | running / startup-config | ✅ | `write memory`、`reload`、未存檔的提示、斷電後回到上一次存檔 |
 | FortiOS CLI | ✅ | `config` / `edit` / `set` / `next` / `end`、`show`、`get`、`diagnose`、`execute ping` |
 | 主機終端機 | ✅ | `ping`、`ipconfig`、`arp`、`tracert`、`nslookup`、`curl`、`iperf3` |
@@ -289,7 +289,7 @@ README 說明「現在有什麼、怎麼玩」，這份文件說明「整體應�
 
 | 功能 | 狀態 | 說明 |
 | --- | --- | --- |
-| 關卡 | ✅ | 17 章 97 關（清單見第 17 節） |
+| 關卡 | ✅ | 17 章 99 關（清單見第 17 節） |
 | 任務目標 | ✅ | ping、TCP、UDP、DHCP、設定檢查、故障演練、IPv6 ping、傳輸速率、遠端登入（SSH / Telnet 帳號密碼）、IP 電話註冊、通話品質 (MOS)、HTTPS（連得上之後還要通過憑證驗證）、路徑（一定要經過 / 不能經過某台設備）；TCP 的目標交握完還會送一個裝滿的資料區段（設了 DF），MTU 的問題才看得出來 |
 | 提示與星等 | ✅ | 每關 3 個提示，看一個少一顆星 |
 | 學習卡 | ✅ | 每關 2 到 4 張觀念說明 |
@@ -350,7 +350,7 @@ README 說明「現在有什麼、怎麼玩」，這份文件說明「整體應�
 
 ## 17. 關卡規劃
 
-### 現有的 97 關
+### 現有的 99 關
 
 | 章 | 關卡 |
 | --- | --- |
@@ -364,8 +364,8 @@ README 說明「現在有什麼、怎麼玩」，這份文件說明「整體應�
 | 8 高可用與進階路由 | 迴圈與生成樹、EtherChannel、閘道備援、集中式 DHCP、OSPF 路徑選擇、切蛋糕、閘道還活著，但出不去（HSRP 追蹤）、主線斷了，電話斷了四十秒（BFD）、兩台閘道，只有一台在做事（GLBP） |
 | 9 IPv6 | IPv6 初體驗、雙協定、位址從哪裡來？、IPv6 也要動態路由、封了 IPv4，忘了 IPv6、IPv6 的預設閘道被搶走了（RA Guard）、內部網站加了 IPv6 之後（AAAA 與 Happy Eyeballs）、IPv6 過不了 VPN（VTI 只載 IPv4） |
 | 10 故障排除 | 誰搶了我的 IP、樓層之間又斷了、分公司的求救電話、明明連得上，為什麼這麼慢、分公司的 OSPF 鄰居起不來、流量為什麼繞去實驗室、VPN 通了，資料卻過不去、DNS 改了，為什麼還連到舊的、整層樓都慢了（廣播風暴與 Storm Control） |
-| 11 維運與管理 | 還好有備份、韌體升級、讓 SSH 能用、網路怎麼變慢了、是誰動了設定？、你的連線不是私人連線 |
-| 12 語音與 QoS | 電話接上了，然後呢？、語音斷斷續續 |
+| 11 維運與管理 | 還好有備份、韌體升級、讓 SSH 能用、網路怎麼變慢了、是誰動了設定？、你的連線不是私人連線、專線被塞滿了，是誰？（NetFlow）、事件的先後兜不起來（NTP 與 service timestamps） |
+| 12 語音與 QoS | 電話接上了，然後呢？、語音斷斷續續、新的 AP 怎麼插都不亮（PoE 預算與 CDP 的電力協商） |
 | 13 進階路由 | 誰當 DR？、10G 和 1G 一樣快？、分公司自成一區、兩家 ISP 都要用、併購的工廠只會靜態路由（重分配）、備份走另一條線（PBR）、分公司的路由表太大了（stub）、工廠接了一條供應商專線（NSSA）、兩個出口，同一個 AS（iBGP）、共用服務放在全域的路由表（VRF 的 OSPF 與路由洩漏） |
 | 14 無線控制器與無線環境 | AP 找不到控制器、牆後面收不到、走到另一頭就斷線 |
 | 15 網路自動化 | 用 API 管理路由器、一次設定四台交換器、控制器說哪裡有問題 |
@@ -428,7 +428,7 @@ CCNA v2.0 預計在 2027 年 2 月取代 v1.1，改版後整張對照表要重�
 | 16（已完成） | GRE 與 recursive routing、GRE over IPsec、IOS VTI、DMVPN（phase 2 / 3）、NAT-T → 7-7 到 7-11；命名 ACL 的序號照 IOS 保留、ACL 可以寫 esp / gre。IKEv2 的憑證驗證移到第 19 階段 | 第 6 節最大的缺口，也是 CCNA 5.5 / Network+ 的常考題 |
 | 17（已完成） | AAAA 與雙協定（RFC 6724、Happy Eyeballs）、IPv6 經過 IPv4 的 Tunnel（GRE、6in4）與 IPv6 over VPN → 9-7、9-8。DHCPv6 Prefix Delegation、FortiGate 的 IPv6 政策、NAT64 / DNS64 要先有 IPv6 的網際網路與防火牆，移到第 22 階段 | 第 8 節剩下的項目 |
 | 18（已完成） | BFD（OSPF、BGP）與 OSPF fast hello → 8-8；GLBP → 8-9；HSRP / VRRP 改用各自正確的虛擬 MAC。FortiGate HA、堆疊 / vPC、電力備援要先有兩台設備合成一台的模型，移到第 22 階段 | 第 9 節剩下的項目 |
-| 19（進行中） | 維運與語音補充：NetFlow 與 QoS 的 police（已完成 → 11-7）、OSPF / DHCP / crypto 的 `debug`（已完成）；IKEv2 / 802.1X 的憑證驗證（PKI、時鐘不對讓憑證「尚未生效」）、NTP + Syslog 對時關卡、用 CDP / LLDP 畫拓撲、PoE 預算、雙 WAN 的 QoS、排程事件 → 第 11、12 章補充關卡 | 讓故障排除的工具與劇本更完整 |
+| 19（進行中） | 維運與語音補充：NetFlow 與 QoS 的 police（已完成 → 11-7）、OSPF / DHCP / crypto 的 `debug`（已完成）、NTP + Syslog 對時與 `service timestamps`（已完成 → 11-8）、PoE 預算與 Cisco AP 的 CDP / LLDP 電力協商（已完成 → 12-3）；IKEv2 / 802.1X 的憑證驗證（PKI、時鐘不對讓憑證「尚未生效」）、用 CDP / LLDP 畫拓撲（要先做「看不到線」的關卡模式）、雙 WAN 的 QoS、排程事件 → 第 11、12 章補充關卡 | 讓故障排除的工具與劇本更完整 |
 | 20 | 無線補充：頻道寬度、6 GHz 與 DFS、訪客入口 (Captive Portal)、FlexConnect 分公司、控制器 N+1 → 第 14 章補充關卡 | 第 7 節剩下的項目 |
 | 21 | 自動化與雲端補充：NETCONF、Catalyst Center 範本、用 Git 管理設定、VPC peering 與 Transit Gateway、負載平衡器、Terraform → 第 15、16 章補充關卡 | 第 12 節的延伸 |
 | 22 | FortiGate HA（Active-Passive、連線同步）、堆疊 / vPC、電力備援；IPv6 的網際網路與 FortiGate 的 IPv6（DHCPv6-PD、IPv6 政策、NAT64 / DNS64）；實體層與其他：收發器不相容、breakout、Console 與帶外管理、STP 進階、VTP、EIGRP / RIP、多播、TACACS+、ZBF、NGFW、SD-WAN、其他設備與廠牌 | 剩下的引擎項目 |

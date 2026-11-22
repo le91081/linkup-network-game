@@ -3331,6 +3331,75 @@ console.log('\ndebug ip ospf 與 debug crypto');
   ok(/DHCPREQUEST received/.test(logs(h, 'r1', n0)) && /unicasting BOOTREPLY/.test(logs(h, 'r1', n0)) && !/DHCPDISCOVER/.test(logs(h, 'r1', n0)), '租約過了一半：只有 REQUEST / ACK（unicast），沒有 DISCOVER');
 }
 
+console.log('\nPoE 預算與 CDP / LLDP 的電力協商');
+{
+  const sim = await import('../src/engine/sim.js');
+  const { iosSession, runningConfig } = await import('../src/engine/ios.js');
+  const { iosRun } = await import('../src/ui/cli.js');
+  const { logRows } = await import('../src/engine/ops.js');
+  const ok = (cond, title) => (cond ? console.log('  ✔ ' + title) : fail(title));
+  const cli = (s, id) => { const S = iosSession(() => s.devices[id], () => s); return (...lines) => { const out = []; for (const l of lines) { const r = iosRun({ state: s, showTrace() {}, refreshLive() {} }, id, S, l, (x) => out.push(x)); if (r.changed) settle(s); } return out.join('\n'); }; };
+  const lv = LEVELS.find((x) => x.id === 'l98');
+  const s = lv.setup(); settle(s); sim.advance(s, 60); settle(s);
+  const P = (p) => s.rt.poe['sw:' + p];
+  const SW = cli(s, 'sw');
+  ok(P('Gi0/1').alloc === 30 && P('Gi0/5').state === 'denied' && s.rt.off.ap5 && /Available:124\.0\(w\)  Used:120\.0\(w\)  Remaining:4\.0\(w\)/.test(SW('show power inline')) && /Gi0\/5\s+auto\s+faulty/.test(SW('show power inline')),
+    'no cdp run：四台 AP 依 Class 4 各保留 30 W，用掉 120 W，第五台被拒絕供電 (faulty)');
+  ok(lv.objectives[0].test(s) !== true && lv.objectives[2].test(s) === true, '一開始：新的 AP 沒電；使用者的埠沒有 CDP（整台都關了）');
+  SW('configure terminal', 'cdp run', 'end');
+  sim.advance(s, 60); settle(s);
+  ok(P('Gi0/1').alloc === 20.9 && P('Gi0/1').cdp && P('Gi0/5').state === 'on' && /Used:104\.5\(w\)/.test(SW('show power inline')), `cdp run：AP 用 CDP 協商出實際的 20.9 W，五台一共 104.5 W，新的 AP 分得到電（${P('Gi0/5').state}）`);
+  ok(/%ILPOWER-5-POWER_GRANTED: Interface Gi0\/5: Power granted/.test(logRows(s, s.devices.sw).map((r) => r.line).join('\n')), 'log：ILPOWER-7-DETECT、POWER_GRANTED');
+  ok(/AP-3F-1\s+Gig 0\/1\s+\d+\s+T B I\s+C9120AXI/.test(SW('show cdp neighbors')), 'show cdp neighbors 看得到 Cisco 的 AP（Trans-Bridge、C9120AXI-B）');
+  ok(lv.objectives[2].test(s) !== true && /Gi0\/6 會送出 CDP/.test(lv.objectives[2].test(s)), '稽核：使用者的埠又送出 CDP 了');
+  SW('configure terminal', 'interface range gi0/6 - 8', 'no cdp enable', 'end');
+  sim.advance(s, 60); settle(s);
+  ok(lv.objectives.every((o) => o.test(s) === true), '使用者的埠 no cdp enable：三個目標都通過');
+  // 改用 LLDP 也可以：AP 用 LLDP 的 Power via MDI 協商
+  const s2 = lv.setup(); settle(s2);
+  const L = cli(s2, 'sw');
+  L('configure terminal', 'lldp run', 'interface range gi0/6 - 8', 'no lldp transmit', 'end');
+  sim.advance(s2, 60); settle(s2);
+  const e = s2.rt.poe['sw:Gi0/5'];
+  ok(e.state === 'on' && e.lldp && s2.rt.poe['sw:Gi0/2'].alloc === 20.9 && lv.objectives.every((o) => o.test(s2) === true), '改用 lldp run（使用者的埠 no lldp transmit）：AP 用 LLDP 協商，一樣分得到電');
+  ok(runningConfig(s2, s2.devices.sw).join('\n').includes('no cdp run') && / no lldp transmit/.test(runningConfig(s2, s2.devices.sw).join('\n')), 'running-config：no cdp run、lldp run、no lldp transmit');
+}
+
+console.log('\nNTP、時區與 service timestamps');
+{
+  const sim = await import('../src/engine/sim.js');
+  const { iosSession, runningConfig } = await import('../src/engine/ios.js');
+  const { iosRun } = await import('../src/ui/cli.js');
+  const ops0 = await import('../src/engine/ops.js');
+  const { iosStamp, syslogRows, uptimeStamp } = ops0;
+  const ok = (cond, title) => (cond ? console.log('  ✔ ' + title) : fail(title));
+  const cli = (s, id) => { const S = iosSession(() => s.devices[id], () => s); return (...lines) => { const out = []; for (const l of lines) { const r = iosRun({ state: s, showTrace() {}, refreshLive() {} }, id, S, l, (x) => out.push(x)); if (r.changed) settle(s); } return out.join('\n'); }; };
+  const lv = LEVELS.find((x) => x.id === 'l99');
+  const s = lv.setup(); settle(s);
+  const row = (id) => syslogRows(s, s.devices.log).filter((r) => r.dev === id).pop();
+  ok(/^\*/.test(iosStamp(s, s.devices.hq)) && /^\*Mar  \d /.test(iosStamp(s, s.devices.sw)) && /1993$/.test(ops0.iosClock(s, s.devices.sw)) && /^Jan  5 01:/.test(iosStamp(s, s.devices.br)),
+    `一開始：HQ-RT 不可信 (*)、HQ-SW 停在 3 月 1 日、BR-RT 有對時但紀錄用 UTC（${iosStamp(s, s.devices.br)}）`);
+  ok(lv.objectives.map((o) => o.test(s) === true).join() === 'false,false,false', '三個目標一開始都沒過');
+  const B = cli(s, 'br');
+  B('configure terminal', 'service timestamps log datetime msec localtime show-timezone', 'end');
+  ok(/^Jan  5 09:\d\d:\d\d\.\d{3} TST$/.test(iosStamp(s, s.devices.br)) && /service timestamps log datetime msec localtime show-timezone/.test(runningConfig(s, s.devices.br).join('\n')), `localtime show-timezone：${iosStamp(s, s.devices.br)}`);
+  B('configure terminal', 'service timestamps log datetime year', 'end');
+  ok(/^Jan  5 2026 01:\d\d:\d\d$/.test(iosStamp(s, s.devices.br)), `datetime year（沒有 msec、沒有 localtime）：${iosStamp(s, s.devices.br)}`);
+  B('configure terminal', 'service timestamps log uptime', 'end');
+  ok(/^\d\dw\d+d$|^\d+w\d+d$|^\d+d\d\dh$|^\d\d:\d\d:\d\d$/.test(iosStamp(s, s.devices.br)) && uptimeStamp(45296) === '12:34:56' && uptimeStamp(93600) === '1d02h' && uptimeStamp(9 * 86400) === '1w2d', `uptime：${iosStamp(s, s.devices.br)}`);
+  B('configure terminal', 'no service timestamps log', 'end');
+  ok(iosStamp(s, s.devices.br) === '' && /no service timestamps log/.test(runningConfig(s, s.devices.br).join('\n')), 'no service timestamps log：紀錄沒有時間');
+  ok(/% Invalid input/.test(B('configure terminal', 'service timestamps log datetime msc2', 'end')), '不認識的選項：IOS 拒絕');
+  lv.solve(s); settle(s);
+  ok(lv.objectives.every((o) => o.test(s) === true), '解法：三個目標都通過（NTP 要幾分鐘才同步，目標在複本上讓時間往前走）');
+  for (let n = 0; n < 6; n++) { sim.advance(s, 64); settle(s, 30); }
+  cli(s, 'sw')('configure terminal', 'interface Gi0/5', 'shutdown', 'end');
+  sim.advance(s, 2);
+  const r = row('sw');
+  ok(r && /^<\d+>\d+: Jan  5 09:\d\d:\d\d\.\d{3} TST: %/.test(r.line), `HQ-SW 的紀錄送到 Syslog 伺服器，是台灣時間、記到毫秒：${r && r.line.slice(0, 60)}`);
+  ok(/Clock is synchronized, stratum 3, reference is 10\.10\.0\.5/.test(cli(s, 'sw')('show ntp status')), 'show ntp status：synchronized，stratum 3');
+}
+
 console.log('\nNetFlow 與 QoS 的 police');
 {
   const sim = await import('../src/engine/sim.js');

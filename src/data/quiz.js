@@ -32,7 +32,7 @@ export const LEVEL_TOPIC = {
   l55: 'wireless', l56: 'wireless', l57: 'wireless',
   l58: 'auto', l59: 'auto', l60: 'auto', l61: 'auto', l62: 'auto',
   l63: 'routing', l64: 'routing', l65: 'ops', l66: 'routing', l67: 'switching', l68: 'vpn', l69: 'security', l71: 'services',
-  l70: 'auto', l72: 'routing', l73: 'auto', l74: 'security', l75: 'switching', l76: 'vpn', l77: 'routing', l78: 'routing', l79: 'routing', l80: 'routing', l81: 'routing', l82: 'routing', l83: 'security', l84: 'security', l85: 'switching', l86: 'security', l87: 'ipv6', l88: 'vpn', l89: 'vpn', l90: 'vpn', l91: 'vpn', l92: 'vpn', l93: 'ipv6', l94: 'ipv6', l95: 'routing', l96: 'routing', l97: 'ops',
+  l70: 'auto', l72: 'routing', l73: 'auto', l74: 'security', l75: 'switching', l76: 'vpn', l77: 'routing', l78: 'routing', l79: 'routing', l80: 'routing', l81: 'routing', l82: 'routing', l83: 'security', l84: 'security', l85: 'switching', l86: 'security', l87: 'ipv6', l88: 'vpn', l89: 'vpn', l90: 'vpn', l91: 'vpn', l92: 'vpn', l93: 'ipv6', l94: 'ipv6', l95: 'routing', l96: 'routing', l97: 'ops', l98: 'switching', l99: 'ops',
 };
 
 export const QUESTIONS = {
@@ -57,6 +57,8 @@ export const QUESTIONS = {
     { q: 'Syslog 的嚴重等級是 0 到 7。哪一個說法正確？', a: ['數字越大越嚴重', '數字越小越嚴重', '7 代表系統無法使用', '0 是除錯訊息'], c: 1, e: '0 是 Emergency（系統無法使用），7 是 Debugging。數字越小代表事件越嚴重。', r: 'CCNA 4.5' },
   ],
   switching: [
+    { q: 'PoE 交換器的預算還剩 4 W，又插上一台 802.3at（Class 4）的 AP，交換器會怎麼做？', a: ['降低每個埠的電壓，大家一起分', '拒絕供電給新的 AP（ILPOWER_POWER_DENY）', '關掉最早插上的那台設備', '照樣供電，超過的部分由備用電源補'], c: 1, e: '交換器依 IEEE 等級先保留上限（Class 4 是 30 W），剩下的預算不夠就拒絕供電，已經在用的設備不受影響。Cisco 的設備用 CDP / LLDP 協商之後，保留量才會降到實際用量。', r: 'CCNA 1.1' },
+    { q: '稽核要求「CDP 不能把設備資訊送給使用者」，最恰當的做法是？', a: ['整台交換器 no cdp run', '只在使用者的埠 no cdp enable', '把 CDP 的計時器調成 255 秒', '改用 LLDP 就不會洩漏'], c: 1, e: '整台關掉會連帶影響 Cisco 電話的語音 VLAN 與 AP、電話的 PoE 電力協商。只在使用者可以接觸的埠關掉（LLDP 是 no lldp transmit），基礎設施的埠保留。LLDP 一樣會送出設備資訊。', r: 'CCNA 2.3' },
     { q: '二樓的網路 ping 都通，但大量傳輸非常慢；某個埠收到的廣播比其他埠多了好幾個數量級，也沒有迴圈。最適合的對策是？', a: ['在接電腦的埠設定 storm-control broadcast level', '把 STP 關掉', '增加 VLAN', '把所有埠設成 Trunk'], c: 0, e: '單一台設備狂送廣播，整個 VLAN 的線路都被佔掉，STP 管不到。Storm Control 設定廣播上限，超過的丟掉或把埠關掉。', r: 'Network+ 5.3' },
     { q: '兩台伺服器都把網卡的 MTU 改成 9000，中間的交換器沒有開 Jumbo Frame。會發生什麼事？', a: ['完全連不到', 'ping 會通、TCP 連得上，但大量傳輸卡住', '速度會自動降到 1500 的水準，其他正常', '交換器會回 ICMP「需要分段」'], c: 1, e: '交握與一般 ping 的封包都小於 1500，可以通過；資料區段依 MSS 8960 裝滿，超過交換器的 MTU 被當成 giant 丟掉。第二層的設備不會回 ICMP，送的人不知道要改小。', r: 'Network+ 2.2' },
     { q: '在 Windows 上，哪一個指令可以測出整條路能不能跑 MTU 9000？', a: ['ping -l 9000', 'ping -f -l 8972', 'tracert -h 9000', 'ping -t 9000'], c: 1, e: '-f 設定 DF（不可分段），-l 是資料的大小：8972 + ICMP 標頭 8 + IP 標頭 20 = 9000。不加 -f 的話封包會被分段，測不出問題。Linux 是 ping -M do -s 8972。', r: 'Network+ 5.5' },
@@ -158,6 +160,8 @@ export const QUESTIONS = {
     { q: '雙協定 (dual stack) 的意思是什麼？', a: ['同一個介面同時執行 IPv4 與 IPv6', '把 IPv6 封包包在 IPv4 裡傳送', '用 NAT 在兩種位址之間轉換', '一台設備裝兩張網路卡'], c: 0, e: '雙協定讓兩種協定並存、各走各的。把 IPv6 包進 IPv4 是通道 (tunneling)，位址轉換則是 NAT64。', r: 'Network+ 1.8' },
   ],
   ops: [
+    { q: 'IOS 設了 clock timezone TST 8，show clock 是台灣時間，但 show logging 的紀錄還是差了 8 小時。原因是？', a: ['NTP 還沒同步', 'service timestamps 沒有加 localtime', '時區名稱不能用 TST', 'Syslog 伺服器的時區設錯'], c: 1, e: 'clock timezone 只影響 show clock；IOS 15 預設的 service timestamps log datetime msec 用 UTC 記錄。加上 localtime（最好再加 show-timezone）紀錄才是當地時間。', r: 'CCNA 4.2' },
+    { q: 'IOS 的紀錄時間前面出現 *（例如 *Mar  1 00:12:33.123），代表什麼？', a: ['這是嚴重的錯誤訊息', '時鐘不可信：沒有對時也沒有手動設定', '訊息是從別的設備轉送來的', '紀錄緩衝區已經滿了'], c: 1, e: '* 表示時間不可信 (not authoritative)；對過時但目前失去同步則是一個點。Catalyst 2960 這類沒有電池時鐘的機型，重開機之後從 1993 年 3 月 1 日開始算。', r: 'CCNA 4.2' },
     { q: 'SNMP 顯示專線一直是滿的，要找出「是哪一台、往哪裡」在用頻寬，最適合的工具是？', a: ['Syslog', 'NetFlow', 'CDP', 'NTP'], c: 1, e: 'SNMP 只有介面的計數器（收送了多少位元組）；NetFlow 記下每一條流量的來源、目的、協定、埠與位元組數，匯出到收集器就能排出流量大戶。', r: 'Network+ 3.2' },
     { q: '在 IOS 上用 police cir 10000000 管制某一類流量，超過的部分會怎樣？', a: ['排隊等一下再送', '直接丟掉（TCP 會自己降速）', '改標 DSCP 0 後照送', '送到另一條線路'], c: 1, e: 'police 預設 conform 送出、exceed 丟掉；shape 才是把多的排進佇列延後送。管制常放在進來的介面（service-policy input），整形放在出去的介面。', r: 'CCNA 4.7' },
     { q: 'AAA 的三個 A 分別代表什麼？', a: ['Access、Address、Audit', 'Authentication、Authorization、Accounting', 'Account、Admin、Alert', 'Authentication、Availability、Access'], c: 1, e: '驗證（你是誰）、授權（你可以做什麼）、紀錄（你做了什麼）。', r: 'CCNA 5.8' },

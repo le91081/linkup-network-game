@@ -1834,6 +1834,34 @@ export function iosSession(getDev, getState, who = null) {
       return undefined;
     }],
     ['no clock timezone [...]', () => { if (dev().mgmt) delete dev().mgmt.tz; }],
+    // service timestamps log | debug datetime [msec] [localtime] [show-timezone] [year] | uptime
+    ['service timestamps [...]', ([rest]) => {
+      const m = dev().mgmt, w = String(rest || '').toLowerCase().split(' ').filter(Boolean);
+      if (!m) return err('這台設備不支援');
+      const kinds = !w[0] ? ['log', 'debug'] : 'log'.startsWith(w[0]) ? ['log'] : 'debug'.startsWith(w[0]) ? ['debug'] : null;
+      if (!kinds) return err('用法：service timestamps log | debug datetime [msec] [localtime] [show-timezone] [year]，或 service timestamps log uptime');
+      const opt = w.slice(1);
+      let c;
+      if (!opt.length || 'uptime'.startsWith(opt[0]) && opt[0].length >= 2) c = { dt: false };
+      else if (opt[0].length >= 2 && 'datetime'.startsWith(opt[0])) {
+        c = { dt: true, msec: false, local: false, tz: false, year: false };
+        for (const x of opt.slice(1)) {
+          const k = x.length >= 2 && ['msec', 'localtime', 'show-timezone', 'year'].find((o) => o.startsWith(x));
+          if (!k) return err(`% Invalid input detected：service timestamps 不認識「${x}」（可以用 msec、localtime、show-timezone、year）`);
+          c[{ msec: 'msec', localtime: 'local', 'show-timezone': 'tz', year: 'year' }[k]] = true;
+        }
+      } else return err(`% Invalid input detected：service timestamps ${w[0]} 後面要接 datetime 或 uptime`);
+      m.stamps ||= {};
+      for (const k of kinds) m.stamps[k] = c;
+      return undefined;
+    }],
+    ['no service timestamps [...]', ([rest]) => {
+      const m = dev().mgmt, w = String(rest || '').toLowerCase().split(' ').filter(Boolean);
+      if (!m) return err('這台設備不支援');
+      m.stamps ||= {};
+      for (const k of !w[0] ? ['log', 'debug'] : 'log'.startsWith(w[0]) ? ['log'] : ['debug']) m.stamps[k] = { off: true };
+      return undefined;
+    }],
     // 嚴重程度在這個門檻以內的訊息才送到 Syslog 伺服器（預設 informational）
     ['logging trap <level>', ([lv]) => {
       const m = dev().mgmt, n = /^[0-7]$/.test(lv) ? +lv : SEVERITY.findIndex((s) => s.startsWith(lv.toLowerCase()));
@@ -3961,6 +3989,11 @@ export function runningConfig(state, dev) {
   if (dev.radius && dev.radius.ip) o.push('!', 'radius server AAA', ` address ipv4 ${dev.radius.ip} auth-port 1812 acct-port 1813`, ` key 7 ${hex(dev.radius.secret || '')}`);
   if (m) {
     o.push('!');
+    for (const k of ['debug', 'log']) {
+      const c = (m.stamps || {})[k];
+      if (!c) continue;
+      o.push(c.off ? `no service timestamps ${k}` : !c.dt ? `service timestamps ${k} uptime` : `service timestamps ${k} datetime${c.msec ? ' msec' : ''}${c.local ? ' localtime' : ''}${c.tz ? ' show-timezone' : ''}${c.year ? ' year' : ''}`);
+    }
     if (m.tz && m.tz.name) o.push(`clock timezone ${m.tz.name} ${m.tz.off}`);
     if (+m.ntpMaster > 0) o.push(`ntp master ${+m.ntpMaster}`);
     if (m.ntp) o.push(`ntp server ${m.ntp}`);

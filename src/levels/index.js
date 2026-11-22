@@ -27,6 +27,8 @@ import { LEVELS22 } from './tunnels.js';
 import { LEVELS23 } from './ipv6b.js';
 import { LEVELS24 } from './ha.js';
 import { LEVELS25 } from './ops2.js';
+import { LEVELS26 } from './poe.js';
+import { LEVELS27 } from './ntp.js';
 import { isCiscoOs } from '../engine/files.js';
 
 export const CHAPTERS = [
@@ -641,7 +643,7 @@ export const LEVELS = [
 ];
 
 CHAPTERS.push(...CHAPTERS2, ...CHAPTERS3, ...CHAPTERS4, ...CHAPTERS5, ...CHAPTERS6, ...CHAPTERS7, ...CHAPTERS8, ...CHAPTERS9, ...CHAPTERS10, ...CHAPTERS11);
-LEVELS.push(...LEVELS2, ...LEVELS3, ...LEVELS4, ...LEVELS5, ...LEVELS6, ...LEVELS7, ...LEVELS8, ...LEVELS9, ...LEVELS10, ...LEVELS11, ...LEVELS12, ...LEVELS13, ...LEVELS14, ...LEVELS15, ...LEVELS16, ...LEVELS17, ...LEVELS18, ...LEVELS19, ...LEVELS20, ...LEVELS21, ...LEVELS22, ...LEVELS23, ...LEVELS24, ...LEVELS25);
+LEVELS.push(...LEVELS2, ...LEVELS3, ...LEVELS4, ...LEVELS5, ...LEVELS6, ...LEVELS7, ...LEVELS8, ...LEVELS9, ...LEVELS10, ...LEVELS11, ...LEVELS12, ...LEVELS13, ...LEVELS14, ...LEVELS15, ...LEVELS16, ...LEVELS17, ...LEVELS18, ...LEVELS19, ...LEVELS20, ...LEVELS21, ...LEVELS22, ...LEVELS23, ...LEVELS24, ...LEVELS25, ...LEVELS26, ...LEVELS27);
 LEVELS.sort((a, b) => a.chapter - b.chapter); // 穩定排序：補充關卡排到所屬章節的最後
 
 // 關卡裡的交換器都由「前任管理員」下過 spanning-tree portfast default：接終端設備的埠一連上就開始轉送。

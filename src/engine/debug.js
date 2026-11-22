@@ -109,7 +109,7 @@ function ikeLines(T, ver, f) {
   }
   if (f.ipsec && /第二階段|CHILD_SA|proxy ID|網段沒有互相對應/.test(w)) {
     const proxy = /proxy|網段/.test(w);
-    out.push(`IPSEC(validate_proposal_request): proposal part #1`, `IPSEC(validate_proposal_request): proposal part #1,\n  (key eng. msg.) INBOUND local= ${me}:0, remote= ${peer}:0,\n    local_proxy= ${T.cfg && T.cfg.local ? T.cfg.local : '0.0.0.0/0'},\n    remote_proxy= ${T.cfg && T.cfg.remote ? T.cfg.remote : '0.0.0.0/0'}`,
+    out.push(`IPSEC(validate_proposal_request): proposal part #1,\n  (key eng. msg.) INBOUND local= ${me}:0, remote= ${peer}:0,\n    local_proxy= ${T.cfg && T.cfg.local ? T.cfg.local : '0.0.0.0/0'},\n    remote_proxy= ${T.cfg && T.cfg.remote ? T.cfg.remote : '0.0.0.0/0'}`,
       proxy ? `IPSEC(ipsec_process_proposal): proxy identities not supported` : `IPSEC(ipsec_process_proposal): transform proposal not supported for identity:\n    {esp-aes esp-sha-hmac }`);
   }
   return out;

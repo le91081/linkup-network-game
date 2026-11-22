@@ -33,10 +33,12 @@ export function poeTable(state, isDead) {
       if (pc && pc.poe === 'never') { out[key] = { pd: x.id, state: 'never', watts: 0, alloc: 0, cls }; continue; }
       if (isDead(d.id) || shutPort(d, p.id)) { out[key] = { pd: x.id, state: 'off', watts: 0, alloc: 0, cls }; continue; }
       const cdp = speaksCdp(x) && !isDead(x.id) && cdpOn(d, p.id) && cdpOn(x, o.port); // 還在開機的電話還沒送 CDP，先依等級保留
-      const alloc = cdp ? watts : POE_CLASS_W[cls];
-      if (sum + alloc > budget + 1e-9) { out[key] = { pd: x.id, state: 'denied', watts: 0, alloc, cls, cdp }; continue; }
+      // Cisco 的 AP 也會用 LLDP 的 Power via MDI 協商（802.3at 的 DLL 分級）：兩邊的 LLDP 都要能送能收
+      const lldp = !cdp && xm.lwap && xm.vendor === 'Cisco' && !isDead(x.id) && lldpTxOn(d, p.id) && lldpRxOn(d, p.id) && lldpTxOn(x, o.port) && lldpRxOn(x, o.port);
+      const alloc = cdp || lldp ? watts : POE_CLASS_W[cls];
+      if (sum + alloc > budget + 1e-9) { out[key] = { pd: x.id, state: 'denied', watts: 0, alloc, cls, cdp, lldp }; continue; }
       sum += alloc;
-      out[key] = { pd: x.id, state: 'on', watts, alloc, cls, cdp };
+      out[key] = { pd: x.id, state: 'on', watts, alloc, cls, cdp, lldp };
     }
   }
   return out;

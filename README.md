@@ -75,7 +75,7 @@ npm run build    # 輸出到 dist/
 - **評分**：過關時依實際作答時間（畫面在前景、沒有開對話框才算；標準時間是 3 分鐘加上每個目標 1.5 分鐘）、看了幾個提示、跑了幾次完整測試給 S / A / B / C 與分數，關卡選單上顯示最佳等級。設定變更的次數只列出來參考。
 - **關卡編輯器**：自由模式的「關卡設計」可以寫關卡名稱、任務說明、提示，指定哪些設備鎖定（玩家看得到、不能設定），然後試玩、存成自訂關卡、或匯出成關卡檔分享；關卡選單的「自訂關卡」可以遊玩、匯出、刪除與匯入。
 
-## 關卡（17 章 97 關）
+## 關卡（17 章 99 關）
 
 | 章節 | 關卡數 | 主題 |
 | --- | --- | --- |
@@ -89,8 +89,8 @@ npm run build    # 輸出到 dist/
 | 8 高可用與進階路由 | 9 | STP、EtherChannel、VRRP / HSRP、DHCP Relay、OSPF Cost、VLSM；HSRP 追蹤上行介面（preempt 預設是關的，兩台都要開）；主線在業者那一端斷掉、介面燈號還亮著，OSPF 要等 40 秒的 Dead timer，用 BFD（或 fast hello）兩秒內切到備援；兩台閘道只有 HSRP 的 Active 在做事，改成 GLBP 讓兩台一起轉送（AVG 輪流發虛擬 MAC、AVF 壞掉時其他台接手） |
 | 9 IPv6 | 8 | Link-local、SLAAC、IPv6 靜態路由、雙協定；RA 的 M / O / A 旗標與 DHCPv6（stateless / stateful，DHCPv6 不給閘道）、OSPFv3（link-local 鄰居、純 IPv6 路由器的 Router ID）、IPv6 ACL 與隱含的 ND 允許規則；冒牌的 Router Advertisement 搶走預設閘道（主機多一個位址、IPv6 變黑洞），RA Guard 的 device-role host；內部網站加了 AAAA 之後雙協定的電腦 ping 名稱逾時、瀏覽器靠 Happy Eyeballs 改用 IPv4 才打得開（AAAA 寫錯、伺服器少了 IPv6 閘道，`nslookup -type=aaaa`、`ping -4 / -6`）；IPv6 過不了 VPN：`tunnel mode ipsec ipv4` 的 VTI 只載 IPv4，改成 GRE over IPsec，OSPFv3 在 Tunnel 上建鄰居 |
 | 10 故障排除 | 9 | 網路已經設定好但被改壞了：IP 衝突與 DHCP 保留、Trunk / VLAN / shutdown、閘道 / 回程路由 / NAT / ACL / DNS、ping 會通但傳檔很慢（速率寫死、duplex mismatch、舊 Hub）；OSPF 鄰居起不來（MD5 金鑰、被動介面、network 敘述）；流量繞經實驗室的交換器（根橋位置與 Root Guard）；VPN 通了資料卻過不去（NAT 例外、加密的 ACL 要涵蓋新網段）；DNS 改了卻還連到舊的（TTL 與用戶端快取、nslookup 不看快取、`ipconfig /flushdns`）；整層樓都慢了：一台電腦狂送廣播（從介面的 broadcasts 計數器找出是誰），用 Storm Control 擋下 |
-| 11 維運與管理 | 7 | 是誰動了設定（設定封存、差異比對、變更紀錄、只拿掉有問題的那一行、停用帳號）；從 TFTP 還原設定（合併與整份取代的差別）、韌體升級（flash 空間、MD5、`boot system`、TFTP 與 FTP 的速度）、讓原廠交換器能用 SSH（主機名稱、網域、RSA 金鑰、`login local`）、用 SNMPv3 找出滿載的線路（線對斷掉自動降到 100 Mbps）；HTTPS 憑證錯誤（過期、新網址不在 SAN 裡、沒有加入網域的筆電不信任公司的 CA、時鐘回到兩年前變成「尚未生效」）；專線被塞滿：SNMP 只看得出哪條線滿了，用 NetFlow（`ip flow ingress` 或 Flexible NetFlow）找出流量大戶，再用 QoS 的 `police` 替它限速 |
-| 12 語音與 QoS | 2 | IP 電話：PoE、語音 VLAN、CDP 與 LLDP-MED、DHCP option 150、CUCM 註冊；線路塞車時用 QoS 保住通話：信任邊界、LLQ、配合營運商合約頻寬的整形 |
+| 11 維運與管理 | 8 | 是誰動了設定（設定封存、差異比對、變更紀錄、只拿掉有問題的那一行、停用帳號）；從 TFTP 還原設定（合併與整份取代的差別）、韌體升級（flash 空間、MD5、`boot system`、TFTP 與 FTP 的速度）、讓原廠交換器能用 SSH（主機名稱、網域、RSA 金鑰、`login local`）、用 SNMPv3 找出滿載的線路（線對斷掉自動降到 100 Mbps）；HTTPS 憑證錯誤（過期、新網址不在 SAN 裡、沒有加入網域的筆電不信任公司的 CA、時鐘回到兩年前變成「尚未生效」）；專線被塞滿：SNMP 只看得出哪條線滿了，用 NetFlow（`ip flow ingress` 或 Flexible NetFlow）找出流量大戶，再用 QoS 的 `police` 替它限速；事件的先後兜不起來：沒對時的時間前面有 *、2960 重開機回到 1993 年、`clock timezone` 只改 `show clock`，紀錄要 `service timestamps log datetime msec localtime` |
+| 12 語音與 QoS | 3 | IP 電話：PoE、語音 VLAN、CDP 與 LLDP-MED、DHCP option 150、CUCM 註冊；線路塞車時用 QoS 保住通話：信任邊界、LLQ、配合營運商合約頻寬的整形；新的 AP 插上去不亮：為了稽核整台 `no cdp run`，交換器只能依 Class 4 替每台 AP 保留 30 W，預算用完（改成只在使用者的埠 `no cdp enable`） |
 | 13 進階路由 | 10 | OSPF 的 DR / BDR 選舉（不搶位、`clear ip ospf process`）、Router ID 與 Loopback、passive-interface；參考頻寬與 cost、等價多路徑 (ECMP)；多區域 OSPF、ABR 與 `area range` 彙總；用 eBGP 同時接兩家 ISP：local-preference 決定出去走哪家、AS-path prepend 影響進來走哪家、prefix-list 避免變成轉運站；把靜態路由重分配進 OSPF（ASBR、O E2、用 prefix-list + route-map 只送工廠的網段）；政策路由讓 NAS 的備份改走寬頻（ACL + route-map set ip next-hop，套在進來的介面上）；分公司的路由表太大：stub 與 totally stubby（新路由器照範本設了 `area 10 stub`、ABR 沒設，Hello 的選項位元不同，鄰居起不來）；工廠在 stub 區域裡重分配供應商的網段白做：改成 NSSA（O N2、ABR 轉成 Type-5、`no-summary` 補回預設路由）；兩台邊界路由器的 iBGP（`update-source`、`next-hop-self`、中間的 Core 沒有 BGP 是黑洞，要全網狀或 route reflector，ISP 的線斷了繞網際網路回來）；機房的 VRF 各跑自己的 OSPF 程序，共用服務靠兩個方向的靜態路由洩漏（`… global`、出口介面在另一個 VRF），只洩漏需要的網段 |
 | 14 無線控制器與無線環境 | 3 | 輕量型 AP 與無線控制器（CAPWAP、DHCP option 43、Local 模式的流量經控制器放進 VLAN、RRM 自動分頻道）、牆面衰減與訊號熱力圖、漫遊（同一個 VLAN、sticky client 與 802.11k/v/r） |
 | 15 網路自動化 | 3 | RESTCONF：只走 HTTPS、HTTP Basic 驗證、YANG 路徑（`ietf-interfaces`、`Cisco-IOS-XE-native`）、JSON 與 XML、狀態碼、名稱裡的 `/` 要寫成 `%2F`、自簽憑證；Ansible：INI 格式的 inventory、YAML、`network_cli`、資源模組、`--check`、PLAY RECAP 與冪等；Catalyst Center：Token 驗證的北向 API、用 SNMP / SSH 輪詢的設備清單、AI 驅動的問題清單（DHCP 失敗率偏離基準、雙工不一致、設備連不到） |
@@ -150,7 +150,7 @@ npm run build    # 輸出到 dist/
 - **Tunnel 介面**：`interface Tunnel<n>`（路由器）→ `tunnel source <介面 | IP>`、`tunnel destination <IP>`、`tunnel mode gre ip | gre multipoint | ipsec ipv4 | ipv6ip`、`tunnel key`、`keepalive [秒] [次數]`、`tunnel protection ipsec profile <名稱>`、`ip mtu`、`ip tcp adjust-mss`、`ip ospf network broadcast`、`shutdown`；`crypto ipsec profile <名稱>` →（`set transform-set`、`set pfs`、`set ikev2-profile`、`set security-association lifetime seconds`）；transform-set 裡的 `mode transport | tunnel`；`crypto isakmp key … address 0.0.0.0`（萬用金鑰）；`[no] crypto ipsec nat-transparency udp-encapsulation`、`crypto isakmp nat keepalive`；`ip route <網段> <遮罩> Tunnel0`（點對點的 Tunnel 只寫出口介面）；ACL 可以寫 `esp`、`gre`、`ahp`，命名 ACL 的序號和 IOS 一樣保留（`no 10` 不會讓後面的重新編號）。
 - **DMVPN（NHRP）**：`ip nhrp network-id`、`ip nhrp authentication`、`ip nhrp holdtime`、`ip nhrp nhs <IP> [nbma <IP>] [multicast]`、`ip nhrp map <IP> <NBMA>`、`ip nhrp map multicast dynamic | <NBMA>`、`ip nhrp redirect`、`ip nhrp shortcut`；`show dmvpn`、`show ip nhrp [brief]`、`show ip nhrp nhs`、`show interfaces tunnel <n>`、`show crypto session`、`show crypto ipsec profile`、`show crypto ipsec transform-set`、`show running-config interface <名稱>`。
 - **VPN 的時間面**：`show crypto isakmp sa`、`show crypto ipsec sa`、isakmp policy 裡的 `lifetime`、`crypto ipsec security-association lifetime seconds`、crypto map 裡的 `set security-association lifetime seconds`、`crypto isakmp keepalive <秒> [重試間隔]`。
-- **時鐘與 NTP**：`show clock [detail]`、`clock set`、`clock timezone`、`ntp server`、`ntp master [stratum]`、`show ntp status`、`show ntp associations`。
+- **時鐘與 NTP**：`show clock [detail]`、`clock set`、`clock timezone`、`ntp server`、`ntp master [stratum]`、`show ntp status`、`show ntp associations`；`service timestamps log | debug datetime [msec] [localtime] [show-timezone] [year]`、`service timestamps log uptime`、`no service timestamps`（預設和 IOS 15 一樣是 datetime msec、用 UTC）。
 - **紀錄**：`show logging`、`logging host`、`logging trap <等級>`、`clear logging`。
 - **OSPF**：`show ip ospf`（每個程序一段：stub / NSSA、是不是負責 Type-7 的轉換、VRF 的程序）、`show ip ospf neighbor`（Pri、FULL/DR、2WAY/DROTHER、EXSTART；所有程序的鄰居在同一張表）、`show ip ospf interface [brief | <介面>]`、`show ip ospf database`（Summary 的 0.0.0.0、Type-7、轉換出來的 Type-5，只列自己網域的 LSA）、`show ip protocols [vrf <名稱>]`、`show ip route vrf <名稱> [ospf | static | <位址>]`、`clear ip ospf process`（Router ID 改了要清除程序才會生效；全域與 VRF 的程序一起重來）。
 - **路由表**：`show ip route` 和真的 IOS 一樣依主網段分組（`is subnetted` / `is variably subnetted`）、列出介面自己的位址 (L)、動態路由的存在時間與 Gateway of last resort；可以篩選 `show ip route ospf | bgp | static | connected`，也可以查單一網段 `show ip route <位址> [遮罩]`（Known via、distance、metric、from、等價的每一條路）。沒放進路由表的路（下一站不通的靜態路由、管理距離比較大的備援路由）會在最後用提示說明原因。
@@ -269,7 +269,7 @@ npm run build    # 輸出到 dist/
 ## 鄰居探索與 DTP
 
 - **CDP 與 LLDP**：鄰居表是從真的收到的通告學來的，每一筆都有剩下的 holdtime。Catalyst 與 ISR 出廠時 CDP 開、LLDP 關；Nexus 兩個都開；IP 電話兩個都講（Yealink 只講 LLDP-MED）；UniFi 基地台只講 LLDP。中間隔著 Hub 或非網管交換器時，CDP 會被泛洪過去（一個埠上看到好幾個鄰居），LLDP 的目的位址是 802.1D 保留給「最近的橋接器」的，交換器不會轉送。
-- **靠 CDP 才知道的事**：雙工不一致 (`%CDP-4-DUPLEX_MISMATCH`)、Native VLAN 不一致 (`%CDP-4-NATIVE_VLAN_MISMATCH`) 都要收到對方的 CDP 才會出現，每分鐘抱怨一次。電話的語音 VLAN 與 PoE 協商也是。
+- **靠 CDP 才知道的事**：雙工不一致 (`%CDP-4-DUPLEX_MISMATCH`)、Native VLAN 不一致 (`%CDP-4-NATIVE_VLAN_MISMATCH`) 都要收到對方的 CDP 才會出現，每分鐘抱怨一次。電話的語音 VLAN 與 PoE 協商也是：Cisco 的電話與 AP 用 CDP（AP 也可以用 LLDP）告訴交換器實際要多少瓦，沒有的話交換器依 IEEE 等級保留上限（AP 是 Class 4 的 30 W）。供電、拒絕、拔掉會記 `%ILPOWER-5-POWER_GRANTED`、`%ILPOWER-5-ILPOWER_POWER_DENY`、`%ILPOWER-5-IEEE_DISCONNECT`。
 - **DTP**：Catalyst 的埠出廠是 `dynamic auto`。對面是 `trunk` 或 `desirable` 就協商成 Trunk；兩端都是 auto 維持 Access；設了 `nonegotiate` 的一端不送 DTP，對面的 dynamic 埠永遠等不到要求。電腦、路由器、Nexus 都不講 DTP；攻擊工具（例如 Yersinia）可以假裝成交換器，把使用者的埠協商成 Trunk（VLAN hopping）。
 
 ## IP 電話與 QoS
