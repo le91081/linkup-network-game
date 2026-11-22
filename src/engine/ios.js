@@ -540,8 +540,8 @@ export function iosSession(getDev, getState, who = null) {
     ['no tunnel destination [...]', () => onTun((i) => { delete i.tun.dst; })],
     ['tunnel mode <...>', ([m]) => {
       const w = m.toLowerCase().split(/\s+/);
-      const v = w[0] === 'gre' && (!w[1] || w[1] === 'ip') ? 'gre' : w[0] === 'gre' && /^multi/.test(w[1] || '') ? 'mgre' : w[0] === 'ipsec' && (!w[1] || w[1] === 'ipv4') ? 'ipsec' : null;
-      if (!v) return err('這個模擬支援：tunnel mode gre ip、tunnel mode gre multipoint、tunnel mode ipsec ipv4');
+      const v = w[0] === 'gre' && (!w[1] || w[1] === 'ip') ? 'gre' : w[0] === 'gre' && /^multi/.test(w[1] || '') ? 'mgre' : w[0] === 'ipsec' && (!w[1] || w[1] === 'ipv4') ? 'ipsec' : w[0] === 'ipv6ip' && !w[1] ? 'ipv6ip' : null;
+      if (!v) return err('這個模擬支援：tunnel mode gre ip、tunnel mode gre multipoint、tunnel mode ipsec ipv4、tunnel mode ipv6ip');
       return onTun((i) => {
         if (v === 'gre') delete i.tun.mode; else i.tun.mode = v;
         if (v === 'mgre' && i.tun.dst) { delete i.tun.dst; return '（multipoint GRE 不用 tunnel destination，已經移除；對端的位址由 NHRP 決定）'; }
@@ -3632,7 +3632,7 @@ export function runningConfig(state, dev) {
       ...(n.redirect ? [' ip nhrp redirect'] : []), ...(n.shortcut ? [' ip nhrp shortcut'] : []),
       ...(t.ka ? [` keepalive ${t.ka.sec} ${t.ka.retry}`] : []),
       ...(t.src ? [` tunnel source ${srcIf ? longIf(srcIf.label) : t.src}`] : []), ...(t.dst ? [` tunnel destination ${t.dst}`] : []),
-      ...(t.mode === 'mgre' ? [' tunnel mode gre multipoint'] : t.mode === 'ipsec' ? [' tunnel mode ipsec ipv4'] : []),
+      ...(t.mode === 'mgre' ? [' tunnel mode gre multipoint'] : t.mode === 'ipsec' ? [' tunnel mode ipsec ipv4'] : t.mode === 'ipv6ip' ? [' tunnel mode ipv6ip'] : []),
       ...(t.key != null ? [` tunnel key ${t.key}`] : []), ...(t.prot ? [` tunnel protection ipsec profile ${t.prot}`] : []),
       ...(i.shut ? [' shutdown'] : []), '!');
   }

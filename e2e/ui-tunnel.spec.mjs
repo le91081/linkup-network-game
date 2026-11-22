@@ -71,3 +71,22 @@ test('DMVPN：spoke 的 NHRP 設定、show dmvpn、show ip nhrp nhs', async ({ p
   await expect(page.locator('#panel .term-out')).toContainText(/10\.0\.0\.1\s+RE\s+NBMA Address: 203\.0\.113\.2/);
   expect(await scan(page, '#panel', 'CLI')).toEqual([]);
 });
+
+test('雙協定：ping 主機名稱優先用 IPv6、ping -4、nslookup 列出 AAAA、curl 的 Happy Eyeballs', async ({ page }) => {
+  await boot(page);
+  await open(page, 'l93');
+  await clickDevice(page, 'pca');
+  await page.locator('#panel .tab', { hasText: '終端機' }).click();
+  await typeCmd(page, 'ping www.corp.local');
+  await expect(page.locator('#panel .term-out')).toContainText('Ping www.corp.local [2001:db8:20::100]', { timeout: 15000 });
+  await expect(page.locator('#panel .term-out')).toContainText('有 AAAA 記錄');
+  await typeCmd(page, 'ping -4 www.corp.local');
+  await expect(page.locator('#panel .term-out')).toContainText(/回覆自 10\.20\.0\.10/, { timeout: 15000 });
+  await typeCmd(page, 'nslookup www.corp.local');
+  await expect(page.locator('#panel .term-out')).toContainText(/Addresses:\s+2001:db8:20::100/);
+  await typeCmd(page, 'curl -k https://www.corp.local/');
+  await expect(page.locator('#panel .term-out')).toContainText('Happy Eyeballs', { timeout: 15000 });
+  await typeCmd(page, 'ipconfig /displaydns');
+  await expect(page.locator('#panel .term-out')).toContainText('AAAA 記錄');
+  expect(await scan(page, '#panel', '終端機')).toEqual([]);
+});

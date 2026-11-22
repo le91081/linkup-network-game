@@ -166,7 +166,7 @@ export const ospf6Passive = (d, i) => {
   const c = d.ospf6 || {};
   return (c.passiveDefault ? !(c.noPassive || []).includes(i.id) : (c.passive || []).includes(i.id)) || isLoopback(i);
 };
-export const ospf6NetType = (i) => (isLoopback(i) ? 'loopback' : i.ospf6Net === 'p2p' ? 'point-to-point' : 'broadcast');
+export const ospf6NetType = (i) => (isLoopback(i) ? 'loopback' : i.ospf6Net === 'p2p' ? 'point-to-point' : i.ospf6Net === 'broadcast' ? 'broadcast' : i.bind && i.bind.t === 'gre' ? 'point-to-point' : 'broadcast');
 export const ospf6Hello = (i) => +i.ospf6Hello || 10;
 export const ospf6Dead = (i) => +i.ospf6Dead || 4 * ospf6Hello(i);
 export const ospf6Prio = (i) => (i.ospf6Prio == null || i.ospf6Prio === '' ? 1 : +i.ospf6Prio);
@@ -338,7 +338,7 @@ function computeOspfAf(state, af) {
       O(d).ifs[i.id] = { area, cost, type: af.netType(i), passive: af.passive(d.dev, i), prio: af.prio(i), hello: af.hello(i), dead: af.dead(i), state: 'DOWN', nbrs: 0, full: 0, why: [] };
       stubs[d.id].push(...af.stubs(d.dev, i, cost, area));
       if (af.passive(d.dev, i)) { O(d).ifs[i.id].state = isLoopback(i) ? 'LOOP' : 'PASSIVE'; continue; }
-      for (const e of l2Explore(state, d.dev.id, i)) {
+      for (const e of l2Explore(state, d.dev.id, i, { family: af.ns === '6' ? 6 : 4 })) {
         const x = nodeAt(e.dev, e.iface), j = e.iface;
         if (!x || !isNode.has(x.id) || !running(x, j) || !af.peer(i, j)) continue;
         const k = [key(d, i), key(x, j)].sort().join('~');

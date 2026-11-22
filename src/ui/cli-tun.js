@@ -28,7 +28,7 @@ export function tunnelDetail(st, d, i) {
   const srcTxt = rt.src != null ? `${fmtIp(rt.src)}${srcIf ? ` (${longIf(srcIf.label)})` : ''}` : t.src ? `UNKNOWN (${srcIf ? longIf(srcIf.label) : t.src})` : 'UNKNOWN';
   o.push(`  Tunnel source ${srcTxt}${mode === 'mgre' ? '' : `, destination ${t.dst || 'UNKNOWN'}`}`);
   o.push(`  Tunnel protocol/transport ${MODE_TEXT[mode]}`);
-  if (mode !== 'ipsec') o.push(`    Key ${t.key != null ? `0x${(+t.key).toString(16).toUpperCase()}` : 'disabled'}, sequencing disabled`, '    Checksumming of packets disabled');
+  if (mode !== 'ipsec' && mode !== 'ipv6ip') o.push(`    Key ${t.key != null ? `0x${(+t.key).toString(16).toUpperCase()}` : 'disabled'}, sequencing disabled`, '    Checksumming of packets disabled');
   o.push('  Tunnel TTL 255, Fast tunneling enabled', `  Tunnel transport MTU ${rt.mtu || 1476} bytes`, '  Tunnel transmit bandwidth 8000 (kbps)', '  Tunnel receive bandwidth 8000 (kbps)');
   if (t.prot) o.push(`  Tunnel protection via IPSec (profile "${t.prot}")`);
   if (+i.mtu > 0) o.push(`（ip mtu ${i.mtu}：Tunnel 送出的封包最大 ${i.mtu} 位元組）`);
@@ -138,7 +138,7 @@ export function cryptoSessionLines(st, d) {
     const status = sa ? 'UP-ACTIVE' : t.nego ? 'UP-NO-IKE' : 'DOWN';
     const v = ikeVer(d, t.cfg) === 2 ? 'IKEv2' : 'IKEv1';
     const port = t.natT ? 4500 : 500;
-    const flow = t.vti ? 'permit ip 0.0.0.0/0.0.0.0 0.0.0.0/0.0.0.0' : t.proto === 'gre' ? `permit 47 host ${fmtIp(t.localIp)} host ${fmtIp(t.peerIp)}` : t.local.map((l, k) => { const r = t.remote[k] || t.remote[0]; return `permit ip ${fmtIp(l.net)}/${fmtMask(l.bits)} ${r ? `${fmtIp(r.net)}/${fmtMask(r.bits)}` : '0.0.0.0/0.0.0.0'}`; }).join(' ');
+    const flow = t.vti ? 'permit ip 0.0.0.0/0.0.0.0 0.0.0.0/0.0.0.0' : t.proto === 'gre' || t.proto === 'ipv6ip' ? `permit ${t.proto === 'gre' ? 47 : 41} host ${fmtIp(t.localIp)} host ${fmtIp(t.peerIp)}` : t.local.map((l, k) => { const r = t.remote[k] || t.remote[0]; return `permit ip ${fmtIp(l.net)}/${fmtMask(l.bits)} ${r ? `${fmtIp(r.net)}/${fmtMask(r.bits)}` : '0.0.0.0/0.0.0.0'}`; }).join(' ');
     o.push(`Interface: ${iface ? longIf(iface.label) : '(none)'}`, `Session status: ${status}`, `Peer: ${t.peerIp != null ? fmtIp(t.peerIp) : '0.0.0.0'} port ${port} `);
     if (sa || t.nego) o.push(`  ${v} SA: local ${fmtIp(t.localIp)}/${port} remote ${fmtIp(t.peerIp)}/${port} ${sa ? 'Active' : 'Inactive'}`);
     o.push(`  IPSEC FLOW: ${flow} `, `        Active SAs: ${sa ? 2 : 0}, origin: ${t.prot ? 'crypto map' : 'crypto map'}`);

@@ -4,7 +4,7 @@ import { inp, sel, note, cardHead, del, isNum } from './form.js';
 import { DNS_TYPES, DNS_TTL, zoneRecords } from '../engine/dns.js';
 
 const HINT = {
-  A: '名稱 → IPv4 位址', CNAME: '別名 → 另一個名稱（例如 www → web01）', MX: '這個網域的郵件伺服器（數字小的優先）', PTR: '反查：IP 位址 → 名稱',
+  A: '名稱 → IPv4 位址', AAAA: '名稱 → IPv6 位址（有全域 IPv6 的電腦會優先用它）', CNAME: '別名 → 另一個名稱（例如 www → web01）', MX: '這個網域的郵件伺服器（數字小的優先）', PTR: '反查：IP 位址 → 名稱',
 };
 
 export function dnsTab(ctx, body) {
@@ -24,7 +24,7 @@ export function dnsTab(ctx, body) {
       inp(ctx, () => (r.type === 'MX' && r.pref != null ? `${r.pref} ${r.value}` : r.value), (v) => {
         const m = r.type === 'MX' && v.trim().match(/^(\d+)\s+(\S+)$/);
         if (m) { r.pref = +m[1]; r.value = m[2]; } else r.value = v.trim();
-      }, { ph: r.type === 'A' ? '10.0.0.10' : r.type === 'MX' ? '10 mail.corp.local' : r.type === 'PTR' ? 'web01.corp.local' : 'web01.corp.local' }),
+      }, { ph: r.type === 'A' ? '10.0.0.10' : r.type === 'AAAA' ? '2001:db8::10' : r.type === 'MX' ? '10 mail.corp.local' : r.type === 'PTR' ? 'web01.corp.local' : 'web01.corp.local' }),
       inp(ctx, () => String(r.ttl ?? DNS_TTL), (v) => { r.ttl = +v || DNS_TTL; }, { ph: String(DNS_TTL), check: isNum(0, 2147483647) }),
       del(() => { z.records.splice(n, 1); ctx.commit(true); }))),
     h('div', { class: 'addrow' }, button('新增記錄', { ic: 'plus', small: true, onclick: () => { z.records.push({ name: '', type: 'A', value: '', ttl: DNS_TTL }); ctx.commit(true); } }))));

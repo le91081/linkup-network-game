@@ -3112,6 +3112,67 @@ console.log('\nTunnel 介面：GRE、keepalive、recursive routing、GRE over IP
   ok(/permit esp any host 203\.0\.113\.2/.test(runningConfig(n3, n3.devices.hq).join('\n')), 'ACL 可以寫 esp（IP 協定 50）、gre（47）');
 }
 
+console.log('\nIPv6 補齊：AAAA 與雙協定、IPv6 經過 IPv4 的 Tunnel（GRE、6in4）');
+{
+  const sim = await import('../src/engine/sim.js');
+  const s6 = await import('../src/engine/sim6.js');
+  const { iosSession, runningConfig } = await import('../src/engine/ios.js');
+  const { iosRun } = await import('../src/ui/cli.js');
+  const { parseIp6, fmtIp6 } = await import('../src/engine/ip6.js');
+  const { cacheRows } = await import('../src/engine/dns.js');
+  const { makeDevice: MD, makeState: MS } = await import('../src/engine/model.js');
+  const ok = (cond, title) => (cond ? console.log('  ✔ ' + title) : fail(title));
+  const cli = (s, id) => { const S = iosSession(() => s.devices[id], () => s); return (...lines) => { const out = []; for (const l of lines) { const r = iosRun({ state: s, showTrace() {}, refreshLive() {} }, id, S, l, (x) => out.push(x)); if (r.changed) settle(s); } return out.join('\n'); }; };
+  const lv = (id) => { const l = LEVELS.find((x) => x.id === id); const s = l.setup(); settle(s); return { s, l }; };
+
+  // ── AAAA 與雙協定（9-7）
+  const { s: a, l: l93 } = lv('l93');
+  const q6 = sim.resolveName(a, 'pca', 'www.corp.local', 0, { type: 'AAAA', nocache: true });
+  ok(q6.ok && fmtIp6(q6.ip6) === '2001:db8:20::100', `AAAA 查得到：${q6.ok ? fmtIp6(q6.ip6) : q6.reason}`);
+  const p1 = sim.dualStack(a, 'pca', 'www.corp.local', { proto: 'icmp' });
+  ok(!p1.ok && p1.family === 6 && /NDP/.test(p1.reason), '有全域 IPv6 的電腦用名稱 ping：優先用 AAAA，位址寫錯就逾時（不會改用 IPv4）');
+  const p4 = sim.dualStack(a, 'pca', 'www.corp.local', { proto: 'icmp', family: 4 });
+  ok(p4.ok && p4.family === 4, 'ping -4：用 A 記錄，會通');
+  const h = sim.dualStack(a, 'pca', 'www.corp.local', { proto: 'tcp', dport: 443, happy: true });
+  ok(h.ok && h.family === 4 && h.fallback && h.log.some((x) => /Happy Eyeballs/.test(x.text)), '瀏覽器 (Happy Eyeballs)：IPv6 沒有回應，改用 IPv4 連上（會通，但慢一點）');
+  const o = sim.dualStack(a, 'old', 'www.corp.local', { proto: 'tcp', dport: 443, happy: true });
+  ok(o.ok && o.family === 4 && !o.fallback && /沒有全域的 IPv6/.test(o.why), '只有 IPv4 的電腦根本不問 AAAA：直接用 IPv4');
+  sim.resolveName(a, 'pca', 'www.corp.local', 0, { type: 'AAAA' });
+  ok(cacheRows(a, a.devices.pca).some((r) => r.ip6 != null && fmtIp6(r.ip6) === '2001:db8:20::100'), 'AAAA 也會記進 DNS 快取（ipconfig /displaydns 的記錄類型 28）');
+  const nodata = sim.resolveName(a, 'pca', 'ns.corp.local', 0, { type: 'AAAA', nocache: true });
+  ok(!nodata.ok, '沒有 AAAA 的名稱：查不到 IPv6 位址');
+  l93.solve(a); settle(a);
+  const p6 = sim.dualStack(a, 'pca', 'www.corp.local', { proto: 'icmp' });
+  ok(p6.ok && p6.family === 6, '修好 AAAA、伺服器補上 IPv6 閘道：ping www.corp.local 走 IPv6');
+
+  // ── IPv6 經過 VTI 過不去、改成 GRE 就通（9-8）
+  const { s: b, l: l94 } = lv('l94');
+  ok(!(b.devices.hq.rt.nbrs6 || []).length && b.devices.hq.rt.nbrs.some((n) => n.iface === 'Tu0' && n.state === 'full'), 'tunnel mode ipsec ipv4：OSPFv2 在 Tunnel 上 FULL，OSPFv3 沒有鄰居（VTI 只載 IPv4）');
+  const v6fail = s6.transact6(b, 'br', parseIp6('2001:db8:1::10'));
+  ok(!v6fail.ok, `IPv6 過不了 VTI：${v6fail.reason}`);
+  l94.solve(b); settle(b);
+  const r6 = s6.transact6(b, 'bpc', parseIp6('2001:db8:1::10'), { proto: 'tcp', dport: 443 });
+  ok(r6.ok && r6.log.some((x) => /GRE 封裝：IPv6/.test(x.text)) && r6.hops.some((x) => x.proto === 'esp'), 'tunnel mode gre ip + tunnel protection：IPv6 包進 GRE、再加密成 ESP，分公司連得到總公司');
+  ok((b.devices.hq.rt.nbrs6 || []).some((n) => n.state === 'full') && b.devices.br.rt.routes6.some((x) => x.type === 'O' && x.iface && x.iface.id === 'Tu0'), 'OSPFv3 在 GRE 上 FULL，分公司從 Tunnel0 學到總公司的 IPv6 前綴');
+
+  // ── 6in4（tunnel mode ipv6ip）
+  const c = MS([
+    MD('isr4331', 'r1', { name: 'R1', pos: [-6, 0] }), MD('isr4331', 'isp', { name: 'ISP', pos: [0, -4] }), MD('isr4331', 'r2', { name: 'R2', pos: [6, 0] }),
+  ], [['r1:Gi0/0/0', 'isp:Gi0/0/0'], ['r2:Gi0/0/0', 'isp:Gi0/0/1']]);
+  c.v6 = true;
+  settle(c);
+  cli(c, 'isp')('configure terminal', 'interface Gi0/0/0', 'ip address 203.0.113.2 255.255.255.252', 'interface Gi0/0/1', 'ip address 198.51.100.2 255.255.255.252', 'end');
+  const side = (id, wan, gw, lo, tun, dst) => cli(c, id)('configure terminal', 'ipv6 unicast-routing', 'interface Gi0/0/0', `ip address ${wan} 255.255.255.252`, 'exit', `ip route 0.0.0.0 0.0.0.0 ${gw}`,
+    'interface Loopback0', `ipv6 address ${lo}`, 'ipv6 ospf 1 area 0', 'interface Tunnel0', `ipv6 address ${tun}`, 'ipv6 ospf 1 area 0', 'tunnel source Gi0/0/0', `tunnel destination ${dst}`, 'tunnel mode ipv6ip', 'end');
+  side('r1', '203.0.113.1', '203.0.113.2', '2001:db8:a::1/128', '2001:db8:ff::1/64', '198.51.100.1');
+  side('r2', '198.51.100.1', '198.51.100.2', '2001:db8:b::1/128', '2001:db8:ff::2/64', '203.0.113.1');
+  sim.advance(c, 60); settle(c);
+  const t6 = s6.transact6(c, 'r1', parseIp6('2001:db8:b::1'));
+  ok(t6.ok && t6.log.some((x) => /6in4 封裝/.test(x.text) && /協定 41/.test(x.text)), '6in4（tunnel mode ipv6ip）：IPv6 包進 IPv4（協定 41），經過只有 IPv4 的 ISP；OSPFv3 學到對面的 Loopback');
+  ok(c.devices.r1.ifaces.find((i) => i.id === 'Tu0').rt.tun.mtu === 1480 && /Tunnel protocol\/transport IPv6\/IP/.test(cli(c, 'r1')('show interfaces tunnel 0')), '6in4 的外層只多 20 位元組：Tunnel 的 MTU 1480；show interfaces 是 IPv6/IP');
+  ok(/ tunnel mode ipv6ip/.test(runningConfig(c, c.devices.r1).join('\n')), 'running-config：tunnel mode ipv6ip');
+}
+
 // ── 題庫與證照對照表的資料檢查 ──
 {
   const { QUESTIONS, TOPICS, LEVEL_TOPIC } = await import('../src/data/quiz.js');

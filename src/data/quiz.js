@@ -32,7 +32,7 @@ export const LEVEL_TOPIC = {
   l55: 'wireless', l56: 'wireless', l57: 'wireless',
   l58: 'auto', l59: 'auto', l60: 'auto', l61: 'auto', l62: 'auto',
   l63: 'routing', l64: 'routing', l65: 'ops', l66: 'routing', l67: 'switching', l68: 'vpn', l69: 'security', l71: 'services',
-  l70: 'auto', l72: 'routing', l73: 'auto', l74: 'security', l75: 'switching', l76: 'vpn', l77: 'routing', l78: 'routing', l79: 'routing', l80: 'routing', l81: 'routing', l82: 'routing', l83: 'security', l84: 'security', l85: 'switching', l86: 'security', l87: 'ipv6', l88: 'vpn', l89: 'vpn', l90: 'vpn', l91: 'vpn', l92: 'vpn',
+  l70: 'auto', l72: 'routing', l73: 'auto', l74: 'security', l75: 'switching', l76: 'vpn', l77: 'routing', l78: 'routing', l79: 'routing', l80: 'routing', l81: 'routing', l82: 'routing', l83: 'security', l84: 'security', l85: 'switching', l86: 'security', l87: 'ipv6', l88: 'vpn', l89: 'vpn', l90: 'vpn', l91: 'vpn', l92: 'vpn', l93: 'ipv6', l94: 'ipv6',
 };
 
 export const QUESTIONS = {
@@ -141,6 +141,9 @@ export const QUESTIONS = {
     { q: '為什麼不直接用連接埠轉發把內部的 ERP 開放到網際網路？', a: ['連接埠轉發比較慢', '服務會直接暴露給全世界的攻擊者；VPN 會先驗證身分並加密', '這樣會佔用太多 IP', 'ERP 不支援 HTTPS'], c: 1, e: '開放到網際網路的服務隨時會被掃描與攻擊。只讓通過驗證的 VPN 使用者連線，可以大幅縮小攻擊面。', r: 'Security+ 3.2' },
   ],
   ipv6: [
+    { q: 'DNS 裡 AAAA 記錄的用途是？', a: ['名稱對應到 IPv4 位址', '名稱對應到 IPv6 位址', '郵件伺服器', '反查名稱'], c: 1, e: 'A 是 IPv4、AAAA（quad-A）是 IPv6。同一個名稱可以兩種都有，雙協定的用戶端兩種都會問。', r: 'CCNA 4.3' },
+    { q: '網站加了 AAAA 之後，雙協定的電腦 ping 網站名稱逾時，瀏覽器卻打得開、只是比較慢；只有 IPv4 的電腦一切正常。最可能的原因是？', a: ['DNS 伺服器故障', 'AAAA 寫錯或 IPv6 的路不通：電腦優先用 IPv6，瀏覽器的 Happy Eyeballs 才改用 IPv4', 'IPv4 的 ACL 擋掉 ICMP', 'MTU 太小'], c: 1, e: '有全域 IPv6 位址的電腦依 RFC 6724 優先用 AAAA；ping 不會改用 IPv4，瀏覽器會在兩三百毫秒後改試 IPv4。用 nslookup -type=aaaa 與 ping -6 / ping -4 比對。', r: 'Network+ 3.4' },
+    { q: '兩地之間的 VTI（tunnel mode ipsec ipv4）上，IPv4 的 OSPF 正常，OSPFv3 卻一直沒有鄰居。原因是？', a: ['OSPFv3 要另外設定驗證', 'IPv4 的 VTI 只載送 IPv4，IPv6 的封包進不去；改用 GRE over IPsec', 'OSPFv3 不能在 Tunnel 上跑', 'Router ID 重複'], c: 1, e: 'ipsec ipv4 模式的 VTI 的 proxy ID 是 0.0.0.0/0，只有 IPv4 能進去。GRE 可以同時載 IPv4 與 IPv6，加上 tunnel protection 一樣加密。', r: 'CCNA 1.8' },
     { q: '辦公室有人接了一台會送 Router Advertisement 的設備，大家的 IPv6 預設閘道被搶走。交換器上該用哪個功能防？', a: ['DHCP Snooping', 'RA Guard（接電腦的埠 device-role host）', 'Dynamic ARP Inspection', 'BPDU Guard'], c: 1, e: 'RA 沒有驗證，主機會接受任何人送的 RA。RA Guard 把接電腦的埠設成 host 角色，從那裡進來的 RA 一律丟掉。', r: 'Network+ 4.3' },
     { q: 'IPv6 位址的長度是多少？', a: ['32 位元', '64 位元', '128 位元', '256 位元'], c: 2, e: 'IPv6 位址是 128 位元，寫成 8 組、每組 4 個十六進位數字。', r: 'CCNA 1.8' },
     { q: '2001:0db8:0000:0000:0000:0000:0000:0001 的最短寫法是？', a: ['2001:db8::1', '2001:db8:0:1', '2001:0db8::0001', '2001:db8:::1'], c: 0, e: '每組開頭的 0 可以省略，一段連續的全 0 可以用 :: 代替，但整個位址只能用一次。', r: 'CCNA 1.8' },

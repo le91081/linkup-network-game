@@ -45,10 +45,10 @@ function tunBlock(ctx, t) {
   const parts = [
     grid2(
       field('模式', sel(ctx, () => mode, (v) => { if (v === 'gre') delete T.mode; else T.mode = v; if (v === 'mgre') delete T.dst; if (v === 'ipsec') delete T.ka; if (v === 'mgre' && !t.nhrp) t.nhrp = { id: 1 }; },
-        [['gre', 'GRE 點對點（tunnel mode gre ip）'], ['mgre', 'mGRE 多點（DMVPN：gre multipoint）'], ['ipsec', 'IPsec VTI（tunnel mode ipsec ipv4）']], { rerender: true })),
+        [['gre', 'GRE 點對點（tunnel mode gre ip）'], ['mgre', 'mGRE 多點（DMVPN：gre multipoint）'], ['ipsec', 'IPsec VTI（tunnel mode ipsec ipv4，只載 IPv4）'], ['ipv6ip', '6in4（tunnel mode ipv6ip，只載 IPv6）']], { rerender: true })),
       field('來源 (tunnel source)', sel(ctx, () => T.src || '', (v) => { if (v) T.src = v; else delete T.src; }, srcOpts)),
       mode !== 'mgre' && field('對端位址 (tunnel destination)', inp(ctx, () => T.dst || '', (v) => { if (v) T.dst = v; else delete T.dst; }, { ph: '對端的公用 IP', check: isIp })),
-      mode !== 'ipsec' && field('Tunnel key（選填）', inp(ctx, () => (T.key != null ? String(T.key) : ''), (v) => { if (v === '') delete T.key; else T.key = +v; }, { ph: '兩端要一樣', check: numOr(0, 4294967295) })),
+      mode !== 'ipsec' && mode !== 'ipv6ip' && field('Tunnel key（選填）', inp(ctx, () => (T.key != null ? String(T.key) : ''), (v) => { if (v === '') delete T.key; else T.key = +v; }, { ph: '兩端要一樣', check: numOr(0, 4294967295) })),
       field('加密 (tunnel protection)', sel(ctx, () => T.prot || '', (v) => { if (v) T.prot = v; else delete T.prot; },
         [['', mode === 'ipsec' ? '（VTI 一定要選一個 IPsec profile）' : '不加密（純 GRE，內容看得到）'], ...profs.map((p) => [p, `IPsec profile ${p}`])], { rerender: true })),
       field('IP MTU (ip mtu)', inp(ctx, () => (t.mtu ? String(t.mtu) : ''), (v) => { if (v === '') delete t.mtu; else t.mtu = +v; }, { ph: '自動', w: '7em', check: numOr(576, 1500) })),
@@ -59,13 +59,13 @@ function tunBlock(ctx, t) {
     parts.push(h('div', { class: 'toggles' }, toggle(ctx, () => !!T.ka, (v) => { if (v) T.ka = { sec: 10, retry: 3 }; else delete T.ka; }, 'Keepalive：對端沒有回應時把 line protocol 拉下來（沒有設定的話，只要有路到對端就一直是 up）', { rerender: true })));
     if (T.ka) parts.push(grid2(field('週期（秒）', inp(ctx, () => String(T.ka.sec), (v) => { T.ka.sec = Math.max(1, +v || 10); }, { check: isNum(1, 32767) })), field('重試次數', inp(ctx, () => String(T.ka.retry), (v) => { T.ka.retry = Math.max(1, +v || 3); }, { check: isNum(1, 255) }))));
   }
-  if (mode !== 'ipsec') parts.push(nhrpBlock(ctx, t));
+  if (mode !== 'ipsec' && mode !== 'ipv6ip') parts.push(nhrpBlock(ctx, t));
   parts.push(ctx.live(() => {
     const rt = t.rt && t.rt.tun;
     if (!rt) return null;
     if (t.shut) return note('muted', '介面被停用 (shutdown)。');
     if (!t.rt.link) return note('warn', `line protocol down：${rt.why || '設定還沒完成'}`);
-    const out = [note('ok', `line protocol up · Tunnel 裡最多放得下 ${t.mtu ? Math.min(+t.mtu, rt.mtu) : rt.mtu} 位元組的封包（外面的線路 ${rt.mtu + (T.prot ? (mode === 'ipsec' ? 73 : 97) : 24)} 扣掉 ${mode === 'ipsec' ? 'ESP' : T.prot ? 'GRE + ESP' : 'GRE'} 的標頭）`)];
+    const out = [note('ok', `line protocol up · Tunnel 裡最多放得下 ${t.mtu ? Math.min(+t.mtu, rt.mtu) : rt.mtu} 位元組的封包（外面的線路 ${rt.mtu + (mode === 'ipv6ip' ? 20 : T.prot ? (mode === 'ipsec' ? 73 : 97) : 24)} 扣掉 ${mode === 'ipv6ip' ? '外層 IPv4' : mode === 'ipsec' ? 'ESP' : T.prot ? 'GRE + ESP' : 'GRE'} 的標頭）`)];
     if (mode === 'gre' && !T.ka && rt.note) out.push(note('warn', `${rt.note}。沒有 keepalive 的 GRE 照樣顯示 up。`));
     if (rt.kaLeft) out.push(note('warn', `對面沒有回應 keepalive，再 ${rt.kaLeft} 秒就會 down。`));
     const peers = rt.peers.filter((p) => p.ip != null);

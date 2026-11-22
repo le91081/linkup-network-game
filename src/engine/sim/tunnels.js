@@ -171,7 +171,7 @@ function protT(d, i, peerIp, responder) {
   const T = {
     name, cfg, dev: d.id, up: false, why: '', local: cidrList(cfg.local), remote: cidrList(cfg.remote),
     iface: vti ? i : tunIface('vpn:' + name, `IPsec ${i.label}`), peerIp, localIp: src, tif: i.id, prot: true, responder: !!responder,
-    ...(vti ? { vti: true } : { proto: 'gre' }),
+    ...(vti ? { vti: true } : { proto: tunMode(i) === 'ipv6ip' ? 'ipv6ip' : 'gre' }),
   };
   if (prof.tset && !(d.tsets || {})[prof.tset]) T.why = `IPsec profile ${i.tun.prot} 用的 transform-set ${prof.tset} 不存在`;
   else if (prof.ikev2 && !v2obj(d, cfg)) T.why = `IPsec profile ${i.tun.prot} 指定的 ikev2 profile「${prof.ikev2}」不存在`;

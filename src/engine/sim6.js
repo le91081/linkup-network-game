@@ -14,6 +14,8 @@ import { parseIp6, fmtIp6, parseCidr6, net6, linkLocal, eui64, isLinkLocal } fro
 import { l2Explore } from './sim.js';
 import { computeOspf6 } from './ospf.js';
 import { raBlocked } from './l2sec.js';
+import { forward, isTun, tunMode, GRE_OVERHEAD } from './sim.js';
+import { fmtIp } from './ip.js';
 
 export const mode6 = (dev, i) => i.mode6 || (dev.kind === 'host' ? 'auto' : 'static');
 const owns6 = (i, ip) => !!i.rt.v6 && (i.rt.v6.ll === ip || i.rt.v6.addrs.some((a) => a.ip === ip));
@@ -369,6 +371,24 @@ function forward6(state, ctx, startId, pkt) {
       if (x) return drop(`${dev.name} 的 ${r.iface.label} 出方向的 IPv6 ACL「${r.iface.acl6Out}」拒絕了這個封包：${x.text}`);
     }
     const nh = r.via ?? pkt.dst;
+    // IPv6 從 Tunnel 出去：外面包一層 IPv4（GRE 是協定 47、6in4 是協定 41），經過只有 IPv4 的網路送到對面
+    if (isTun(r.iface)) {
+      const t = r.iface, rt = t.rt.tun, mode = tunMode(t);
+      if (!t.rt.link || !rt || !rt.up) return drop(`${dev.name} 的 ${t.label} 是 line protocol down：${(rt && rt.why) || '沒有啟用'}`);
+      if (mode === 'ipsec') return drop(`${dev.name} 的 ${t.label} 是 tunnel mode ipsec ipv4：這種 VTI 只載送 IPv4，IPv6 要用 GRE（tunnel mode gre ip）或 tunnel mode ipv6ip`);
+      if (mode === 'mgre') return drop(`${dev.name} 的 ${t.label} 是 multipoint GRE：IPv6 要另外設定 ipv6 nhrp，這個模擬沒有`);
+      const v6in4 = mode === 'ipv6ip', key = t.tun.key != null && t.tun.key !== '' ? +t.tun.key : null;
+      ctx.log.push({ dev: dev.id, kind: 'vpn', text: `${v6in4 ? '6in4' : 'GRE'} 封裝：IPv6 封包從 ${t.label} 送出，外面包一層 IPv4 ${fmtIp(rt.src)} → ${fmtIp(rt.dst)}（IP 協定 ${v6in4 ? 41 : 47}）` });
+      const ctx4 = { ct: {}, log: ctx.log, hops: ctx.hops, l3: [] };
+      const o = forward(state, ctx4, dev.id, { proto: v6in4 ? 'ipv6ip' : 'gre', src: rt.src, dst: rt.dst, sport: 0, dport: 0, ttl: 255, reply: pkt.reply, outer: true, greKey: v6in4 ? null : key, len: 80 + (v6in4 ? 20 : GRE_OVERHEAD), gre: { key, v6: true, inner: { proto: pkt.proto, src6: pkt.src.toString(16), dst6: pkt.dst.toString(16), reply: !!pkt.reply } } });
+      if (!o.ok) return { ok: false, dev: o.dev, reason: o.reason };
+      if (!o.gre) return drop(`${state.devices[o.dev].name} 收到封裝的 IPv6，但沒有交給任何 Tunnel 介面`);
+      dev = state.devices[o.dev];
+      inIf = o.gre;
+      if (!inIf.rt.v6 || inIf.rt.v6.ll == null) return drop(`${dev.name} 的 ${inIf.label} 沒有啟用 IPv6（沒有 ipv6 address），解封裝出來的 IPv6 封包被丟掉`);
+      ctx.log.push({ dev: dev.id, kind: 'vpn', text: `解封裝：還原出 IPv6 封包（從 ${inIf.label} 進來）` });
+      continue;
+    }
     const eps = l2Explore(state, dev.id, r.iface);
     if (eps.storm) return drop(`廣播風暴！${state.devices[eps.storm].name} 所在的網段形成了迴圈`);
     const tgt = eps.find((e) => owns6(e.iface, nh));

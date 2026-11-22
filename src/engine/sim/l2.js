@@ -117,7 +117,7 @@ export function l2Explore(state, devId, iface, opts = {}) {
   const queue = [];
   const dev = state.devices[devId];
   if (!ifaceActive(dev, iface) || rt.off[devId] || (state.down || {})[devId]) return out;
-  if (iface.bind.t === 'gre') return iface.rt && iface.rt.link ? greExplore(state, devId, iface) : out; // Tunnel：對面是哪幾台路由器由 GRE / NHRP 決定
+  if (iface.bind.t === 'gre') return iface.rt && iface.rt.link ? greExplore(state, devId, iface, opts.family) : out; // Tunnel：對面是哪幾台路由器由 GRE / NHRP 決定
   // opts.mac：用別的來源 MAC 送（macof 亂造的 MAC）；opts.trace：記下走過的交換器 (out.sws) 與每一段線路 (out.links)
   const mac = opts.mac || (iface.rt && iface.rt.mac);
   if (opts.trace) { out.sws = []; out.links = []; }

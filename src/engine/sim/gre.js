@@ -19,7 +19,7 @@ export const NHRP_HOLD = 7200; // ip nhrp holdtime 的預設值
 export const RECUR_HOLD = 30; // 偵測到 recursive routing 之後，Tunnel 暫停多久才再試一次
 export const isTun = (i) => !!i && !!i.bind && i.bind.t === 'gre';
 export const tunMode = (i) => (i.tun && i.tun.mode) || 'gre';
-export const MODE_TEXT = { gre: 'GRE/IP', mgre: 'multi-GRE/IP', ipsec: 'IPSEC/IP' };
+export const MODE_TEXT = { gre: 'GRE/IP', mgre: 'multi-GRE/IP', ipsec: 'IPSEC/IP', ipv6ip: 'IPv6/IP' };
 const keyOf = (i) => (i.tun && i.tun.key != null && i.tun.key !== '' ? +i.tun.key : null);
 const holdOf = (i) => +(i.nhrp && i.nhrp.hold) || NHRP_HOLD;
 const nhrpOn = (i) => !!(i.nhrp && i.nhrp.id != null && i.nhrp.id !== '');
@@ -49,7 +49,7 @@ export function tunSource(d, i) {
 /** Tunnel 的 IP MTU：外層介面的 MTU 扣掉 GRE（24）或 ESP（約 73）的標頭；GRE 再加上 tunnel protection 兩個都要扣 */
 export function tunOverhead(i) {
   const m = tunMode(i);
-  return m === 'ipsec' ? IPSEC_OVERHEAD : GRE_OVERHEAD + (i.tun && i.tun.prot ? IPSEC_OVERHEAD : 0);
+  return m === 'ipsec' ? IPSEC_OVERHEAD : m === 'ipv6ip' ? 20 : GRE_OVERHEAD + (i.tun && i.tun.prot ? IPSEC_OVERHEAD : 0);
 }
 
 // ───────────────────────── 第一步：只看設定與外層的路由 ─────────────────────────
@@ -95,7 +95,7 @@ function probe(state, d, src, dst, key) {
   const prev = setQuiet(true);
   try {
     const ctx = { ct: {}, log: [], hops: [], l3: [] };
-    const r = forward(state, ctx, d.id, { proto: 'gre', src, dst, sport: 0, dport: 0, ttl: 255, greKey: key, outer: true, probe: true });
+    const r = forward(state, ctx, d.id, { proto: key === 'ipv6ip' ? 'ipv6ip' : 'gre', src, dst, sport: 0, dport: 0, ttl: 255, greKey: key === 'ipv6ip' ? null : key, outer: true, probe: true });
     if (r.ok && r.gre) return { ok: true, dev: r.dev, iface: r.gre };
     return { ok: false, why: r.reason || `${fmtIp(dst)} 沒有對應的 Tunnel 介面` };
   } finally { setQuiet(prev); }
@@ -103,12 +103,13 @@ function probe(state, d, src, dst, key) {
 
 /** 收到 GRE 封包：找出 tunnel source 是這個位址、而且（點對點的話）destination 是送來的那一端的 Tunnel 介面 */
 export function greRx(state, dev, pkt) {
-  const mine = dev.ifaces.filter((j) => isTun(j) && tunMode(j) !== 'ipsec' && j.rt && j.rt.tun && j.rt.tun.src === pkt.dst);
+  const want = pkt.proto === 'ipv6ip' ? (j) => tunMode(j) === 'ipv6ip' : (j) => tunMode(j) !== 'ipsec' && tunMode(j) !== 'ipv6ip';
+  const mine = dev.ifaces.filter((j) => isTun(j) && want(j) && j.rt && j.rt.tun && j.rt.tun.src === pkt.dst);
   const m = mine.filter((j) => tunMode(j) === 'mgre' || j.rt.tun.dst === pkt.src);
   if (!m.length) {
     return { why: `${dev.name} 收到 ${fmtIp(pkt.src)} 送來的 GRE 封包，但沒有 tunnel source ${fmtIp(pkt.dst)}、tunnel destination ${fmtIp(pkt.src)} 的 Tunnel 介面${mine.length ? `（${mine.map((j) => j.label).join('、')} 的 destination 是 ${mine.map((j) => (j.rt.tun.dst != null ? fmtIp(j.rt.tun.dst) : '未設定')).join('、')}）` : ''}：回 ICMP protocol unreachable` };
   }
-  const k = m.find((j) => keyOf(j) === (pkt.greKey ?? null));
+  const k = pkt.proto === 'ipv6ip' ? m[0] : m.find((j) => keyOf(j) === (pkt.greKey ?? null));
   if (!k) return { why: `tunnel key 不一致：封包帶的 key 是 ${pkt.greKey ?? '（沒有）'}，${dev.name} 的 ${m[0].label} 設定的是 ${keyOf(m[0]) ?? '（沒有）'}。key 對不上的 GRE 封包直接丟棄` };
   if (pkt.probe ? !k.rt.tun.ok1 : !k.rt.tun.up) return { why: `${dev.name} 的 ${k.label} 是 line protocol down（${k.rt.tun.why || '沒有啟用'}），收到的 GRE 封包被丟掉` };
   return { iface: k };
@@ -188,13 +189,13 @@ export function greReach(state, list) {
       }
       continue;
     }
-    if (rt.mode === 'gre') {
-      const key = keyOf(i);
+    if (rt.mode === 'gre' || rt.mode === 'ipv6ip') {
+      const key = rt.mode === 'ipv6ip' ? 'ipv6ip' : keyOf(i);
       const p = probe(state, d, rt.src, rt.dst, key);
       let ok = p.ok, why = p.why, back = null;
       if (p.ok) {
         const pd = state.devices[p.dev];
-        back = tunMode(p.iface) === 'mgre' ? null : probe(state, pd, p.iface.rt.tun.src, rt.src, keyOf(p.iface));
+        back = tunMode(p.iface) === 'mgre' ? null : probe(state, pd, p.iface.rt.tun.src, rt.src, rt.mode === 'ipv6ip' ? 'ipv6ip' : keyOf(p.iface));
         if (back && !back.ok) { ok = false; why = `回程：${back.why}`; }
         const peer = add({ ip: p.iface.rt.ip, nbma: rt.dst, dev: p.dev, iface: p.iface.id, mcast: true, ok, kind: 'p2p' });
         if (tunMode(p.iface) !== 'mgre') { mcastEdge(state, { d, i }, { d: pd, i: p.iface }); if (back && back.ok) mcastEdge(state, { d: pd, i: p.iface }, { d, i }); else mcastEdge(state, { d: pd, i: p.iface }, { d, i }, why); }
@@ -278,9 +279,10 @@ export function greReach(state, list) {
 }
 
 /** l2Explore 用：OSPF 的 Hello 從這個 Tunnel 介面送得到哪些路由器（只送得到單向的，附上原因） */
-export function greExplore(state, devId, iface) {
+export function greExplore(state, devId, iface, family) {
   const E = ((state.rt.greEdges || {})[devId + '/' + iface.id]) || {};
   const out = [];
+  if ((family === 6 && tunMode(iface) === 'ipsec') || (family === 4 && tunMode(iface) === 'ipv6ip')) return out; // 這種 Tunnel 不載送這個位址家族
   for (const e of Object.values(E)) {
     if (!e.fwd && !e.back) continue;
     const d = state.devices[e.dev], j = d && d.ifaces.find((x) => x.id === e.iface);
@@ -324,6 +326,7 @@ export function greTarget(state, ctx, dev, outIf, nh, pkt) {
   const rt = outIf.rt.tun;
   if (!rt || !rt.up) return { drop: `${dev.name} 的 ${outIf.label} 是 line protocol down：${(rt && rt.why) || '沒有啟用'}` };
   if (rt.mode === 'gre') return { nbma: rt.dst, peer: rt.peers[0] };
+  if (rt.mode === 'ipv6ip') return { drop: `${dev.name} 的 ${outIf.label} 是 tunnel mode ipv6ip（6in4）：只能載送 IPv6，IPv4 的封包不會進去` };
   const peer = rt.peers.find((p) => p.ip === nh);
   const hub = rt.peers.find((p) => p.kind === 'nhs' && p.ok);
   const T = peer && outIf.tun.prot ? dev.rt.tunnels.find((t) => t.tif === outIf.id && t.peerIp === peer.nbma) : null;

@@ -246,7 +246,7 @@ function deliver(dev, inIf, pkt) {
     const t = cand.find((x) => x.peer && hash(x.peer.dev + '/' + x.peer.name) === pkt.spi) || cand[0];
     return t ? { ok: true, dev: dev.id, tun: t } : no(`${dev.name} 收到來源不明的加密封包，直接丟棄`);
   }
-  if (pkt.proto === 'gre') {
+  if (pkt.proto === 'gre' || pkt.proto === 'ipv6ip') {
     const g = greRx(null, dev, pkt);
     return g.iface ? { ok: true, dev: dev.id, gre: g.iface } : no(g.why);
   }

@@ -1,7 +1,7 @@
 // 主機上的終端機：ping / ipconfig / tracert / nslookup / curl
 import { h, ownKeys, escLine } from './dom.js';
 import { fmtIp, fmtMask, parseIp } from '../engine/ip.js';
-import { transact, resolveName, dnsQuery, dhcpTrace, arpRows, clearArp, dhcpRelease, dhcpRenew, fmtDur, throughput } from '../engine/sim.js';
+import { transact, resolveName, dualStack, dnsQuery, dhcpTrace, arpRows, clearArp, dhcpRelease, dhcpRenew, fmtDur, throughput } from '../engine/sim.js';
 import { cacheRows, cacheFlush, ptrName } from '../engine/dns.js';
 import { plainStamp } from '../engine/ops.js';
 import { remoteOpen, remoteLogin, remoteSend, remoteAlive, remoteClose, remoteBusy } from '../engine/remote.js';
@@ -42,7 +42,8 @@ const HELP = [
   '  arp -d                  清空 ARP 快取',
   '  tracert <IP 或網域>     顯示封包經過的每一台路由器',
   '  nslookup <網域>         直接向 DNS 伺服器查詢（不看本機的快取）',
-  '  nslookup -type=mx <網域> 查郵件伺服器；nslookup <IP> 反查名稱 (PTR)',
+  '  nslookup -type=mx <網域> 查郵件伺服器；-type=aaaa 查 IPv6 位址；nslookup <IP> 反查名稱 (PTR)',
+  '  ping -4 / ping -6 <網域>  指定用 IPv4 或 IPv6（有 AAAA、電腦也有 IPv6 時預設用 IPv6）',
   '  curl https://<網域>     開網頁：HTTPS 會驗證憑證（-k 略過、-v 看憑證、-I 只看標頭、-L 跟著轉址）',
   '  date                    看這台電腦的時間（憑證的有效期間用它判斷）',
   '  iperf3 -c <IP>          量測到另一台主機的實際傳輸速率（跑 10 秒）',
@@ -376,12 +377,13 @@ export function buildTerminal(ctx, body) {
         print(`    ${r.name}`);
         print('    ----------------------------------------');
         print(`    記錄名稱 . . . . . . : ${r.name}`);
-        print('    記錄類型 . . . . . . : 1');
+        print(`    記錄類型 . . . . . . : ${r.ip6 != null ? 28 : 1}`);
         print(`    存留時間 . . . . . . : ${r.left}`);
-        print('    資料長度 . . . . . . : 4');
+        print(`    資料長度 . . . . . . : ${r.ip6 != null ? 16 : 4}`);
         print('    區段 . . . . . . . . : 回答');
         if (r.alias) print(`    CNAME 記錄 . . . . . : （經由別名 ${r.alias}）`);
-        print(`    A (主機) 記錄  . . . : ${fmtIp(r.ip)}`, 'ok');
+        if (r.ip6 != null) print(`    AAAA 記錄  . . . . . : ${fmtIp6(r.ip6)}`, 'ok');
+        else print(`    A (主機) 記錄  . . . : ${fmtIp(r.ip)}`, 'ok');
       }
     } else if (c === 'ipconfig' && /^\/?flushdns$/i.test(args[0] || '')) {
       cacheFlush(st(), dev);
@@ -437,14 +439,20 @@ export function buildTerminal(ctx, body) {
       }
       if (badSize != null) { print(linux ? `ping: invalid argument: '${badSize}': out of range: 0 <= value <= 65507` : `錯誤的值給選項 -l，有效範圍是從 0 到 65500。`, 'bad'); draw(); return; }
       const dataLen = data ?? (linux ? 56 : 32);
+      // 用名稱 ping：電腦有全域的 IPv6 位址、名稱又有 AAAA 時優先用 IPv6（ping -4 / -6 可以指定）
+      const fam = args.includes('-4') ? 4 : args.includes('-6') ? 6 : 0;
+      const named = !!target && !target.includes(':') && parseIp(target) == null;
+      const r6 = named && fam !== 4 && st().v6 && (fam === 6 || dev.ifaces.some((i) => i.rt.v6 && i.rt.v6.addrs.length)) ? resolveName(st(), dev.id, target, 0, { type: 'AAAA' }) : null;
       if (!target) print(`用法：${c} <IP 或網域>`, 'warn');
-      else if (target.includes(':')) {
-        const d6 = parseIp6(target);
+      else if (named && fam === 6 && !(r6 && r6.ok)) print(`Ping 要求找不到主機 ${target}。${r6 ? r6.reason : '這台電腦沒有 IPv6'}`, 'bad');
+      else if (target.includes(':') || (r6 && r6.ok)) {
+        const d6 = r6 && r6.ok ? r6.ip6 : parseIp6(target);
         if (d6 == null) print('IPv6 位址的格式不正確', 'bad');
         else {
           const res = transact6(st(), dev.id, d6);
-          app.showTrace(`${dev.name}> ${line}`, res.log, res.hops, res);
+          app.showTrace(`${dev.name}> ${line}`, [...(r6 ? r6.log : []), ...res.log], [...(r6 ? r6.hops : []), ...res.hops], res);
           print('');
+          if (r6 && r6.ok) print(`（${target} 有 AAAA 記錄，這台電腦也有 IPv6 位址，所以用 IPv6；要用 IPv4 請 ping -4 ${target}）`, 'hint');
           if (c !== 'ping') {
             print(`在上限 30 個躍點上追蹤 ${fmtIp6(d6)} 的路由：`);
             res.l3.forEach((x, n) => print(`  ${String(n + 1).padStart(2)}    ${String(n + 1).padStart(2)} ms    ${fmtIp6(x.ip6).padEnd(28)} ${st().devices[x.dev].name}`));
@@ -452,7 +460,7 @@ export function buildTerminal(ctx, body) {
             if (!res.ok) { print(`  ${String(res.l3.length + 1 + (res.phase === 'reply' ? 1 : 0)).padStart(2)}     *        *        要求等候逾時。`, 'bad'); print('  ↳ ' + res.reason, 'hint'); }
             else print('追蹤完成。');
           } else {
-            print(`Ping ${fmtIp6(d6)} (使用 32 位元組的資料):`);
+            print(`Ping ${r6 && r6.ok ? `${target} [${fmtIp6(d6)}]` : fmtIp6(d6)} (使用 32 位元組的資料):`);
             for (let n = 0; n < 4; n++) print(res.ok ? `回覆自 ${fmtIp6(d6)}: 時間=${Math.max(1, res.hops.length)}ms` : res.phase === 'reply' ? '要求等候逾時。' : '目的地主機無法連線。', res.ok ? 'ok' : 'bad');
             if (!res.ok) print('  ↳ ' + res.reason, 'hint');
           }
@@ -517,12 +525,25 @@ export function buildTerminal(ctx, body) {
       else if (type === 'A') {
         // nslookup 自己就是一個 DNS 用戶端：直接問伺服器，不看、也不寫本機的快取
         const r = resolveName(st(), dev.id, target, 0, { nocache: true });
+        // Windows 的 nslookup 也會問 AAAA：兩種都有就列成 Addresses
+        const q6 = r.ok && st().v6 ? resolveName(st(), dev.id, target, 0, { nocache: true, type: 'AAAA' }) : null;
         app.showTrace(`${dev.name}> ${line}`, r.log, r.hops, r);
         if (r.ok) {
           srvLine(r);
           if (!r.auth) print('未經授權的回答:');
           print(`名稱:    ${r.canonical || target}`);
-          print(`Address:  ${fmtIp(r.ip)}`, 'ok');
+          if (q6 && q6.ok) { print(`Addresses:  ${fmtIp6(q6.ip6)}`, 'ok'); print(`          ${fmtIp(r.ip)}`, 'ok'); }
+          else print(`Address:  ${fmtIp(r.ip)}`, 'ok');
+          if (r.alias) print(`Aliases:  ${target}`);
+        } else print('*** ' + r.reason, 'bad');
+      } else if (type === 'AAAA') {
+        const r = resolveName(st(), dev.id, target, 0, { nocache: true, type: 'AAAA' });
+        app.showTrace(`${dev.name}> ${line}`, r.log, r.hops, r);
+        if (r.ok) {
+          srvLine(r);
+          if (!r.auth) print('未經授權的回答:');
+          print(`名稱:    ${r.canonical || target}`);
+          print(`Address:  ${fmtIp6(r.ip6)}`, 'ok');
           if (r.alias) print(`Aliases:  ${target}`);
         } else print('*** ' + r.reason, 'bad');
       } else if (type === 'MX' || type === 'PTR') {
@@ -537,7 +558,7 @@ export function buildTerminal(ctx, body) {
             else print(`${name}	name = ${x.value}`, 'ok');
           }
         }
-      } else print(`這個模擬支援的查詢類型：A（預設）、MX、PTR`, 'warn');
+      } else print(`這個模擬支援的查詢類型：A（預設）、AAAA、MX、PTR`, 'warn');
     } else if (c === 'docker' && dev.docker) {
       dockerCmd(app, dev, args, print, () => ctx.commit(false));
     } else if (c === 'curl' && isApiCurl(line)) {
@@ -676,10 +697,23 @@ export function buildTerminal(ctx, body) {
         else print(`curl: (7) Failed to connect to ${host} port ${port}: Connection refused`, 'bad');
         return;
       }
-      const r = resolve(host);
-      if (!r.ok) { print(`curl: (6) Could not resolve host: ${host}`, 'bad'); print('  ↳ ' + r.reason, 'hint'); return; }
-      const res = transact(st(), dev.id, { proto: 'tcp', dst: r.ip, dport: port });
-      app.showTrace(`${dev.name}> curl ${u}`, [...r.log, ...res.log], [...r.hops, ...res.hops], res);
+      let r, res;
+      if (parseIp(host) == null && st().v6) {
+        // 雙協定：先試 IPv6，連不上就改用 IPv4（Happy Eyeballs）
+        const ds = dualStack(st(), dev.id, host, { proto: 'tcp', dport: port, happy: true });
+        if (!ds.res) { print(`curl: (6) Could not resolve host: ${host}`, 'bad'); print('  ↳ ' + ds.reason, 'hint'); app.showTrace(`${dev.name}> curl ${u}`, ds.log, ds.hops, ds); return; }
+        res = ds.res;
+        r = { ip: ds.family === 4 ? ds.ip : null, ip6: ds.family === 6 ? ds.ip6 : null };
+        app.showTrace(`${dev.name}> curl ${u}`, ds.log, ds.hops, res);
+        if (ds.fallback && verbose) print(`*   Trying [${fmtIp6(ds.ip6)}]:${port}...`, 'dim'), print('* Happy Eyeballs timeout，改試 IPv4', 'dim');
+        if (ds.fallback) print(`（Happy Eyeballs：先試 IPv6 [${fmtIp6(ds.ip6)}] 沒有回應：${ds.fallback}。250 毫秒後改用 IPv4 才連上，所以感覺「卡一下」）`, 'hint');
+      } else {
+        r = resolve(host);
+        if (!r.ok) { print(`curl: (6) Could not resolve host: ${host}`, 'bad'); print('  ↳ ' + r.reason, 'hint'); return; }
+        res = transact(st(), dev.id, { proto: 'tcp', dst: r.ip, dport: port });
+        app.showTrace(`${dev.name}> curl ${u}`, [...r.log, ...res.log], [...r.hops, ...res.hops], res);
+      }
+      const shown = r.ip6 != null ? fmtIp6(r.ip6) : fmtIp(r.ip);
       if (!res.ok) {
         const reset = /連線被重設/.test(res.reason || ''), refused = /拒絕|沒有在/.test(res.reason || '');
         print(reset ? 'curl: (56) Recv failure: Connection reset by peer' : `curl: (${refused ? 7 : 28}) ${refused ? `Failed to connect to ${host} port ${port}: Connection refused` : `Failed to connect to ${host} port ${port} after 21032 ms: Timed out`}`, 'bad');
@@ -687,7 +721,7 @@ export function buildTerminal(ctx, body) {
         return;
       }
       const srv = st().devices[res.responder], web = (srv && srv.web) || {};
-      if (verbose) print(`*   Trying ${fmtIp(r.ip)}:${port}...`, 'dim'), print(`* Connected to ${host} (${fmtIp(r.ip)}) port ${port}`, 'dim');
+      if (verbose) print(`*   Trying ${r.ip6 != null ? `[${shown}]` : shown}:${port}...`, 'dim'), print(`* Connected to ${host} (${shown}) port ${port}`, 'dim');
       // 協定和連接埠對不上：明文的 HTTP 送到 443、TLS 送到 80
       if (!https && port === 443) { print('HTTP/1.1 400 Bad Request', 'warn'); print('<center>The plain HTTP request was sent to HTTPS port</center>', 'pre'); print('  ↳ 443 是 HTTPS：網址要寫 https://', 'hint'); return; }
       if (https && port === 80) { print('curl: (35) OpenSSL/3.0.13: error:0A00010B:SSL routines::wrong version number', 'bad'); print('  ↳ 80 是明文的 HTTP：要用 https:// 就連 443，或把網址改成 http://', 'hint'); return; }
