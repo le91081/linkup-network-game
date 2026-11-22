@@ -2099,14 +2099,16 @@ export function buildCli(ctx, body) {
   const draw = () => {
     out.replaceChildren(...logs.map((l) => h('div', { class: 'tl ' + (l.c || ''), text: l.t || ' ' })));
     out.scrollTop = out.scrollHeight;
-    promptEl.textContent = sess.prompt();
+    const sec = !!(sess.pending && sess.pending.secret);
+    promptEl.textContent = sec ? 'Password:' : sess.prompt();
+    input.type = sec ? 'password' : 'text';
   };
   const print = (t, c) => logs.push({ t, c });
 
   const follow = () => consoleFollow(app, dev.id, 'cli:' + dev.id, print);
   follow(); // 上次離開這個分頁之後，console 上出現過的訊息
   const run = (line) => {
-    print(sess.prompt() + ' ' + line, 'cmd');
+    if (!(sess.pending && sess.pending.secret)) print(sess.prompt() + ' ' + line, 'cmd');
     const r = iosRun(app, dev.id, sess, line, print);
     if (r.clear) logs.length = 0;
     if (r.changed) ctx.commit(false);
@@ -2124,7 +2126,7 @@ export function buildCli(ctx, body) {
       const line = input.value.trim();
       input.value = '';
       if (!line && !sess.pending) return; // reload 的 [confirm] 可以直接按 Enter
-      hist.push(line); hi = hist.length;
+      if (!(sess.pending && sess.pending.secret)) { hist.push(line); hi = hist.length; } // 密碼不留在歷史紀錄裡
       run(line);
     } else if (e.key === 'Tab') {
       // Tab 補齊：只有一個候選就補完，有好幾個就列出來

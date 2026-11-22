@@ -3820,6 +3820,77 @@ console.log('\n光纖收發器');
   ok(['sw-b', 'sw-w', 'sw-r'].every((b) => s.rt.cable[cab(b).id] === 'up') && !fiberLink(s, cab('sw-r')).link.marginal, '參考解法：三條光纖都正常');
 }
 
+console.log('\n權限等級與 AAA（TACACS+）');
+{
+  const { iosSession, runningConfig } = await import('../src/engine/ios.js');
+  const rem = await import('../src/engine/remote.js');
+  const { aaaLogin, aaaAuthorize, aaaAccount } = await import('../src/engine/aaa.js');
+  const { cloneState } = await import('../src/engine/model.js');
+  const ok = (cond, title) => (cond ? console.log('  ✔ ' + title) : fail(title));
+  const lv = LEVELS.find((x) => x.id === 'l116');
+  const s = lv.setup(); settle(s);
+  const sw = s.devices.sw1, con = iosSession(() => s.devices.sw1, () => s);
+  const run = (S, lines) => { const out = []; for (const l of lines) out.push(...S.exec(l).out); settle(s); return out; };
+  // ── 權限等級 ──
+  run(con, ['configure terminal', 'username helpdesk secret Help#Desk1', 'end']);
+  ok(/\nusername helpdesk secret 9 /.test(runningConfig(s, sw).join('\n')) && /\nusername admin privilege 15 secret 9 /.test(runningConfig(s, sw).join('\n')), 'username 沒寫 privilege 就是 1 級（running-config 不印 privilege）；admin 是 15 級');
+  const vty = iosSession(() => s.devices.sw1, () => s, { user: 'helpdesk', line: 'vty0', ip: '10.1.98.60', priv: 1 });
+  ok(vty.prompt() === 'SW-1>' && /使用者模式/.test(run(vty, ['configure terminal']).join('\n')) && vty.exec('show ip interface brief').pass && !vty.exec('show running-config').pass, '1 級（使用者模式 >）：show 可以，但 configure terminal、show running-config 都不行');
+  ok(/% No password set/.test(run(vty, ['enable']).join('\n')), '遠端登入、沒有 enable secret：enable 回 % No password set');
+  run(con, ['configure terminal', 'enable secret En@ble2026', 'end']);
+  run(vty, ['enable']);
+  ok(vty.pending && vty.pending.secret && /% Access denied/.test(run(vty, ['wrong']).join('\n')), 'enable 問密碼；打錯是 % Access denied');
+  run(vty, ['En@ble2026']);
+  ok(vty.prompt() === 'SW-1#' && /\nenable secret 9 /.test(runningConfig(s, sw).join('\n')), 'enable secret 對了：進入特權模式 (#)；running-config 有 enable secret 9');
+  run(vty, ['disable']);
+  ok(vty.prompt() === 'SW-1>', 'disable：回到使用者模式');
+  // 遠端登入：本機帳號的權限
+  const open = (user) => rem.remoteOpen(s, 'ops', 'ssh', parseIp('10.1.99.11'), user);
+  const o1 = open('helpdesk'), l1 = rem.remoteLogin(s, o1.conn, 'Help#Desk1');
+  const o2 = open('admin'), l2 = rem.remoteLogin(s, o2.conn, 'Sw1-Br3akGlass');
+  ok(l1.ok && l1.priv === 1 && l2.ok && l2.priv === 15, 'SSH 登入：helpdesk 是 1 級、admin 是 15 級（看帳號的 privilege）');
+  // ── AAA ──
+  const s2 = lv.setup(); settle(s2);
+  const C = iosSession(() => s2.devices.sw1, () => s2);
+  const r2 = (lines) => { const out = []; for (const l of lines) out.push(...C.exec(l).out); settle(s2); return out; };
+  ok(/requires "aaa new-model"/.test(r2(['configure terminal', 'aaa authentication login default group tacacs+ local', 'end']).join('\n')), '還沒有 aaa new-model：aaa authentication 不能設定');
+  r2(['configure terminal', 'aaa new-model', 'tacacs server ISE', 'address ipv4 10.1.98.20', 'key Tac@csKey2026', 'exit', 'aaa authentication login default group tacacs+ local', 'end']);
+  const sw2 = s2.devices.sw1;
+  const a1 = aaaLogin(s2, sw2, 'netadmin', 'N3tAdm!n#26');
+  ok(!a1.ok && /沒有登記 10\.1\.99\.11/.test(a1.trail.join()) && /本機帳號：FAIL/.test(a1.trail.join()), 'ISE 沒有登記 SW-1：TACACS+ 逾時 (ERROR) → 改試本機帳號 → netadmin 不是本機帳號');
+  s2.devices.ise.tacacsServer.clients.push('10.1.99.11');
+  const a2 = aaaLogin(s2, sw2, 'netadmin', 'N3tAdm!n#26'), a3 = aaaLogin(s2, sw2, 'netadmin', 'wrong'), a4 = aaaLogin(s2, sw2, 'admin', 'Sw1-Br3akGlass');
+  ok(a2.ok && a2.via === 'tacacs' && a2.priv === 1, 'netadmin 透過 TACACS+ 登入；沒有 aaa authorization exec，一律是 1 級');
+  ok(!a3.ok && /FAIL/.test(a3.trail.join()) && !a4.ok, 'ISE 回答 FAIL（密碼錯誤、或不是 ISE 的帳號）：直接拒絕，不會再試本機帳號');
+  r2(['configure terminal', 'aaa authorization exec default group tacacs+ local', 'end']);
+  ok(aaaLogin(s2, sw2, 'netadmin', 'N3tAdm!n#26').priv === 15 && aaaLogin(s2, sw2, 'vendor', 'V3nd0r#Read').priv === 1, 'aaa authorization exec：權限由 ISE 決定（netadmin 15、vendor 1）');
+  s2.devices.ise.tacacsServer.key = 'other';
+  const a5 = aaaLogin(s2, sw2, 'admin', 'Sw1-Br3akGlass');
+  ok(a5.ok && a5.via === 'local' && /共用密鑰不一致/.test(a5.trail.join()), '共用密鑰不一致：當成 ERROR，改用本機帳號 admin');
+  s2.devices.ise.tacacsServer.key = 'Tac@csKey2026';
+  const ven = s2.devices.ise.tacacsServer.users.find((u) => u.user === 'vendor');
+  Object.assign(ven, { priv: 15, cmds: 'show' });
+  r2(['configure terminal', 'aaa authorization commands 15 default group tacacs+ local', 'aaa accounting commands 15 default start-stop group tacacs+', 'end']);
+  ok(aaaAuthorize(s2, sw2, 'vendor', 15, 'configure terminal') === 'Command authorization failed.' && aaaAuthorize(s2, sw2, 'vendor', 15, 'show running-config') === null && aaaAuthorize(s2, sw2, 'netadmin', 15, 'configure terminal') === null, '指令授權：vendor 只能 show（configure terminal 被拒），netadmin 都可以');
+  const VS = iosSession(() => s2.devices.sw1, () => s2, { user: 'vendor', line: 'vty0', ip: '10.1.98.70', priv: 15 });
+  const vo = []; for (const l of ['configure terminal', 'show running-config']) vo.push(...VS.exec(l).out);
+  ok(vo.includes('Command authorization failed.') && VS.mode === 'exec', 'vendor 的連線：configure terminal → Command authorization failed.');
+  const NS = iosSession(() => s2.devices.sw1, () => s2, { user: 'netadmin', line: 'vty1', ip: '10.1.98.60', priv: 15 });
+  for (const l of ['configure terminal', 'interface vlan 99', 'description MGMT', 'end']) NS.exec(l);
+  const log = s2.devices.ise.tacacsServer.log;
+  ok(log.some((e) => e.user === 'netadmin' && e.cmd === 'description MGMT' && e.dev === 'SW-1') && !log.some((e) => e.cmd === 'end'), 'accounting：netadmin 打的 15 級指令都記到 ISE（end 這種 1 級的不記）');
+  const rc = runningConfig(s2, sw2).join('\n');
+  ok(/\naaa new-model\n!\naaa authentication login default group tacacs\+ local\naaa authorization exec default group tacacs\+ local\naaa authorization commands 15 default group tacacs\+ local\naaa accounting commands 15 default start-stop group tacacs\+\n/.test(rc) && /\ntacacs server ISE\n address ipv4 10\.1\.98\.20\n key 7 /.test(rc), 'running-config：aaa 的區塊與 tacacs server');
+  // 伺服器掛了：只剩本機帳號
+  const s3 = cloneState(s2); (s3.down ||= {}).ise = true; settle(s3);
+  const a6 = aaaLogin(s3, s3.devices.sw1, 'admin', 'Sw1-Br3akGlass');
+  ok(a6.ok && a6.via === 'local' && a6.priv === 15, 'ISE 關機：TACACS+ 逾時，改用本機帳號 admin（15 級）');
+  r2(['configure terminal', 'aaa authentication login default group tacacs+', 'end']);
+  const s4 = cloneState(s2); (s4.down ||= {}).ise = true; settle(s4);
+  ok(!aaaLogin(s4, s4.devices.sw1, 'admin', 'Sw1-Br3akGlass').ok, '方法清單少了 local：ISE 一掛，誰都登不進去');
+  void aaaAccount;
+}
+
 console.log('\nNetFlow 與 QoS 的 police');
 {
   const sim = await import('../src/engine/sim.js');

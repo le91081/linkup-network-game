@@ -75,7 +75,7 @@ npm run build    # 輸出到 dist/
 - **評分**：過關時依實際作答時間（畫面在前景、沒有開對話框才算；標準時間是 3 分鐘加上每個目標 1.5 分鐘）、看了幾個提示、跑了幾次完整測試給 S / A / B / C 與分數，關卡選單上顯示最佳等級。設定變更的次數只列出來參考。
 - **關卡編輯器**：自由模式的「關卡設計」可以寫關卡名稱、任務說明、提示，指定哪些設備鎖定（玩家看得到、不能設定），然後試玩、存成自訂關卡、或匯出成關卡檔分享；關卡選單的「自訂關卡」可以遊玩、匯出、刪除與匯入。
 
-## 關卡（17 章 115 關）
+## 關卡（17 章 116 關）
 
 | 章節 | 關卡數 | 主題 |
 | --- | --- | --- |
@@ -89,7 +89,7 @@ npm run build    # 輸出到 dist/
 | 8 高可用與進階路由 | 9 | STP、EtherChannel、VRRP / HSRP、DHCP Relay、OSPF Cost、VLSM；HSRP 追蹤上行介面（preempt 預設是關的，兩台都要開）；主線在業者那一端斷掉、介面燈號還亮著，OSPF 要等 40 秒的 Dead timer，用 BFD（或 fast hello）兩秒內切到備援；兩台閘道只有 HSRP 的 Active 在做事，改成 GLBP 讓兩台一起轉送（AVG 輪流發虛擬 MAC、AVF 壞掉時其他台接手） |
 | 9 IPv6 | 8 | Link-local、SLAAC、IPv6 靜態路由、雙協定；RA 的 M / O / A 旗標與 DHCPv6（stateless / stateful，DHCPv6 不給閘道）、OSPFv3（link-local 鄰居、純 IPv6 路由器的 Router ID）、IPv6 ACL 與隱含的 ND 允許規則；冒牌的 Router Advertisement 搶走預設閘道（主機多一個位址、IPv6 變黑洞），RA Guard 的 device-role host；內部網站加了 AAAA 之後雙協定的電腦 ping 名稱逾時、瀏覽器靠 Happy Eyeballs 改用 IPv4 才打得開（AAAA 寫錯、伺服器少了 IPv6 閘道，`nslookup -type=aaaa`、`ping -4 / -6`）；IPv6 過不了 VPN：`tunnel mode ipsec ipv4` 的 VTI 只載 IPv4，改成 GRE over IPsec，OSPFv3 在 Tunnel 上建鄰居 |
 | 10 故障排除 | 9 | 網路已經設定好但被改壞了：IP 衝突與 DHCP 保留、Trunk / VLAN / shutdown、閘道 / 回程路由 / NAT / ACL / DNS、ping 會通但傳檔很慢（速率寫死、duplex mismatch、舊 Hub）；OSPF 鄰居起不來（MD5 金鑰、被動介面、network 敘述）；流量繞經實驗室的交換器（根橋位置與 Root Guard）；VPN 通了資料卻過不去（NAT 例外、加密的 ACL 要涵蓋新網段）；DNS 改了卻還連到舊的（TTL 與用戶端快取、nslookup 不看快取、`ipconfig /flushdns`）；整層樓都慢了：一台電腦狂送廣播（從介面的 broadcasts 計數器找出是誰），用 Storm Control 擋下 |
-| 11 維運與管理 | 9 | 是誰動了設定（設定封存、差異比對、變更紀錄、只拿掉有問題的那一行、停用帳號）；從 TFTP 還原設定（合併與整份取代的差別）、韌體升級（flash 空間、MD5、`boot system`、TFTP 與 FTP 的速度）、讓原廠交換器能用 SSH（主機名稱、網域、RSA 金鑰、`login local`）、用 SNMPv3 找出滿載的線路（線對斷掉自動降到 100 Mbps）；HTTPS 憑證錯誤（過期、新網址不在 SAN 裡、沒有加入網域的筆電不信任公司的 CA、時鐘回到兩年前變成「尚未生效」）；專線被塞滿：SNMP 只看得出哪條線滿了，用 NetFlow（`ip flow ingress` 或 Flexible NetFlow）找出流量大戶，再用 QoS 的 `police` 替它限速；事件的先後兜不起來：沒對時的時間前面有 *、2960 重開機回到 1993 年、`clock timezone` 只改 `show clock`，紀錄要 `service timestamps log datetime msec localtime`；機櫃裡的線全部沒有標籤（這一關看不到接線）：用 `show cdp neighbors`、`lldp run` 之後的 `show lldp neighbors`、電腦的 MAC 加上 `show mac address-table` 找出每個埠接什麼，補上 description |
+| 11 維運與管理 | 10 | 是誰動了設定（設定封存、差異比對、變更紀錄、只拿掉有問題的那一行、停用帳號）；從 TFTP 還原設定（合併與整份取代的差別）、韌體升級（flash 空間、MD5、`boot system`、TFTP 與 FTP 的速度）、讓原廠交換器能用 SSH（主機名稱、網域、RSA 金鑰、`login local`）、用 SNMPv3 找出滿載的線路（線對斷掉自動降到 100 Mbps）；HTTPS 憑證錯誤（過期、新網址不在 SAN 裡、沒有加入網域的筆電不信任公司的 CA、時鐘回到兩年前變成「尚未生效」）；專線被塞滿：SNMP 只看得出哪條線滿了，用 NetFlow（`ip flow ingress` 或 Flexible NetFlow）找出流量大戶，再用 QoS 的 `police` 替它限速；事件的先後兜不起來：沒對時的時間前面有 *、2960 重開機回到 1993 年、`clock timezone` 只改 `show clock`，紀錄要 `service timestamps log datetime msec localtime`；機櫃裡的線全部沒有標籤（這一關看不到接線）：用 `show cdp neighbors`、`lldp run` 之後的 `show lldp neighbors`、電腦的 MAC 加上 `show mac address-table` 找出每個埠接什麼，補上 description；外包工程師要能看設定但不能改：AAA 與 TACACS+（ISE 沒有登記設備就不回應、方法清單 `group tacacs+ local` 只在 ISE 連不到時改用本機帳號、`aaa authorization exec` 決定權限等級、指令授權與記錄） |
 | 12 語音與 QoS | 4 | IP 電話：PoE、語音 VLAN、CDP 與 LLDP-MED、DHCP option 150、CUCM 註冊；線路塞車時用 QoS 保住通話：信任邊界、LLQ、配合營運商合約頻寬的整形；新的 AP 插上去不亮：為了稽核整台 `no cdp run`，交換器只能依 Class 4 替每台 AP 保留 30 W，預算用完（改成只在使用者的埠 `no cdp enable`）；專線一斷電話就聽不清楚：QoS 只套在主線，切到 10 Mbps 的備援線路後沒有整形，每條線路要依自己的合約 shape、共用同一個 LLQ |
 | 13 進階路由 | 10 | OSPF 的 DR / BDR 選舉（不搶位、`clear ip ospf process`）、Router ID 與 Loopback、passive-interface；參考頻寬與 cost、等價多路徑 (ECMP)；多區域 OSPF、ABR 與 `area range` 彙總；用 eBGP 同時接兩家 ISP：local-preference 決定出去走哪家、AS-path prepend 影響進來走哪家、prefix-list 避免變成轉運站；把靜態路由重分配進 OSPF（ASBR、O E2、用 prefix-list + route-map 只送工廠的網段）；政策路由讓 NAS 的備份改走寬頻（ACL + route-map set ip next-hop，套在進來的介面上）；分公司的路由表太大：stub 與 totally stubby（新路由器照範本設了 `area 10 stub`、ABR 沒設，Hello 的選項位元不同，鄰居起不來）；工廠在 stub 區域裡重分配供應商的網段白做：改成 NSSA（O N2、ABR 轉成 Type-5、`no-summary` 補回預設路由）；兩台邊界路由器的 iBGP（`update-source`、`next-hop-self`、中間的 Core 沒有 BGP 是黑洞，要全網狀或 route reflector，ISP 的線斷了繞網際網路回來）；機房的 VRF 各跑自己的 OSPF 程序，共用服務靠兩個方向的靜態路由洩漏（`… global`、出口介面在另一個 VRF），只洩漏需要的網段 |
 | 14 無線控制器與無線環境 | 5 | 輕量型 AP 與無線控制器（CAPWAP、DHCP option 43、Local 模式的流量經控制器放進 VLAN、RRM 自動分頻道）、牆面衰減與訊號熱力圖、漫遊（同一個 VLAN、sticky client 與 802.11k/v/r）；控制器 N+1：AP 要填主要與次要控制器、備援控制器要有一樣的 WLAN、它的 Trunk 要允許員工的 VLAN（heartbeat 逾時約 30 秒才切換，主要的回來會自己切回去）；分公司的 AP 用 Local 模式，開分公司的 NAS 也繞回總公司、專線一斷 Wi-Fi 就停：改成 FlexConnect，AP 的埠改成 Trunk（Native VLAN 是 AP 的管理 VLAN） |
@@ -400,7 +400,7 @@ npm run build    # 輸出到 dist/
 
 完整的功能規劃（每個領域已完成、部分完成、尚未開始的項目，以及建議的實作順序）在 [PLAN.md](PLAN.md)。以下是最接近的幾項：
 
-1. FortiGate HA、堆疊 / vPC；OSPF point-to-multipoint、FortiGate 的 IPsec 介面模式與 IPv6 政策、DHCPv6 Prefix Delegation、NAT64 / DNS64、TACACS+。
+1. FortiGate HA、堆疊 / vPC；OSPF point-to-multipoint、FortiGate 的 IPsec 介面模式與 IPv6 政策、DHCPv6 Prefix Delegation、NAT64 / DNS64。
 2. BGP 的 VRF 與 MP-BGP route-target、自由模式畫牆。
 3. 中繼憑證鏈、OCSP 與 FortiGate 的憑證驗證。
 4. NTP 與 Syslog 的維運關卡（引擎已經有了，還沒有獨立的關卡）。

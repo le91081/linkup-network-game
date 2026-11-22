@@ -11,6 +11,7 @@ import { clearOspfProcess, clearOspfAll, ospfArea, ospfProc, ospfKeys, ospfProcs
 import { parseComm } from './bgp.js';
 import { transfer, configFile, ensureFlash, flashFree, flashPath, fsName, IMAGES, PLATFORM, PLATFORM_NAME, imageFile, fmtBytes } from './files.js';
 import { macsBehind, recompute, ospfOn, ikeVer, isTun, tunMode, transact } from './sim.js';
+import { parseMethods, METHOD_TEXT, aaaAuthorize, aaaAccount } from './aaa.js';
 import { tpOf, urlTarget, caCert, validityError, issue, certHex, hexCert } from './pki.js';
 import { logEvent, markReboot, setClock, deviceTime, SEVERITY, bootTime, longIf, localUsers, iosClock } from './ops.js';
 import { isNexus, isCat2960, isCat9300, ICMP_TYPES } from './mtu.js';
@@ -99,7 +100,7 @@ export const ERR_RECOVERY_CAUSES = ['arp-inspection', 'bpduguard', 'channel-misc
 const TYPES = { gi: 'gigabitethernet', te: 'tengigabitethernet', fa: 'fastethernet', eth: 'ethernet' };
 const PROMPT = {
   exec: '#', config: '(config)#', if: '(config-if)#', vlan: '(config-vlan)#', raguard: '(config-ra-guard)#', router: '(config-router)#', dhcp: '(dhcp-config)#',
-  line: '(config-line)#', acl: '(config-ext-nacl)#', stdacl: '(config-std-nacl)#', radius: '(config-radius-server)#',
+  line: '(config-line)#', tacacs: '(config-server-tacacs)#', acl: '(config-ext-nacl)#', stdacl: '(config-std-nacl)#', radius: '(config-radius-server)#',
   isakmp: '(config-isakmp)#', tset: '(cfg-crypto-trans)#', cmap: '(config-crypto-map)#', ipsecprof: '(ipsec-profile)#', flowrec: '(config-flow-record)#', flowexp: '(config-flow-exporter)#', flowmon: '(config-flow-monitor)#', pkitp: '(ca-trustpoint)#', pkichain: '(config-cert-chain)#', pkicert: '(config-pubkey)#',
   ikev2prop: '(config-ikev2-proposal)#', ikev2pol: '(config-ikev2-policy)#', ikev2kr: '(config-ikev2-keyring)#', ikev2peer: '(config-ikev2-keyring-peer)#', ikev2prof: '(config-ikev2-profile)#', track: '(config-track)#', vrfdef: '(config-vrf)#', vrfaf: '(config-vrf-af)#', ipvrf: '(config-vrf)#', archive: '(config-archive)#', archlog: '(config-archive-log-cfg)#', ipsla: '(config-ip-sla)#', slaecho: '(config-ip-sla-echo)#', bgp: '(config-router)#', rmap: '(config-route-map)#', qcmap: '(config-cmap)#', pmap: '(config-pmap)#', pmapc: '(config-pmap-c)#',
 };
@@ -480,7 +481,7 @@ const HELP = {
  */
 /** who：從遠端登入時是誰、從哪裡（{ user, line, ip }），用在紀錄裡 */
 export function iosSession(getDev, getState, who = null) {
-  const S = { mode: 'exec', cur: null };
+  const S = { mode: 'exec', cur: null, priv: who && who.priv != null ? +who.priv : 15, tries: 0 };
   const dev = () => getDev();
 
   // ── 介面模式 ──
@@ -2010,12 +2011,15 @@ export function iosSession(getDev, getState, who = null) {
       const k = t.findIndex((x) => ['secret', 'password'].includes(x.toLowerCase()));
       if (!m || k < 0 || !t[k + 1]) return err('用法：username <帳號> privilege 15 secret <密碼>');
       const name = t[0], pass = readSecret(t.slice(k + 1));
+      const pk = t.findIndex((x) => x.toLowerCase() === 'privilege');
+      if (pk >= 0 && pk < k && !(/^\d+$/.test(t[pk + 1] || '') && +t[pk + 1] <= 15)) return err('用法：username <帳號> privilege <0-15> secret <密碼>');
+      const priv = pk >= 0 && pk < k ? +t[pk + 1] : 1; // 沒寫 privilege 就是 1：登入之後在使用者模式 (>)，要 enable 才能設定
       // 第一個帳號（或同名）是主要帳號，其他人的帳號另外存。
       // 模擬裡出廠的 admin / admin 只是方便用的預設值（真的 IOS 出廠沒有帳號），建立第一個帳號就取代它
       const factory = m.user === 'admin' && m.pass === 'admin' && !(m.users || []).length;
-      if (m.user == null || m.user === '' || m.user === name || factory) { m.user = name; m.pass = pass; return undefined; }
+      if (m.user == null || m.user === '' || m.user === name || factory) { m.user = name; m.pass = pass; m.priv = priv; return undefined; }
       const list = (m.users ||= []), cur = list.find((u) => u.user === name);
-      if (cur) cur.pass = pass; else list.push({ user: name, pass });
+      if (cur) Object.assign(cur, { pass, priv }); else list.push({ user: name, pass, priv });
       return undefined;
     }],
     ['no username <name> [...]', ([name]) => {
@@ -2024,12 +2028,14 @@ export function iosSession(getDev, getState, who = null) {
       if (!localUsers(m).some((u) => u.user === name)) return err(`% 沒有 ${name} 這個帳號`);
       if ((m.user ?? 'admin') === name) {
         const nx = (m.users || []).shift();
-        if (nx) { m.user = nx.user; m.pass = nx.pass; } else { m.user = ''; m.pass = ''; }
+        if (nx) { m.user = nx.user; m.pass = nx.pass; m.priv = nx.priv; } else { m.user = ''; m.pass = ''; delete m.priv; }
       } else m.users = (m.users || []).filter((u) => u.user !== name);
       if (m.users && !m.users.length) delete m.users;
       return undefined;
     }],
-    ['enable secret <...>', () => undefined],
+    // enable secret：從使用者模式 (>) 進入特權模式 (#) 的密碼。遠端登入（vty）沒有設定的話，enable 會被拒絕
+    ['enable secret <...>', ([rest]) => { const m = dev().mgmt; if (!m) return err('這台設備不支援'); const t = rest.split(/\s+/); m.enableSecret = readSecret(t); if (!m.enableSecret) return err('用法：enable secret <密碼>'); return undefined; }],
+    ['no enable secret [...]', () => { if (dev().mgmt) delete dev().mgmt.enableSecret; }],
     // 隱藏指令：接受第三方的收發器（Cisco 不保證、TAC 也不支援）。已經 err-disabled 的埠要 shutdown 再 no shutdown
     ['service unsupported-transceiver', (args, out) => {
       dev().unsupportedXcvr = true;
@@ -2037,7 +2043,68 @@ export function iosSession(getDev, getState, who = null) {
     }],
     ['no service unsupported-transceiver', () => { delete dev().unsupportedXcvr; }],
     ['service <...>', () => undefined],
+    // ── AAA ──
+    ['aaa new-model', () => { (dev().aaa ||= {}).on = true; }],
+    ['no aaa new-model', () => { if (dev().aaa) dev().aaa.on = false; }],
+    ['aaa authentication login <name> <...>', ([name, rest]) => {
+      const d = dev();
+      if (!(d.aaa && d.aaa.on)) return err('AAA command requires "aaa new-model"');
+      const m = parseMethods(rest.split(/\s+/));
+      if (!m) return err('用法：aaa authentication login default group tacacs+ local（方法可以是 group tacacs+、local、none）');
+      (d.aaa.authn ||= {})[name] = m;
+      return undefined;
+    }],
+    ['no aaa authentication login <name> [...]', ([name]) => { const a = dev().aaa; if (a && a.authn) delete a.authn[name]; }],
+    ['aaa authorization exec <name> <...>', ([name, rest]) => {
+      const d = dev();
+      if (!(d.aaa && d.aaa.on)) return err('AAA command requires "aaa new-model"');
+      const m = parseMethods(rest.split(/\s+/));
+      if (!m || name !== 'default') return err('用法：aaa authorization exec default group tacacs+ local');
+      d.aaa.authzExec = m;
+      return undefined;
+    }],
+    ['no aaa authorization exec [...]', () => { if (dev().aaa) delete dev().aaa.authzExec; }],
+    ['aaa authorization commands <lvl> <name> <...>', ([lvl, name, rest]) => {
+      const d = dev();
+      if (!(d.aaa && d.aaa.on)) return err('AAA command requires "aaa new-model"');
+      const m = parseMethods(rest.split(/\s+/));
+      if (!m || lvl !== '15' || name !== 'default') return err('用法：aaa authorization commands 15 default group tacacs+ local（這個模擬只支援 15 級）');
+      d.aaa.authzCmd = m;
+      return undefined;
+    }],
+    ['no aaa authorization commands [...]', () => { if (dev().aaa) delete dev().aaa.authzCmd; }],
+    ['aaa accounting <kind> <...>', ([kind, rest]) => {
+      const d = dev();
+      if (!(d.aaa && d.aaa.on)) return err('AAA command requires "aaa new-model"');
+      const w = rest.split(/\s+/), k = kind.toLowerCase();
+      // aaa accounting commands 15 default start-stop group tacacs+ / aaa accounting exec default start-stop group tacacs+
+      const lvl = k === 'commands' ? w.shift() : null;
+      const name = w.shift(), how = (w.shift() || '').toLowerCase();
+      const m = parseMethods(w);
+      if (!['commands', 'exec'].includes(k) || (k === 'commands' && lvl !== '15') || name !== 'default' || !['start-stop', 'stop-only'].includes(how) || !m || !m.includes('tacacs'))
+        return err('用法：aaa accounting commands 15 default start-stop group tacacs+（或 aaa accounting exec default start-stop group tacacs+）');
+      if (k === 'commands') d.aaa.acctCmd = how; else d.aaa.acctExec = how;
+      return undefined;
+    }],
+    ['no aaa accounting <kind> [...]', ([kind]) => { const a = dev().aaa; if (!a) return; if (/^c/i.test(kind)) delete a.acctCmd; else delete a.acctExec; }],
     ['aaa <...>', () => undefined],
+    // ── TACACS+ 伺服器 ──
+    ['tacacs server <name>', ([name]) => {
+      const d = dev(), list = (d.tacacs ||= []);
+      let t = list.find((x) => x.name === name);
+      if (!t) list.push((t = { name, ip: '', key: '' }));
+      enter('tacacs', t);
+      return undefined;
+    }],
+    ['no tacacs server <name>', ([name]) => { const d = dev(); if (d.tacacs) d.tacacs = d.tacacs.filter((x) => x.name !== name); }],
+    ['ip tacacs source-interface <...>', ([text]) => {
+      const r = resolveIf(dev(), text);
+      if (isErr(r)) return r;
+      if (!r.iface) return err('這個介面不能當來源（要有 IP 的介面，例如 Loopback0 或 Vlan99）');
+      (dev().aaa ||= {}).src = r.iface.id;
+      return undefined;
+    }],
+    ['no ip tacacs source-interface [...]', () => { if (dev().aaa) delete dev().aaa.src; }],
     ['dot1x system-auth-control', () => undefined],
     ['radius server <name>', () => { if (!dev().radius) return err('這台設備不支援 RADIUS'); enter('radius', null); return undefined; }],
     // ── IPsec VPN ──
@@ -2571,6 +2638,13 @@ export function iosSession(getDev, getState, who = null) {
       }],
       ['no access-class [...]', () => { dev().mgmt.allow = ''; }],
       // login local：用 username 建的帳號；login：只問線路密碼；no login：不驗證（非常危險）
+      ['login authentication <name>', ([name]) => {
+        const m = dev().mgmt;
+        if (!m || S.cur === 'console') return undefined;
+        if (name === 'default') delete m.vtyAuthList; else m.vtyAuthList = name;
+        return undefined;
+      }],
+      ['no login authentication [...]', () => { const m = dev().mgmt; if (m) delete m.vtyAuthList; }],
       ['login [...]', ([rest]) => {
         const m = dev().mgmt;
         if (!m || S.cur === 'console') return undefined;
@@ -2579,6 +2653,9 @@ export function iosSession(getDev, getState, who = null) {
         else if ('local'.startsWith(r)) m.vtyLogin = 'local';
         return undefined;
       }],
+      // privilege level：用線路密碼（login）或不驗證（no login）登入的人，一進來是第幾級
+      ['privilege level <n>', ([n]) => { const m = dev().mgmt; if (!m || S.cur === 'console') return undefined; if (!/^\d+$/.test(n) || +n > 15) return err('用法：privilege level <0-15>'); if (+n === 1) delete m.vtyPriv; else m.vtyPriv = +n; return undefined; }],
+      ['no privilege level [...]', () => { const m = dev().mgmt; if (m) delete m.vtyPriv; }],
       ['no login', () => { const m = dev().mgmt; if (m && S.cur !== 'console') m.vtyLogin = 'none'; return S.cur === 'console' ? undefined : '（no login：任何人連進來都不用驗證就能下指令，非常危險）'; }],
       ['password <...>', ([p]) => { const m = dev().mgmt; if (m && S.cur !== 'console') m.vtyPass = readSecret(p.split(/\s+/)); }],
       ['no password [...]', () => { const m = dev().mgmt; if (m && S.cur !== 'console') delete m.vtyPass; }],
@@ -2639,6 +2716,12 @@ export function iosSession(getDev, getState, who = null) {
         if (d.mgmt && d.mgmt.allow && (d.mgmt.aclName || 'MGMT') === S.cur) d.mgmt.allow = list.join(', ');
         return undefined;
       }],
+    ],
+    tacacs: [
+      ['address ipv4 <ip>', ([ip]) => { if (parseIp(ip) == null) return err('IP 位址的格式不正確'); S.cur.ip = ip; return undefined; }],
+      ['key <...>', ([k]) => { S.cur.key = readSecret(k.split(/\s+/)); }],
+      ['timeout <n>', () => undefined],
+      ['single-connection', () => undefined],
     ],
     radius: [
       ['address ipv4 <ip> [...]', ([ip]) => { if (parseIp(ip) == null) return err('IP 位址的格式不正確'); dev().radius.ip = ip; return undefined; }],
@@ -3130,7 +3213,36 @@ export function iosSession(getDev, getState, who = null) {
     }
     if (!tok.length || tok[0].startsWith('!')) return done(false);
     const t0 = tok[0].toLowerCase();
+    // AAA：遠端登入的人打的 15 級指令，先問 TACACS+ 能不能執行（authorization），再送去記錄（accounting）
+    if (who && who.user && dev().aaa && dev().aaa.on && S.priv >= 15) {
+      const deny = aaaAuthorize(getState(), dev(), who.user, S.priv, text);
+      if (deny) { out.push(deny); return done(false); }
+      aaaAccount(getState(), dev(), who, S.priv, text);
+    }
+    if (S.mode === 'exec' && S.priv < 15) {
+      if (match(tok, 'enable') || match(tok, 'enable 15')) {
+        const sec = (dev().mgmt || {}).enableSecret;
+        if (!sec && !(who && /vty/i.test(String(who.line || '')))) { S.priv = 15; return done(false); }
+        if (!sec) { out.push('% No password set'); out.push('（遠端登入要先在設備上設定 enable secret，才能從使用者模式進入特權模式；或用 privilege 15 的帳號登入）'); return done(false); }
+        out.push('Password: ');
+        S.pending = { secret: true, fn: (ans, o2) => {
+          if (ans === sec) { S.pending = null; S.priv = 15; S.tries = 0; return { out: o2, changed: false }; }
+          S.tries++;
+          if (S.tries >= 3) { S.pending = null; S.tries = 0; o2.push('% Bad secrets'); return { out: o2, changed: false }; }
+          o2.push('% Access denied', 'Password: ');
+          return { out: o2, changed: false };
+        } };
+        return done(false);
+      }
+      if (match(tok, 'disable') || match(tok, 'terminal <...>')) return done(false);
+      // 使用者模式只看得到一部分：設定相關的指令都不存在
+      const view = /^sh/i.test(tok[0]) && !(tok[1] && /^(run|start|arch|flash|tech|aaa|priv)/i.test(tok[1]));
+      if (view || /^(ping|tracer|traceroute|telnet|ssh|exit|logout|quit)$/i.test(tok[0])) return { out, changed: false, pass: true };
+      out.push(err(`Invalid input detected：使用者模式 (>) 不能用「${text}」，先 enable 進入特權模式 (#)`));
+      return done(false);
+    }
     if (S.mode === 'exec') {
+      if (match(tok, 'disable')) { S.priv = 1; return done(false); }
       if (tok[0] === 'clear' && (tok[1] || '') === 'ip' && (tok[2] || '').startsWith('bg') && tok[3]) {
         // clear ip bgp *：重設所有鄰居（要重新建立）；加上 soft 只重新套用政策
         if (!(tok.length > 4 && 'soft'.startsWith(tok[4]))) {
@@ -3608,7 +3720,7 @@ export function iosSession(getDev, getState, who = null) {
   return {
     exec,
     complete,
-    prompt: () => ((((getState().dyn || {}).clk || {})[dev().id] || {}).rommon ? 'rommon 1 >' : S.pending ? '' : hostName(dev()) + PROMPT[S.mode]),
+    prompt: () => ((((getState().dyn || {}).clk || {})[dev().id] || {}).rommon ? 'rommon 1 >' : S.pending ? '' : hostName(dev()) + (S.mode === 'exec' && S.priv < 15 ? '>' : PROMPT[S.mode])),
     get pending() { return S.pending; },
     help: () => HELP[S.mode] || [],
     get mode() { return S.mode; },
@@ -3635,13 +3747,37 @@ const redistLine = (r, into) => ` redistribute ${r.src}${r.as != null ? ' ' + r.
 export const aclLine = (r) => `${r.action} ${r.proto || 'ip'} ${aclAddr(r.src)}${r.sport ? ' eq ' + r.sport : ''} ${aclAddr(r.dst)}${r.port && r.proto !== 'ip' && r.proto !== 'icmp' ? ' eq ' + r.port : ''}${r.icmp ? ' ' + r.icmp : ''}`;
 
 /** 產生等效的 running-config */
+/**
+ * aaa 的區塊印在設定檔前面（帳號後面）：有設定方法清單、授權、記錄，或沒有 802.1X 的時候。
+ * 只有 802.1X 的交換器（aaa new-model 只是為了 dot1x）維持印在交換器的區段裡
+ */
+function aaaTop(dev) {
+  const a = dev.aaa;
+  if (!a || !a.on) return false;
+  const dot1x = !!(dev.sw && Object.values(dev.sw.ports).some((p) => p.dot1x));
+  return !dot1x || !!(Object.keys(a.authn || {}).length || a.authzExec || a.authzCmd || a.acctCmd || a.acctExec);
+}
+
 export function runningConfig(state, dev) {
   const o = ['Building configuration...', '', '!', `hostname ${hostName(dev)}`, '!'];
   if ((dev.bootSys || []).length) o.push(...dev.bootSys.map((b) => `boot system ${b}`), '!');
   if (dev.ftpLogin && (dev.ftpLogin.user || dev.ftpLogin.pass)) o.push(...(dev.ftpLogin.user ? [`ip ftp username ${dev.ftpLogin.user}`] : []), ...(dev.ftpLogin.pass ? [`ip ftp password 7 ${hex(dev.ftpLogin.pass)}`] : []), '!');
   if (+dev.tftpBlk > 512) o.push(`ip tftp blocksize ${+dev.tftpBlk}`, '!');
   const m = dev.mgmt;
-  if (m && localUsers(m).length) o.push(...localUsers(m).map((u) => `username ${u.user} privilege 15 secret 9 ${secret9(u.pass || '')}`), '!');
+  if (m && m.enableSecret) o.push(`enable secret 9 ${secret9(m.enableSecret)}`, '!');
+  const aaa = aaaTop(dev) ? dev.aaa : null;
+  if (aaa) {
+    const ml = (x) => x.map((k) => METHOD_TEXT[k]).join(' ');
+    o.push('aaa new-model', '!');
+    for (const [n, x] of Object.entries(aaa.authn || {})) o.push(`aaa authentication login ${n} ${ml(x)}`);
+    if (dev.sw && Object.values(dev.sw.ports).some((p) => p.dot1x)) o.push('aaa authentication dot1x default group radius');
+    if (aaa.authzExec) o.push(`aaa authorization exec default ${ml(aaa.authzExec)}`);
+    if (aaa.authzCmd) o.push(`aaa authorization commands 15 default ${ml(aaa.authzCmd)}`);
+    if (aaa.acctExec) o.push(`aaa accounting exec default ${aaa.acctExec} group tacacs+`);
+    if (aaa.acctCmd) o.push(`aaa accounting commands 15 default ${aaa.acctCmd} group tacacs+`);
+    o.push('!');
+  }
+  if (m && localUsers(m).length) o.push(...localUsers(m).map((u) => `username ${u.user}${u.priv === 1 ? '' : ` privilege ${u.priv}`} secret 9 ${secret9(u.pass || '')}`), '!');
   if (m && (m.domain || m.sshVer === 2 || m.sshTimeout || m.sshRetries)) {
     o.push(...(m.domain ? [`ip domain name ${m.domain}`] : []), ...(m.sshVer === 2 ? ['ip ssh version 2'] : []),
       ...(m.sshTimeout ? [`ip ssh time-out ${m.sshTimeout}`] : []), ...(m.sshRetries ? [`ip ssh authentication-retries ${m.sshRetries}`] : []), '!');
@@ -3691,7 +3827,7 @@ export function runningConfig(state, dev) {
     const vl = sw.vlans.map((v) => v.id).sort((a, b) => a - b).join(',');
     if (sw.snoop && sw.snoop.on) o.push('ip dhcp snooping', `ip dhcp snooping vlan ${vl}`);
     if (sw.dai && sw.dai.on) o.push(`ip arp inspection vlan ${vl}`);
-    if (Object.values(sw.ports).some((p) => p.dot1x)) o.push('aaa new-model', 'aaa authentication dot1x default group radius', 'dot1x system-auth-control');
+    if (Object.values(sw.ports).some((p) => p.dot1x)) o.push(...(aaaTop(dev) ? [] : ['aaa new-model', 'aaa authentication dot1x default group radius']), 'dot1x system-auth-control');
     if (sw.qos && sw.qos.on) o.push('mls qos');
     if (sw.qos && sw.qos.cosDscp && sw.qos.cosDscp.join() !== COS_DSCP_DEFAULT.join()) o.push(`mls qos map cos-dscp ${sw.qos.cosDscp.join(' ')}`);
     o.push('!');
@@ -4135,6 +4271,8 @@ export function runningConfig(state, dev) {
       if ((e.set.defNh || []).length) o.push(` set ip default next-hop ${e.set.defNh.join(' ')}`);
     }
   }
+  if (dev.aaa && dev.aaa.src) { const i = dev.ifaces.find((x) => x.id === dev.aaa.src); if (i) o.push('!', `ip tacacs source-interface ${i.label}`); }
+  for (const t of dev.tacacs || []) o.push('!', `tacacs server ${t.name}`, ...(t.ip ? [` address ipv4 ${t.ip}`] : []), ...(t.key ? [` key 7 ${hex(t.key)}`] : []));
   if (dev.radius && dev.radius.ip) o.push('!', 'radius server AAA', ` address ipv4 ${dev.radius.ip} auth-port 1812 acct-port 1813`, ` key 7 ${hex(dev.radius.secret || '')}`);
   if (m) {
     o.push('!');
@@ -4171,8 +4309,8 @@ export function runningConfig(state, dev) {
     const tr = [m.ssh && 'ssh', m.telnet && 'telnet'].filter(Boolean).join(' ') || 'none';
     const et = m.execTimeout == null || m.execTimeout === '' ? null : +m.execTimeout;
     o.push('line vty 0 4', ` transport input ${tr}`, ...(allow.length ? [` access-class ${an} in`] : []),
-      ...(et != null && et !== 600 ? [` exec-timeout ${Math.floor(et / 60)} ${et % 60}`] : []), ...(m.vtyPass ? [` password 7 ${hex(m.vtyPass)}`] : []),
-      m.vtyLogin === 'local' ? ' login local' : m.vtyLogin === 'none' ? ' no login' : ' login');
+      ...(et != null && et !== 600 ? [` exec-timeout ${Math.floor(et / 60)} ${et % 60}`] : []), ...(m.vtyPriv != null ? [` privilege level ${m.vtyPriv}`] : []), ...(m.vtyPass ? [` password 7 ${hex(m.vtyPass)}`] : []),
+      ...(dev.aaa && dev.aaa.on && (m.vtyAuthList || Object.keys(dev.aaa.authn || {}).length) ? (m.vtyAuthList ? [` login authentication ${m.vtyAuthList}`] : []) : [m.vtyLogin === 'local' ? ' login local' : m.vtyLogin === 'none' ? ' no login' : ' login']));
   }
   o.push('!', 'end');
   return o;

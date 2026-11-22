@@ -295,6 +295,7 @@ function deliver(dev, inIf, pkt) {
     if (dev.kind !== 'firewall' && owner && owner.ping === false && inIf === owner) return no(`${dev.name} 的 ${owner.label} 介面不回應來自外部的 ping（安全性預設值）`);
     return ok;
   }
+  if (pkt.proto === 'tcp' && pkt.dport === 49 && dev.tacacsServer) return ok; // TACACS+
   if (pkt.proto === 'udp') {
     if (pkt.dport === 53 && dev.dnsProxy && !fromWan) return ok;
     if (pkt.dport === 67 && dev.dhcpScopes) return ok;

@@ -165,7 +165,7 @@ export function buildTerminal(ctx, body) {
     const c = r.conn;
     r.stage = 'shell';
     const line = 'vty' + Math.max(0, ((st().dyn.vty || {})[c.to] || []).findIndex((v) => v.cid === c.cid));
-    r.sess = r.kind === 'ios' ? iosSession(() => st().devices[c.to], st, { user: c.user || '(line)', line, ip: c.seen }) : fortiSession(() => st().devices[c.to], st);
+    r.sess = r.kind === 'ios' ? iosSession(() => st().devices[c.to], st, { user: c.user || '(line)', line, ip: c.seen, priv: c.priv ?? 15 }) : fortiSession(() => st().devices[c.to], st);
     consoleFollow(app, c.to, 'vty:' + c.cid, () => {}); // 從現在開始看：以前的紀錄不會倒出來
   };
 
@@ -187,19 +187,20 @@ export function buildTerminal(ctx, body) {
       ctx.commit(false);
       if (a.ok) {
         if (c.proto === 'ssh') banner(r);
+        if (a.aaa) print(`（AAA：${a.aaa.trail.join(' → ')}；權限等級 ${a.priv}）`, 'dim');
         shell(r);
         print('');
       } else if (a.closed) {
         endRemote(c.proto === 'ssh' ? `${c.user}@${ip}: Permission denied (publickey,password).` : r.auth === 'line' ? '% Bad passwords' : '% Login invalid', 'bad', a.reason);
         if (c.proto === 'telnet') print('Connection closed by foreign host.', 'dim');
-      } else if (c.proto === 'ssh') { print('Permission denied, please try again.', 'bad'); askPass(r); }
+      } else if (c.proto === 'ssh') { print('Permission denied, please try again.', 'bad'); if (a.aaa) print('  ↳ AAA：' + a.aaa.trail.join(' → '), 'hint'); askPass(r); }
       else if (r.auth === 'line') { print('% Login invalid', 'bad'); print(''); r.stage = 'pass'; }
       else { print('% Login invalid', 'bad'); print(''); r.stage = 'user'; }
       return;
     }
     // 已經登入：這一行送到對方的命令列
     const ios = r.kind === 'ios';
-    print(r.sess.prompt() + (ios ? ' ' : '') + line, 'cmd');
+    if (!(r.sess.pending && r.sess.pending.secret)) print(r.sess.prompt() + (ios ? ' ' : '') + line, 'cmd');
     const low = line.trim().toLowerCase();
     const atTop = ios ? r.sess.mode === 'exec' && !r.sess.pending : !r.sess.depth;
     if (atTop && ['exit', 'logout', 'quit'].includes(low)) {
@@ -784,7 +785,7 @@ export function buildTerminal(ctx, body) {
     if (escLine(e, input)) return;
     const r = remote();
     if (e.key === 'Enter') {
-      const secret = r && r.stage === 'pass';
+      const secret = r && (r.stage === 'pass' || !!(r.sess && r.sess.pending && r.sess.pending.secret));
       const line = secret ? input.value : input.value.trim();
       input.value = '';
       // 密碼可以是空的；reload 的 [confirm] 也可以直接按 Enter
@@ -824,8 +825,9 @@ export function buildTerminal(ctx, body) {
   // 提示字元跟著目前的狀態變：本機、等待輸入密碼，或已經登入對方的命令列
   drawPrompt = () => {
     const r = remote();
-    promptEl.textContent = !r ? ((app.tfAsk || {})[dev.id] ? '  Enter a value:' : PS) : r.stage === 'key' ? '(yes/no)?' : r.stage === 'user' ? 'Username:' : r.stage === 'pass' ? 'Password:' : r.sess.prompt();
-    input.type = r && r.stage === 'pass' ? 'password' : 'text';
+    const sec = !!(r && r.sess && r.sess.pending && r.sess.pending.secret);
+    promptEl.textContent = !r ? ((app.tfAsk || {})[dev.id] ? '  Enter a value:' : PS) : r.stage === 'key' ? '(yes/no)?' : r.stage === 'user' ? 'Username:' : r.stage === 'pass' || sec ? 'Password:' : r.sess.prompt();
+    input.type = r && (r.stage === 'pass' || sec) ? 'password' : 'text';
     input.placeholder = r ? '' : 'ping 192.168.1.1';
   };
   // 沒有在打字的時候，設備那一端也可能因為閒置太久而把連線切掉

@@ -215,3 +215,37 @@ export function arpCard(ctx) {
     return rows.map((r) => h('div', { class: 'line' }, h('b', { class: 'mono', text: fmtIp(r.ip) }), h('span', { class: 'mono muted', text: `${r.mac} · ${r.age} 秒前` })));
   }));
 }
+
+// ───────────────────────── TACACS+（設備管理的 AAA 伺服器） ─────────────────────────
+
+/** 模擬時間 → 台灣時間的 時:分:秒（two 在上面 Syslog 的區段） */
+const hhmmss = (t) => { const x = new Date(SIM_EPOCH + t * 1000 + 8 * 3600 * 1000); return `${two(x.getUTCHours())}:${two(x.getUTCMinutes())}:${two(x.getUTCSeconds())}`; };
+
+export function tacacsServerTab(ctx, body) {
+  const { dev } = ctx, t = dev.tacacsServer;
+  t.users ||= []; t.clients ||= [];
+  body.append(h('p', { class: 'tip', text: '集中管理網路設備的管理員（像 Cisco ISE 的 Device Administration）：設備把登入、每一行指令能不能執行（授權）、打了什麼（記錄）都送到這裡。TACACS+ 走 TCP 49，整個封包都加密，而且認證、授權、記錄是分開的。' }));
+  const card = h('div', { class: 'card' }, cardHead('TACACS+ 服務 · TCP 49'),
+    field('共用密鑰 (shared secret)', inp(ctx, ...bind(t, 'key'), { ph: '例如 Tac@csKey2026' })),
+    field('網路設備（只回應這些來源 IP，空白表示全部）', inp(ctx, () => t.clients.join(', '), (v) => { t.clients = v.split(/[,\s]+/).filter(Boolean); }, { ph: '例如 10.1.99.1, 10.1.99.11', check: (v) => v.split(/[,\s]+/).filter(Boolean).every(isIp) }),
+      '設備送 TACACS+ 用的來源位址要在這裡登記；沒有登記的設備，伺服器直接不理（設備那邊會等到逾時）'));
+  body.append(card);
+  const uc = h('div', { class: 'card' }, cardHead('管理員帳號'),
+    h('div', { class: 'thead c-tac' }, h('span', { text: '帳號' }), h('span', { text: '密碼' }), h('span', { text: '權限' }), h('span', { text: '可以用的指令' }), h('span')));
+  t.users.forEach((u, n) => uc.append(h('div', { class: 'trow c-tac' },
+    inp(ctx, ...bind(u, 'user'), { ph: '帳號', mono: false }), inp(ctx, ...bind(u, 'pass'), { ph: '密碼' }),
+    sel(ctx, () => String(u.priv || 1), (v) => { u.priv = +v; }, [['15', '15（特權）'], ['1', '1（使用者）']]),
+    sel(ctx, () => u.cmds || 'all', (v) => { u.cmds = v; }, [['all', '全部指令'], ['show', '只能 show']]),
+    del(() => { t.users.splice(n, 1); ctx.commit(true); }))));
+  uc.append(h('div', { class: 'addrow' }, button('新增帳號', { ic: 'plus', small: true, onclick: () => { t.users.push({ user: '', pass: '', priv: 1, cmds: 'show' }); ctx.commit(true); } })),
+    note('muted', '權限要搭配設備上的 aaa authorization exec 才會生效（沒有設定的話，登入之後一律是 1 級）；「只能 show」要搭配 aaa authorization commands 15。'));
+  body.append(uc);
+  const lc = h('div', { class: 'card' }, cardHead('指令記錄 (accounting)'));
+  lc.append(ctx.live(() => {
+    const log = (t.log || []).slice(-40).reverse();
+    if (!log.length) return note('muted', '還沒有記錄。設備要設定 aaa accounting commands 15 default start-stop group tacacs+，管理員打的 15 級指令才會送到這裡。');
+    return h('div', { class: 'tac-log mono' }, log.map((e) => h('div', { class: 'tac-row' },
+      h('span', { class: 'muted', text: hhmmss(e.t) }), h('span', { text: e.dev }), h('b', { text: e.user }), h('span', { class: 'muted', text: `${e.line || ''} ${e.ip || ''}` }), h('span', { class: 'tac-cmd', text: e.cmd }))));
+  }));
+  body.append(lc);
+}

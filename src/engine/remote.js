@@ -5,6 +5,10 @@
 import { transact, flowSend, closeFlow } from './sim.js';
 import { logEvent, iosClock, idleLimit, vtyRows, localUsers } from './ops.js';
 import { isIos } from './ios.js';
+import { aaaLogin } from './aaa.js';
+
+/** aaa new-model：vty 的登入交給方法清單（見 aaa.js） */
+const aaaOn = (d) => isIos(d) && !!(d.aaa && d.aaa.on);
 import { fmtIp } from './ip.js';
 
 const PORT = { ssh: 22, telnet: 23 };
@@ -80,12 +84,12 @@ export function remoteOpen(state, fromId, proto, ip, user) {
   if (!d.mgmt || !kind) { closeFlow(state, cid); return { ok: false, res, reason: `${d.name} 接受了連線，但這個模擬沒有它的命令列可以登入`, refused: true }; }
   const q = quietLeft(state, d);
   if (q) { closeFlow(state, cid); return { ok: false, res, reason: `${d.name} 因為登入失敗太多次，正在拒絕所有登入（還要 ${q} 秒）`, refused: true }; }
-  const auth = vtyMode(d);
+  const auth = aaaOn(d) ? 'aaa' : vtyMode(d);
   if (proto === 'telnet' && auth === 'line' && !d.mgmt.vtyPass) {
     closeFlow(state, cid);
     return { ok: false, res, noPass: true, reason: `${d.name} 的 line vty 是 login（用線路密碼登入），但還沒有設定密碼。原廠預設就是這樣：一定要先設定，才能遠端登入` };
   }
-  if (auth === 'none') { grant(state, d, conn); return { ok: true, res, conn, kind, key: hostKey(d), auth, open: true }; }
+  if (auth === 'none') { conn.priv = kind === 'ios' ? d.mgmt.vtyPriv ?? 1 : 15; grant(state, d, conn); return { ok: true, res, conn, kind, key: hostKey(d), auth, open: true }; }
   return { ok: true, res, conn, kind, key: hostKey(d), auth };
 }
 
@@ -95,12 +99,16 @@ export function remoteLogin(state, conn, pass) {
   const sent = flowSend(state, conn.from, flowOf(conn, conn.proto === 'telnet' ? { kind: 'login', user: conn.user, pass } : null));
   if (!sent.ok) { closeFlow(state, conn.cid); return { ok: false, closed: true, reason: sent.reason }; }
   const m = d.mgmt, now = state.clock;
-  const mode = vtyMode(d);
+  const viaAaa = aaaOn(d);
+  const mode = viaAaa ? 'aaa' : vtyMode(d);
   // SSH 一定要有帳號：line vty 只設 login（線路密碼）的話，SSH 登入不了
-  const sshNeedsLocal = conn.proto === 'ssh' && mode !== 'local';
-  const good = !sshNeedsLocal && (mode === 'line' ? pass === (m.vtyPass || '') && !!m.vtyPass : localUsers(m).some((u) => u.user === conn.user && u.pass === pass));
+  const sshNeedsLocal = !viaAaa && conn.proto === 'ssh' && mode !== 'local';
+  const aaa = viaAaa ? aaaLogin(state, d, conn.user, pass) : null;
+  const who = viaAaa || mode === 'line' ? null : localUsers(m).find((u) => u.user === conn.user && u.pass === pass);
+  const good = viaAaa ? aaa.ok : !sshNeedsLocal && (mode === 'line' ? pass === (m.vtyPass || '') && !!m.vtyPass : !!who);
   const at = isIos(d) ? iosClock(state, d) : '';
-  if (good) { grant(state, d, conn); return { ok: true }; }
+  // 權限等級：aaa 由授權決定；本機帳號看帳號的 privilege；用線路密碼登入看 line vty 的 privilege level（預設 1）
+  if (good) { conn.priv = !isIos(d) ? 15 : aaa ? aaa.priv : who ? who.priv : m.vtyPriv ?? 1; conn.aaa = aaa; grant(state, d, conn); return { ok: true, priv: conn.priv, aaa }; }
   conn.tries++;
   const L = loginState(state, d), rule = blockRule(d);
   L.fails.push(now);
@@ -119,7 +127,7 @@ export function remoteLogin(state, conn, pass) {
   const max = conn.proto === 'ssh' && isIos(d) ? +m.sshRetries || MAX_TRIES : MAX_TRIES;
   if (sshNeedsLocal && conn.tries >= max) return { ok: false, closed: true, reason: `${d.name} 的 line vty 沒有設定 login local：SSH 要用 username 建立的帳號登入，只設 login（線路密碼）的話永遠登入不了` };
   if (conn.tries >= max) { closeFlow(state, conn.cid); return { ok: false, closed: true, reason: `密碼錯了 ${max} 次，連線被切斷` }; }
-  return { ok: false, closed: false, hint: sshNeedsLocal ? 'line vty 沒有設定 login local' : '' };
+  return { ok: false, closed: false, hint: sshNeedsLocal ? 'line vty 沒有設定 login local' : aaa ? aaa.trail.join(' → ') : '', aaa };
 }
 
 /** 設備正在執行一個要花時間的指令（例如 copy）：這段時間不算閒置 */

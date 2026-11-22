@@ -317,3 +317,22 @@ test('收發器：光纖的選單換掉兩端速率不同的收發器就連上�
   await typeCmd(page, 'enable', 'show interfaces transceiver');
   await expect(page.locator('#panel .term-out')).toContainText('-11.2 --');
 });
+
+test('TACACS+：ISE 的分頁列出帳號；vendor 從工作站 SSH 進 SW-1，show 可以、configure terminal 被授權擋下', async ({ page }) => {
+  await boot(page);
+  await open(page, 'l116');
+  await clickDevice(page, 'ise');
+  await page.locator('#panel .tab', { hasText: 'TACACS+' }).click();
+  await expect(page.locator('#panel .card', { hasText: '管理員帳號' }).locator('input.inp').first()).toHaveValue('netadmin');
+  expect(await scan(page, '#panel', 'ISE 的 TACACS+ 分頁')).toEqual([]);
+  await page.evaluate(() => { const L = window.linkup; L.level.solve(L.state); L.changed(); L.settleNow(); });
+  await clickDevice(page, 'ops');
+  await page.locator('#panel .tab', { hasText: '終端機' }).click();
+  await typeCmd(page, 'ssh -l vendor 10.1.99.11');
+  const out = page.locator('#panel .term-out');
+  if (await page.locator('#panel .prompt', { hasText: 'yes/no' }).count()) await typeCmd(page, 'yes');
+  await typeCmd(page, 'V3nd0r#Read', 'configure terminal', 'show running-config | include aaa new');
+  await expect(out).toContainText('Command authorization failed.');
+  await expect(out).toContainText('aaa new-model');
+  await expect(page.locator('#panel .prompt')).toHaveText('SW-1#');
+});

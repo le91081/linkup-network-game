@@ -33,7 +33,7 @@ README 說明「現在有什麼、怎麼玩」，這份文件說明「整體應�
 | 2. 第二層：交換 | 15 | 0 | 2 |
 | 3. 第三層：路由 | 14 | 1 | 2 |
 | 4. IP 服務 | 11 | 3 | 0 |
-| 5. 網路安全 | 12 | 2 | 3 |
+| 5. 網路安全 | 13 | 2 | 2 |
 | 6. VPN 與廣域網路 | 10 | 1 | 2 |
 | 7. 無線網路 | 6 | 3 | 1 |
 | 8. IPv6 | 5 | 3 | 0 |
@@ -45,9 +45,9 @@ README 說明「現在有什麼、怎麼玩」，這份文件說明「整體應�
 | 14. 遊戲系統 | 16 | 1 | 5 |
 | 15. 介面與體驗 | 6 | 1 | 7 |
 | 16. 工程品質 | 5 | 1 | 4 |
-| **合計** | **156** | **24** | **35** |
+| **合計** | **157** | **24** | **34** |
 
-另外：關卡 115 關（第 17 節）、證照條目涵蓋情形（第 18 節）、建議的實作順序（第 19 節）。
+另外：關卡 116 關（第 17 節）、證照條目涵蓋情形（第 18 節）、建議的實作順序（第 19 節）。
 
 ---
 
@@ -142,14 +142,14 @@ README 說明「現在有什麼、怎麼玩」，這份文件說明「整體應�
 | 狀態檢查 | ✅ | TCP 三向交握、連線紀錄，後續封包不重新比對政策 |
 | DMZ 與 VIP | ✅ | |
 | 防火牆紀錄 | ✅ | 每條新連線被哪一條政策放行或拒絕 |
-| 管理介面加固 | 🟡 | 多個本機帳號（一人一個，`username` / `no username`）、SSH 取代 Telnet（要先有主機名稱、網域名稱、RSA 金鑰與 `login local`）、vty `access-class`、`exec-timeout`、`login block-for`、`banner motd`、FortiGate 各介面的 allowaccess 與 `admintimeout`、密碼以雜湊顯示；`enable secret` 會接受但沒有作用（模擬裡沒有 enable 模式） |
+| 管理介面加固 | 🟡 | 多個本機帳號（一人一個，`username` / `no username`）、SSH 取代 Telnet（要先有主機名稱、網域名稱、RSA 金鑰與 `login local`）、vty `access-class`、`exec-timeout`、`login block-for`、`banner motd`、FortiGate 各介面的 allowaccess 與 `admintimeout`、密碼以雜湊顯示；權限等級：`username … privilege <0-15>`（沒寫就是 1）、使用者模式 (>) 與 `enable` / `enable secret` / `disable`、line vty 的 `privilege level`；遠端登入沒有 enable secret 會 % No password set |
 | DHCP Snooping、DAI | ✅ | |
 | Port Security | ✅ | maximum、靜態 / sticky / 動態的安全位址（照 IOS 的順序學，打開 sticky 會把已經學到的轉成 sticky）、protect / restrict / shutdown（預設）、違規次數與 `%PORT_SECURITY-2-PSECURE_VIOLATION`、斷線時動態的安全位址清掉；`show port-security [interface \| address]` |
 | err-disabled | ✅ | BPDU Guard 與 Port Security 關掉的埠會一直維持，原因排除也不會自己恢復：`shutdown` → `no shutdown`、重新開機，或 `errdisable recovery cause` / `interval`（原因還在就馬上再被關）；`show interfaces status err-disabled`、`show errdisable recovery` |
 | 802.1X / RADIUS | ✅ | 有線埠與 WPA2-Enterprise 的帳號密碼驗證 (PEAP)；EAP-TLS：用戶端檢查 RADIUS 伺服器的憑證、伺服器檢查電腦憑證（信任的 CA、用各自的時鐘看有效期間），NPS 的伺服器憑證可以重新申請（→ 6-13） |
 | Wi-Fi 加密 | ✅ | 開放、WEP、WPA2、WPA2 / WPA3 混合、WPA3 |
 | 攻擊情境 | ✅ | 冒牌 DHCP、ARP 欺騙、搶根橋、未授權設備、密碼暴力嘗試（`login block-for`）、側錄 Telnet 明文密碼、DTP 偽裝成交換器的 VLAN hopping；MAC flooding（macof 把每一台走得到的交換器的表塞滿，unknown unicast 泛洪給攻擊者，擋住之後要等老化或 clear）；雙重標籤（Access 埠收自己 VLAN 的標籤、Native VLAN 的 Trunk 不加標籤，封包單向跳進別的 VLAN、繞過 ACL；`vlan dot1q tag native` 或改 Native VLAN）；冒牌的 IPv6 RA；狂送廣播的設備。還沒有 SYN flood |
-| TACACS+ 與 AAA | ⬜ | 授權、稽核、權限等級 |
+| TACACS+ 與 AAA | ✅ | `aaa new-model`、`tacacs server`（address、key）、`ip tacacs source-interface`；`aaa authentication login` 方法清單（伺服器連不到或沒回應才換下一個，FAIL 直接拒絕）、`login authentication`；`aaa authorization exec`（權限由伺服器或本機帳號決定，沒設定一律 1 級）、`aaa authorization commands 15`（Command authorization failed.）、`aaa accounting commands 15`；TACACS+ 伺服器（ISE）的分頁：共用密鑰、登記的網路設備、帳號的權限與指令範圍、指令記錄 → 11-10 |
 | IOS 進階過濾 | ⬜ | Zone-Based Firewall、時間型 ACL、Reflexive ACL |
 | NGFW / UTM | ⬜ | IPS、防毒、網頁過濾、應用程式控管、SSL 檢查 |
 | IPv6 安全 | ✅ | IPv6 ACL（見第 8 節）；冒牌的 Router Advertisement（主機用每一個 RA 的前綴各產生一個位址、預設閘道選 Router Preference 最高的）與 RA Guard（`ipv6 nd raguard policy` / `device-role host \| router` / `attach-policy`、`show ipv6 nd raguard policy`） |
@@ -289,7 +289,7 @@ README 說明「現在有什麼、怎麼玩」，這份文件說明「整體應�
 
 | 功能 | 狀態 | 說明 |
 | --- | --- | --- |
-| 關卡 | ✅ | 17 章 115 關（清單見第 17 節） |
+| 關卡 | ✅ | 17 章 116 關（清單見第 17 節） |
 | 任務目標 | ✅ | ping、TCP、UDP、DHCP、設定檢查、故障演練、IPv6 ping、傳輸速率、遠端登入（SSH / Telnet 帳號密碼）、IP 電話註冊、通話品質 (MOS)、HTTPS（連得上之後還要通過憑證驗證）、路徑（一定要經過 / 不能經過某台設備）；TCP 的目標交握完還會送一個裝滿的資料區段（設了 DF），MTU 的問題才看得出來 |
 | 提示與星等 | ✅ | 每關 3 個提示，看一個少一顆星 |
 | 學習卡 | ✅ | 每關 2 到 4 張觀念說明 |
@@ -350,7 +350,7 @@ README 說明「現在有什麼、怎麼玩」，這份文件說明「整體應�
 
 ## 17. 關卡規劃
 
-### 現有的 115 關
+### 現有的 116 關
 
 | 章 | 關卡 |
 | --- | --- |
@@ -364,7 +364,7 @@ README 說明「現在有什麼、怎麼玩」，這份文件說明「整體應�
 | 8 高可用與進階路由 | 迴圈與生成樹、EtherChannel、閘道備援、集中式 DHCP、OSPF 路徑選擇、切蛋糕、閘道還活著，但出不去（HSRP 追蹤）、主線斷了，電話斷了四十秒（BFD）、兩台閘道，只有一台在做事（GLBP） |
 | 9 IPv6 | IPv6 初體驗、雙協定、位址從哪裡來？、IPv6 也要動態路由、封了 IPv4，忘了 IPv6、IPv6 的預設閘道被搶走了（RA Guard）、內部網站加了 IPv6 之後（AAAA 與 Happy Eyeballs）、IPv6 過不了 VPN（VTI 只載 IPv4） |
 | 10 故障排除 | 誰搶了我的 IP、樓層之間又斷了、分公司的求救電話、明明連得上，為什麼這麼慢、分公司的 OSPF 鄰居起不來、流量為什麼繞去實驗室、VPN 通了，資料卻過不去、DNS 改了，為什麼還連到舊的、整層樓都慢了（廣播風暴與 Storm Control） |
-| 11 維運與管理 | 還好有備份、韌體升級、讓 SSH 能用、網路怎麼變慢了、是誰動了設定？、你的連線不是私人連線、專線被塞滿了，是誰？（NetFlow）、事件的先後兜不起來（NTP 與 service timestamps）、機櫃裡的線全部沒有標籤（看不到接線，用 CDP / LLDP 找） |
+| 11 維運與管理 | 還好有備份、韌體升級、讓 SSH 能用、網路怎麼變慢了、是誰動了設定？、你的連線不是私人連線、專線被塞滿了，是誰？（NetFlow）、事件的先後兜不起來（NTP 與 service timestamps）、機櫃裡的線全部沒有標籤（看不到接線，用 CDP / LLDP 找）、外包工程師要能看設定但不能改（AAA 與 TACACS+） |
 | 12 語音與 QoS | 電話接上了，然後呢？、語音斷斷續續、新的 AP 怎麼插都不亮（PoE 預算與 CDP 的電力協商）、專線一斷，電話就聽不清楚（雙 WAN 的 QoS） |
 | 13 進階路由 | 誰當 DR？、10G 和 1G 一樣快？、分公司自成一區、兩家 ISP 都要用、併購的工廠只會靜態路由（重分配）、備份走另一條線（PBR）、分公司的路由表太大了（stub）、工廠接了一條供應商專線（NSSA）、兩個出口，同一個 AS（iBGP）、共用服務放在全域的路由表（VRF 的 OSPF 與路由洩漏） |
 | 14 無線控制器與無線環境 | AP 找不到控制器、牆後面收不到、走到另一頭就斷線、控制器重開機，整棟的 Wi-Fi 斷了六分鐘（N+1）、分公司的專線一斷，Wi-Fi 也跟著斷（FlexConnect） |
@@ -428,7 +428,7 @@ CCNA v2.0 預計在 2027 年 2 月取代 v1.1，改版後整張對照表要重�
 | 19（已完成） | 維運與語音補充：NetFlow 與 QoS 的 police（已完成 → 11-7）、OSPF / DHCP / crypto 的 `debug`（已完成）、NTP + Syslog 對時與 `service timestamps`（已完成 → 11-8）、PoE 預算與 Cisco AP 的 CDP / LLDP 電力協商（已完成 → 12-3）、IKEv2 的憑證驗證（PKI、時鐘不對讓憑證「尚未生效」→ 7-12）、802.1X 的 EAP-TLS（伺服器憑證、電腦憑證、用戶端的時鐘 → 6-13）、看不到接線的關卡模式與用 CDP / LLDP 畫拓撲（→ 11-9）、雙 WAN 的 QoS 與排程事件（已完成 → 12-4） → 第 11、12 章補充關卡 | 讓故障排除的工具與劇本更完整 |
 | 20（已完成） | 無線補充：頻道寬度與 DFS（已完成 → 5-4）、6 GHz（已完成 → 5-5）、控制器 N+1（已完成 → 14-4）、FlexConnect 分公司（已完成 → 14-5）、訪客入口 (Captive Portal → 5-6) | 第 7 節剩下的項目 |
 | 21（已完成） | 自動化與雲端補充：負載平衡器（已完成 → 16-3）、VPC peering 與 Transit Gateway（已完成 → 16-4）、NETCONF（已完成 → 15-4）、Terraform（已完成 → 16-5）、Catalyst Center 範本（已完成 → 15-5）、用 Git 管理設定（已完成 → 15-6） | 第 12 節的延伸 |
-| 22（進行中） | FortiGate HA（Active-Passive、連線同步）、堆疊 / vPC、電力備援；IPv6 的網際網路與 FortiGate 的 IPv6（DHCPv6-PD、IPv6 政策、NAT64 / DNS64）；實體層與其他：收發器不相容（已完成 → 4-5）、breakout、Console 與帶外管理、STP 進階、VTP、EIGRP / RIP、多播、TACACS+、ZBF、NGFW、SD-WAN、其他設備與廠牌 | 剩下的引擎項目 |
+| 22（進行中） | FortiGate HA（Active-Passive、連線同步）、堆疊 / vPC、電力備援；IPv6 的網際網路與 FortiGate 的 IPv6（DHCPv6-PD、IPv6 政策、NAT64 / DNS64）；實體層與其他：收發器不相容（已完成 → 4-5）、breakout、Console 與帶外管理、STP 進階、VTP、EIGRP / RIP、多播、TACACS+ 與權限等級（已完成 → 11-10）、ZBF、NGFW、SD-WAN、其他設備與廠牌 | 剩下的引擎項目 |
 | 23 | 介面與體驗（第 15 節）、工程品質（第 16 節：CI、靜態檢查、存檔格式遷移、大型拓撲效能、部署） | 引擎穩定之後再整理介面與工程 |
 | 最後 | 遊戲系統（第 14 節）：成就、預算與採購、名詞表、帳號與雲端存檔、多人、關卡編輯器補齊（學習卡、已知資訊、設定檢查目標） | 依使用者的決定排在最後，等關卡與引擎都齊了再做 |
 | 隨時 | CI、存檔格式遷移（`sim.js` 的拆分與分塊載入已完成） | CI 要遠端儲存庫，要另外決定 |

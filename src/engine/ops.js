@@ -402,8 +402,8 @@ export function opsBefore(state) {
  */
 export function localUsers(m) {
   if (!m) return [];
-  const main = m.user === '' ? [] : [{ user: m.user ?? 'admin', pass: m.pass ?? 'admin' }];
-  return [...main, ...(m.users || [])];
+  const main = m.user === '' ? [] : [{ user: m.user ?? 'admin', pass: m.pass ?? 'admin', priv: m.priv ?? 15 }];
+  return [...main, ...(m.users || []).map((u) => ({ ...u, priv: u.priv ?? 15 }))];
 }
 
 /** Gi0/1 → GigabitEthernet0/1 */
