@@ -1,6 +1,7 @@
 // 關卡劇本的排程事件：「三分鐘後施工挖斷主線」「十分鐘後修好」
 // 關卡在 setup 裡設定 s.script = [{ at: 秒, text: '畫面上的通知', why: '線路斷掉的原因',
-//   cut: [[設備, 埠]]（線路斷掉）, uncut: [[設備, 埠]]（修好）, flows: { 背景流量 id: true | false } }]
+//   cut: [[設備, 埠]]（線路斷掉）, uncut: [[設備, 埠]]（修好）, flows: { 背景流量 id: true | false },
+//   radar: [基地台]（附近的氣象雷達：用 DFS 頻道的基地台要立刻換頻道） }]
 // 時間到了（模擬時鐘走到 at）才發生；快轉到收斂 (settle) 不會為了它們特地往前跳。
 // 發生過的事件記下 fired（發生的時間），新的通知放進 state.scriptNews 給畫面顯示。
 
@@ -24,6 +25,7 @@ export function scriptTick(state) {
       if (state.cut) delete state.cut[c.id];
       if (state.cutWhy) delete state.cutWhy[c.id];
     }
+    for (const id of e.radar || []) (state.dyn.radar ||= {})[id] = { at: state.clock || 0, pending: true };
     for (const [id, on] of Object.entries(e.flows || {})) {
       const f = (state.flows || []).find((x) => x.id === id);
       if (f) f.on = !!on;

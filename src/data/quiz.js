@@ -32,7 +32,7 @@ export const LEVEL_TOPIC = {
   l55: 'wireless', l56: 'wireless', l57: 'wireless',
   l58: 'auto', l59: 'auto', l60: 'auto', l61: 'auto', l62: 'auto',
   l63: 'routing', l64: 'routing', l65: 'ops', l66: 'routing', l67: 'switching', l68: 'vpn', l69: 'security', l71: 'services',
-  l70: 'auto', l72: 'routing', l73: 'auto', l74: 'security', l75: 'switching', l76: 'vpn', l77: 'routing', l78: 'routing', l79: 'routing', l80: 'routing', l81: 'routing', l82: 'routing', l83: 'security', l84: 'security', l85: 'switching', l86: 'security', l87: 'ipv6', l88: 'vpn', l89: 'vpn', l90: 'vpn', l91: 'vpn', l92: 'vpn', l93: 'ipv6', l94: 'ipv6', l95: 'routing', l96: 'routing', l97: 'ops', l98: 'switching', l99: 'ops', l100: 'ops', l101: 'vpn', l102: 'security', l103: 'switching',
+  l70: 'auto', l72: 'routing', l73: 'auto', l74: 'security', l75: 'switching', l76: 'vpn', l77: 'routing', l78: 'routing', l79: 'routing', l80: 'routing', l81: 'routing', l82: 'routing', l83: 'security', l84: 'security', l85: 'switching', l86: 'security', l87: 'ipv6', l88: 'vpn', l89: 'vpn', l90: 'vpn', l91: 'vpn', l92: 'vpn', l93: 'ipv6', l94: 'ipv6', l95: 'routing', l96: 'routing', l97: 'ops', l98: 'switching', l99: 'ops', l100: 'ops', l101: 'vpn', l102: 'security', l103: 'switching', l104: 'wireless',
 };
 
 export const QUESTIONS = {
@@ -99,6 +99,8 @@ export const QUESTIONS = {
     { q: '在路由器上要看 VRF CUST-A 的路由表，要用哪個指令？', a: ['show ip route', 'show ip route vrf CUST-A', 'show vrf routes', 'show running-config vrf'], c: 1, e: 'show ip route 只顯示全域的路由表。VRF 的要加 vrf <名稱>；ping、traceroute 也一樣要指定（ping vrf CUST-A 10.1.0.10）。', r: 'CCNA 1.12' },
   ],
   wireless: [
+    { q: '兩台相鄰的 AP 都在 5 GHz 開 80 MHz，一台用頻道 36、一台用頻道 44，會怎樣？', a: ['不會干擾，36 和 44 是不同頻道', '會干擾：36 的 80 MHz 佔用 36 – 48，和 44 重疊', '只有 2.4 GHz 會干擾', '速度會自動加倍'], c: 1, e: '頻道綁在一起就佔用整塊頻譜：80 MHz 的 36 用掉 36、40、44、48。AP 一多就排不開，企業網路常用 20 / 40 MHz 讓每台有自己的頻道。', r: 'CCNA 1.11' },
+    { q: 'AP 用了 DFS 頻道（例如 100）會遇到什麼狀況？', a: ['速度會被限制在 20 MHz', '偵測到雷達時必須立刻換頻道，用戶端會短暫斷線', '只有 WPA3 的用戶端能連', '不能和 2.4 GHz 同時使用'], c: 1, e: '52 – 144 是 DFS 頻道，和氣象、航空雷達共用。偵測到雷達就要離開，30 分鐘內不能回來；機場、港口附近或需要穩定的會議室，選非 DFS 的 36 – 48、149 – 161。', r: 'Network+ 2.3' },
     { q: '2.4GHz 頻段中，哪一組頻道彼此不重疊？', a: ['1、2、3', '1、6、11', '2、7、12', '1、5、9'], c: 1, e: '每個頻道寬約 20MHz，相鄰頻道只差 5MHz，所以要隔 5 個頻道才不會重疊。', r: 'CCNA 1.11' },
     { q: '下列哪一種個人無線加密最安全？', a: ['WEP', 'WPA (TKIP)', 'WPA2-Personal', 'WPA3-Personal'], c: 3, e: 'WPA3 改用 SAE 交握，就算側錄到交握過程也無法離線猜密碼。WEP 與 TKIP 都已經被破解。', r: 'CCNA 5.9' },
     { q: 'SSID 是什麼？', a: ['基地台的 MAC 位址', '無線網路的名稱', '加密用的金鑰', '頻道編號'], c: 1, e: 'SSID 是用戶端看到的網路名稱。多台基地台可以廣播同一個 SSID 來提供漫遊。', r: 'CCNA 1.11' },

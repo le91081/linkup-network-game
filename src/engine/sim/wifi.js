@@ -11,6 +11,28 @@ const SEC_MODES = { open: ['open'], wep: ['wep'], wpa2: ['wpa2'], wpa2wpa3: ['wp
 export const apRange = (d) => ({ low: 6, mid: 9, high: 12 })[(d.wifi && d.wifi.power) || 'mid'];
 const distOf = (a, b) => Math.hypot(a.pos[0] - b.pos[0], a.pos[1] - b.pos[1]);
 
+// ── 5 GHz 的頻道寬度與 DFS ──
+// 頻道綁在一起變寬（40 / 80 / 160 MHz）速度跟著加倍，但佔掉的頻譜也變多：兩台基地台的「整塊」有重疊就會互相干擾。
+// width5 沒設定是「自動」：和 Cisco 的 DBS 一樣，附近有基地台用到同一塊頻譜就自動縮窄（80 → 40 → 20）。
+// 52 – 144 是 DFS 頻道：和氣象雷達共用，偵測到雷達就要立刻換頻道（用戶端會斷一下），30 分鐘內不能回來。
+export const CH5 = [36, 40, 44, 48, 52, 56, 60, 64, 100, 104, 108, 112, 116, 120, 124, 128, 132, 136, 140, 144, 149, 153, 157, 161, 165];
+export const DFS = new Set([52, 56, 60, 64, 100, 104, 108, 112, 116, 120, 124, 128, 132, 136, 140, 144]);
+const BONDS = {
+  40: [[36, 40], [44, 48], [52, 56], [60, 64], [100, 104], [108, 112], [116, 120], [124, 128], [132, 136], [140, 144], [149, 153], [157, 161]],
+  80: [[36, 40, 44, 48], [52, 56, 60, 64], [100, 104, 108, 112], [116, 120, 124, 128], [132, 136, 140, 144], [149, 153, 157, 161]],
+  160: [[36, 40, 44, 48, 52, 56, 60, 64], [100, 104, 108, 112, 116, 120, 124, 128]],
+};
+/** 某個主頻道在某個寬度下佔用的 20 MHz 頻道（綁不起來就退回較窄的） */
+export function blockOf(ch, w) {
+  if (!(w > 20)) return [ch];
+  const b = (BONDS[w] || []).find((x) => x.includes(ch));
+  return b || blockOf(ch, w === 160 ? 80 : w === 80 ? 40 : 20);
+}
+/** 實際用得到的寬度（例如 165 只能 20 MHz、149 沒有 160 MHz） */
+const fitWidth = (ch, w) => (blockOf(ch, w).length * 20);
+/** 5 GHz 的速率（2x2，依訊號分三級），單位 Mbps */
+const RATE5 = { 20: [173, 117, 58], 40: [400, 270, 135], 80: [866, 585, 292], 160: [1733, 1170, 585] };
+
 // ── 牆面衰減 ──
 // state.walls = [{ id, a: [x, y], b: [x, y], mat }]。每穿過一道牆就少掉一些訊號，5 GHz 穿牆比 2.4 GHz 差
 export const WALL_MATS = {
@@ -58,7 +80,8 @@ export const wlansOf = (w) => ((w.wlc && w.wlc.wlans) || []).filter((x) => x.on 
 /** 基地台現在放送的 SSID：一般的基地台是自己的設定；輕量型 AP 要加入 WLC 之後才有（FlexConnect 斷線時沿用最後一份） */
 export const ssidsOf = (state, ap) => (ap.lwap ? ((ap.rt && ap.rt.capwap && ap.rt.capwap.wlans) || []) : ap.wifi.ssids);
 /** 頻道：輕量型 AP 由 WLC 的 RRM 自動指定 */
-const chOf = (ap, band) => (band === '2.4GHz' ? +(ap.rt.rrm ? ap.rt.rrm.ch24 : ap.wifi.ch24) || 1 : +(ap.rt.rrm ? ap.rt.rrm.ch5 : ap.wifi.ch5) || 36);
+const chOf = (ap, band) => (band === '2.4GHz' ? +(ap.rt.rrm ? ap.rt.rrm.ch24 : ap.wifi.ch24) || 1 : (ap.rt.dfs && ap.rt.dfs.to) || +(ap.rt.rrm ? ap.rt.rrm.ch5 : ap.wifi.ch5) || 36);
+export const apChannel = chOf;
 export const apsOf = (state) =>
   Object.values(state.devices).filter((d) => d.wifi && !state.rt.off[d.id] && !(state.down || {})[d.id] && ssidsOf(state, d).some((s) => !s.off && s.name));
 /** 反向的路徑（給 WLC 送回 AP 的 CAPWAP 隧道動畫用） */
@@ -101,14 +124,50 @@ export function prepWifi(state) {
   prepCapwap(state, (d) => !state.rt.off[d.id] && !(state.down || {})[d.id]);
   const rt = state.rt, aps = apsOf(state);
   const assocMem = (state.dyn.assoc ||= {});
+  // DFS：偵測到雷達的基地台換到不是 DFS 的頻道，30 分鐘內不回來；剛換的 15 秒內 5 GHz 的用戶端斷線
+  const radar = (state.dyn.radar ||= {});
+  for (const ap of aps) {
+    const r = radar[ap.id];
+    if (!r) continue;
+    if (r.pending) {
+      // 雷達只影響正在用 DFS 頻道的基地台：換到附近沒人用的非 DFS 頻道
+      const cur = +(ap.rt.rrm ? ap.rt.rrm.ch5 : ap.wifi.ch5) || 36;
+      if (!DFS.has(cur)) { delete radar[ap.id]; continue; }
+      const used = new Set(aps.filter((o) => o !== ap).map((o) => +(o.rt.rrm ? o.rt.rrm.ch5 : o.wifi.ch5) || 36));
+      r.from = cur; r.to = CH5.find((c) => !DFS.has(c) && c !== 165 && !used.has(c)) || 36;
+      delete r.pending;
+    }
+    // 管理員自己改了頻道：不再沿用雷達之後換過去的頻道
+    if (r.from !== (+(ap.rt.rrm ? ap.rt.rrm.ch5 : ap.wifi.ch5) || 36)) { delete radar[ap.id]; continue; }
+    if (state.clock >= r.at + 1800) { delete radar[ap.id]; continue; }
+    ap.rt.dfs = { from: r.from, to: r.to, at: r.at, hold: state.clock < r.at + 15 };
+  }
+  // 附近（會互相干擾的距離內）的基地台
+  const near = new Map(aps.map((a) => [a.id, []]));
   for (let i = 0; i < aps.length; i++) {
     for (let j = i + 1; j < aps.length; j++) {
       const a = aps[i], b = aps[j];
       const wl = wallsBetween(state, a.pos, b.pos).db24;
       if (distOf(a, b) + wl * (apRange(a) + apRange(b)) / 80 >= apRange(a) + apRange(b)) continue;
+      near.get(a.id).push(b); near.get(b.id).push(a);
+    }
+  }
+  // 5 GHz 的實際寬度：固定的照設定（綁不起來就縮窄）；自動的看附近有沒有人用到同一塊
+  for (const ap of aps) {
+    const ch = chOf(ap, '5GHz'), pref = +ap.wifi.width5 || 0;
+    // 自動：避開鄰居佔用的頻譜（固定寬度的鄰居看整塊，自動的鄰居看主頻道）
+    const taken = near.get(ap.id).flatMap((o) => { const c = chOf(o, '5GHz'); return +o.wifi.width5 ? blockOf(c, fitWidth(c, +o.wifi.width5)) : [c]; });
+    ap.rt.width5 = pref ? fitWidth(ch, pref) : [80, 40, 20].find((w) => !blockOf(ch, fitWidth(ch, w)).some((c) => taken.includes(c))) || 20;
+    ap.rt.width5 = fitWidth(ch, ap.rt.width5);
+  }
+  for (let i = 0; i < aps.length; i++) {
+    for (const b of near.get(aps[i].id)) {
+      const a = aps[i];
+      if (aps.indexOf(b) < i) continue;
       const bands = [];
       if (Math.abs(chOf(a, '2.4GHz') - chOf(b, '2.4GHz')) < 5) bands.push('2.4GHz');
-      if (chOf(a, '5GHz') === chOf(b, '5GHz')) bands.push('5GHz');
+      const A5 = blockOf(chOf(a, '5GHz'), a.rt.width5), B5 = blockOf(chOf(b, '5GHz'), b.rt.width5);
+      if (A5.some((c) => B5.includes(c))) bands.push('5GHz');
       for (const band of bands) { a.rt.interf.push({ dev: b.id, band }); b.rt.interf.push({ dev: a.id, band }); }
     }
   }
@@ -122,6 +181,8 @@ export function prepWifi(state) {
       const cands = [];
       for (const ap of aps) {
         const rf = rfAt(state, ap, d.pos), dist = rf.dist;
+        // 剛偵測到雷達、正在換頻道：5 GHz 暫時沒有訊號，訊號夠的用戶端退回 2.4 GHz
+        if (rf.band === '5GHz' && ap.rt.dfs && ap.rt.dfs.hold) { rf.band = rf.rssi24 >= -78 ? '2.4GHz' : null; rf.rssi = rf.rssi24; }
         if (!rf.band) continue;
         ssidsOf(state, ap).forEach((s, idx) => {
           if (s.off || s.name !== w.ssid) return;
@@ -154,9 +215,11 @@ export function prepWifi(state) {
       const apd = state.devices[best.ap];
 
       const noisy = apd.rt.interf.some((x) => x.band === best.band);
-      best.rate = Math.round((best.band === '5GHz' ? (best.rssi > -52 ? 866 : best.rssi > -62 ? 585 : 292) : best.rssi > -72 ? 144 : 72) * (noisy ? 0.5 : 1));
+      const R5 = RATE5[apd.rt.width5 || 80] || RATE5[80];
+      best.rate = Math.round((best.band === '5GHz' ? (best.rssi > -52 ? R5[0] : best.rssi > -62 ? R5[1] : R5[2]) : best.rssi > -72 ? 144 : 72) * (noisy ? 0.5 : 1));
       best.noisy = noisy;
       best.ch = chOf(apd, best.band);
+      if (best.band === '5GHz') best.width = apd.rt.width5 || 80;
       i.rt.assoc = best;
       if (best.via) {
         // Local 模式：用戶端掛在 WLC 上（流量經 CAPWAP 回到 WLC 才放進 VLAN）。動畫照實際的隧道路徑走

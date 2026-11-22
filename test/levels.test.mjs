@@ -3516,6 +3516,27 @@ console.log('\n802.1X 的 EAP-TLS');
   ok(/RADIUS 拒絕了 財務 PC 的憑證.*2025-12-01 就到期了/.test(note('pc1')), '電腦憑證過期：RADIUS 拒絕（用 NPS 自己的時鐘判斷）');
 }
 
+console.log('\n5 GHz 的頻道寬度與 DFS');
+{
+  const sim = await import('../src/engine/sim.js');
+  const ok = (cond, title) => (cond ? console.log('  ✔ ' + title) : fail(title));
+  ok(sim.blockOf(44, 80).join() === '36,40,44,48' && sim.blockOf(149, 160).join() === '149,153,157,161' && sim.blockOf(165, 80).join() === '165' && sim.blockOf(100, 40).join() === '100,104', 'blockOf：80 MHz 的 44 佔 36 – 48；149 沒有 160 MHz（退回 80）；165 只能 20 MHz');
+  const lv = LEVELS.find((x) => x.id === 'l104');
+  const s = lv.setup(); settle(s);
+  const A = s.devices.apA, B = s.devices.apB, C = s.devices.apC, assoc = (id) => s.devices[id].ifaces.map((i) => i.rt.assoc).find(Boolean);
+  ok(A.rt.interf.some((x) => x.dev === 'apB' && x.band === '5GHz') && assoc('nbA').noisy && assoc('nbA').rate === 293 && assoc('nbC').rate === 585, '36 和 44 都開 80 MHz：同一塊頻譜互相干擾，速率減半；會議室獨佔 80 MHz（585 Mbps）');
+  sim.advance(s, 152); settle(s);
+  ok(C.rt.dfs && C.rt.dfs.from === 100 && C.rt.dfs.to === 40 && C.rt.dfs.hold && assoc('nbC').band === '2.4GHz', '雷達：會議室從 DFS 頻道 100 換到 40，換頻道的 15 秒內筆電退回 2.4 GHz');
+  sim.advance(s, 20); settle(s);
+  ok(!C.rt.dfs.hold && assoc('nbC').band === '5GHz' && assoc('nbC').noisy && C.rt.interf.length >= 2, '15 秒後回到 5 GHz，可是新的頻道 40 撞上另外兩台');
+  delete A.wifi.width5; delete B.wifi.width5; settle(s);
+  ok(A.rt.width5 === 20 && B.rt.width5 === 20, '寬度改成自動：附近有人用到同一塊，自動縮窄到 20 MHz');
+  Object.assign(A.wifi, { ch5: 36, width5: 40 }); Object.assign(B.wifi, { ch5: 44, width5: 40 }); Object.assign(C.wifi, { ch5: 149, width5: 80 }); settle(s);
+  ok(!C.rt.dfs && lv.objectives.every((o) => o.test(s) === true) && assoc('nbA').rate === 270 && assoc('nbC').rate === 585, '40 MHz 的 36、44，80 MHz 的 149：互不干擾、不用 DFS，五個目標都通過');
+  sim.advance(s, 300); settle(s);
+  ok(!C.rt.dfs && lv.objectives.every((o) => o.test(s) === true), '之後雷達再掃過來也沒影響（不在 DFS 頻道上）');
+}
+
 console.log('\nNetFlow 與 QoS 的 police');
 {
   const sim = await import('../src/engine/sim.js');

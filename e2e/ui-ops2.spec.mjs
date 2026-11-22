@@ -110,3 +110,17 @@ test('看不到接線的關卡：場景沒有線、連接埠只說有插線，sh
   await expect(page.locator('#panel .term-out')).toContainText('AP-2F-01');
   expect(await scan(page, '#panel', '看不到接線的連接埠')).toEqual([]);
 });
+
+test('頻道寬度與 DFS：無線電卡片列出 DFS 頻道、實際寬度，改成 40 MHz 之後不再干擾', async ({ page }) => {
+  await boot(page);
+  await open(page, 'l104');
+  await clickDevice(page, 'apA');
+  await page.locator('#panel .tab', { hasText: '無線電' }).click();
+  const card = page.locator('#panel .card', { hasText: '5GHz 頻道寬度' });
+  await expect(card).toContainText('實際使用 80 MHz');
+  await expect(card).toContainText('AP-業務區');
+  await expect(card.locator('option', { hasText: '頻道 100（DFS）' })).toHaveCount(1);
+  await card.locator('select').nth(2).selectOption('40');
+  await expect(card).toContainText('實際使用 40 MHz（頻道 36、40）');
+  expect(await scan(page, '#panel', '無線電卡片')).toEqual([]);
+});

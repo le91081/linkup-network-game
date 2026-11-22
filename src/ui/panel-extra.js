@@ -9,7 +9,7 @@ import {
 } from './form.js';
 import { fmtIp } from '../engine/ip.js';
 import { CATALOG, peerOf, portOf, newSsid, cableAt, linkInfo } from '../engine/model.js';
-import { visibleSsids, WIFI_SEC, macsBehind, isBridgePort, hitsOf, P1, accessOf, portfastOn, macRows, clearMac, macAgeOf, saInfo, fmtDur, isTrunk, dtpSpeaker, WALL_MATS, errdisRows, bouncePort, ERR_CAUSES, ERR_RECOVERY_DEFAULT } from '../engine/sim.js';
+import { visibleSsids, WIFI_SEC, macsBehind, isBridgePort, hitsOf, P1, accessOf, portfastOn, macRows, clearMac, macAgeOf, saInfo, fmtDur, isTrunk, dtpSpeaker, WALL_MATS, errdisRows, bouncePort, ERR_CAUSES, ERR_RECOVERY_DEFAULT, CH5, DFS, blockOf } from '../engine/sim.js';
 import { cdpCfg, lldpCfg, cdpOn, lldpTxOn, lldpRxOn, portNd, setPortNd, neighbors, speaksCdp, speaksLldp } from '../engine/disc.js';
 import { ntpInfo, deviceTime, plainStamp, logRows, clearLog, syslogStats, NTP_POLL } from '../engine/ops.js';
 import * as M from './panel-more.js';
@@ -190,8 +190,17 @@ export function radioCard(ctx) {
   return h('div', { class: 'card' }, cardHead('無線電'),
     grid2(
       field('2.4GHz 頻道', sel(ctx, ...bind(w, 'ch24', Number), Array.from({ length: 11 }, (_, n) => [n + 1, `頻道 ${n + 1}${[1, 6, 11].includes(n + 1) ? '（不重疊）' : ''}`]))),
-      field('5GHz 頻道', sel(ctx, ...bind(w, 'ch5', Number), [36, 40, 44, 48, 149, 153, 157, 161].map((c) => [c, `頻道 ${c}`]))),
+      field('5GHz 頻道', sel(ctx, ...bind(w, 'ch5', Number), CH5.map((c) => [c, `頻道 ${c}${DFS.has(c) ? '（DFS）' : ''}`]))),
+      field('5GHz 頻道寬度', sel(ctx, () => (w.width5 ? String(w.width5) : ''), (v) => { if (v) w.width5 = +v; else delete w.width5; }, [['', '自動（附近有人就縮窄）'], ['20', '20 MHz'], ['40', '40 MHz'], ['80', '80 MHz'], ['160', '160 MHz']])),
       field('發射功率', sel(ctx, ...bind(w, 'power'), [['low', '低（涵蓋範圍小）'], ['mid', '中'], ['high', '高（涵蓋範圍大）']]))),
+    ctx.live(() => {
+      const rt = ctx.dev.rt || {}, ch = (rt.dfs && rt.dfs.to) || +w.ch5 || 36, wd = rt.width5;
+      const out = [];
+      if (wd) out.push(note('muted', `5 GHz 實際使用 ${wd} MHz（頻道 ${blockOf(ch, wd).join('、')}）${wd < (+w.width5 || 80) ? '：附近有基地台用到同一塊頻譜，自動縮窄了' : ''}`));
+      if (rt.dfs) out.push(note('warn', `偵測到雷達：從 DFS 頻道 ${rt.dfs.from} 換到 ${rt.dfs.to}${rt.dfs.hold ? '（正在換頻道，5 GHz 的用戶端暫時斷線）' : ''}，30 分鐘內不能回到原本的頻道`));
+      else if (DFS.has(+w.ch5)) out.push(note('muted', `頻道 ${w.ch5} 是 DFS 頻道：和氣象雷達共用，偵測到雷達就要立刻換頻道（用戶端會斷一下）`));
+      return out;
+    }),
     ctx.live(() => {
       const list = ctx.dev.rt.interf;
       if (!list.length) return note('ok', '沒有偵測到與其他基地台的頻道干擾');
