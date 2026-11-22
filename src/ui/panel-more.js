@@ -4,6 +4,8 @@ import { sessionLog, clearSessionLog, arpRows, sessionRows, clearSessions, fmtDu
 import { syslogRows, clearSyslog, SIM_EPOCH } from '../engine/ops.js';
 import { inp, sel, toggle, field, note, kv, del, cardHead, grid2, bind, isIp } from './form.js';
 import { fmtIp } from '../engine/ip.js';
+import { CORP_CA, fmtDate, certDaysLeft, issueCert } from '../engine/web.js';
+import { deviceTime } from '../engine/ops.js';
 
 // ───────────────────────── RADIUS / 802.1X ─────────────────────────
 
@@ -36,12 +38,39 @@ export function radiusServerTab(ctx, body) {
   card.append(h('div', { class: 'addrow' }, button('新增帳號', { ic: 'plus', small: true, onclick: () => { r.users.push({ user: '', pass: '' }); ctx.commit(true); } })),
     ctx.live(() => (!r.secret ? note('warn', '還沒有設定共用密鑰。') : !r.users.some((u) => u.user) ? note('muted', '還沒有任何帳號。') : note('ok', `共 ${r.users.filter((u) => u.user).length} 個帳號可以登入。`))));
   body.append(card);
+  // 伺服器憑證：PEAP 與 EAP-TLS 的用戶端都會先檢查它（簽發者要在信任清單裡、而且在有效期間內）
+  const cc = h('div', { class: 'card' }, cardHead('伺服器憑證與 EAP-TLS'));
+  cc.append(ctx.live(() => {
+    const c = r.cert;
+    if (!c) return note('muted', '這台 RADIUS 伺服器沒有特別設定憑證（當作已經裝好一張用戶端都信任的憑證）。');
+    const left = certDaysLeft(ctx.state, c), ago = Math.floor((SIM_EPOCH + (ctx.state.clock || 0) * 1000 - c.to) / 86400000);
+    return h('div', null, kv('名稱 (CN)', c.cn), kv('簽發者', c.issuer), kv('有效期間', `${fmtDate(c.from)} ～ ${fmtDate(c.to)}`),
+      left < 0 ? note('bad', `已經過期 ${Math.max(1, ago)} 天：用戶端（PEAP 與 EAP-TLS）會拒絕這台伺服器，全部登入失敗。`) : left < 30 ? note('warn', `再 ${left} 天到期。`) : note('ok', `還有 ${left} 天到期。`));
+  }));
+  cc.append(h('div', { class: 'addrow' }, button('向公司的 CA 重新申請伺服器憑證', { ic: 'shield', small: true, onclick: () => {
+    const cn = (r.cert && r.cert.cn) || `${dev.name}.corp.local`;
+    r.cert = issueCert(ctx.state, { cn, issuer: CORP_CA, days: 730 });
+    ctx.commit(true);
+  } })),
+    toggle(ctx, () => r.tls !== false, (v) => { if (v) delete r.tls; else r.tls = false; }, '接受 EAP-TLS（用戶端用憑證登入）'),
+    note('muted', `EAP-TLS 只接受「${(r.trust || [CORP_CA]).join('、')}」簽發、而且還在有效期間內的用戶端憑證（用這台伺服器自己的時鐘判斷）。`));
+  body.append(cc);
 }
 
 /** 終端設備的 802.1X 用戶端 (supplicant) */
 export function hostDot1x(ctx) {
-  const d = ctx.dev.dot1x;
-  return h('div', { class: 'sub' }, h('span', { class: 'f-label', text: '有線網路的 802.1X 登入' }),
+  const d = ctx.dev.dot1x, dev = ctx.dev;
+  const method = field('驗證方式', sel(ctx, () => d.method || 'peap', (v) => { if (v === 'peap') delete d.method; else d.method = v; }, [['peap', 'PEAP（帳號密碼）'], ['tls', 'EAP-TLS（電腦憑證）']], { rerender: true }));
+  if (d.method === 'tls') {
+    return h('div', { class: 'sub' }, h('span', { class: 'f-label', text: '有線網路的 802.1X 登入' }), method, ctx.live(() => {
+      const c = d.cert;
+      if (!c) return note('warn', '這台電腦沒有用戶端憑證：加入網域的電腦會自動向公司的 CA 申請，沒有加入的就沒有。');
+      const now = deviceTime(ctx.state, dev).ms;
+      return h('div', null, kv('憑證', `${c.cn}（${c.issuer} 簽發）`), kv('有效期間', `${fmtDate(c.from)} ～ ${fmtDate(c.to)}`),
+        now < c.from || now > c.to ? note('warn', `用這台電腦自己的時鐘（${fmtDate(now)}）看，憑證不在有效期間內。`) : null);
+    }));
+  }
+  return h('div', { class: 'sub' }, h('span', { class: 'f-label', text: '有線網路的 802.1X 登入' }), method,
     grid2(
       field('帳號', inp(ctx, ...bind(d, 'user'), { ph: '個人帳號', mono: false })),
       field('密碼', inp(ctx, ...bind(d, 'pass'), { ph: '密碼' }))));

@@ -3492,6 +3492,30 @@ console.log('\nPKI 與 IKEv2 的憑證驗證');
   ok(lv.objectives.every((o) => (o.type === 'check' ? o.test(s2) : sim.runObjective(s2, o).pass) === true), '解法：clock set 加上 ntp server 216.239.35.0（不經過 VPN），四個目標都通過');
 }
 
+console.log('\n802.1X 的 EAP-TLS');
+{
+  const { issueCert, CORP_CA } = await import('../src/engine/web.js');
+  const ok = (cond, title) => (cond ? console.log('  ✔ ' + title) : fail(title));
+  const lv = LEVELS.find((x) => x.id === 'l102');
+  const s = lv.setup(); settle(s);
+  const note = (id) => s.devices[id].ifaces[0].rt.note || '';
+  const auth = (p) => s.rt.auth.dot1x['sw:' + p];
+  ok(!auth('Gi0/1').ok && /不接受 RADIUS 伺服器（NPS）的憑證 nps\.corp\.local：憑證 2026-01-04 就到期了/.test(note('pc1')), 'NPS 的伺服器憑證過期：用戶端拒絕它，財務 PC 登不進去');
+  ok(/還沒生效/.test(note('nb')) && /不信任簽發它的「Corp Root CA」/.test(note('vend')), '時鐘差兩年的筆電：伺服器憑證「還沒生效」；沒有加入網域的廠商筆電不信任公司的 CA');
+  s.devices.nps.radiusServer.cert = issueCert(s, { cn: 'nps.corp.local', issuer: CORP_CA, days: 730 }); settle(s);
+  ok(auth('Gi0/1').ok && !auth('Gi0/2').ok && /2026-01-05 才生效/.test(note('nb')), '重新申請伺服器憑證：財務 PC 通過；筆電的時鐘還是 2023 年，新的憑證在它眼裡還沒生效');
+  s.devices.nb.clock = { sync: true }; settle(s);
+  ok(auth('Gi0/2').ok && !auth('Gi0/3').ok, '筆電打開自動校時：通過；廠商筆電仍然被擋');
+  s.devices.vend.trust = [CORP_CA]; settle(s);
+  ok(/沒有用戶端憑證/.test(note('vend')), '廠商筆電就算信任公司的 CA，也沒有電腦憑證：EAP-TLS 登入不了');
+  s.devices.nps.radiusServer.trust = ['Other CA']; settle(s);
+  ok(!auth('Gi0/1').ok && /RADIUS 拒絕了 財務 PC 的憑證 fin-pc01\.corp\.local：NPS 不信任簽發它的「Corp Root CA」/.test(note('pc1')), 'NPS 不信任簽發電腦憑證的 CA：拒絕用戶端');
+  s.devices.nps.radiusServer.trust = [CORP_CA]; s.devices.nps.radiusServer.tls = false; settle(s);
+  ok(/沒有開啟 EAP-TLS/.test(note('pc1')), 'NPS 關掉 EAP-TLS：只接受帳號密碼');
+  delete s.devices.nps.radiusServer.tls; s.devices.pc1.dot1x.cert.to = Date.UTC(2025, 11, 1); settle(s);
+  ok(/RADIUS 拒絕了 財務 PC 的憑證.*2025-12-01 就到期了/.test(note('pc1')), '電腦憑證過期：RADIUS 拒絕（用 NPS 自己的時鐘判斷）');
+}
+
 console.log('\nNetFlow 與 QoS 的 police');
 {
   const sim = await import('../src/engine/sim.js');

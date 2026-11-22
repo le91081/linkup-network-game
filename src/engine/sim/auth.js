@@ -4,18 +4,42 @@ import { fmtIp, parseIp } from '../ip.js';
 import { apsOf, rfAt, ssidsOf } from './wifi.js';
 import { isVlanSw } from './core.js';
 import { transact } from './transact.js';
+import { deviceTime } from '../ops.js';
+import { CORP_CA, fmtDate } from '../web.js';
 
 // ───────────────────────── 802.1X / RADIUS ─────────────────────────
 
-/** 由驗證者（交換器或基地台）向 RADIUS 伺服器查詢帳密。回傳 null 代表通過，否則回傳原因 */
-function radiusCheck(state, nas, user, pass) {
+/** 用 verifier 自己的時鐘與信任清單檢查一張憑證：回傳 '' 或原因 */
+function certProblem(state, verifier, cert, trust) {
+  if (!trust.includes(cert.issuer)) return `${verifier.name} 不信任簽發它的「${cert.issuer}」`;
+  const now = deviceTime(state, verifier).ms;
+  if (now < cert.from) return `用 ${verifier.name} 的時鐘（${fmtDate(now)}）看，憑證 ${fmtDate(cert.from)} 才生效，還沒生效`;
+  if (now > cert.to) return `憑證 ${fmtDate(cert.to)} 就到期了（${verifier.name} 的時鐘是 ${fmtDate(now)}）`;
+  return '';
+}
+/**
+ * 由驗證者（交換器或基地台）向 RADIUS 伺服器查詢。回傳 null 代表通過，否則回傳原因
+ * sup：用戶端的設定 { user, pass, method: 'peap'（帳密，預設）| 'tls'（憑證）, cert }；host：用戶端設備（檢查伺服器憑證用）
+ * EAP（PEAP 與 EAP-TLS）都會先由用戶端檢查 RADIUS 伺服器的憑證（伺服器有設定 cert 時）；EAP-TLS 再由伺服器檢查用戶端的憑證
+ */
+function radiusCheck(state, nas, user, pass, host = null, sup = null) {
   const r = nas.radius || {};
   const ip = parseIp(r.ip || '');
   if (ip == null) return `${nas.name} 還沒有設定 RADIUS 伺服器`;
   const res = transact(state, nas.id, { proto: 'udp', dst: ip, dport: 1812, quiet: true });
   if (!res.ok) return `${nas.name} 連不到 RADIUS 伺服器 ${fmtIp(ip)}（${res.reason}）`;
-  const srv = state.devices[res.responder].radiusServer;
+  const srvDev = state.devices[res.responder], srv = srvDev.radiusServer;
   if (!r.secret || r.secret !== srv.secret) return `${nas.name} 與 RADIUS 伺服器的共用密鑰 (shared secret) 不一致`;
+  if (host && srv.cert) {
+    const p = certProblem(state, host, srv.cert, host.trust || []);
+    if (p) return `${host.name} 不接受 RADIUS 伺服器（${srvDev.name}）的憑證 ${srv.cert.cn}：${p}`;
+  }
+  if (sup && sup.method === 'tls') {
+    if (srv.tls === false) return `${srvDev.name} 沒有開啟 EAP-TLS（只接受帳號密碼）`;
+    if (!sup.cert) return `${host ? host.name : '用戶端'} 沒有用戶端憑證：沒有加入網域的電腦不會自動申請，EAP-TLS 登入不了`;
+    const p = certProblem(state, srvDev, sup.cert, srv.trust || [CORP_CA]);
+    return p ? `RADIUS 拒絕了 ${host ? host.name : '用戶端'} 的憑證 ${sup.cert.cn}：${p}` : null;
+  }
   if (!user) return '用戶端沒有提供帳號';
   if (!(srv.users || []).some((u) => u.user === user && u.pass === pass)) return `RADIUS 拒絕了帳號「${user}」：帳號或密碼錯誤`;
   return null;
@@ -32,7 +56,7 @@ export function computeAuth(state) {
         const h = l && state.devices[l.dev];
         const sup = (h && h.dot1x) || {};
         auth.dot1x[d.id + ':' + pid] = res(!l ? '沒有設備接上' : h.kind !== 'host' ? `對面的 ${h.name} 不是支援 802.1X 的終端設備`
-          : !sup.user ? `${h.name} 沒有提供 802.1X 帳號` : radiusCheck(state, d, sup.user, sup.pass));
+          : !sup.user && sup.method !== 'tls' ? `${h.name} 沒有提供 802.1X 帳號` : radiusCheck(state, d, sup.user, sup.pass, h, sup));
       }
     }
     for (const i of d.ifaces) {
@@ -42,7 +66,7 @@ export function computeAuth(state) {
         if (!rfAt(state, ap, d.pos).band || !ssidsOf(state, ap).some((s) => !s.off && s.name === i.wifi.ssid && s.sec === 'wpa2ent')) continue;
         if (auth.ent[key] && auth.ent[key].ok) continue;
         const nas = ap.lwap && ap.rt.capwap && ap.rt.capwap.wlc ? state.devices[ap.rt.capwap.wlc] : ap;
-        auth.ent[key] = res(radiusCheck(state, nas, i.wifi.user, i.wifi.pass));
+        auth.ent[key] = res(radiusCheck(state, nas, i.wifi.user, i.wifi.pass, d, { user: i.wifi.user, pass: i.wifi.pass, method: i.wifi.eap, cert: (d.dot1x || {}).cert }));
       }
     }
   }

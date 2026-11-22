@@ -33,7 +33,7 @@ README 說明「現在有什麼、怎麼玩」，這份文件說明「整體應�
 | 2. 第二層：交換 | 15 | 0 | 2 |
 | 3. 第三層：路由 | 14 | 1 | 2 |
 | 4. IP 服務 | 11 | 3 | 0 |
-| 5. 網路安全 | 11 | 3 | 3 |
+| 5. 網路安全 | 12 | 2 | 3 |
 | 6. VPN 與廣域網路 | 10 | 1 | 2 |
 | 7. 無線網路 | 5 | 2 | 3 |
 | 8. IPv6 | 5 | 3 | 0 |
@@ -45,9 +45,9 @@ README 說明「現在有什麼、怎麼玩」，這份文件說明「整體應�
 | 14. 遊戲系統 | 16 | 1 | 5 |
 | 15. 介面與體驗 | 6 | 1 | 7 |
 | 16. 工程品質 | 5 | 1 | 4 |
-| **合計** | **153** | **24** | **38** |
+| **合計** | **154** | **23** | **38** |
 
-另外：關卡 101 關（第 17 節）、證照條目涵蓋情形（第 18 節）、建議的實作順序（第 19 節）。
+另外：關卡 102 關（第 17 節）、證照條目涵蓋情形（第 18 節）、建議的實作順序（第 19 節）。
 
 ---
 
@@ -146,14 +146,14 @@ README 說明「現在有什麼、怎麼玩」，這份文件說明「整體應�
 | DHCP Snooping、DAI | ✅ | |
 | Port Security | ✅ | maximum、靜態 / sticky / 動態的安全位址（照 IOS 的順序學，打開 sticky 會把已經學到的轉成 sticky）、protect / restrict / shutdown（預設）、違規次數與 `%PORT_SECURITY-2-PSECURE_VIOLATION`、斷線時動態的安全位址清掉；`show port-security [interface \| address]` |
 | err-disabled | ✅ | BPDU Guard 與 Port Security 關掉的埠會一直維持，原因排除也不會自己恢復：`shutdown` → `no shutdown`、重新開機，或 `errdisable recovery cause` / `interval`（原因還在就馬上再被關）；`show interfaces status err-disabled`、`show errdisable recovery` |
-| 802.1X / RADIUS | 🟡 | 有線埠與 WPA2-Enterprise 的帳號密碼驗證；沒有憑證 (EAP-TLS) |
+| 802.1X / RADIUS | ✅ | 有線埠與 WPA2-Enterprise 的帳號密碼驗證 (PEAP)；EAP-TLS：用戶端檢查 RADIUS 伺服器的憑證、伺服器檢查電腦憑證（信任的 CA、用各自的時鐘看有效期間），NPS 的伺服器憑證可以重新申請（→ 6-13） |
 | Wi-Fi 加密 | ✅ | 開放、WEP、WPA2、WPA2 / WPA3 混合、WPA3 |
 | 攻擊情境 | ✅ | 冒牌 DHCP、ARP 欺騙、搶根橋、未授權設備、密碼暴力嘗試（`login block-for`）、側錄 Telnet 明文密碼、DTP 偽裝成交換器的 VLAN hopping；MAC flooding（macof 把每一台走得到的交換器的表塞滿，unknown unicast 泛洪給攻擊者，擋住之後要等老化或 clear）；雙重標籤（Access 埠收自己 VLAN 的標籤、Native VLAN 的 Trunk 不加標籤，封包單向跳進別的 VLAN、繞過 ACL；`vlan dot1q tag native` 或改 Native VLAN）；冒牌的 IPv6 RA；狂送廣播的設備。還沒有 SYN flood |
 | TACACS+ 與 AAA | ⬜ | 授權、稽核、權限等級 |
 | IOS 進階過濾 | ⬜ | Zone-Based Firewall、時間型 ACL、Reflexive ACL |
 | NGFW / UTM | ⬜ | IPS、防毒、網頁過濾、應用程式控管、SSL 檢查 |
 | IPv6 安全 | ✅ | IPv6 ACL（見第 8 節）；冒牌的 Router Advertisement（主機用每一個 RA 的前綴各產生一個位址、預設閘道選 Router Preference 最高的）與 RA Guard（`ipv6 nd raguard policy` / `device-role host \| router` / `attach-policy`、`show ipv6 nd raguard policy`） |
-| 憑證與 PKI | 🟡 | 公開 CA 與公司內部的 CA（公開 CA 不簽 .local、效期上限）、用戶端的信任清單（加入網域的電腦自動有公司的根憑證，`certutil -addstore root` 匯入）、有效期間用用戶端自己的時鐘判斷（`w32tm`、`timedatectl`、自動設定時間）、SAN 與萬用字元；沒有中繼憑證鏈、CRL / OCSP、ACME 自動續約，也還沒用在 802.1X (EAP-TLS) 與 IPsec |
+| 憑證與 PKI | 🟡 | 公開 CA 與公司內部的 CA（公開 CA 不簽 .local、效期上限）、用戶端的信任清單（加入網域的電腦自動有公司的根憑證，`certutil -addstore root` 匯入）、有效期間用用戶端自己的時鐘判斷（`w32tm`、`timedatectl`、自動設定時間）、SAN 與萬用字元；沒有中繼憑證鏈、CRL / OCSP、ACME 自動續約，用在 802.1X 的 EAP-TLS（→ 6-13）與 IOS 的 IKEv2 rsa-sig（trustpoint、SCEP、revocation-check → 7-12） |
 
 ## 6. VPN 與廣域網路
 
@@ -289,7 +289,7 @@ README 說明「現在有什麼、怎麼玩」，這份文件說明「整體應�
 
 | 功能 | 狀態 | 說明 |
 | --- | --- | --- |
-| 關卡 | ✅ | 17 章 101 關（清單見第 17 節） |
+| 關卡 | ✅ | 17 章 102 關（清單見第 17 節） |
 | 任務目標 | ✅ | ping、TCP、UDP、DHCP、設定檢查、故障演練、IPv6 ping、傳輸速率、遠端登入（SSH / Telnet 帳號密碼）、IP 電話註冊、通話品質 (MOS)、HTTPS（連得上之後還要通過憑證驗證）、路徑（一定要經過 / 不能經過某台設備）；TCP 的目標交握完還會送一個裝滿的資料區段（設了 DF），MTU 的問題才看得出來 |
 | 提示與星等 | ✅ | 每關 3 個提示，看一個少一顆星 |
 | 學習卡 | ✅ | 每關 2 到 4 張觀念說明 |
@@ -350,7 +350,7 @@ README 說明「現在有什麼、怎麼玩」，這份文件說明「整體應�
 
 ## 17. 關卡規劃
 
-### 現有的 101 關
+### 現有的 102 關
 
 | 章 | 關卡 |
 | --- | --- |
@@ -359,7 +359,7 @@ README 說明「現在有什麼、怎麼玩」，這份文件說明「整體應�
 | 3 企業網路 | 守門員、總公司與分公司、對外伺服器群 |
 | 4 資料中心 | 機櫃上線、Spine-Leaf、跨棟連線、一開 Jumbo Frame，備份就卡住 |
 | 5 無線網路 | 家裡的 Wi-Fi、辦公室基地台、訪客 Wi-Fi |
-| 6 網路安全 | 只開了 TCP、誰在發 IP？、不速之客、存取控制清單、管理介面加固、冒牌閘道、搶走根橋、你是誰？、偽裝成交換器、交換器變成了 Hub（MAC flooding）、跳進伺服器 VLAN 的封包（雙重標籤）、飯店的房間網路（Private VLAN） |
+| 6 網路安全 | 只開了 TCP、誰在發 IP？、不速之客、存取控制清單、管理介面加固、冒牌閘道、搶走根橋、你是誰？、偽裝成交換器、交換器變成了 Hub（MAC flooding）、跳進伺服器 VLAN 的封包（雙重標籤）、飯店的房間網路（Private VLAN）、星期一早上，有線網路全部登不進去（EAP-TLS） |
 | 7 VPN 與廣域備援 | 站對站 VPN、在家上班、雙線路備援、三個據點，一個中心、線路燈還亮著（IP SLA）、小檔案可以，大檔案卡住（PMTUD 黑洞）、兩個分公司的連線一下通一下斷（GRE 與 recursive routing）、稽核報告（GRE over IPsec）、每加一個網段就要改兩邊的 ACL（VTI）、門市之間的監視器畫面（DMVPN）、新分公司在共享辦公室裡（NAT-T）、換了主機板電池，VPN 就起不來了（IKEv2 的憑證驗證） |
 | 8 高可用與進階路由 | 迴圈與生成樹、EtherChannel、閘道備援、集中式 DHCP、OSPF 路徑選擇、切蛋糕、閘道還活著，但出不去（HSRP 追蹤）、主線斷了，電話斷了四十秒（BFD）、兩台閘道，只有一台在做事（GLBP） |
 | 9 IPv6 | IPv6 初體驗、雙協定、位址從哪裡來？、IPv6 也要動態路由、封了 IPv4，忘了 IPv6、IPv6 的預設閘道被搶走了（RA Guard）、內部網站加了 IPv6 之後（AAAA 與 Happy Eyeballs）、IPv6 過不了 VPN（VTI 只載 IPv4） |
@@ -428,7 +428,7 @@ CCNA v2.0 預計在 2027 年 2 月取代 v1.1，改版後整張對照表要重�
 | 16（已完成） | GRE 與 recursive routing、GRE over IPsec、IOS VTI、DMVPN（phase 2 / 3）、NAT-T → 7-7 到 7-11；命名 ACL 的序號照 IOS 保留、ACL 可以寫 esp / gre。IKEv2 的憑證驗證移到第 19 階段 | 第 6 節最大的缺口，也是 CCNA 5.5 / Network+ 的常考題 |
 | 17（已完成） | AAAA 與雙協定（RFC 6724、Happy Eyeballs）、IPv6 經過 IPv4 的 Tunnel（GRE、6in4）與 IPv6 over VPN → 9-7、9-8。DHCPv6 Prefix Delegation、FortiGate 的 IPv6 政策、NAT64 / DNS64 要先有 IPv6 的網際網路與防火牆，移到第 22 階段 | 第 8 節剩下的項目 |
 | 18（已完成） | BFD（OSPF、BGP）與 OSPF fast hello → 8-8；GLBP → 8-9；HSRP / VRRP 改用各自正確的虛擬 MAC。FortiGate HA、堆疊 / vPC、電力備援要先有兩台設備合成一台的模型，移到第 22 階段 | 第 9 節剩下的項目 |
-| 19（進行中） | 維運與語音補充：NetFlow 與 QoS 的 police（已完成 → 11-7）、OSPF / DHCP / crypto 的 `debug`（已完成）、NTP + Syslog 對時與 `service timestamps`（已完成 → 11-8）、PoE 預算與 Cisco AP 的 CDP / LLDP 電力協商（已完成 → 12-3）、IKEv2 的憑證驗證（PKI、時鐘不對讓憑證「尚未生效」→ 7-12）；802.1X 的 EAP-TLS、用 CDP / LLDP 畫拓撲（要先做「看不到線」的關卡模式）；雙 WAN 的 QoS 與排程事件（已完成 → 12-4） → 第 11、12 章補充關卡 | 讓故障排除的工具與劇本更完整 |
+| 19（進行中） | 維運與語音補充：NetFlow 與 QoS 的 police（已完成 → 11-7）、OSPF / DHCP / crypto 的 `debug`（已完成）、NTP + Syslog 對時與 `service timestamps`（已完成 → 11-8）、PoE 預算與 Cisco AP 的 CDP / LLDP 電力協商（已完成 → 12-3）、IKEv2 的憑證驗證（PKI、時鐘不對讓憑證「尚未生效」→ 7-12）、802.1X 的 EAP-TLS（伺服器憑證、電腦憑證、用戶端的時鐘 → 6-13）；用 CDP / LLDP 畫拓撲（要先做「看不到線」的關卡模式）；雙 WAN 的 QoS 與排程事件（已完成 → 12-4） → 第 11、12 章補充關卡 | 讓故障排除的工具與劇本更完整 |
 | 20 | 無線補充：頻道寬度、6 GHz 與 DFS、訪客入口 (Captive Portal)、FlexConnect 分公司、控制器 N+1 → 第 14 章補充關卡 | 第 7 節剩下的項目 |
 | 21 | 自動化與雲端補充：NETCONF、Catalyst Center 範本、用 Git 管理設定、VPC peering 與 Transit Gateway、負載平衡器、Terraform → 第 15、16 章補充關卡 | 第 12 節的延伸 |
 | 22 | FortiGate HA（Active-Passive、連線同步）、堆疊 / vPC、電力備援；IPv6 的網際網路與 FortiGate 的 IPv6（DHCPv6-PD、IPv6 政策、NAT64 / DNS64）；實體層與其他：收發器不相容、breakout、Console 與帶外管理、STP 進階、VTP、EIGRP / RIP、多播、TACACS+、ZBF、NGFW、SD-WAN、其他設備與廠牌 | 剩下的引擎項目 |

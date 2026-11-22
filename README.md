@@ -75,7 +75,7 @@ npm run build    # 輸出到 dist/
 - **評分**：過關時依實際作答時間（畫面在前景、沒有開對話框才算；標準時間是 3 分鐘加上每個目標 1.5 分鐘）、看了幾個提示、跑了幾次完整測試給 S / A / B / C 與分數，關卡選單上顯示最佳等級。設定變更的次數只列出來參考。
 - **關卡編輯器**：自由模式的「關卡設計」可以寫關卡名稱、任務說明、提示，指定哪些設備鎖定（玩家看得到、不能設定），然後試玩、存成自訂關卡、或匯出成關卡檔分享；關卡選單的「自訂關卡」可以遊玩、匯出、刪除與匯入。
 
-## 關卡（17 章 101 關）
+## 關卡（17 章 102 關）
 
 | 章節 | 關卡數 | 主題 |
 | --- | --- | --- |
@@ -84,7 +84,7 @@ npm run build    # 輸出到 dist/
 | 3 企業網路 | 3 | 防火牆政策與 DMZ、靜態路由與回程路由、一對一靜態 NAT |
 | 4 資料中心 | 4 | ToR 與 SVI、Spine-Leaf 與 OSPF、銅纜 / 多模 / 單模光纖與距離；Jumbo Frame 要整條路一致（交換器默默丟掉 giant、`ping -f -l 8972`、2960 的 `system mtu jumbo` 要存檔重新開機） |
 | 5 無線網路 | 3 | SSID、WPA2 / WPA3、PoE、頻道規劃、訪客 SSID 對應 VLAN |
-| 6 網路安全 | 12 | TCP 與 UDP（只放行 TCP 53 的 ACL 擋掉了 DNS、TFTP、Syslog）、DHCP Snooping、Port Security、ACL、管理加固、DAI、BPDU Guard、802.1X / RADIUS、用 DTP 偽裝成交換器的 VLAN hopping 與邊緣埠加固；MAC flooding 把交換器的表塞滿、變成 Hub（Port Security 的 maximum 與違規動作要先設好再打開、亂造的項目要等老化或 clear）；雙重標籤從 Native VLAN 跳進伺服器 VLAN、繞過 ACL（Native VLAN 改成沒人用的、或 vlan dot1q tag native）；飯店的房間用 Private VLAN 隔離（isolated、community、promiscuous） |
+| 6 網路安全 | 13 | TCP 與 UDP（只放行 TCP 53 的 ACL 擋掉了 DNS、TFTP、Syslog）、DHCP Snooping、Port Security、ACL、管理加固、DAI、BPDU Guard、802.1X / RADIUS、用 DTP 偽裝成交換器的 VLAN hopping 與邊緣埠加固；MAC flooding 把交換器的表塞滿、變成 Hub（Port Security 的 maximum 與違規動作要先設好再打開、亂造的項目要等老化或 clear）；雙重標籤從 Native VLAN 跳進伺服器 VLAN、繞過 ACL（Native VLAN 改成沒人用的、或 vlan dot1q tag native）；飯店的房間用 Private VLAN 隔離（isolated、community、promiscuous）；EAP-TLS：NPS 的伺服器憑證週末過期，星期一所有電腦同時登不進去（重新申請），時鐘差了兩年的筆電連新的憑證都「還沒生效」，沒有公司憑證的廠商筆電仍然擋在外面 |
 | 7 VPN 與廣域備援 | 12 | 站對站 IPsec、遠端存取 VPN、雙線路浮動靜態路由；業者骨幹故障時介面還是 up，用 IP SLA 與追蹤的靜態路由切換（探測目標要綁在主線、不要用使用者的 DNS）；三個據點的 Hub-and-Spoke 與 IKEv2（版本要一致、PFS 不一致要到重新協商才斷、加密範圍與 NAT 例外要包含另一個分公司）；IPsec 讓封包變大，ICMP「需要分段」被伺服器網段的 ACL 擋掉造成 PMTUD 黑洞（上傳正常、下載卡住），放行 `packet-too-big` 並在介面上 `ip tcp adjust-mss 1360`；GRE 通道上的 OSPF 學到 tunnel destination 的網段，造成 recursive routing、Tunnel 一直 flapping（`%TUN-5-RECURDOWN`，network 敘述不要包含 WAN）；GRE 不加密，用 `tunnel protection ipsec profile` 改成 GRE over IPsec，外部 ACL 改放 UDP 500 與 ESP、不再放行明文 GRE；crypto map 換成 VTI（`tunnel mode ipsec ipv4`），transform-set 不一致時 VTI 是 up/down，再讓 OSPF 在 VTI 上學到新網段；DMVPN（mGRE + NHRP + IPsec）：hub 少了 `ip nhrp map multicast dynamic` 讓 OSPF 只有單向的 Hello，spoke 搶到 DR，門市之間的流量在 NHRP 解析之後直接走；分公司在大樓的 PAT 後面：總公司的對端要寫 NAT 之後的位址，NAT-T 改走 UDP 4500，ACL 要放行；用憑證驗證的 IKEv2：分公司換了主機板電池、時鐘回到 2002 年，總公司的憑證「還沒生效」，偏偏 NTP 伺服器在 VPN 的另一邊（先 `clock set`，再改用不經過 VPN 的 NTP） |
 | 8 高可用與進階路由 | 9 | STP、EtherChannel、VRRP / HSRP、DHCP Relay、OSPF Cost、VLSM；HSRP 追蹤上行介面（preempt 預設是關的，兩台都要開）；主線在業者那一端斷掉、介面燈號還亮著，OSPF 要等 40 秒的 Dead timer，用 BFD（或 fast hello）兩秒內切到備援；兩台閘道只有 HSRP 的 Active 在做事，改成 GLBP 讓兩台一起轉送（AVG 輪流發虛擬 MAC、AVF 壞掉時其他台接手） |
 | 9 IPv6 | 8 | Link-local、SLAAC、IPv6 靜態路由、雙協定；RA 的 M / O / A 旗標與 DHCPv6（stateless / stateful，DHCPv6 不給閘道）、OSPFv3（link-local 鄰居、純 IPv6 路由器的 Router ID）、IPv6 ACL 與隱含的 ND 允許規則；冒牌的 Router Advertisement 搶走預設閘道（主機多一個位址、IPv6 變黑洞），RA Guard 的 device-role host；內部網站加了 AAAA 之後雙協定的電腦 ping 名稱逾時、瀏覽器靠 Happy Eyeballs 改用 IPv4 才打得開（AAAA 寫錯、伺服器少了 IPv6 閘道，`nslookup -type=aaaa`、`ping -4 / -6`）；IPv6 過不了 VPN：`tunnel mode ipsec ipv4` 的 VTI 只載 IPv4，改成 GRE over IPsec，OSPFv3 在 Tunnel 上建鄰居 |
@@ -322,6 +322,7 @@ npm run build    # 輸出到 dist/
 - **Root Guard**：啟用的埠如果收到更優先的根橋 BPDU 就進入 root-inconsistent 而被擋下；開在朝向根橋的埠上（錯誤設定）一樣會被擋。
 - **TCP 三向交握**：TCP 連線會走完 SYN → SYN-ACK → ACK；防火牆與 NAT 設備用連線紀錄比對後續的封包，不會重新比對政策。
 - **DHCP 發放前先確認**：伺服器發出新位址前會先 ping，已經有人在用就跳過並記成衝突；但設備離線期間發出去的租約不會重新檢查，回來之後照樣衝突。
+- **802.1X 的 EAP-TLS**：主機的 802.1X 可以選 PEAP（帳號密碼）或 EAP-TLS（電腦憑證，加入網域的電腦自動申請）。用戶端先檢查 RADIUS 伺服器的憑證（PEAP 也是），EAP-TLS 再由伺服器檢查用戶端的憑證；兩邊各用自己的時鐘判斷有效期間。RADIUS 伺服器的分頁可以看伺服器憑證的到期日、向公司的 CA 重新申請、開關 EAP-TLS。
 - **憑證驗證**：IKEv2 的 `rsa-sig` 由驗證的那一端用 trustpoint 裡 CA 的根憑證檢查對方的憑證，有效期間看的是「自己的時鐘」：時鐘錯了就是 `%PKI-3-CERTIFICATE_INVALID_NOT_YET_VALID` 或 `EXPIRED`。trustpoint 預設 `revocation-check crl`，要連得到 CA 拿 CRL（CA 在 VPN 另一邊時改成 `crl none`）；對方的 profile 要找得到符合的身分（`identity local fqdn` 對上 `match identity remote fqdn domain`）。換過主機板電池的路由器，時鐘回到 2002 年、而且重開機也一樣。
 - **IKEv2**：IKE_SA_INIT 與 IKE_AUTH 四個訊息就建好 IKE SA 和第一個 CHILD_SA（IKEv1 要 Main Mode 加 Quick Mode）。兩端版本不一致時協商失敗；預先共用金鑰可以兩個方向不同（A 用來簽的要等於 B 用來驗證的）。第一個 CHILD_SA 不做 PFS 的 DH，所以 PFS 不一致時一開始照樣通，到第一次重新協商才斷 — 任務裡有「一小時後再測一次」。
 - **Hub-and-Spoke**：分公司只和總公司建通道，分公司之間的流量在總公司解密、比對政策（VPN → VPN）、再加密送出去；兩條通道的加密範圍、總公司的政策、Cisco 分公司的 NAT 例外都要包含另一個分公司。

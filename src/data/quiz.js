@@ -32,7 +32,7 @@ export const LEVEL_TOPIC = {
   l55: 'wireless', l56: 'wireless', l57: 'wireless',
   l58: 'auto', l59: 'auto', l60: 'auto', l61: 'auto', l62: 'auto',
   l63: 'routing', l64: 'routing', l65: 'ops', l66: 'routing', l67: 'switching', l68: 'vpn', l69: 'security', l71: 'services',
-  l70: 'auto', l72: 'routing', l73: 'auto', l74: 'security', l75: 'switching', l76: 'vpn', l77: 'routing', l78: 'routing', l79: 'routing', l80: 'routing', l81: 'routing', l82: 'routing', l83: 'security', l84: 'security', l85: 'switching', l86: 'security', l87: 'ipv6', l88: 'vpn', l89: 'vpn', l90: 'vpn', l91: 'vpn', l92: 'vpn', l93: 'ipv6', l94: 'ipv6', l95: 'routing', l96: 'routing', l97: 'ops', l98: 'switching', l99: 'ops', l100: 'ops', l101: 'vpn',
+  l70: 'auto', l72: 'routing', l73: 'auto', l74: 'security', l75: 'switching', l76: 'vpn', l77: 'routing', l78: 'routing', l79: 'routing', l80: 'routing', l81: 'routing', l82: 'routing', l83: 'security', l84: 'security', l85: 'switching', l86: 'security', l87: 'ipv6', l88: 'vpn', l89: 'vpn', l90: 'vpn', l91: 'vpn', l92: 'vpn', l93: 'ipv6', l94: 'ipv6', l95: 'routing', l96: 'routing', l97: 'ops', l98: 'switching', l99: 'ops', l100: 'ops', l101: 'vpn', l102: 'security',
 };
 
 export const QUESTIONS = {
@@ -108,6 +108,8 @@ export const QUESTIONS = {
     { q: '和 2.4GHz 相比，5GHz 的特性是什麼？', a: ['傳得比較遠、穿牆比較好', '頻道多、干擾少，但涵蓋範圍比較小', '只能用在室外', '不支援加密'], c: 1, e: '頻率越高衰減越快，所以 5GHz 距離較短；但它的不重疊頻道多很多，適合用戶密集的環境。', r: 'CCNA 1.11' },
   ],
   security: [
+    { q: '有線網路用 802.1X 的 EAP-TLS。某天早上所有電腦同時登入失敗，交換器與 RADIUS 的設定都沒人改過。最可能的原因是？', a: ['交換器的 Port Security 被觸發', 'RADIUS 伺服器的憑證過期了，用戶端拒絕它', '每台電腦的密碼都過期了', 'DHCP 位址池用完了'], c: 1, e: 'EAP（PEAP 與 EAP-TLS）會由用戶端先檢查 RADIUS 伺服器的憑證；伺服器憑證一過期，全部用戶端同時失敗。EAP-TLS 不用密碼，用戶端出示的是電腦憑證。', r: 'CCNA 5.8' },
+    { q: 'EAP-TLS 和 PEAP 最主要的差別是？', a: ['EAP-TLS 不需要 RADIUS', 'EAP-TLS 用戶端用自己的憑證證明身分，PEAP 用帳號密碼', 'PEAP 不檢查伺服器憑證', 'EAP-TLS 只能用在無線網路'], c: 1, e: 'PEAP 先建 TLS 通道（用戶端檢查伺服器憑證），再在裡面用帳號密碼 (MSCHAPv2)。EAP-TLS 是雙向憑證：伺服器也檢查用戶端的憑證，沒有密碼可以被釣走，但每台用戶端都要有憑證（通常靠網域的自動申請）。', r: 'Security+ 3.2' },
     { q: '攻擊者用 macof 把交換器的 MAC 位址表塞滿之後，會發生什麼事？', a: ['交換器當機重開', '新的 MAC 學不進來，目的地不在表裡的訊框被泛洪到整個 VLAN，攻擊者可以側錄', '所有連接埠自動進入 err-disabled', '交換器自動改用 STP 封鎖攻擊者'], c: 1, e: 'MAC 位址表的容量有限（2960 是 8,192 筆）。表滿了之後交換器像 Hub 一樣泛洪 unknown unicast。對策是 Port Security 限制每個埠的 MAC 數量。', r: 'Network+ 4.2' },
     { q: '要讓接電腦的埠最多只接受 2 個 MAC，超過的封包丟掉並記錄、但埠不要關掉，該怎麼設定？', a: ['switchport port-security maximum 2 與 violation shutdown', 'switchport port-security maximum 2 與 violation restrict', 'switchport port-security maximum 2 與 violation protect', 'storm-control broadcast level 2'], c: 1, e: 'restrict 會丟掉違規的封包、送 syslog、違規次數加一；protect 只丟掉不記錄；shutdown（預設）把埠關成 err-disabled。', r: 'CCNA 5.7' },
     { q: '雙重標籤 (double tagging) 攻擊要成立，攻擊者通常必須在哪裡？', a: ['任何一個 Trunk 埠', '和 Trunk 的 Native VLAN 相同的 Access VLAN 裡', '路由器的子介面上', '伺服器所在的 VLAN'], c: 1, e: '第一台交換器拿掉外層標籤後，因為那是 Native VLAN，從 Trunk 送出時不加標籤，對面看到的是裡面那層。把 Native VLAN 改成沒人用的 VLAN，或 vlan dot1q tag native，就能擋下。', r: 'Network+ 4.2' },

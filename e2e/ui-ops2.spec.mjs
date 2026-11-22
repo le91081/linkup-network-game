@@ -79,3 +79,21 @@ test('憑證驗證的 IKEv2：show crypto pki certificates 是 Not yet valid，c
   await expect(out).toContainText('READY');
   expect(await scan(page, '#panel', 'CLI（PKI）')).toEqual([]);
 });
+
+test('EAP-TLS：NPS 分頁重新申請伺服器憑證、筆電打開自動校時，兩台都通過 802.1X', async ({ page }) => {
+  await boot(page);
+  await open(page, 'l102');
+  await clickDevice(page, 'nps');
+  await page.locator('#panel .tab', { hasText: 'RADIUS' }).click();
+  const card = page.locator('#panel .card', { hasText: '伺服器憑證與 EAP-TLS' });
+  await expect(card).toContainText('已經過期');
+  await card.locator('button', { hasText: '向公司的 CA 重新申請伺服器憑證' }).click();
+  await expect(card).toContainText('還有');
+  expect(await scan(page, '#panel', 'RADIUS 分頁（憑證）')).toEqual([]);
+  await clickDevice(page, 'nb');
+  await expect(page.locator('#panel')).toContainText('EAP-TLS（電腦憑證）');
+  await page.locator('#panel label.switch', { hasText: '自動設定時間' }).click();
+  await page.evaluate(() => window.linkup.settleNow());
+  expect(await page.evaluate(() => ['sw:Gi0/1', 'sw:Gi0/2', 'sw:Gi0/3'].map((k) => window.linkup.state.rt.auth.dot1x[k].ok))).toEqual([true, true, false]);
+  expect(await scan(page, '#panel', '筆電的網路設定（802.1X）')).toEqual([]);
+});
