@@ -52,6 +52,14 @@ npm run build    # 輸出到 dist/
 進度存在瀏覽器的 localStorage（`linkup.v1`，加上 `?profile=` 就是另一份），每一份存檔、匯出的拓撲檔與關卡檔都記著格式的版本（`ver`）。
 設定的資料結構改版時，在 `src/engine/migrate.js` 加一個遷移步驟：舊的存檔載入時一步一步升級；比較新的版本存的檔案不會被改動（那一關當作沒有存檔，匯入時提示要更新）。
 
+### 離線使用
+
+正式建置（`npm run build`、GitHub Pages）會註冊 service worker（`public/sw.js`）與 manifest：開過一次之後，沒有網路也能玩，也可以用瀏覽器的「安裝」放到桌面。頁面本身先問網路、連不上才用快取，所以有新版本時重新整理就會拿到；打包的 JS / CSS 檔名帶著雜湊值，快取裡有就直接用。開發伺服器與 Claude Artifact 不會註冊。
+
+### 效能
+
+`npm run bench` 量大型拓撲每次重新計算的時間（Nexus 核心 + 最多 47 台 Catalyst 2960、每台 7 台 PC，最多 377 台設備）；`npm run bench -- dhcp` 改成 PC 用 DHCP。
+
 ## 玩法
 
 | 操作 | 效果 |
@@ -67,6 +75,7 @@ npm run build    # 輸出到 dist/
 | 執行測試 | 播放封包動畫並檢查任務目標，空白鍵快轉 |
 | 場景上方的時鐘 | 暫停 / 繼續模擬時間、切換 1× / 10× / 60×、直接前進 30 秒；出現「收斂中」時點一下會快轉到網路穩定為止 |
 | Shift + 拖曳設備（自由模式） | 移動設備 |
+| ? | 鍵盤快捷鍵清單：Ctrl + Enter 執行測試、[ ] 切換設備、1 – 9 切換分頁、/ 跳到終端機的輸入列、T 切換 2D 拓撲圖、H 提示、L 關卡清單、M 開關音效 |
 
 - 電腦與伺服器有「終端機」分頁：`ping`（支援 IPv6）、`ipconfig`、`ipconfig /renew`、`ipconfig /release`、`arp -a`、`arp -d`、`tracert`、`nslookup`、`curl`（HTTPS 會驗證憑證，錯誤訊息和真的 curl 一樣；`-k` 略過、`-v` 看憑證、`-I` 只看標頭、`-L` 跟著轉址）、`date`、`w32tm /resync`、`certutil -store root` / `-addstore root`、`netstat -e`、`netsh interface ipv4 show subinterfaces`（MTU）、`ping -f -l <大小>`（設 DF 找出路徑上的 MTU）、`iperf3 -c <IP>`（量實際傳輸速率，會讓時間前進 10 秒），以及 `ssh 帳號@IP`、`telnet IP` 登入網路設備的命令列（見下方「遠端登入」）。Linux 主機（Ansible 控制主機、Docker 主機）用的是 `ip addr`、`ip route`、`sudo ip link set eth0 mtu 9000`、`ping -M do -s <大小>`、`timedatectl`，Docker 主機還有 `docker`。
 - 電腦與伺服器還有「封包擷取」分頁：像 Wireshark 一樣記下網路卡收送的訊框，可以用 `ip.addr == …`、`tcp.port == …`、`arp`、`telnet` 之類的條件篩選，點一下看每一層的標頭。

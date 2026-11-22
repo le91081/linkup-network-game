@@ -641,3 +641,28 @@ test('存檔格式遷移：舊版本的存檔（DNS 用 dnsRecords、沒有版�
   }, id);
   expect(r).toEqual({ ver: 2, ok: true, level: id });
 });
+
+test('鍵盤快捷鍵：? 打開清單、] 選下一台設備、數字切分頁、T 切換 2D 拓撲圖、M 開關音效', async ({ page }) => {
+  await boot(page);
+  await open(page, 'l03');
+  await page.evaluate(() => document.activeElement && document.activeElement.blur());
+  await page.keyboard.press('?');
+  await expect(page.locator('#modal-root')).toContainText('鍵盤快捷鍵');
+  expect(await scan(page, '#modal-root', '快捷鍵清單')).toEqual([]);
+  await page.keyboard.press('Escape');
+  await expect(page.locator('#modal-root .backdrop')).toHaveCount(0);
+  const first = await page.evaluate(() => { const s = window.linkup.state.devices; return s[Object.keys(s)[0]].name; });
+  await page.keyboard.press(']');
+  await expect(page.locator('#panel .p-title h2')).toHaveText(first);
+  if (await page.locator('#panel .tab').count() > 1) {
+    await page.keyboard.press('2');
+    await expect(page.locator('#panel .tab').nth(1)).toHaveClass(/\bon\b/);
+  }
+  await page.keyboard.press('t');
+  expect(await page.evaluate(() => !!window.linkup.view2d)).toBe(true);
+  await page.keyboard.press('t');
+  expect(await page.evaluate(() => !!window.linkup.view2d)).toBe(false);
+  await page.keyboard.press('m');
+  await expect(page.locator('#toasts')).toContainText('音效：關');
+  expect(await page.evaluate(() => window.linkup.store.sound)).toBe(false);
+});

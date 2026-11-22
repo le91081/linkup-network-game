@@ -430,6 +430,7 @@ export function openHelp(app) {
       step('mouse', '2. 設定', '點一下設備，右側會出現它的管理頁面：IP、DHCP、VLAN、路由、NAT、防火牆政策…'),
       step('play', '3. 測試', '按「執行測試」，看封包沿著網路線一站一站前進。卡住的地方會直接告訴你原因。'),
       step('terminal', '4. 除錯', '打開電腦的「終端機」分頁，用 ping、tracert、ipconfig、nslookup 自己找問題。')),
+    h('p', { class: 'muted', text: '鍵盤：按 ? 看所有快捷鍵（Ctrl + Enter 執行測試、[ ] 切換設備、T 切換 2D 拓撲圖、M 開關音效）。' }),
     h('div', { class: 'd-actions' }, button('從第 1-1 關跟著做一次（互動導覽）', { ic: 'mouse', kind: 'ghost', onclick: () => { closeModal(); startTutorial(app); } }), button('開始', { kind: 'primary', onclick: closeModal })),
   ]);
 }

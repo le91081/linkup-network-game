@@ -1,0 +1,14 @@
+{
+  "name": "LinkUp — 從一條網路線到資料中心",
+  "short_name": "LinkUp",
+  "description": "網路工程解謎遊戲：接線、設定、測試、除錯",
+  "lang": "zh-Hant",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#0b1020",
+  "theme_color": "#0f1630",
+  "icons": [
+    { "src": "icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" }
+  ]
+}

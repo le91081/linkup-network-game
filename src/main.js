@@ -6,6 +6,8 @@ import { recompute, runObjective, advance, settle, pendingOf, fmtDur } from './e
 import { takeScriptNews } from './engine/script.js';
 import { cloneState, addCable, cableAt, portOf } from './engine/model.js';
 import { SAVE_VER, migrateState, migrateStore } from './engine/migrate.js';
+import { installShortcuts } from './ui/keys.js';
+import { sfx } from './ui/sound.js';
 import * as hud from './ui/hud.js';
 import { renderDevicePanel } from './ui/panel.js';
 import { toast, sleep } from './ui/dom.js';
@@ -295,6 +297,7 @@ const app = {
       app.scene.pulse(a, RED);
       app.scene.pulse(b, RED);
     } else {
+      sfx.link(app);
       toast(`已接線：${A.name} [${portOf(A, pa).label}] ↔ ${B.name} [${portOf(B, pb).label}]`, 'ok');
       app.scene.pulse(a, GREEN);
       app.scene.pulse(b, GREEN);
@@ -341,6 +344,7 @@ const app = {
       await app.scene.playHops(r.hops);
       if (app.runToken !== token) return;
       feedback(o, r);
+      (r.pass ? sfx.ok : sfx.bad)(app);
       app.results[i] = r;
       app.con.result(r.pass, r.pass ? '✔ 通過' : '✘ 未通過' + (o.expect === false ? '：這條連線應該被擋下來' : r.reason ? '：' + r.reason : ''));
       hud.renderMission(app);
@@ -410,7 +414,7 @@ const app = {
     app.saveStore();
     ids.forEach((id, n) => setTimeout(() => app.scene.pulse(id, GREEN, true), n * 70));
     await sleep(900);
-    if (app.level === lv) hud.openComplete(app, stars, { ...sc, prevBest: prev.best || 0 });
+    if (app.level === lv) { sfx.win(app); hud.openComplete(app, stars, { ...sc, prevBest: prev.best || 0 }); }
   },
 };
 
@@ -539,6 +543,17 @@ window.addEventListener('keydown', (e) => {
     e.preventDefault();
   }
 });
+
+// 其他快捷鍵（? 看清單）
+installShortcuts(app, hud);
+
+// 離線使用 (PWA)：正式建置才註冊 service worker（開發伺服器、Claude Artifact 不用）
+if (import.meta.env.PROD && import.meta.env.MODE !== 'artifact' && 'serviceWorker' in navigator && /^https?:$/.test(location.protocol)) {
+  const link = document.createElement('link');
+  link.rel = 'manifest'; link.href = './manifest.webmanifest';
+  document.head.append(link);
+  navigator.serviceWorker.register('./sw.js').catch(() => { /* 不能註冊（例如無痕模式）：照常線上使用 */ });
+}
 
 if (app.store.last === 'sandbox') app.openSandbox();
 else if (app.store.last === 'drill' && app.store.drill) app.openDrill(app.store.drill, { resume: true });
