@@ -230,7 +230,7 @@ export function prepVrrp(state) {
     let rec = dyn.vrrp[x.key];
     if (!rec) rec = dyn.vrrp[x.key] = dyn.boot ? { state: best === x ? 'master' : 'backup', lost: null } : { state: 'backup', lost: null };
     const master = peers.find((p) => prev[p.key] === 'master'); // 上一刻還在轉送的那一台
-    const downIv = x.proto === 'hsrp' ? HSRP_HOLD : VRRP_DOWN;
+    const downIv = x.proto === 'vrrp' ? VRRP_DOWN : HSRP_HOLD;
     let st, wait = 0;
     if (rec.state === 'master') {
       // 我是 Master / Active：比我優先、而且會搶（或本來也是 Master，例如斷掉的線接回來）的那一台出現了才讓出去
@@ -252,11 +252,57 @@ export function prepVrrp(state) {
     x.peers = peers;
     x.i.rt.vrrp = { state: st, peers: peers.length, wait: wait > 0 ? wait : 0, proto: x.proto, grp: x.grp, prio: x.prio, cfgPrio: x.cfgPrio, pre: x.pre, dec: x.dec,
       members: peers.map((p) => [p.d.id, p.i.id]), odd: odd ? { dev: odd.d.id, proto: odd.proto, grp: odd.grp } : null };
-    if (st === 'master') x.i.rt.vips.push(x.vip);
+    if (st === 'master' && x.proto !== 'glbp') x.i.rt.vips.push(x.vip);
   }
   // 這一輪有人接手了：整組的「聽不到 Master」計時歸零（下次 Master 消失才從頭計時）
   for (const x of c) if ([x, ...(x.peers || [])].some((p) => dyn.vrrp[p.key].state === 'master')) dyn.vrrp[x.key].lost = null;
+  prepGlbp(state, c);
 }
+
+// ── GLBP：AVG（Active）回答虛擬 IP 的 ARP，最多四台 AVF 各負責一個虛擬 MAC 一起轉送 ──
+export const GLBP_HOLD = 10;
+const glbpMac = (grp, n) => `00:07:b4:00:${(grp & 255).toString(16).padStart(2, '0')}:${n.toString(16).padStart(2, '0')}`;
+function prepGlbp(state, c) {
+  const now = state.clock, tbl = (state.dyn.glbp ||= {}), out = (state.rt.glbp = {});
+  const groups = {};
+  for (const x of c) if (x.proto === 'glbp') (groups[fmtIp(x.vip) + '|' + x.grp] ||= []).push(x);
+  for (const [k, members] of Object.entries(groups)) {
+    const rec = (tbl[k] ||= { fw: {}, lost: {} });
+    const alive = new Set(members.map((x) => x.key));
+    // 新加入的成員拿最小的空號；回來的成員拿回自己原本的號碼（AVF 的 preempt 預設開啟）
+    for (const x of members.slice().sort((a, b) => cmp(b.k, a.k))) { // 優先權高的（通常就是 AVG）先拿到 1 號
+      if (rec.fw[x.key] != null) { delete rec.lost[rec.fw[x.key]]; continue; }
+      const used = new Set(Object.values(rec.fw));
+      let n = 1;
+      while (used.has(n) && n < 4) n++;
+      if (!used.has(n)) rec.fw[x.key] = n;
+    }
+    for (const [mk, n] of Object.entries(rec.fw)) {
+      if (alive.has(mk)) continue;
+      // 這台 AVF 失聯了：它的虛擬 MAC 等 holdtime 之後由其他 AVF 接手
+      rec.lost[n] ||= { at: state.dyn.boot ? -1e9 : now, prev: mk };
+      delete rec.fw[mk];
+    }
+    const avg = members.find((x) => state.dyn.vrrp[x.key] && state.dyn.vrrp[x.key].state === 'master');
+    const own = Object.entries(rec.fw).map(([mk, n]) => ({ n, mac: glbpMac(members[0].grp, n), owner: mk }));
+    const backup = own.slice().sort((a, b) => a.n - b.n)[0];
+    for (const [n, L] of Object.entries(rec.lost)) {
+      const wait = L.at + GLBP_HOLD - now;
+      if (wait > 0) state.rt.pending.push({ at: L.at + GLBP_HOLD, dev: members[0].d.id, kind: 'vrrp', text: `GLBP：其他 AVF 接手 ${glbpMac(members[0].grp, +n)}` });
+      own.push({ n: +n, mac: glbpMac(members[0].grp, +n), owner: wait > 0 ? null : backup ? backup.owner : null, wait: wait > 0 ? wait : 0, prev: L.prev });
+    }
+    own.sort((a, b) => a.n - b.n);
+    out[k] = { avg: avg ? avg.key : null, fwds: own };
+    for (const x of members) {
+      x.i.rt.vrrp.fwd = rec.fw[x.key] ?? null;
+      x.i.rt.vrrp.glbp = k;
+      if (!x.i.rt.vips.includes(x.vip)) x.i.rt.vips.push(x.vip); // 每一台 AVF 都轉送送到虛擬 IP 的封包
+    }
+  }
+  for (const k of Object.keys(tbl)) if (!groups[k]) delete tbl[k];
+}
+
+
 
 function buildRoutes(state, d) {
   const r = [];

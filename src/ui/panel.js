@@ -10,7 +10,7 @@ import {
 import { CATALOG, MEDIA, peerOf, newIface, defaultPortMode } from '../engine/model.js';
 import { parseIp, fmtIp } from '../engine/ip.js';
 import { routeRows, SERVICE_NAMES, hitsOf, ospfOn, setOspf, fmtDur } from '../engine/sim.js';
-import { ospfArea, ospfCost, ospfPassive, isLoopback, ospfProcOf, ospfKeys } from '../engine/ospf.js';
+import { ospfArea, ospfCost, ospfPassive, isLoopback, ospfProcOf, ospfKeys, ospfBfd } from '../engine/ospf.js';
 import { ospfCard, ospfNeighborRows } from './panel-ospf.js';
 import * as L2S from './panel-l2sec.js';
 import { buildTerminal } from './terminal.js';
@@ -60,7 +60,8 @@ function ospfIfBlock(ctx, i) {
       }, { ph: '10/40（兩端要一樣）' })),
       !isLoopback(i) && field('驗證', sel(ctx, () => i.ospfAuth || '', (v) => { if (v) i.ospfAuth = v; else delete i.ospfAuth; if (v === 'md5' && !(i.ospfKey && i.ospfKey.id)) i.ospfKey = { id: 1, key: (i.ospfKey || {}).key || '' }; }, [['', '跟著區域的設定（預設不驗證）'], ['md5', 'MD5 (message-digest)'], ['plain', '明文密碼'], ['null', '不驗證 (null)']], { rerender: true })),
       i.ospfAuth && i.ospfAuth !== 'null' && field('驗證金鑰', inp(ctx, () => (i.ospfKey || {}).key || '', (v) => { i.ospfKey = { id: i.ospfAuth === 'md5' ? (i.ospfKey || {}).id || 1 : '', key: v }; }, { ph: '兩端要一樣' }))),
-    !isLoopback(i) && h('div', { class: 'toggles' }, toggle(ctx, () => ospfPassive(d, i), setPassive, '被動介面 (passive-interface)：通告這個網段，但不送 Hello、不建立鄰居（接使用者的介面建議打開）')),
+    !isLoopback(i) && h('div', { class: 'toggles' }, toggle(ctx, () => ospfPassive(d, i), setPassive, '被動介面 (passive-interface)：通告這個網段，但不送 Hello、不建立鄰居（接使用者的介面建議打開）'),
+      i.bind.t !== 'gre' && toggle(ctx, () => ospfBfd(d, i), (on) => { if (on) { i.bfd ||= { tx: 300, rx: 300, mult: 3 }; i.ospfBfd = true; delete i.ospfBfdOff; } else { delete i.ospfBfd; delete i.bfd; } }, 'BFD：每 300 毫秒互送一次，對面失聯一秒內通知 OSPF，不用等 Dead timer（兩端都要開）')),
     isLoopback(i) && note('muted', 'Loopback 一律以 /32 主機路由通告；它永遠是 up 的，很適合拿來當 Router ID。'),
     i.vrf && note('muted', `這個介面在 VRF ${i.vrf} 裡：由 router ospf ${(c.pid || '?')} vrf ${i.vrf} 涵蓋，學到的路裝進 VRF ${i.vrf} 的路由表`),
     ctx.live(() => {

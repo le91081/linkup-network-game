@@ -312,7 +312,12 @@ export function clearMac(state, d) { if (state.dyn && state.dyn.mac) delete stat
 /** ARP 項目多久沒用到就會被清掉：個人電腦大約兩分鐘，防火牆五分鐘，路由器與交換器四小時 */
 export const arpTtl = (dev) => (dev.kind === 'host' ? 120 : dev.kind === 'firewall' || dev.kind === 'homerouter' ? 300 : 14400);
 export const VRRP_MAC = '00:00:5e:00:01:01'; // VRRP 的虛擬 MAC：換手之後主機不需要重新學
-export const answerMac = (e, ip) => (e.iface.rt.ip !== ip && e.iface.vrrp && e.iface.vrrp.on && parseIp(e.iface.vrrp.vip || '') === ip ? VRRP_MAC : e.iface.rt.mac);
+/** 虛擬 IP 的 MAC：HSRP 是 0000.0c07.ac<群組>、VRRP 是 0000.5e00.01<群組>（GLBP 每台 AVF 各一個，見 sim/l3.js） */
+export const fhrpMac = (v) => {
+  const g = (+v.group >= 0 && v.group !== '' && v.group != null ? +v.group : 1) & 255, hx = g.toString(16).padStart(2, '0');
+  return v.proto === 'hsrp' ? `00:00:0c:07:ac:${hx}` : `00:00:5e:00:01:${hx}`;
+};
+export const answerMac = (e, ip) => (e.iface.rt.ip !== ip && e.iface.vrrp && e.iface.vrrp.on && parseIp(e.iface.vrrp.vip || '') === ip ? fhrpMac(e.iface.vrrp) : e.iface.rt.mac);
 export const arpRows = (state, dev) => Object.entries((state.dyn && state.dyn.arp[dev.id]) || {})
   .filter(([, e]) => state.clock - e.t < arpTtl(dev))
   .map(([ip, e]) => ({ ip: +ip, mac: e.mac, age: Math.floor(state.clock - e.t), left: Math.ceil(arpTtl(dev) - (state.clock - e.t)) }));

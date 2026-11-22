@@ -17,8 +17,8 @@ export const HSRP_HOLD = 10; // HSRP 的 holdtime：10 秒沒聽到 Active 的 H
 export const FHRP_DEC = 10; // track 沒寫 decrement 時預設扣 10
 export const slaKey = (d, n) => d.id + '/' + n;
 
-/** FHRP 的協定、群組、preempt（VRRP 預設會搶回來，HSRP 預設不會） */
-export const fhrpProto = (v) => (v && v.proto === 'hsrp' ? 'hsrp' : 'vrrp');
+/** FHRP 的協定、群組、preempt（VRRP 預設會搶回來，HSRP 與 GLBP 預設不會） */
+export const fhrpProto = (v) => (v && v.proto === 'hsrp' ? 'hsrp' : v && v.proto === 'glbp' ? 'glbp' : 'vrrp');
 export const fhrpGroup = (v) => (v && +v.group >= 0 && v.group !== '' && v.group != null ? +v.group : 1);
 export const fhrpPreempt = (v) => (v && v.preempt != null ? !!v.preempt : fhrpProto(v) === 'vrrp');
 

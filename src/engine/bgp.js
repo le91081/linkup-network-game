@@ -22,6 +22,7 @@
 // 執行期：state.dyn.bgp[兩端] = { since, up, last }；d.rt.bgp = { rid, asn, peers: [...], table: [...] }
 import { parseIp, fmtIp, netOf, sameNet } from './ip.js';
 import { plHit, aclRouteHit, rmRoute, ospfInternal } from './policy.js';
+import { bfdDetect } from './ospf.js';
 
 export const BGP_UP = 10; // 設定好之後：TCP 三向交握、OPEN、KEEPALIVE，大約十秒進到 Established
 export const BGP_HOLD = 180; // 對方沒有消息（線路沒斷，只是路上不通）：hold time 到了才斷
@@ -228,10 +229,13 @@ export function computeBgp(state, { transact, logEvent, ospfOn = () => false, lo
       }
       if (!t.ok) {
         // 已經建立的連線：線路沒斷只是路上不通，要等 hold time 到期才會斷
-        if (rec && rec.up && now - rec.last < BGP_HOLD) {
+        // fall-over bfd：兩端都設、出去的介面也都有 bfd interval，對方一失聯 BFD 一秒內就通知 BGP，不用等 hold time
+        const bfdMs = n.bfd && back.bfd && src.iface && srcO.iface ? bfdDetect(src.iface, srcO.iface) : null;
+        const holdT = bfdMs != null ? Math.max(1, Math.ceil(bfdMs / 1000)) : BGP_HOLD;
+        if (rec && rec.up && now - rec.last < holdT) {
           touched.add(key);
-          peer.state = 'Established'; peer.up = now - (rec.upAt ?? rec.since); peer.hold = BGP_HOLD - (now - rec.last);
-          state.rt.pending.push({ at: rec.last + BGP_HOLD, dev: d.id, kind: 'bgp', text: `${d.name}：BGP 鄰居 ${n.ip} 沒有消息，hold time 到了才會斷` });
+          peer.state = 'Established'; peer.up = now - (rec.upAt ?? rec.since); peer.hold = holdT - (now - rec.last);
+          state.rt.pending.push({ at: rec.last + holdT, dev: d.id, kind: 'bgp', text: `${d.name}：BGP 鄰居 ${n.ip} 沒有消息，${bfdMs != null ? 'BFD 偵測中' : 'hold time 到了才會斷'}` });
           sessionOf(d, o, n, back, key, ibgp);
           continue;
         }

@@ -1,5 +1,6 @@
 // IOS 的 show 指令：Tunnel 介面、DMVPN（NHRP）、IPsec profile 與 crypto session
-import { fmtIp, fmtMask } from '../engine/ip.js';
+import { fmtIp, fmtMask, parseIp, sameNet } from '../engine/ip.js';
+import { bfdCfg, ospfBfd } from '../engine/ospf.js';
 import { MODE_TEXT, isTun, nhrpCache, saInfo, tunMode, tunOverhead, ikeVer } from '../engine/sim.js';
 import { longIf } from '../engine/ops.js';
 
@@ -146,5 +147,38 @@ export function cryptoSessionLines(st, d) {
     if (t.natInfo) o.push(`（中間有 NAT：對端看到的位址是 ${fmtIp(t.natInfo.seen)}${t.natT ? '，ESP 包在 UDP 4500 裡 (NAT-T)' : '，但沒有用 NAT-T'}）`);
     o.push('');
   }
+  return o;
+}
+
+/** show bfd neighbors [details]：兩端都設了 bfd interval、又有 OSPF / BGP 用它的介面 */
+export function bfdLines(st, d, detail) {
+  const rows = [];
+  for (const i of d.ifaces) {
+    const me = bfdCfg(i);
+    if (!me || !i.rt || i.rt.ip == null) continue;
+    const clients = [];
+    for (const n of d.rt.nbrs || []) if (n.iface === i.id && ospfBfd(d, i)) clients.push({ ip: n.ip, dev: n.dev, who: 'OSPF', up: n.state === 'full' });
+    for (const p of ((d.rt.bgp || {}).peers || [])) {
+      const nb = ((d.bgp || {}).neighbors || []).find((x) => x.ip === p.ip);
+      if (nb && nb.bfd && p.state === 'Established' && sameNet(parseIp(p.ip), i.rt.ip, i.rt.bits)) clients.push({ ip: parseIp(p.ip), who: 'BGP', up: true });
+    }
+    for (const c of clients) {
+      const od = c.dev && st.devices[c.dev], oi = od && od.ifaces.find((x) => x.rt && x.rt.ip === c.ip);
+      const peerOk = c.who === 'BGP' || (oi && bfdCfg(oi) && ospfBfd(od, oi));
+      rows.push({ i, c, ok: peerOk && c.up, peer: oi });
+    }
+  }
+  if (!rows.length) return ['（沒有任何 BFD session：介面上要有 bfd interval，OSPF 用 ip ospf bfd 或 bfd all-interfaces、BGP 用 neighbor … fall-over bfd，兩端都要設）'];
+  const o = ['', 'IPv4 Sessions', 'NeighAddr                              LD/RD         RH/RS     State     Int'];
+  rows.forEach((r, k) => {
+    o.push(`${fmtIp(r.c.ip).padEnd(39)}${String(`${k + 1}/${r.ok ? k + 1 : 0}`).padEnd(14)}${(r.ok ? 'Up' : 'Down').padEnd(10)}${(r.ok ? 'Up' : 'Down').padEnd(10)}${longIf(r.i.label)}`);
+    if (detail) {
+      const me = bfdCfg(r.i), them = r.peer && bfdCfg(r.peer);
+      o.push(`Session state is ${r.ok ? 'UP' : 'DOWN'} and not using echo function.`, `OurAddr: ${fmtIp(r.i.rt.ip)}`, `Local Diag: 0, Demand mode: 0, Poll bit: 0`,
+        `MinTxInt: ${me.tx * 1000}, MinRxInt: ${me.rx * 1000}, Multiplier: ${me.mult}`, ...(them ? [`Received MinRxInt: ${them.rx * 1000}, Received Multiplier: ${them.mult}`, `Holddown (hits): 0(0), Hello (hits): ${Math.max(me.tx, them.rx)}(0)`] : []),
+        `Registered protocols: ${r.c.who}`, '');
+    }
+    if (!r.ok) o.push(`（${r.peer && !bfdCfg(r.peer) ? `對面的 ${r.peer.label} 沒有 bfd interval` : r.c.who === 'OSPF' && r.peer && !ospfBfd(st.devices[r.c.dev], r.peer) ? '對面的 OSPF 沒有用 BFD' : '鄰居還沒建立'}）`);
+  });
   return o;
 }

@@ -673,8 +673,9 @@ export function iosSession(getDev, getState, who = null) {
     ['no ip ospf priority [...]', () => onL3((i) => { delete i.ospfPrio; })],
     ['ip ospf hello-interval <n>', ([n]) => (+n >= 1 && +n <= 65535 ? onL3((i) => { if (+n === 10) delete i.ospfHello; else i.ospfHello = +n; }) : err('hello-interval 的範圍是 1 – 65535 秒'))],
     ['no ip ospf hello-interval [...]', () => onL3((i) => { delete i.ospfHello; })],
+    ['ip ospf dead-interval minimal hello-multiplier <n>', ([n]) => (+n >= 3 && +n <= 20 ? onL3((i) => { i.ospfFast = +n; delete i.ospfDead; delete i.ospfHello; }) : err('hello-multiplier 的範圍是 3 – 20（每秒送幾個 Hello）'))],
     ['ip ospf dead-interval <n>', ([n]) => (+n >= 1 && +n <= 65535 ? onL3((i) => { i.ospfDead = +n; }) : err('dead-interval 的範圍是 1 – 65535 秒'))],
-    ['no ip ospf dead-interval [...]', () => onL3((i) => { delete i.ospfDead; })],
+    ['no ip ospf dead-interval [...]', () => onL3((i) => { delete i.ospfDead; delete i.ospfFast; })],
     ['ip ospf network <t>', ([t]) => {
       if ('point-to-multipoint'.startsWith(t.toLowerCase()) && t.length > 8) return err('% 這個模擬還不支援 point-to-multipoint（DMVPN 請用 broadcast，spoke 設 ip ospf priority 0）');
       const v = ['point-to-point', 'broadcast'].find((x) => x.startsWith(t.toLowerCase()));
@@ -690,6 +691,13 @@ export function iosSession(getDev, getState, who = null) {
     ['no ip ospf message-digest-key [...]', () => onL3((i) => { delete i.ospfKey; })],
     ['no ip ospf authentication-key [...]', () => onL3((i) => { delete i.ospfKey; })],
     ['ip ospf mtu-ignore', () => onL3((i) => { i.ospfMtuIgnore = true; })],
+    ['bfd interval <tx> min_rx <rx> multiplier <m>', ([tx, rx, m]) => {
+      if (!(+tx >= 50 && +tx <= 9999) || !(+rx >= 50 && +rx <= 9999) || !(+m >= 3 && +m <= 50)) return err('用法：bfd interval <50-9999 毫秒> min_rx <50-9999 毫秒> multiplier <3-50>');
+      return onL3((i) => { i.bfd = { tx: +tx, rx: +rx, mult: +m }; });
+    }],
+    ['no bfd interval [...]', () => onL3((i) => { delete i.bfd; })],
+    ['ip ospf bfd [...]', ([rest]) => onL3((i) => { if (/disable/i.test(rest || '')) { i.ospfBfdOff = true; delete i.ospfBfd; } else { i.ospfBfd = true; delete i.ospfBfdOff; } })],
+    ['no ip ospf bfd [...]', () => onL3((i) => { delete i.ospfBfd; delete i.ospfBfdOff; })],
     ['no ip ospf mtu-ignore', () => onL3((i) => { delete i.ospfMtuIgnore; })],
     ['ip mtu <n>', ([n]) => (+n >= 68 && +n <= 9216 ? onL3((i) => {
       const lim = l2Of(i);
@@ -733,9 +741,9 @@ export function iosSession(getDev, getState, who = null) {
     ['no ip access-group <name> <dir>', ([, dir]) => onL3((i) => { i[dir.toLowerCase() === 'in' ? 'aclIn' : 'aclOut'] = []; if (i.aclNames) delete i.aclNames[dir.toLowerCase()]; })],
     // FHRP：VRRP（vrrp …，預設會搶回 Master）與 HSRP（standby …，預設不搶，要 standby <g> preempt）
     ['standby version <n>', () => undefined],
-    ...['vrrp', 'standby'].flatMap((kw) => {
-      const proto = kw === 'vrrp' ? 'vrrp' : 'hsrp', max = proto === 'vrrp' ? 254 : 255;
-      const grpOk = (g) => /^\d+$/.test(g) && +g >= (proto === 'vrrp' ? 1 : 0) && +g <= 255;
+    ...['vrrp', 'standby', 'glbp'].flatMap((kw) => {
+      const proto = kw === 'vrrp' ? 'vrrp' : kw === 'glbp' ? 'glbp' : 'hsrp', max = proto === 'vrrp' ? 254 : 255;
+      const grpOk = (g) => /^\d+$/.test(g) && +g >= (proto === 'vrrp' ? 1 : 0) && +g <= (proto === 'glbp' ? 1023 : 255);
       const G = (g, fn) => (grpOk(g) ? onL3((i) => fn(fhrpOn(i, proto, g), i)) : err(`群組號碼必須是 ${proto === 'vrrp' ? '1' : '0'} – 255`));
       return [
         [`${kw} <g> ip <vip>`, ([g, vip]) => (parseIp(vip) == null ? err('IP 位址的格式不正確') : G(g, (v) => { Object.assign(v, { on: true, vip }); }))],
@@ -754,6 +762,10 @@ export function iosSession(getDev, getState, who = null) {
           });
         }],
         [`no ${kw} <g> track <obj> [...]`, ([g, obj]) => G(g, (v) => { v.track = (v.track || []).filter((t) => +t.obj !== +obj); if (!v.track.length) delete v.track; })],
+        ...(proto === 'glbp' ? [[`glbp <g> load-balancing <lb>`, ([g, lb]) => {
+          const x = ['round-robin', 'host-dependent', 'weighted'].find((y) => y.startsWith(lb.toLowerCase()));
+          return x ? G(g, (v) => { if (x === 'round-robin') delete v.lb; else v.lb = x; }) : err('用法：glbp <群組> load-balancing round-robin | host-dependent | weighted');
+        }]] : []),
         [`no ${kw} <g> ip [...]`, ([g]) => G(g, (v) => { v.on = false; })],
         [`no ${kw} <g>`, ([g]) => G(g, (v) => { v.on = false; })],
         [`${kw} <g> <...>`, () => err(`這個模擬支援的 ${kw} 指令：ip、priority、preempt、track（timers、authentication 沒有模擬）`)],
@@ -2229,6 +2241,8 @@ export function iosSession(getDev, getState, who = null) {
         return cur && cur.rid !== parseIp(id) ? '% OSPF: Reload or use "clear ip ospf process" command, for this to take effect' : undefined;
       }],
       ['passive-interface default', () => { const c = oc(); c.ospfPassiveDefault = true; c.ospfNoPassive = []; }],
+      ['bfd all-interfaces', () => { oc().bfdAll = true; }],
+      ['no bfd all-interfaces', () => { delete oc().bfdAll; }],
       ['no passive-interface default', () => { const c = oc(); delete c.ospfPassiveDefault; delete c.ospfNoPassive; }],
       ['passive-interface <...>', ([t]) => { const i = ifByName(t); if (isErr(i)) return i; const c = oc(); if (c.ospfPassiveDefault) c.ospfNoPassive = (c.ospfNoPassive || []).filter((x) => x !== i.id); else if (!(c.ospfPassive ||= []).includes(i.id)) c.ospfPassive.push(i.id); return undefined; }],
       ['no passive-interface <...>', ([t]) => { const i = ifByName(t); if (isErr(i)) return i; const c = oc(); if (c.ospfPassiveDefault) { if (!(c.ospfNoPassive ||= []).includes(i.id)) c.ospfNoPassive.push(i.id); } else c.ospfPassive = (c.ospfPassive || []).filter((x) => x !== i.id); return undefined; }],
@@ -2749,6 +2763,8 @@ export function iosSession(getDev, getState, who = null) {
       }],
       ['no neighbor <ip> ebgp-multihop [...]', ([ip]) => nb(ip, (n) => { delete n.multihop; })],
       ['neighbor <ip> disable-connected-check', ([ip]) => nb(ip, (n) => { n.dcc = true; })],
+      ['neighbor <ip> fall-over bfd [...]', ([ip]) => nb(ip, (n) => { n.bfd = true; })],
+      ['no neighbor <ip> fall-over [...]', ([ip]) => nb(ip, (n) => { delete n.bfd; })],
       ['no neighbor <ip> disable-connected-check', ([ip]) => nb(ip, (n) => { delete n.dcc; })],
       ['neighbor <ip> send-community [...]', ([ip, k]) => nb(ip, (n) => { n.sendComm = /^(both|extended)$/i.test(k || '') ? k.toLowerCase() : 'standard'; })],
       ['no neighbor <ip> send-community [...]', ([ip]) => nb(ip, (n) => { delete n.sendComm; })],
@@ -3584,9 +3600,13 @@ export function runningConfig(state, dev) {
     if (i.ospfNet === 'p2p') l.push(' ip ospf network point-to-point');
     if (i.ospfNet === 'broadcast') l.push(' ip ospf network broadcast');
     if (i.ospfPrio != null && i.ospfPrio !== '') l.push(` ip ospf priority ${i.ospfPrio}`);
+    if (i.ospfFast) l.push(` ip ospf dead-interval minimal hello-multiplier ${i.ospfFast}`);
     if (i.ospfHello) l.push(` ip ospf hello-interval ${i.ospfHello}`);
     if (i.ospfDead) l.push(` ip ospf dead-interval ${i.ospfDead}`);
     if (i.ospfMtuIgnore) l.push(' ip ospf mtu-ignore');
+    if (i.ospfBfd) l.push(' ip ospf bfd');
+    if (i.ospfBfdOff) l.push(' ip ospf bfd disable');
+    if (i.bfd) l.push(` bfd interval ${i.bfd.tx} min_rx ${i.bfd.rx} multiplier ${i.bfd.mult}`);
     if (ospfOn(dev, i) && i.ospfCost) l.push(` ip ospf cost ${i.ospfCost}`);
     if (i.aclIn && i.aclIn.length) l.push(` ip access-group ${aclName(i, 'in')} in`);
     if (i.aclOut && i.aclOut.length) l.push(` ip access-group ${aclName(i, 'out')} out`);
@@ -3731,6 +3751,7 @@ export function runningConfig(state, dev) {
     }
     for (const r of c.ospfRanges || []) o.push(` area ${r.area} range ${fmtIp(r.net)} ${fmtMask(r.bits)}`);
     const ifl = (id) => longIf((dev.ifaces.find((x) => x.id === id) || { label: id }).label);
+    if (c.bfdAll) o.push(' bfd all-interfaces');
     if (c.ospfPassiveDefault) { o.push(' passive-interface default'); for (const id of c.ospfNoPassive || []) o.push(` no passive-interface ${ifl(id)}`); }
     else for (const id of c.ospfPassive || []) o.push(` passive-interface ${ifl(id)}`);
     for (const n of stmts) o.push(` network ${fmtIp(n.net)} ${wild(n.bits)} area ${+(n.area || 0)}`);
@@ -3757,6 +3778,7 @@ export function runningConfig(state, dev) {
     for (const n of b.neighbors) {
       if (n.rrClient) o.push(` neighbor ${n.ip} route-reflector-client`);
       if (n.nhSelf) o.push(` neighbor ${n.ip} next-hop-self`);
+      if (n.bfd) o.push(` neighbor ${n.ip} fall-over bfd`);
       if (n.sendComm) o.push(` neighbor ${n.ip} send-community${n.sendComm !== 'standard' ? ' ' + n.sendComm : ''}`);
       if (n.defOrig) o.push(` neighbor ${n.ip} default-originate`);
       if (n.weight != null) o.push(` neighbor ${n.ip} weight ${n.weight}`);
@@ -3900,11 +3922,12 @@ export function runningConfig(state, dev) {
 
 /** FHRP 的設定行：VRRP 印 vrrp …、HSRP 印 standby …；預設值（priority 100、VRRP 的 preempt）不印 */
 function fhrpLines(v) {
-  const kw = fhrpProto(v) === 'hsrp' ? 'standby' : 'vrrp', g = fhrpGroup(v);
+  const kw = fhrpProto(v) === 'hsrp' ? 'standby' : fhrpProto(v) === 'glbp' ? 'glbp' : 'vrrp', g = fhrpGroup(v);
   const l = [];
   if (v.on && v.vip) l.push(` ${kw} ${g} ip ${v.vip}`);
   if (+v.prio && +v.prio !== 100) l.push(` ${kw} ${g} priority ${+v.prio}`);
-  if (kw === 'standby' && fhrpPreempt(v)) l.push(` standby ${g} preempt`);
+  if (kw !== 'vrrp' && fhrpPreempt(v)) l.push(` ${kw} ${g} preempt`);
+  if (kw === 'glbp' && v.lb) l.push(` glbp ${g} load-balancing ${v.lb}`);
   if (kw === 'vrrp' && !fhrpPreempt(v)) l.push(` no vrrp ${g} preempt`);
   for (const t of v.track || []) l.push(` ${kw} ${g} track ${t.obj}${t.dec != null ? ' decrement ' + t.dec : ''}`);
   return l;
@@ -3917,7 +3940,7 @@ function fhrpOn(i, proto, g) {
     v = i.vrrp = { on: false, vip: '', prio: '100', ...keep };
     if (!v.track) delete v.track;
   }
-  if (proto === 'hsrp') v.proto = 'hsrp'; else delete v.proto;
+  if (proto === 'hsrp' || proto === 'glbp') v.proto = proto; else delete v.proto;
   if (+g !== 1) v.group = +g; else delete v.group;
   return v;
 }

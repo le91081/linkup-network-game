@@ -3173,6 +3173,75 @@ console.log('\nIPv6 補齊：AAAA 與雙協定、IPv6 經過 IPv4 的 Tunnel（G
   ok(/ tunnel mode ipv6ip/.test(runningConfig(c, c.devices.r1).join('\n')), 'running-config：tunnel mode ipv6ip');
 }
 
+console.log('\n高可用：BFD、GLBP');
+{
+  const sim = await import('../src/engine/sim.js');
+  const { iosSession, runningConfig } = await import('../src/engine/ios.js');
+  const { iosRun } = await import('../src/ui/cli.js');
+  const { cloneState: CS } = await import('../src/engine/model.js');
+  const ok = (cond, title) => (cond ? console.log('  ✔ ' + title) : fail(title));
+  const cli = (s, id) => { const S = iosSession(() => s.devices[id], () => s); return (...lines) => { const out = []; for (const l of lines) { const r = iosRun({ state: s, showTrace() {}, refreshLive() {} }, id, S, l, (x) => out.push(x)); if (r.changed) settle(s); } return out.join('\n'); }; };
+  const lv = (id) => { const l = LEVELS.find((x) => x.id === id); const s = l.setup(); settle(s); return { s, l }; };
+  const ipOf = (s, id) => s.devices[id].ifaces[0].rt.ip;
+
+  // ── BFD（8-8）
+  const { s: b, l: l95 } = lv('l95');
+  const cutAt = (s0, secs) => {
+    const t = CS(s0); settle(t);
+    const c = t.cables.find((x) => (x.a.dev === 'carrier' && x.b.dev === 'br') || (x.b.dev === 'carrier' && x.a.dev === 'br'));
+    t.cut = { [c.id]: true }; sim.recompute(t); sim.advance(t, secs);
+    return { t, r: sim.transact(t, 'bpc', { proto: 'udp', dst: ipOf(t, 'pbx'), dport: 5060, quiet: true }) };
+  };
+  ok(!cutAt(b, 2).r.ok && cutAt(b, 41).r.ok, '沒有 BFD：業者那一端斷掉，HQ-RT 的介面還是 up，要等 Dead timer（40 秒）才切到備援');
+  l95.solve(b); settle(b);
+  const x = cutAt(b, 2);
+  ok(x.r.ok && x.r.hops.some((h) => h.proto === 'gre'), 'bfd interval 300 min_rx 300 multiplier 3 + bfd all-interfaces：兩秒內改走 GRE 備援');
+  const H = cli(b, 'hq');
+  ok(/10\.255\.9\.2\s+1\/1\s+Up\s+Up\s+GigabitEthernet0\/0\/2/.test(H('show bfd neighbors')) && /Registered protocols: OSPF/.test(H('show bfd neighbors details')), 'show bfd neighbors：Up，客戶是 OSPF');
+  ok(/ bfd interval 300 min_rx 300 multiplier 3/.test(runningConfig(b, b.devices.hq).join('\n')) && /router ospf 1[\s\S]* bfd all-interfaces/.test(runningConfig(b, b.devices.hq).join('\n')), 'running-config：介面的 bfd interval、router ospf 的 bfd all-interfaces');
+  const b2 = lv('l95').s;
+  cli(b2, 'hq')('configure terminal', 'interface Gi0/0/2', 'bfd interval 300 min_rx 300 multiplier 3', 'exit', 'router ospf 1', 'bfd all-interfaces', 'end');
+  ok(!cutAt(b2, 2).r.ok && /Down/.test(cli(b2, 'hq')('show bfd neighbors')), '只有一端設 BFD：session 起不來，照樣等 Dead timer');
+  const b3 = lv('l95').s;
+  for (const id of ['hq', 'br']) cli(b3, id)('configure terminal', 'interface Gi0/0/2', 'ip ospf dead-interval minimal hello-multiplier 4', 'end');
+  ok(cutAt(b3, 2).r.ok, 'OSPF fast hello（dead-interval minimal hello-multiplier 4）：Dead timer 1 秒，一樣兩秒內切換');
+}
+
+console.log('\nGLBP：AVG、AVF、虛擬 MAC 與接手');
+{
+  const sim = await import('../src/engine/sim.js');
+  const { iosSession, runningConfig } = await import('../src/engine/ios.js');
+  const { iosRun } = await import('../src/ui/cli.js');
+  const { cloneState: CS } = await import('../src/engine/model.js');
+  const ok = (cond, title) => (cond ? console.log('  ✔ ' + title) : fail(title));
+  const cli = (s, id) => { const S = iosSession(() => s.devices[id], () => s); return (...lines) => { const out = []; for (const l of lines) { const r = iosRun({ state: s, showTrace() {}, refreshLive() {} }, id, S, l, (x) => out.push(x)); if (r.changed) settle(s); } return out.join('\n'); }; };
+  const l96 = LEVELS.find((x) => x.id === 'l96');
+  const s = l96.setup(); settle(s);
+  const srv = s.devices.srv.ifaces[0].rt.ip;
+  const go = (st, pc, quiet = true) => sim.transact(st, pc, { proto: 'tcp', dst: srv, dport: 443, quiet });
+  const via = (r) => (r.l3.find((h) => h.dev === 'r1' || h.dev === 'r2') || {}).dev;
+  go(s, 'pc1', false);
+  ok(s.dyn.arp.pc1[parseIp('10.10.0.1')].mac === '00:00:0c:07:ac:01' && /Active\s+local\s+10\.10\.0\.3\s+10\.10\.0\.1/.test(cli(s, 'r1')('show standby brief')), 'HSRP：閘道的 MAC 是 HSRP 的虛擬 MAC 0000.0c07.ac01，只有 Active（R1）在轉送');
+  l96.solve(s); settle(s);
+  const v = ['pc1', 'pc2', 'pc3', 'pc4'].map((pc) => via(go(s, pc, false)));
+  ok(v.includes('r1') && v.includes('r2'), `GLBP round-robin：四台電腦分到兩台 AVF（${v.join('、')}）`);
+  const macs = ['pc1', 'pc2'].map((pc) => s.dyn.arp[pc][parseIp('10.10.0.1')].mac);
+  ok(macs[0] !== macs[1] && macs.every((m) => /^00:07:b4:00:01:0[12]$/.test(m)), `每台電腦的閘道 MAC 是不同 AVF 的虛擬 MAC（${macs.join('、')}）`);
+  const G = cli(s, 'r1')('show glbp brief');
+  ok(/Gi0\/0\/1\s+1\s+-\s+110\s+Active\s+10\.10\.0\.1/.test(G) && /1\s+1\s+-\s+Active\s+0007\.b400\.0101/.test(G) && /1\s+2\s+-\s+Listen\s+0007\.b400\.0102\s+10\.10\.0\.3/.test(G), 'show glbp brief：R1 是 AVG，Fwd 1 是自己、Fwd 2 是 R2');
+  // R2 斷電：它負責的虛擬 MAC 等 holdtime（10 秒）之後由 R1 接手
+  const pcOnR2 = ['pc1', 'pc2', 'pc3', 'pc4'].find((pc, k) => v[k] === 'r2');
+  const t = CS(s); settle(t);
+  t.down = { r2: true }; sim.recompute(t);
+  const r0 = go(t, pcOnR2);
+  sim.advance(t, 11);
+  const r1 = go(t, pcOnR2);
+  ok(!r0.ok && /其他 AVF 還要/.test(r0.reason) && r1.ok && via(r1) === 'r1', 'AVF（R2）斷電：它的虛擬 MAC 在 holdtime 內沒人轉送，10 秒後 R1 接手，電腦的 ARP 不用改');
+  ok(/ glbp 1 ip 10\.10\.0\.1\n glbp 1 priority 110\n glbp 1 preempt/.test(runningConfig(s, s.devices.r1).join('\n')), 'running-config：glbp 1 ip、priority、preempt');
+  const lb = cli(s, 'r1')('configure terminal', 'interface Gi0/0/1', 'glbp 1 load-balancing host-dependent', 'end');
+  ok(!/%/.test(lb) && / glbp 1 load-balancing host-dependent/.test(runningConfig(s, s.devices.r1).join('\n')), 'glbp 1 load-balancing host-dependent');
+}
+
 // ── 題庫與證照對照表的資料檢查 ──
 {
   const { QUESTIONS, TOPICS, LEVEL_TOPIC } = await import('../src/data/quiz.js');

@@ -28,7 +28,7 @@ import { route6Rows } from '../engine/sim6.js';
 import { CATALOG, MEDIA, peerOf, portOf, linkInfo, phyConfig } from '../engine/model.js';
 import { iosSession, runningConfig, startupConfig, hostName as host, aclName, aclLine, aclSeqs } from '../engine/ios.js';
 import { ipMtu, l2Mtu, jumboNow, isCat2960, isCat9300, isNexus } from '../engine/mtu.js';
-import { tunByName, tunnelDetail, dmvpnLines, nhrpLines, nhsLines, ipsecProfileLines, cryptoSessionLines, transformSetLines } from './cli-tun.js';
+import { tunByName, tunnelDetail, dmvpnLines, nhrpLines, nhsLines, ipsecProfileLines, cryptoSessionLines, transformSetLines, bfdLines } from './cli-tun.js';
 
 const pad = (s, n) => String(s).padEnd(n);
 const isTunIf = (i) => i.bind && i.bind.t === 'gre';
@@ -356,6 +356,8 @@ const SHOW = {
     if (o.length === 3) o.push('', '（沒有任何 IKEv2 SA' + (list.length ? '：' + list.map(({ t }) => `${t.name} — ${t.why || '尚未建立'}`).join('；') : '：crypto map 要 set ikev2-profile 才會用 IKEv2') + '）');
     return o;
   },
+  'show bfd neighbors': (st, d) => bfdLines(st, d, false),
+  'show bfd neighbors details': (st, d) => bfdLines(st, d, true),
   'show dmvpn': (st, d) => dmvpnLines(st, d),
   'show dmvpn detail': (st, d) => dmvpnLines(st, d),
   'show ip nhrp': (st, d) => nhrpLines(st, d, false),
@@ -789,6 +791,25 @@ const SHOW = {
     }
     return o;
   },
+  'show glbp brief': (st, d) => SHOW['_glbp'](st, d),
+  'show glbp detail': (st, d) => SHOW['_glbp'](st, d),
+  '_glbp': (st, d) => {
+    const v = fhrpIfs(d, 'glbp');
+    if (!v.length) return ['（這台沒有設定 GLBP）'];
+    const o = [pad('Interface', 12) + pad('Grp', 5) + pad('Fwd', 4) + pad('Pri', 4) + pad('State', 9) + pad('Address', 16) + pad('Active router', 16) + 'Standby router'];
+    for (const i of v) {
+      const r = i.rt.vrrp || { state: 'init' }, m = fhrpView(st, d, i), G = ((st.rt.glbp || {})[r.glbp]) || { fwds: [] };
+      o.push(pad(i.label, 12) + pad(fhrpGroup(i.vrrp), 5) + pad('-', 4) + pad(r.prio != null ? r.prio : +i.vrrp.prio || 100, 4) + pad(m.hsrpState, 9) + pad(i.vrrp.vip || '', 16) + pad(m.active || 'unknown', 16) + (m.standby || 'unknown'));
+      for (const f of G.fwds) {
+        const mine = f.owner === d.id + '/' + i.id;
+        const od = f.owner && st.devices[f.owner.split('/')[0]], oi = od && od.ifaces.find((y) => od.id + '/' + y.id === f.owner);
+        const owner = f.owner ? (f.owner.startsWith(d.id + '/') ? 'local' : oi && oi.rt.ip != null ? fmtIp(oi.rt.ip) : od.name) : '-';
+        o.push(pad(i.label, 12) + pad(fhrpGroup(i.vrrp), 5) + pad(f.n, 4) + pad('-', 4) + pad(mine ? 'Active' : f.owner ? 'Listen' : 'Init', 9) + pad(dotMac(f.mac), 16) + pad(owner, 16) + '-');
+      }
+    }
+    return o;
+  },
+  'show glbp': (st, d) => SHOW['_glbp'](st, d),
   'show standby brief': (st, d) => {
     const v = fhrpIfs(d, 'hsrp');
     if (!v.length) return ['（這台沒有設定 HSRP）'];
@@ -1598,7 +1619,7 @@ function fhrpView(st, d, i) {
   return { active: act && act.ip, standby: sb && sb.ip, hsrpState, odd };
 }
 const stpState = (d, pid) => (d.rt.wait && d.rt.wait[pid] > 15 ? 'LSN' : d.rt.wait && d.rt.wait[pid] > 0 ? 'LRN' : 'FWD');
-const CMDS = Object.keys(SHOW);
+const CMDS = Object.keys(SHOW).filter((k) => !k.startsWith('_'));
 const match = (tokens, cmd) => {
   const w = cmd.split(' ');
   // 完整的關鍵字優先：ip 不是 ipv6 的縮寫

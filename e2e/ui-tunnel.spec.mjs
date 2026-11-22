@@ -90,3 +90,26 @@ test('雙協定：ping 主機名稱優先用 IPv6、ping -4、nslookup 列出 AA
   await expect(page.locator('#panel .term-out')).toContainText('AAAA 記錄');
   expect(await scan(page, '#panel', '終端機')).toEqual([]);
 });
+
+test('高可用：GLBP 的 AVF 狀態與 show glbp brief、OSPF 的 BFD 開關與 show bfd neighbors', async ({ page }) => {
+  await boot(page);
+  await open(page, 'l96');
+  await page.evaluate(() => { const app = window.linkup; app.level.solve(app.state); app.settleNow(); });
+  await clickDevice(page, 'r1');
+  const card = page.locator('#panel .card', { hasText: 'Gi0/0/1' }).first();
+  await expect(card.locator('select').filter({ has: page.locator('option', { hasText: 'GLBP' }) }).first()).toHaveValue('glbp');
+  await expect(card).toContainText('AVF：負責轉送 00:07:b4:00:01:01');
+  expect(await scan(page, '#panel', '介面分頁（GLBP）')).toEqual([]);
+  await page.locator('#panel .tab', { hasText: 'CLI' }).click();
+  await typeCmd(page, 'show glbp brief');
+  await expect(page.locator('#panel .term-out')).toContainText(/0007\.b400\.0102\s+10\.10\.0\.3/);
+  await open(page, 'l95');
+  await page.evaluate(() => { const app = window.linkup; app.level.solve(app.state); app.settleNow(); });
+  await clickDevice(page, 'hq');
+  const g2 = page.locator('#panel .card', { hasText: 'Gi0/0/2' }).first();
+  await expect(g2.locator('label', { hasText: 'BFD' }).locator('input[type=checkbox]')).toBeChecked();
+  await page.locator('#panel .tab', { hasText: 'CLI' }).click();
+  await typeCmd(page, 'show bfd neighbors');
+  await expect(page.locator('#panel .term-out')).toContainText(/10\.255\.9\.2\s+1\/1\s+Up\s+Up/);
+  expect(await scan(page, '#panel', 'CLI')).toEqual([]);
+});

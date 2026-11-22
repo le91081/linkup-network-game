@@ -32,7 +32,7 @@ export const LEVEL_TOPIC = {
   l55: 'wireless', l56: 'wireless', l57: 'wireless',
   l58: 'auto', l59: 'auto', l60: 'auto', l61: 'auto', l62: 'auto',
   l63: 'routing', l64: 'routing', l65: 'ops', l66: 'routing', l67: 'switching', l68: 'vpn', l69: 'security', l71: 'services',
-  l70: 'auto', l72: 'routing', l73: 'auto', l74: 'security', l75: 'switching', l76: 'vpn', l77: 'routing', l78: 'routing', l79: 'routing', l80: 'routing', l81: 'routing', l82: 'routing', l83: 'security', l84: 'security', l85: 'switching', l86: 'security', l87: 'ipv6', l88: 'vpn', l89: 'vpn', l90: 'vpn', l91: 'vpn', l92: 'vpn', l93: 'ipv6', l94: 'ipv6',
+  l70: 'auto', l72: 'routing', l73: 'auto', l74: 'security', l75: 'switching', l76: 'vpn', l77: 'routing', l78: 'routing', l79: 'routing', l80: 'routing', l81: 'routing', l82: 'routing', l83: 'security', l84: 'security', l85: 'switching', l86: 'security', l87: 'ipv6', l88: 'vpn', l89: 'vpn', l90: 'vpn', l91: 'vpn', l92: 'vpn', l93: 'ipv6', l94: 'ipv6', l95: 'routing', l96: 'routing',
 };
 
 export const QUESTIONS = {
@@ -70,6 +70,9 @@ export const QUESTIONS = {
     { q: '兩台交換器用 Trunk 相連，但 VLAN 30 只在其中一台建立。結果會怎樣？', a: ['VLAN 30 的流量過不了 Trunk', '另一台會自動建立 VLAN 30', '整條 Trunk 會斷線', '所有 VLAN 都受影響'], c: 0, e: '交換器只轉送自己認識的 VLAN。VLAN 必須在路徑上每一台交換器都建立。', r: 'CCNA 2.2' },
   ],
   routing: [
+    { q: '兩台路由器之間隔著業者的交換器，對面那一段斷了，這一端的介面還是 up。OSPF 預設要多久才會發現鄰居不見了？', a: ['馬上', '大約 1 秒', 'Dead timer 到期，預設 40 秒', '3 分鐘'], c: 2, e: '介面沒有 down，OSPF 只能靠「多久沒聽到 Hello」判斷：Dead timer 預設是 Hello 10 秒的 4 倍。要更快就用 BFD（幾百毫秒互送一次）或 OSPF 的 fast hello。', r: 'CCNA 3.4' },
+    { q: 'BFD 的作用是什麼？', a: ['取代 OSPF 計算路由', '用很短的間隔偵測兩台路由器之間的轉送路徑是否還通，失聯時立刻通知 OSPF、BGP 等路由協定', '加密路由協定的封包', '自動調整 OSPF cost'], c: 1, e: 'BFD 本身不交換路由，只負責快速偵測：例如 interval 300 毫秒 × multiplier 3，0.9 秒就判定失聯。兩端都要設，路由協定也要指定使用它（bfd all-interfaces、ip ospf bfd、neighbor … fall-over bfd）。', r: 'Network+ 3.3' },
+    { q: 'HSRP / VRRP 和 GLBP 最大的差別是？', a: ['GLBP 不需要虛擬 IP', 'HSRP / VRRP 一個群組只有一台在轉送；GLBP 同一個虛擬 IP 最多四台一起轉送（AVG 輪流發不同的虛擬 MAC）', 'GLBP 是公開標準', 'HSRP 可以負載平衡、GLBP 不行'], c: 1, e: 'GLBP 的 AVG 回答虛擬 IP 的 ARP，把不同 AVF 的虛擬 MAC（0007.b400.xxyy）交給不同主機；AVF 失聯時其他 AVF 接手它的虛擬 MAC。主機的閘道設定完全不用改。', r: 'CCNA 3.5' },
     { q: '分公司的 area 10 只有一台 ABR 當出口，想讓分公司路由器的路由表只剩區域裡的路加一條預設路由，應該怎麼設定？', a: ['每一台都 area 10 nssa', '每一台都 area 10 stub，ABR 再加 no-summary（totally stubby）', '只在 ABR 上 area 10 stub', '把 area 10 改成 area 0'], c: 1, e: 'stub 讓 ABR 不送外部路由、改送預設路由；ABR 加上 no-summary 連區域間的路也不送。區域是不是 stub 寫在 Hello 裡，區域裡每一台都要設定，只設一台會連鄰居都建立不起來。', r: 'Network+ 2.1' },
     { q: 'stub 區域裡的路由器上設定了 redistribute static subnets，會發生什麼事？', a: ['重分配的路以 Type-5 送進骨幹', '重分配的路送不出去：stub 區域不能有 Type-5，要改成 NSSA', 'ABR 會自動轉成 Type-3', '整個區域的鄰居關係都會斷'], c: 1, e: 'stub 區域不允許 Type-5 LSA，區域裡的 ASBR 重分配了也送不出去。NSSA 讓區域裡的 ASBR 改用 Type-7（O N2），再由 ABR 轉成 Type-5 送進骨幹。', r: 'Network+ 2.1' },
     { q: '兩台邊界路由器用 Loopback 建立 iBGP，鄰居一直停在 Active。最可能漏了什麼？', a: ['ebgp-multihop', 'neighbor … update-source Loopback0', 'next-hop-self', 'network 敘述'], c: 1, e: '沒有 update-source 時，TCP 179 從出口介面的位址送出；對方設定的鄰居卻是 Loopback，連線被拒絕。用 Loopback 建立 iBGP，兩端都要 update-source。', r: 'Network+ 2.1' },

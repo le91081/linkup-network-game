@@ -237,6 +237,34 @@ function nattMap(state, dev, pkt) {
   return m ? { ip: m.local, port: 4500, natt: true } : null;
 }
 
+function glbpPick(state, dev, outIf, nh, cands, known, eps) {
+  const m = cands.find((e) => e.iface.rt.vrrp && e.iface.rt.vrrp.glbp && e.iface.vrrp && parseIp(e.iface.vrrp.vip || '') === nh);
+  if (!m) return null;
+  const k = m.iface.rt.vrrp.glbp, G = (state.rt.glbp || {})[k];
+  if (!G || !G.fwds.length) return null;
+  const tbl = ((state.dyn.glbp || {})[k] ||= { fw: {}, lost: {} });
+  const H = outIf.rt.mac;
+  let f = known && G.fwds.find((x) => x.mac === known.mac); // 主機的 ARP 快取裡已經有某個虛擬 MAC：繼續用它
+  if (!f) {
+    const lb = (m.iface.vrrp.lb || 'round-robin');
+    const live = G.fwds.filter((x) => x.owner);
+    if (!live.length) return { drop: `GLBP 群組 ${k.split('|')[1]} 沒有任何 AVF 在轉送` };
+    const as = (tbl.assign ||= {});
+    if (lb === 'host-dependent') f = live[hash(H + '|' + k) % live.length];
+    else if (as[H] != null) f = live[as[H] % live.length];
+    else {
+      // round-robin：依主機第一次來問 ARP 的順序輪流分配；引擎內部的試算不改紀錄，用這個網段上主機的固定順序
+      const order = [...new Set([...eps.map((e) => e.iface.rt.mac), H])].filter((x) => !cands.some((c) => c.iface.rt.mac === x)).sort();
+      const idx = QUIET ? order.indexOf(H) : (tbl.rr = (tbl.rr ?? -1) + 1);
+      if (!QUIET) as[H] = idx;
+      f = live[Math.max(0, idx) % live.length];
+    }
+  }
+  if (!f.owner) return { drop: `GLBP：負責虛擬 MAC ${f.mac} 的 AVF（${f.prev ? state.devices[f.prev.split('/')[0]].name : '?'}）失聯了，其他 AVF 還要 ${Math.ceil(f.wait)} 秒才接手（holdtime 10 秒）` };
+  const tgt = cands.find((e) => e.dev + '/' + e.iface.id === f.owner);
+  return tgt ? { tgt, mac: f.mac, n: f.n } : null;
+}
+
 function deliver(dev, inIf, pkt) {
   const ok = { ok: true, dev: dev.id };
   const no = (reason) => ({ ok: false, dev: dev.id, reason });
@@ -592,8 +620,12 @@ export function forward(state, ctx, startId, pkt) {
     // 真實網路裡，第一次要和某個 IP 通訊前得先用 ARP 廣播問出它的 MAC；問到之後會記在 ARP 快取裡
     const cache = (state.dyn.arp[dev.id] ||= {});
     const known = cache[nh];
+    // GLBP：同一個虛擬 IP 有好幾台在轉送，看這台主機分到哪一台 AVF 的虛擬 MAC
+    const gl = cands.length ? glbpPick(state, dev, outIf, nh, cands, known && state.clock - known.t < arpTtl(dev) ? known : null, eps) : null;
+    if (gl && gl.drop) return drop(gl.drop);
+    if (gl) tgt = gl.tgt;
     // 快取裡有、還沒過期、而且那個 MAC 現在仍然是這個 IP 的主人，才不用重新詢問
-    const needArp = !(known && state.clock - known.t < arpTtl(dev) && cands.some((e) => answerMac(e, nh) === known.mac));
+    const needArp = !(known && state.clock - known.t < arpTtl(dev) && (gl ? known.mac === gl.mac : cands.some((e) => answerMac(e, nh) === known.mac)));
     if (needArp) {
       log.push({ dev: dev.id, kind: 'arp', text: `ARP 廣播：誰是 ${fmtIp(nh)}？同一個廣播網域的每台設備都會收到` });
       const wave = buildWave(eps);
@@ -605,12 +637,12 @@ export function forward(state, ctx, startId, pkt) {
       }
     }
     if (!tgt) return drop(dai || arpFail(state, dev, outIf, nh, route.via != null, eps));
-    const tmac = answerMac(tgt, nh);
+    const tmac = gl ? gl.mac : answerMac(tgt, nh);
     if (!needArp) known.t = state.clock; // 有流量在走，項目就會一直被確認、不會過期
     if (needArp) {
       cache[nh] = { mac: tmac, t: state.clock, i: outIf.id };
       if (outIf.rt.ip != null) (state.dyn.arp[tgt.dev] ||= {})[outIf.rt.ip] = { mac: outIf.rt.mac, t: state.clock, i: tgt.iface.id }; // 被問的那一方也順便記下發問者
-      log.push({ dev: tgt.dev, kind: 'arp', text: `ARP 回覆：${fmtIp(nh)} 的 MAC 位址是 ${tmac}${tmac === VRRP_MAC ? '（VRRP 的虛擬 MAC）' : ''}（${dev.name} 記入 ARP 快取）` });
+      log.push({ dev: tgt.dev, kind: 'arp', text: `ARP 回覆：${fmtIp(nh)} 的 MAC 位址是 ${tmac}${gl ? `（GLBP 的 AVG 指派 ${state.devices[tgt.dev].name} 的虛擬 MAC：第 ${gl.n} 號 AVF）` : /^00:00:5e:00:01:/.test(tmac) ? '（VRRP 的虛擬 MAC）' : /^00:00:0c:07:ac:/.test(tmac) ? '（HSRP 的虛擬 MAC）' : ''}（${dev.name} 記入 ARP 快取）` });
       for (const h of [...tgt.path].reverse()) hops.push({ cable: h.cable, wifi: h.wifi, from: h.to, to: h.from, tag: h.tag, reply: true, proto: 'arp' });
       learnPath(state, reversed(tgt.path), tmac); // ARP 回覆是單點傳送：沿路的交換器學到回覆者的 MAC
       if (!QUIET) {
@@ -618,7 +650,7 @@ export function forward(state, ctx, startId, pkt) {
         for (const x of reversed(tgt.path)) onHop(state, x, rep, null);
       }
     }
-    if (cands.length > 1 && !dai) {
+    if (cands.length > 1 && !dai && !gl) {
       log.push({ dev: dev.id, kind: 'info', text: `注意：這個網段上有 ${cands.length} 台設備都聲稱自己是 ${fmtIp(nh)}（IP 衝突或 ARP 欺騙），封包被送往最先回應的 ${state.devices[tgt.dev].name}` });
     }
     let giant = null;

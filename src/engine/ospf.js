@@ -82,14 +82,24 @@ export function ospfArea(d, i) {
   return best ? +(best.area || 0) : null;
 }
 export const isLoopback = (i) => i.bind.t === 'loop';
+/**
+ * BFD：介面上 bfd interval <毫秒> min_rx <毫秒> multiplier <次數>，再讓 OSPF 用它（介面的 ip ospf bfd，或 router ospf 底下的 bfd all-interfaces）。
+ * 兩端都要開才會建立 BFD session；偵測時間 = max(自己的 interval, 對方的 min_rx) × multiplier（預設 50 × 3 = 150 毫秒，這裡最快算 1 秒）
+ */
+export const bfdCfg = (i) => (i && i.bfd && +i.bfd.tx > 0 ? { tx: +i.bfd.tx, rx: +i.bfd.rx || +i.bfd.tx, mult: +i.bfd.mult || 3 } : null);
+export const ospfBfd = (d, i) => !!bfdCfg(i) && !i.ospfBfdOff && (!!i.ospfBfd || !!((ospfProcOf(d, i) || {}).bfdAll));
+export function bfdDetect(a, b) {
+  const x = bfdCfg(a), y = bfdCfg(b);
+  return x && y ? Math.max(x.tx, y.rx) * x.mult : null;
+}
 export const ospfPassive = (d, i) => {
   const c = ospfProcOf(d, i) || {};
   return (c.ospfPassiveDefault ? !(c.ospfNoPassive || []).includes(i.id) : (c.ospfPassive || []).includes(i.id)) || isLoopback(i);
 };
 /** Tunnel 介面（GRE、mGRE、VTI）預設是 point-to-point；DMVPN 的 hub 和 spoke 常改成 broadcast */
 export const ospfNetType = (i) => (isLoopback(i) ? 'loopback' : i.ospfNet === 'p2p' ? 'point-to-point' : i.ospfNet === 'broadcast' ? 'broadcast' : i.bind && i.bind.t === 'gre' ? 'point-to-point' : 'broadcast');
-export const ospfHello = (i) => +i.ospfHello || 10;
-export const ospfDead = (i) => +i.ospfDead || 4 * ospfHello(i);
+export const ospfHello = (i) => (i.ospfFast ? 1 / i.ospfFast : +i.ospfHello || 10);
+export const ospfDead = (i) => (i.ospfFast ? 1 : +i.ospfDead || 4 * ospfHello(i)); // fast hello：Dead timer 1 秒
 export const ospfPrio = (i) => (i.ospfPrio == null || i.ospfPrio === '' ? 1 : +i.ospfPrio);
 /** 介面頻寬 (Mbps)：bandwidth 指令優先，不然看實際連線的速率 */
 function bwOf(state, d, i) {
@@ -498,7 +508,11 @@ function computeOspfAf(state, af) {
     // 節點 id 可能是「設備@VRF」；介面 id 裡也可能有 /（Gi0/0/1），所以從第一個 / 切開
     const sides = k.split('~').map((s) => ({ s, dev: s.slice(0, s.indexOf('/')), iface: s.slice(s.indexOf('/') + 1) }));
     const di = devs[sides[0].dev] && devs[sides[0].dev].ifaces.find((x) => x.id === sides[0].iface);
-    const deadT = di ? af.dead(di) : 40;
+    const dj = devs[sides[1].dev] && devs[sides[1].dev].ifaces.find((x) => x.id === sides[1].iface);
+    // 兩端都用 BFD：對方一失聯，一秒內（BFD 的偵測時間）就把鄰居拿掉，不用等 Dead timer
+    const bfdMs = !af.ns && di && dj && ospfBfd(devs[sides[0].dev].dev, di) && ospfBfd(devs[sides[1].dev].dev, dj) ? bfdDetect(di, dj) : null;
+    const deadT = bfdMs != null ? Math.max(1, Math.ceil(bfdMs / 1000)) : di ? af.dead(di) : 40;
+    if (bfdMs != null) rec.bfd = true;
     if (now - rec.last >= deadT || rec.since + P2P_UP > rec.last) { delete adjT[k]; continue; }
     rec.gone = true;
     for (const [a, b] of [[sides[0], sides[1]], [sides[1], sides[0]]]) {
