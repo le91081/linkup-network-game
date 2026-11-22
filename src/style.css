@@ -286,8 +286,9 @@ h3.sec { font-size: 11.5px; letter-spacing: 0.08em; color: var(--faint); text-tr
 .tl.warn { color: #ffd995; }
 .tl.hint { color: #ffb3bb; font-family: var(--sans); }
 .term-line { display: flex; gap: 8px; padding: 6px 12px 10px; align-items: center; }
-.prompt { color: var(--accent); }
-.term-input { flex: 1; background: transparent; border: 0; outline: 0; color: #fff; font: inherit; user-select: text; }
+/* 提示字元很長（netops@backup:~/network-configs$、(config-if-range)#）時：提示字元可以換行、輸入框可以縮，整列不會比終端機寬 */
+.prompt { color: var(--accent); flex: 0 1 auto; min-width: 0; overflow-wrap: anywhere; }
+.term-input { flex: 1; min-width: 4em; background: transparent; border: 0; outline: 0; color: #fff; font: inherit; user-select: text; }
 .term-input::placeholder { color: #36405a; }
 
 /* ───────── 追蹤主控台 ───────── */
@@ -770,6 +771,10 @@ textarea.code.api-hdr { min-height: 52px; height: 52px; }
 .ans-bar { display: flex; align-items: center; gap: 8px; }
 .ans-bar .api-curl { flex: 1; min-width: 0; padding: 6px 9px; }
 .ans-bar .btn { flex: none; }
+.tl.git { white-space: pre-wrap; word-break: normal; overflow-wrap: anywhere; tab-size: 4; }
+.tl.git.hunk { color: #7dd3fc; }
+.tl.git.commit { color: #fde68a; }
+.tl.git.head { color: #fff; font-weight: 600; }
 .tl.tf { white-space: pre-wrap; word-break: normal; overflow-wrap: anywhere; }
 .tl.tf.head { color: #fff; font-weight: 600; }
 .tf-bar { flex-wrap: wrap; }

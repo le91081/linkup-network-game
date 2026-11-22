@@ -5,7 +5,8 @@ import { restconf, netconf } from '../engine/restconf.js';
 import { runPlaybook } from '../engine/automation.js';
 import { inventory, issues, newTemplate, tplCommit, tplDeploy } from '../engine/dnac.js';
 import { recompute } from '../engine/sim.js';
-import { dev } from './util.js';
+import { newRepo, cfgText, runBackup, git, repoInSync } from '../engine/git.js';
+import { dev, levelDefaults } from './util.js';
 
 export const CHAPTERS9 = [
   { id: 15, title: '網路自動化', desc: '用程式管理網路：REST API 與 JSON（RESTCONF / YANG）、用 Ansible 一次設定很多台設備（宣告式與冪等）、控制器式網路的北向 API 與 AI 分析。' },
@@ -31,6 +32,72 @@ const DNAC = { user: 'netops', pass: 'C@talyst-2026' };
 const DNAC_IP = '10.1.98.50';
 
 // ═══════════════════════════ 15-5 Catalyst Center 的範本 ═══════════════════════════
+
+// ═══════════════════════════ 15-6 用 Git 管理設定 ═══════════════════════════
+const BACKUP_SH = `#!/bin/sh
+# 每晚由 cron 執行：用 SSH 把每台設備的 running-config 抓回來，存成 <名稱>.cfg
+# 抓完之後用 git status / git diff 看有什麼變更，再 git add、git commit
+while read name ip; do
+  ssh -o BatchMode=yes backup@"$ip" "show running-config" > "$name.cfg.tmp" \\
+    && mv "$name.cfg.tmp" "$name.cfg" \\
+    || echo "$name: FAILED"
+done < devices.txt
+`;
+const GIT_DEVS = [{ id: 'core', ip: '10.1.99.1', file: 'core.cfg' }, { id: 'sw1', ip: '10.1.99.11', file: 'sw1.cfg' }, { id: 'sw2', ip: '10.1.99.12', file: 'sw2.cfg' }];
+const DEVICES_TXT = GIT_DEVS.map((x) => `${x.file.replace(/\.cfg$/, '')} ${x.ip}`).join('\n') + '\n';
+/** 15-6 的網路。stage 0：一開始；1：Alice 替 SW-1 的座位加了說明；2：現在（Bob 昨晚加了 VLAN 40，Core 那端少打了 add） */
+function gitNet(stage) {
+  const svi = (d, v, helper) => d.ifaces.push(newIface('vlan' + v, 'Vlan' + v, { t: 'svi', vlan: v }, { ip: `10.1.${v}.1`, mask: '255.255.255.0', ...(helper ? { helper } : {}) }));
+  const v40 = stage >= 2;
+  return makeState([
+    D('c9300', 'core', {
+      name: 'Core', pos: [0, -4],
+      init(d) {
+        d.sw.vlans.push({ id: 10, name: 'SALES' }, { id: 30, name: 'WAREHOUSE' }, ...(v40 ? [{ id: 40, name: 'PRINTERS' }] : []), { id: 98, name: 'DATACENTER' }, { id: 99, name: 'MGMT' });
+        Object.assign(d.sw.ports['Gi1/0/1'], { mode: 'trunk', allowed: '10,99' });
+        Object.assign(d.sw.ports['Gi1/0/2'], { mode: 'trunk', allowed: v40 ? '40' : '30,99' });
+        for (const p of ['Gi1/0/10', 'Gi1/0/12']) Object.assign(d.sw.ports[p], { mode: 'access', vlan: 98 });
+        svi(d, 10, '10.1.98.10'); svi(d, 30, '10.1.98.10');
+        if (v40) svi(d, 40);
+        svi(d, 98); svi(d, 99);
+      },
+    }),
+    D('c2960', 'sw1', {
+      name: 'SW-1', pos: [-9, 1.5],
+      init(d) {
+        d.sw.vlans.push({ id: 10, name: 'SALES' }, { id: 99, name: 'MGMT' });
+        Object.assign(d.sw.ports['Gi0/9'], { mode: 'trunk', allowed: '10,99' });
+        for (const p of ['Gi0/1', 'Gi0/2', 'Gi0/3', 'Gi0/4']) Object.assign(d.sw.ports[p], { mode: 'access', vlan: 10 });
+        if (stage >= 1) ['Gi0/1', 'Gi0/2', 'Gi0/3', 'Gi0/4'].forEach((p, n) => { d.sw.ports[p].desc = `Sales desk 0${n + 1}`; });
+        mgmtIp(d, 99, '10.1.99.11', '10.1.99.1');
+      },
+    }),
+    D('c2960', 'sw2', {
+      name: 'SW-2（倉儲）', pos: [9, 1.5],
+      init(d) {
+        d.sw.vlans.push({ id: 30, name: 'WAREHOUSE' }, ...(v40 ? [{ id: 40, name: 'PRINTERS' }] : []), { id: 99, name: 'MGMT' });
+        Object.assign(d.sw.ports['Gi0/9'], { mode: 'trunk', allowed: v40 ? '30,40,99' : '30,99' });
+        Object.assign(d.sw.ports['Gi0/1'], { mode: 'access', vlan: 30 });
+        if (v40) Object.assign(d.sw.ports['Gi0/2'], { mode: 'access', vlan: 40, desc: 'Label printer' });
+        mgmtIp(d, 99, '10.1.99.12', '10.1.99.1');
+      },
+    }),
+    D('tower', 'srv', {
+      name: 'DHCP 與檔案伺服器', pos: [-11, -9.5], ip: '10.1.98.10', gw: '10.1.98.1', services: [{ proto: 'tcp', port: 445, name: 'SMB 檔案分享' }],
+      init(d) { d.dhcpScopes = [10, 30].map((v) => ({ start: `10.1.${v}.100`, end: `10.1.${v}.199`, gw: `10.1.${v}.1`, dns: '10.1.98.10' })); },
+    }),
+    D('tower', 'bk', { name: '備份伺服器', pos: [11, -9.5], ip: '10.1.98.30', gw: '10.1.98.1', dns: '10.1.98.10' }),
+    D('pc', 'pc-s', { name: '業務 PC', pos: [-11, 7], dhcp: true }),
+    D('pc', 'pc-w', { name: '倉儲 PC', pos: [6.5, 7.5], dhcp: true }),
+    D('printer', 'prn', { name: '標籤印表機', pos: [12, 7], ip: '10.1.40.20', gw: '10.1.40.1', services: [{ proto: 'tcp', port: 9100, name: 'RAW 列印' }] }),
+  ], [
+    ['core:Gi1/0/1', 'sw1:Gi0/9'], ['core:Gi1/0/2', 'sw2:Gi0/9'], ['srv:eth0', 'core:Gi1/0/10'], ['bk:eth0', 'core:Gi1/0/12'],
+    ['pc-s:eth0', 'sw1:Gi0/1'], ['pc-w:eth0', 'sw2:Gi0/1'], ['prn:eth0', 'sw2:Gi0/2'],
+  ]);
+}
+/** 三個階段的設定檔（備份檔的樣子） */
+const gitCfgs = (stage) => { const s = levelDefaults(gitNet(stage)); return Object.fromEntries(GIT_DEVS.map((x) => [x.file, cfgText(s, s.devices[x.id])])); };
+
 const TPL_DNAC = '10.1.98.20';
 const SITES = [
   { id: 'swa', name: 'SW-A', ip: '10.1.99.21', hostname: 'TPE-AS01', location: 'TPE-3F-A', pos: [-11.5, 1] },
@@ -644,5 +711,65 @@ export const LEVELS11 = [
       recompute(s);
     },
     recap: ['範本把標準設定寫一次、用變數處理每台不同的地方；草稿要提交成新版本才會被部署，版本紀錄看得出誰改了什麼。', '控制器用 SSH 把設定推到每台設備：某一行不被接受、或控制器連不到，那一台就是 FAILURE — 部署結果要一台一台確認。'],
+  },
+  // ════════════════════════ 15-6 ════════════════════════
+  {
+    id: 'l114', chapter: 15, title: '昨晚有人改了 Core，今天倉儲全斷了', subtitle: '用 Git 管理設定：提交紀錄、差異與修正', tags: ['Git', '組態管理', '版本控制', 'diff', 'trunk'],
+    brief: '備份伺服器每天晚上用 SSH 把每台交換器的設定抓回來，存進 Git。昨天晚上 Bob 替倉儲新增了 VLAN 40（新的標籤印表機），今天早上倉儲的電腦全部拿不到 IP，SW-2 的備份從昨晚開始也一直失敗。請用 Git 的紀錄找出昨晚改了什麼、把問題修好（印表機的 VLAN 40 要保留），再把修好之後的設定備份、提交回 Git。',
+    given: [
+      ['備份伺服器', '10.1.98.30 · Linux ·「終端機」：git、./backup.sh（設定檔在 ~/network-configs）'],
+      ['交換器', 'Core 10.1.99.1 · SW-1 10.1.99.11 · SW-2（倉儲）10.1.99.12'],
+      ['倉儲', 'VLAN 30 電腦（DHCP）· VLAN 40 標籤印表機 10.1.40.20（TCP 9100）'], ['DHCP 與檔案伺服器', '10.1.98.10'],
+    ],
+    learn: [
+      { t: '用 Git 管理設定', d: '把每台設備的設定檔放進 Git：每次變更都是一筆提交 (commit)，記錄誰、什麼時候、改了什麼、為什麼。出問題時先看最近的變更，比一台一台登入找快得多，也能拿出任何一個版本比對或還原。常見做法是用 Oxidized、RANCID 這類工具定時用 SSH 抓設定，有變更就提交。' },
+      { t: '看歷史與差異', d: 'git log --oneline 列出提交；git show <編號> 看那一筆改了哪些行（- 是拿掉的、+ 是加上的，@@ 後面是所在的段落）；git diff 比較工作目錄和上一次提交，git diff HEAD~1 HEAD 比較兩個版本；git blame 看每一行最後是哪一筆提交改的。' },
+      { t: 'status、add、commit', d: '工作目錄的檔案變了，git status 會列出 modified；git add 把變更放進暫存區 (staging area)，git commit -m "說明" 才會記成一筆新的版本。說明要寫「為什麼改」，半年後的自己才看得懂。' },
+      { t: '少打 add 的 trunk', d: 'switchport trunk allowed vlan 40 是把允許的清單「換成」只有 40；要加 VLAN 要寫 switchport trunk allowed vlan add 40。少打 add 是很常見的事故：原本的 VLAN（包括管理 VLAN）全部斷掉。' },
+    ],
+    setup() {
+      const c0 = gitCfgs(0), c1 = gitCfgs(1), c2 = gitCfgs(2);
+      const extra = { 'backup.sh': BACKUP_SH, 'devices.txt': DEVICES_TXT };
+      const s = gitNet(2);
+      s.devices.bk.git = newRepo([
+        { author: 'netops', email: 'netops@corp.local', t: -341869, msg: 'Initial import of switch configs', files: { ...c0, ...extra } },
+        { author: 'alice', email: 'alice@corp.local', t: -239963, msg: 'sw1: descriptions for sales desks 01-04', files: { ...c1, ...extra } },
+        // 昨晚的自動備份：Core 有變更；SW-2 連不到，檔案還是舊的
+        { author: 'bob', email: 'bob@corp.local', t: -33288, msg: 'Automatic backup 2026-01-04 23:45\n\ncore: changed by bob (vty0, 10.1.98.60)\nsw2: FAILED - ssh: connect to host 10.1.99.12 port 22: Connection timed out', files: { ...c1, 'core.cfg': c2['core.cfg'], ...extra } },
+      ], GIT_DEVS);
+      return s;
+    },
+    objectives: [
+      { type: 'dhcp', dev: 'pc-w', subnet: '10.1.30.0/24', label: '倉儲 PC 拿到 10.1.30.x' },
+      { type: 'tcp', from: 'pc-w', ip: '10.1.40.20', port: 9100, label: '倉儲 PC 可以列印到標籤印表機（VLAN 40，TCP 9100）' },
+      {
+        type: 'check', label: '備份伺服器用 SSH 備份三台都成功（./backup.sh）',
+        test(s) {
+          const g = dev(s, 'bk').git, b = g.backups[g.backups.length - 1];
+          if (!b) return '還沒有在備份伺服器執行 ./backup.sh';
+          const bad = g.devices.find((x) => !b.res[x.id]);
+          return !bad || `最後一次備份 ${dev(s, bad.id).name}（${bad.ip}）失敗`;
+        },
+      },
+      {
+        type: 'check', label: 'Git 的最新提交就是三台現在的設定（git status 是 clean）',
+        test(s) { return repoInSync(s, dev(s, 'bk')); },
+      },
+    ],
+    hints: [
+      '備份伺服器 →「終端機」：git log --oneline 看最近的提交。昨晚 23:45 有一筆 Bob 的變更，提交說明也寫了 SW-2 的備份失敗（git log -n 1 看完整的說明）。',
+      'git show HEAD：Core 的 GigabitEthernet1/0/2（往 SW-2 的 trunk）從 switchport trunk allowed vlan 30,99 變成 40 — Bob 少打了 add，VLAN 30（倉儲）和 99（管理）都被拿掉了。',
+      'Core 的 CLI：interface gi1/0/2 → switchport trunk allowed vlan 30,40,99。VLAN 40 是新印表機要用的，不能整個改回去。',
+      '回到備份伺服器：./backup.sh（這次 SW-2 也連得到了）→ git status → git diff → git add -A → git commit -m "Core Gi1/0/2: restore VLAN 30 and 99 on the trunk to SW-2"。',
+    ],
+    solve(s) {
+      recompute(s);
+      typeIn(s, 'core', ['configure terminal', 'interface gi1/0/2', 'switchport trunk allowed vlan 30,40,99', 'end']);
+      recompute(s);
+      runBackup(s, 'bk');
+      git(s, 'bk', ['add', '-A']);
+      git(s, 'bk', ['commit', '-m', 'Core Gi1/0/2: restore VLAN 30 and 99 on the trunk to SW-2']);
+    },
+    recap: ['把設定放進 Git，每次變更都留下誰、何時、改了什麼；出事時先看 git log 與 git show，比一台一台登入找快。', 'switchport trunk allowed vlan 會把清單整個換掉，加 VLAN 要用 add；修好之後要重新備份、提交，Git 才會是最新的。'],
   },
 ];

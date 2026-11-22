@@ -2,7 +2,7 @@
 import { makeDevice as D, makeState, setLine, newIface } from '../engine/model.js';
 import { parseIp } from '../engine/ip.js';
 
-import { dev, ifc, link, setIp, useDhcp, swp, addVlan, portTo, operTo, WEB, DB } from './util.js';
+import { dev, ifc, link, setIp, useDhcp, swp, addVlan, portTo, operTo, WEB, DB, levelDefaults } from './util.js';
 import { CHAPTERS2, LEVELS2 } from './advanced.js';
 import { CHAPTERS3, LEVELS3 } from './more.js';
 import { CHAPTERS4, LEVELS4 } from './trouble.js';
@@ -36,7 +36,6 @@ import { LEVELS31 } from './nolabel.js';
 import { LEVELS32 } from './wifi2.js';
 import { LEVELS33 } from './wlc2.js';
 import { LEVELS34 } from './flex.js';
-import { isCiscoOs } from '../engine/files.js';
 
 export const CHAPTERS = [
   { id: 1, title: '家用網路', desc: '從第一條網路線開始，讓家裡的設備互通並連上網際網路。' },
@@ -653,23 +652,10 @@ CHAPTERS.push(...CHAPTERS2, ...CHAPTERS3, ...CHAPTERS4, ...CHAPTERS5, ...CHAPTER
 LEVELS.push(...LEVELS2, ...LEVELS3, ...LEVELS4, ...LEVELS5, ...LEVELS6, ...LEVELS7, ...LEVELS8, ...LEVELS9, ...LEVELS10, ...LEVELS11, ...LEVELS12, ...LEVELS13, ...LEVELS14, ...LEVELS15, ...LEVELS16, ...LEVELS17, ...LEVELS18, ...LEVELS19, ...LEVELS20, ...LEVELS21, ...LEVELS22, ...LEVELS23, ...LEVELS24, ...LEVELS25, ...LEVELS26, ...LEVELS27, ...LEVELS28, ...LEVELS29, ...LEVELS30, ...LEVELS31, ...LEVELS32, ...LEVELS33, ...LEVELS34);
 LEVELS.sort((a, b) => a.chapter - b.chapter); // 穩定排序：補充關卡排到所屬章節的最後
 
-// 關卡裡的交換器都由「前任管理員」下過 spanning-tree portfast default：接終端設備的埠一連上就開始轉送。
-// 原廠預設是關閉的（要等 30 秒），在自由模式放一台新的交換器就會遇到。
+// 關卡裡的設備都由「前任管理員」設好了一些東西（portfast default、SSH、SNMP），見 util.js 的 levelDefaults
 for (const lv of LEVELS) {
   const setup = lv.setup;
-  lv.setup = () => {
-    const s = setup();
-    for (const d of Object.values(s.devices)) if (d.sw && d.sw.stp && d.sw.stp.portfastDefault == null) d.sw.stp.portfastDefault = true;
-    // 前任管理員也已經把遠端管理設好了：網域名稱、SSH 用的 RSA 金鑰、vty 用本機帳號登入（login local）。
-    // 原廠的 Cisco 設備這些都沒有，所以 SSH 連不進去；在自由模式或第 11 章會遇到
-    for (const d of Object.values(s.devices)) {
-      if (!d.mgmt || !isCiscoOs(d)) continue;
-      if (d.mgmt.sshKey === undefined) { d.mgmt.sshKey = { bits: 2048, gen: 1 }; d.mgmt.domain ||= 'corp.local'; }
-      if (d.mgmt.vtyLogin === undefined) d.mgmt.vtyLogin = 'local';
-      if (d.mgmt.snmp === undefined) { d.mgmt.snmp = 'v2c'; d.mgmt.community ||= 'public'; } // 前任留下的 SNMP v2c public
-    }
-    return s;
-  };
+  lv.setup = () => levelDefaults(setup());
 }
 
 export const levelById = (id) => LEVELS.find((l) => l.id === id);

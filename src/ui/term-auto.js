@@ -3,6 +3,7 @@ import { sendApi, sendNetconf } from './panel-auto.js';
 import { ansibleRun } from './panel-auto.js';
 import { parseYaml, yamlErrorText } from '../engine/yaml.js';
 import { terraform, tfApplyConfirmed, tfStateJson } from '../engine/terraform.js';
+import { git, runBackup } from '../engine/git.js';
 
 /** 依照 shell 的規則切開參數：單引號、雙引號、反斜線 */
 export function shellWords(s) {
@@ -203,6 +204,36 @@ export function tfFileCmd(dev, c, args, print) {
     if (!args[0]) { print(`${c}: missing operand`, 'bad'); return true; }
     if (!(args[0] in files)) { print(`${c}: ${args[0]}: No such file or directory`, 'bad'); return true; }
     for (const l of files[args[0]].replace(/\n$/, '').split('\n')) print(l, 'pre');
+    return true;
+  }
+  return false;
+}
+
+// ───────────────────────── Git 與 ./backup.sh ─────────────────────────
+
+/** git <子指令> */
+export function gitCmd(app, dev, line, print) {
+  const sw = shellWords(line);
+  if (sw.err) { print(`-bash: ${sw.err}`, 'bad'); return; }
+  for (const l of git(app.state, dev.id, sw.words.slice(1))) print(l.t, l.c);
+}
+/** ./backup.sh：用 SSH 把每台設備的設定抓回工作目錄 */
+export function backupCmd(app, dev, print) {
+  for (const l of runBackup(app.state, dev.id).lines) print(l.t, l.c);
+}
+/** 備份伺服器上的檔案：ls、cat、head、tail（~/network-configs 的工作目錄） */
+export function gitFileCmd(dev, c, args, print) {
+  const files = dev.git.wt, names = Object.keys(files).sort();
+  if (c === 'ls') { print(names.join('  ')); return true; }
+  if (c === 'pwd') { print('/home/netops/network-configs'); return true; }
+  if (['cat', 'less', 'more', 'head', 'tail'].includes(c)) {
+    const f = args.filter((x) => !x.startsWith('-'))[0];
+    if (!f) { print(`${c}: missing operand`, 'bad'); return true; }
+    if (!(f in files)) { print(`${c}: ${f}: No such file or directory`, 'bad'); return true; }
+    let l = files[f].replace(/\n$/, '').split('\n');
+    const n = +((args.find((x) => /^-\d+$/.test(x)) || '-10').slice(1));
+    if (c === 'head') l = l.slice(0, n); else if (c === 'tail') l = l.slice(-n);
+    for (const x of l) print(x, 'pre');
     return true;
   }
   return false;

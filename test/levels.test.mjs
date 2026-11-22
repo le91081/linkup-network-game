@@ -3728,6 +3728,49 @@ console.log('\nCatalyst Center 的範本');
   ok(d3.ver === 3 && d3.results.every((x) => x.status === 'SUCCESS') && /logging host 10\.1\.98\.10/.test(runningConfig(s, s.devices.swc).join('\n')) && s.devices.swc.sw.vlans.some((v) => v.id === 40 && v.name === 'VOICE'), 'v3 部署到三台：都 SUCCESS');
 }
 
+console.log('\n用 Git 管理設定');
+{
+  const sim = await import('../src/engine/sim.js');
+  const { git, runBackup, repoInSync, cfgText, lineDiff } = await import('../src/engine/git.js');
+  const { iosSession } = await import('../src/engine/ios.js');
+  const ok = (cond, title) => (cond ? console.log('  ✔ ' + title) : fail(title));
+  const lv = LEVELS.find((x) => x.id === 'l114');
+  const s = lv.setup(); settle(s);
+  const G = (...a) => git(s, 'bk', a).map((l) => l.t).join('\n');
+  const log = G('log', '--oneline');
+  ok(log.split('\n').length === 3 && /\(HEAD -> main\) Automatic backup 2026-01-04 23:45/.test(log), 'git log --oneline：三筆提交，最新的是昨晚的自動備份');
+  ok(/Author: bob <bob@corp\.local>\nDate:   Sun Jan 4 23:45:12 2026 \+0800/.test(G('log', '-n', '1')) && /sw2: FAILED/.test(G('log', '-n', '1')), 'git log -n 1：作者、日期（台灣時間）與完整的說明');
+  const show = G('show', 'HEAD');
+  ok(/\n@@ -\d+,\d+ \+\d+,\d+ @@ \S/.test(show) && /\n- switchport trunk allowed vlan 30,99\n\+ switchport trunk allowed vlan 40\n/.test(show) && /\+interface Vlan40/.test(show), 'git show HEAD：Core 的 trunk 從 30,99 變成 40（少打 add），也看得到新增的 Vlan40');
+  ok(!/sw2\.cfg/.test(show) && /sw1\.cfg/.test(G('show', 'HEAD~1', '--stat')), '昨晚 SW-2 備份失敗：那一筆沒有 sw2.cfg；前一筆是 Alice 改 sw1.cfg');
+  ok(/^nothing to commit, working tree clean$/m.test(G('status')), '一開始工作目錄是乾淨的');
+  const b0 = runBackup(s, 'bk');
+  ok(!b0.res.sw2 && b0.res.core && /sw2[^\n]*FAILED/.test(b0.lines.map((l) => l.t).join('\n')) && /^nothing to commit/m.test(G('status')), '還沒修：./backup.sh 連不到 SW-2，其他兩台沒有變更');
+  const S = iosSession(() => s.devices.core, () => s);
+  for (const l of ['configure terminal', 'interface gi1/0/2', 'switchport trunk allowed vlan 30,40,99', 'end']) S.exec(l);
+  settle(s);
+  const b1 = runBackup(s, 'bk');
+  ok(Object.values(b1.res).every(Boolean), '修好之後 ./backup.sh：三台都成功');
+  const st = G('status');
+  ok(/modified:   core\.cfg/.test(st) && /modified:   sw2\.cfg/.test(st) && !/sw1\.cfg/.test(st) && /no changes added to commit/.test(st), 'git status：core.cfg 與 sw2.cfg 有變更（SW-2 終於備份到 Bob 昨晚的修改）');
+  ok(/\n- switchport trunk allowed vlan 40\n\+ switchport trunk allowed vlan 30,40,99\n/.test(G('diff', '--', 'core.cfg')), 'git diff -- core.cfg：只看 Core 的差異');
+  ok(/no changes added to commit/.test(G('commit', '-m', 'x')), '沒有 git add 就 commit：沒有東西可以提交');
+  G('add', 'core.cfg');
+  ok(/Aborting commit due to empty commit message/.test(G('commit')) && /Aborting commit/.test(G('commit', '-m', '  ')), 'git commit 沒有 -m（或說明是空的）：中止');
+  ok(/Changes to be committed:[^]*modified:   core\.cfg[^]*Changes not staged for commit:[^]*modified:   sw2\.cfg/.test(G('status')), 'git add core.cfg：core 在暫存區，sw2 還沒有');
+  ok(repoInSync(s, s.devices.bk) !== true, '還沒提交：repoInSync 指出 Git 不是最新的');
+  G('add', '-A');
+  const cm = G('commit', '-m', 'Core Gi1/0/2: restore VLAN 30 and 99');
+  ok(/^\[main [0-9a-f]{7}\] Core Gi1\/0\/2: restore VLAN 30 and 99\n 2 files changed, \d+ insertions?\(\+\), \d+ deletions?\(-\)$/.test(cm), `git commit：${cm.split('\n')[1].trim()}`);
+  ok(repoInSync(s, s.devices.bk) === true && /working tree clean/.test(G('status')), '提交之後：Git 的最新版本就是三台現在的設定');
+  const bl = G('blame', 'core.cfg').split('\n').find((l) => /switchport trunk allowed vlan 30,40,99/.test(l));
+  ok(/^[0-9a-f]{8} \(netops +2026-01-05 /.test(bl || ''), 'git blame：修好的那一行算在剛剛的提交');
+  ok(/unknown revision/.test(G('show', 'deadbeef')) && /pathspec 'x\.cfg' did not match/.test(G('add', 'x.cfg')), '錯誤的版本與檔名：和 git 一樣的錯誤訊息');
+  ok(lineDiff(['a', 'b', 'c'], ['a', 'c', 'd']).map((x) => x.op + x.text).join() === ' a,-b, c,+d', '逐行比對（最長共同子序列）');
+  ok(cfgText(s, s.devices.sw1).startsWith('!\nhostname SW-1'), '備份檔拿掉 Building configuration... 這種每次都不一樣的開頭');
+  void sim;
+}
+
 console.log('\nNetFlow 與 QoS 的 police');
 {
   const sim = await import('../src/engine/sim.js');

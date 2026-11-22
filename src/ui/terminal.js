@@ -12,7 +12,7 @@ import { counters, onBulk } from '../engine/wire.js';
 import { fortiRun } from './forticli.js';
 import { transact6, dhcp6Trace, duidOf, iaidOf } from '../engine/sim6.js';
 import { parseIp6, fmtIp6 } from '../engine/ip6.js';
-import { isApiCurl, curlApi, ansibleCmd, fileCmd, netconfCmd, terraformCmd, tfAnswer, tfFileCmd } from './term-auto.js';
+import { isApiCurl, curlApi, ansibleCmd, fileCmd, netconfCmd, terraformCmd, tfAnswer, tfFileCmd, gitCmd, backupCmd, gitFileCmd } from './term-auto.js';
 import { dockerCmd } from './term-docker.js';
 import { dockerDeliver } from '../engine/docker.js';
 import { tlsCheck, fmtDate, certSelf, CORP_CA, PUBLIC_CAS } from '../engine/web.js';
@@ -74,8 +74,8 @@ const HELP_LINUX = [
 export function buildTerminal(ctx, body) {
   const { app, dev } = ctx;
   // Ansible 的控制主機跑的是 Linux（Ansible 不能裝在 Windows 上）
-  const linux = !!dev.ansible || !!dev.docker || !!dev.tf;
-  const PS = linux ? `${dev.ansible || dev.tf ? 'netops' : 'admin'}@${dev.name.replace(/[^\w-]+/g, '-').replace(/^-+|-+$/g, '').toLowerCase() || 'ansible'}:~$` : 'C:\\>';
+  const linux = !!dev.ansible || !!dev.docker || !!dev.tf || !!dev.git;
+  const PS = dev.git ? 'netops@backup:~/network-configs$' : linux ? `${dev.ansible || dev.tf ? 'netops' : 'admin'}@${dev.name.replace(/[^\w-]+/g, '-').replace(/^-+|-+$/g, '').toLowerCase() || 'ansible'}:~$` : 'C:\\>';
   const logs = (app.termLog[dev.id] ||= [{ t: `${dev.name} 終端機 — 輸入 help 查看指令`, c: 'dim' }]);
   const hist = (app.termHist[dev.id] ||= []);
   let hi = hist.length;
@@ -254,6 +254,7 @@ export function buildTerminal(ctx, body) {
       (linux ? HELP_LINUX : HELP).forEach((x) => print(x, 'dim'));
       if ((dev.apps || []).includes('api')) print('  curl -k -u 帳號:密碼 -H "Accept: application/yang-data+json" https://<IP>/restconf/data/…   呼叫 REST API（-X 方法、-d 內容、-i 顯示標頭）', 'dim');
       if ((dev.apps || []).includes('api')) print('  netconf-console2 --host=<IP> --port=830 -u 帳號 -p 密碼 --hello | --get-config   NETCONF（SSH 的 830 埠；edit-config 用 API 分頁）', 'dim');
+      if (dev.git) { print('  ./backup.sh             用 SSH 把每台設備的 running-config 抓回工作目錄', 'dim'); print('  git status | diff | add | commit -m "說明" | log [--oneline] [-p] | show <版本> | blame <檔名> | restore <檔名>', 'dim'); print('  ls / cat / head / tail <檔名>   工作目錄裡的設定檔', 'dim'); }
       if (dev.tf) { print('  terraform init | validate | plan | apply [-auto-approve]   Terraform（main.tf 也可以在 Terraform 分頁編輯）', 'dim'); print('  terraform import <位址> <ID> · terraform state list · ls / cat main.tf', 'dim'); }
       if (dev.ansible) { print('  ansible-playbook -i inventory.ini <playbook> [--check] [-v] [--limit 主機]   執行 playbook', 'dim'); print('  ls / cat <檔名>          列出 / 顯示控制主機上的檔案', 'dim'); }
       if (dev.docker) {
@@ -571,6 +572,17 @@ export function buildTerminal(ctx, body) {
     } else if (c === 'netconf-console2' && ((dev.apps || []).includes('api') || dev.ansible)) {
       netconfCmd(app, dev, line.trim(), print);
       ctx.commit(false);
+    } else if (c === 'git' && dev.git) {
+      gitCmd(app, dev, line.trim(), print);
+      ctx.commit(false);
+    } else if (dev.git && (c === './backup.sh' || ((c === 'sh' || c === 'bash') && /^(\.\/)?backup\.sh$/.test(args[0] || '')))) {
+      backupCmd(app, dev, print);
+      ctx.commit(false);
+    } else if (dev.git && c === 'backup.sh') {
+      print('backup.sh: command not found', 'warn');
+      print('  ↳ 目前目錄裡的程式要寫成 ./backup.sh（Linux 不會在目前目錄找指令）', 'hint');
+    } else if (dev.git && ['ls', 'pwd', 'cat', 'less', 'more', 'head', 'tail'].includes(c) && gitFileCmd(dev, c, args, print)) {
+      // 備份伺服器的工作目錄
     } else if (c === 'terraform' && dev.tf) {
       terraformCmd(app, dev, line.trim(), print);
       ctx.commit(false);
@@ -824,7 +836,7 @@ export function buildTerminal(ctx, body) {
     if (!a.ok) { lost(r, a); draw(); return; }
     if ((r.kind !== 'ios' || r.monitor) && consoleFollow(app, r.conn.to, 'vty:' + r.conn.cid, print)) draw();
   });
-  const chips = dev.docker ? ['docker ps -a', 'docker port web', 'curl http://localhost:8080', 'ip addr', 'help'] : dev.tf ? ['ls', 'cat main.tf', 'terraform init', 'terraform plan', 'terraform apply', 'help'] : linux ? ['ls', 'cat inventory.ini', `ansible-playbook -i inventory.ini ${dev.ansible.file}`, `ansible-playbook -i inventory.ini ${dev.ansible.file} --check -v`, 'help']
+  const chips = dev.docker ? ['docker ps -a', 'docker port web', 'curl http://localhost:8080', 'ip addr', 'help'] : dev.tf ? ['ls', 'cat main.tf', 'terraform init', 'terraform plan', 'terraform apply', 'help'] : dev.git ? ['git log --oneline', 'git show HEAD', './backup.sh', 'git status', 'git diff', 'help'] : linux ? ['ls', 'cat inventory.ini', `ansible-playbook -i inventory.ini ${dev.ansible.file}`, `ansible-playbook -i inventory.ini ${dev.ansible.file} --check -v`, 'help']
     : ['ipconfig', 'ping 8.8.8.8', 'tracert 8.8.8.8', 'nslookup www.example.com', 'arp -a', 'help'];
   body.append(term, h('div', { class: 'chips' }, chips.map((x) =>
     h('button', { class: 'chip btnchip', type: 'button', title: x, onclick: () => { hist.push(x); hi = hist.length; run(x); } }, h('span', { class: 'ell', text: x })))));

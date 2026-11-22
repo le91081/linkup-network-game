@@ -275,3 +275,24 @@ test('Catalyst Center 的範本：填變數、提交草稿、部署，結果一�
   await expect(res).toContainText('不在 SW-C 允許管理的位址範圍內');
   expect(await scan(page, '#panel', 'Catalyst Center 分頁')).toEqual([]);
 });
+
+test('Git：備份伺服器上 git log / git show 找出昨晚的變更，修好之後 ./backup.sh、git add、git commit', async ({ page }) => {
+  await boot(page);
+  await open(page, 'l114');
+  await clickDevice(page, 'bk');
+  await page.locator('#panel .tab', { hasText: '終端機' }).click();
+  const out = page.locator('#panel .term-out');
+  await typeCmd(page, 'git log --oneline', 'git show HEAD');
+  await expect(out).toContainText('(HEAD -> main) Automatic backup 2026-01-04 23:45');
+  await expect(out).toContainText('- switchport trunk allowed vlan 30,99');
+  await expect(out).toContainText('+ switchport trunk allowed vlan 40');
+  expect(await scan(page, '#panel', '備份伺服器的終端機（git show）')).toEqual([]);
+  await page.evaluate(() => { const L = window.linkup; L.state.devices.core.sw.ports['Gi1/0/2'].allowed = '30,40,99'; L.settleNow(); });
+  await clickDevice(page, 'bk');
+  await page.locator('#panel .tab', { hasText: '終端機' }).click();
+  await typeCmd(page, './backup.sh', 'git status');
+  await expect(out).toContainText('modified:   sw2.cfg');
+  await typeCmd(page, 'git add -A', 'git commit -m "Core Gi1/0/2: restore VLAN 30 and 99"', 'git status');
+  await expect(out).toContainText('2 files changed');
+  await expect(out.locator('.tl').last()).toHaveText('nothing to commit, working tree clean');
+});

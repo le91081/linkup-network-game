@@ -75,7 +75,7 @@ npm run build    # 輸出到 dist/
 - **評分**：過關時依實際作答時間（畫面在前景、沒有開對話框才算；標準時間是 3 分鐘加上每個目標 1.5 分鐘）、看了幾個提示、跑了幾次完整測試給 S / A / B / C 與分數，關卡選單上顯示最佳等級。設定變更的次數只列出來參考。
 - **關卡編輯器**：自由模式的「關卡設計」可以寫關卡名稱、任務說明、提示，指定哪些設備鎖定（玩家看得到、不能設定），然後試玩、存成自訂關卡、或匯出成關卡檔分享；關卡選單的「自訂關卡」可以遊玩、匯出、刪除與匯入。
 
-## 關卡（17 章 113 關）
+## 關卡（17 章 114 關）
 
 | 章節 | 關卡數 | 主題 |
 | --- | --- | --- |
@@ -93,7 +93,7 @@ npm run build    # 輸出到 dist/
 | 12 語音與 QoS | 4 | IP 電話：PoE、語音 VLAN、CDP 與 LLDP-MED、DHCP option 150、CUCM 註冊；線路塞車時用 QoS 保住通話：信任邊界、LLQ、配合營運商合約頻寬的整形；新的 AP 插上去不亮：為了稽核整台 `no cdp run`，交換器只能依 Class 4 替每台 AP 保留 30 W，預算用完（改成只在使用者的埠 `no cdp enable`）；專線一斷電話就聽不清楚：QoS 只套在主線，切到 10 Mbps 的備援線路後沒有整形，每條線路要依自己的合約 shape、共用同一個 LLQ |
 | 13 進階路由 | 10 | OSPF 的 DR / BDR 選舉（不搶位、`clear ip ospf process`）、Router ID 與 Loopback、passive-interface；參考頻寬與 cost、等價多路徑 (ECMP)；多區域 OSPF、ABR 與 `area range` 彙總；用 eBGP 同時接兩家 ISP：local-preference 決定出去走哪家、AS-path prepend 影響進來走哪家、prefix-list 避免變成轉運站；把靜態路由重分配進 OSPF（ASBR、O E2、用 prefix-list + route-map 只送工廠的網段）；政策路由讓 NAS 的備份改走寬頻（ACL + route-map set ip next-hop，套在進來的介面上）；分公司的路由表太大：stub 與 totally stubby（新路由器照範本設了 `area 10 stub`、ABR 沒設，Hello 的選項位元不同，鄰居起不來）；工廠在 stub 區域裡重分配供應商的網段白做：改成 NSSA（O N2、ABR 轉成 Type-5、`no-summary` 補回預設路由）；兩台邊界路由器的 iBGP（`update-source`、`next-hop-self`、中間的 Core 沒有 BGP 是黑洞，要全網狀或 route reflector，ISP 的線斷了繞網際網路回來）；機房的 VRF 各跑自己的 OSPF 程序，共用服務靠兩個方向的靜態路由洩漏（`… global`、出口介面在另一個 VRF），只洩漏需要的網段 |
 | 14 無線控制器與無線環境 | 5 | 輕量型 AP 與無線控制器（CAPWAP、DHCP option 43、Local 模式的流量經控制器放進 VLAN、RRM 自動分頻道）、牆面衰減與訊號熱力圖、漫遊（同一個 VLAN、sticky client 與 802.11k/v/r）；控制器 N+1：AP 要填主要與次要控制器、備援控制器要有一樣的 WLAN、它的 Trunk 要允許員工的 VLAN（heartbeat 逾時約 30 秒才切換，主要的回來會自己切回去）；分公司的 AP 用 Local 模式，開分公司的 NAS 也繞回總公司、專線一斷 Wi-Fi 就停：改成 FlexConnect，AP 的埠改成 Trunk（Native VLAN 是 AP 的管理 VLAN） |
-| 15 網路自動化 | 5 | RESTCONF：只走 HTTPS、HTTP Basic 驗證、YANG 路徑（`ietf-interfaces`、`Cisco-IOS-XE-native`）、JSON 與 XML、狀態碼、名稱裡的 `/` 要寫成 `%2F`、自簽憑證；Ansible：INI 格式的 inventory、YAML、`network_cli`、資源模組、`--check`、PLAY RECAP 與冪等；Catalyst Center：Token 驗證的北向 API、用 SNMP / SSH 輪詢的設備清單、AI 驅動的問題清單（DHCP 失敗率偏離基準、雙工不一致、設備連不到）；HTTPS 管理要關掉、改用 NETCONF：`netconf-yang`、SSH 要先有 RSA 金鑰，用 <edit-config> 建立 Loopback；三台新交換器用 Catalyst Center 的範本一次設好：變數、草稿要提交成新版本才會部署、部署結果一台一台看（錯字那一行失敗、控制器被 access-class 擋住） |
+| 15 網路自動化 | 6 | RESTCONF：只走 HTTPS、HTTP Basic 驗證、YANG 路徑（`ietf-interfaces`、`Cisco-IOS-XE-native`）、JSON 與 XML、狀態碼、名稱裡的 `/` 要寫成 `%2F`、自簽憑證；Ansible：INI 格式的 inventory、YAML、`network_cli`、資源模組、`--check`、PLAY RECAP 與冪等；Catalyst Center：Token 驗證的北向 API、用 SNMP / SSH 輪詢的設備清單、AI 驅動的問題清單（DHCP 失敗率偏離基準、雙工不一致、設備連不到）；HTTPS 管理要關掉、改用 NETCONF：`netconf-yang`、SSH 要先有 RSA 金鑰，用 <edit-config> 建立 Loopback；三台新交換器用 Catalyst Center 的範本一次設好：變數、草稿要提交成新版本才會部署、部署結果一台一台看（錯字那一行失敗、控制器被 access-class 擋住）；昨晚有人改了 Core、今天倉儲全斷：備份伺服器上用 git log / git show 找出少打 add 的 trunk，修好之後 ./backup.sh、git add、git commit |
 | 16 雲端網路 | 5 | AWS 的 VPC：公有 / 私有子網路與路由表、網際網路閘道與彈性 IP（一對一 NAT）、安全群組（有狀態）、NAT 閘道、網路 ACL（無狀態、臨時連接埠）、站對站 VPN 與路由傳播（混合雲），「下載設定檔」貼到公司的路由器；應用程式負載平衡器 (ALB) 回 503：目標的安全群組沒有允許 ALB 的健康檢查（來源用 ALB 的安全群組）；兩條 VPC peering 接好了，開發環境還是到不了正式環境（peering 不能轉送）：改用 Transit Gateway，兩邊的路由表都指向它、安全群組允許新的網段；有人在主控台手動改了安全群組 (drift)：Terraform 的 plan 列出差異，要留的規則補進 main.tf 再 apply，別讓 apply 把合作夥伴的規則一起拿掉 |
 | 17 虛擬化 | 3 | VMware ESXi：虛擬交換器、連接埠群組決定 VLAN（VLAN ID 0 不加標籤）、接主機的實體交換器埠要設成 Trunk 並只放行需要的 VLAN、vmk0 管理介面；VRF-Lite：兩家公司用同一個網段（`vrf definition`、`vrf forwarding` 會清掉 IP、`show ip route vrf`、`ping vrf`）；Docker：橋接網路與 veth、`-p 主機埠:容器埠`、只綁 127.0.0.1、資料庫不要發佈（Docker 會繞過 ufw）、改連接埠要重建容器 |
 
@@ -400,8 +400,8 @@ npm run build    # 輸出到 dist/
 
 完整的功能規劃（每個領域已完成、部分完成、尚未開始的項目，以及建議的實作順序）在 [PLAN.md](PLAN.md)。以下是最接近的幾項：
 
-1. 自動化與雲端補充（PLAN 的第 21 階段：用 Git 管理設定）；FortiGate HA、堆疊 / vPC；OSPF point-to-multipoint、FortiGate 的 IPsec 介面模式與 IPv6 政策、DHCPv6 Prefix Delegation、NAT64 / DNS64、TACACS+。
-2. BGP 的 VRF 與 MP-BGP route-target、自由模式畫牆、訪客入口 (Captive Portal)。
+1. FortiGate HA、堆疊 / vPC；OSPF point-to-multipoint、FortiGate 的 IPsec 介面模式與 IPv6 政策、DHCPv6 Prefix Delegation、NAT64 / DNS64、TACACS+。
+2. BGP 的 VRF 與 MP-BGP route-target、自由模式畫牆。
 3. 中繼憑證鏈、OCSP 與 FortiGate 的憑證驗證。
 4. NTP 與 Syslog 的維運關卡（引擎已經有了，還沒有獨立的關卡）。
 
