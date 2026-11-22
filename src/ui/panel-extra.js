@@ -9,7 +9,7 @@ import {
 } from './form.js';
 import { fmtIp } from '../engine/ip.js';
 import { CATALOG, peerOf, portOf, newSsid, cableAt, linkInfo } from '../engine/model.js';
-import { visibleSsids, WIFI_SEC, macsBehind, isBridgePort, hitsOf, P1, accessOf, portfastOn, macRows, clearMac, macAgeOf, saInfo, fmtDur, isTrunk, dtpSpeaker, WALL_MATS, errdisRows, bouncePort, ERR_CAUSES, ERR_RECOVERY_DEFAULT, CH5, DFS, blockOf, CH6, on6, has6 } from '../engine/sim.js';
+import { visibleSsids, WIFI_SEC, macsBehind, isBridgePort, hitsOf, P1, accessOf, portfastOn, macRows, clearMac, macAgeOf, saInfo, fmtDur, isTrunk, dtpSpeaker, WALL_MATS, errdisRows, bouncePort, ERR_CAUSES, ERR_RECOVERY_DEFAULT, CH5, DFS, blockOf, CH6, on6, has6, portalPending, portalAccept, transact } from '../engine/sim.js';
 import { cdpCfg, lldpCfg, cdpOn, lldpTxOn, lldpRxOn, portNd, setPortNd, neighbors, speaksCdp, speaksLldp } from '../engine/disc.js';
 import { ntpInfo, deviceTime, plainStamp, logRows, clearLog, syslogStats, NTP_POLL } from '../engine/ops.js';
 import * as M from './panel-more.js';
@@ -138,7 +138,19 @@ export function wifiPicker(ctx, i) {
   const opts = [['', '（不連線）'], ...nets.map((n) => [n.name, `${n.name} · ${n.sec === 'open' ? '開放' : WIFI_SEC[n.sec]} · 訊號 ${'●'.repeat(n.bars)}${'○'.repeat(3 - n.bars)}`])];
   if (w.ssid && !nets.some((n) => n.name === w.ssid)) opts.push([w.ssid, `${w.ssid} · 目前收不到訊號`]);
   const ent = (nets.find((n) => n.name === w.ssid) || {}).sec === 'wpa2ent';
+  // 訪客入口：連上了但還沒同意，模擬瀏覽器跳出的登入頁面
+  const portal = ctx.live(() => {
+    const p = portalPending(ctx.state, ctx.dev);
+    if (!p) return (i.rt.assoc && i.rt.assoc.portal) ? note('ok', '已經在訪客入口按過同意，可以上網了。') : null;
+    return h('div', null, note('warn', `「${p.assoc.ssid}」有訪客入口：要先在入口網頁按下同意才能上網。`),
+      h('div', { class: 'addrow' }, button('打開瀏覽器、在入口網頁按同意', { ic: 'check', small: true, onclick: () => {
+        const r = portalAccept(ctx.state, ctx.dev.id, transact);
+        toast(r.ok ? '已同意使用條款，可以上網了' : r.why, r.ok ? 'ok' : 'bad', r.ok ? 3200 : 7000);
+        ctx.commit(true);
+      } })));
+  });
   return [
+    portal,
     !nets.length && note('muted', '附近沒有偵測到任何無線網路。'),
     ent
       ? [field('無線網路 (SSID)', sel(ctx, ...bind(w, 'ssid'), opts, { rerender: true })),
@@ -231,6 +243,10 @@ export function ssidTab(ctx, body) {
       h('div', { class: 'toggles' }, toggle(ctx, ...bind(s, 'isolate'), '用戶端隔離（連上這個 SSID 的設備彼此不能互連）'),
         dev.kind === 'ap' && toggle(ctx, ...bind(s, 'kv'), '802.11k/v：提供鄰近基地台的清單、建議用戶端換到訊號更好的基地台（改善 sticky client）'),
         dev.kind === 'ap' && toggle(ctx, ...bind(s, 'ft'), '802.11r（Fast Transition）：漫遊時沿用金鑰，不用重新做完整的驗證')),
+      s.sec !== 'wpa2ent' && toggle(ctx, () => !!(s.portal && s.portal.on), (v) => { s.portal = { ...(s.portal || {}), on: v }; }, '訪客入口 (Captive Portal)：連上之後要先在入口網頁按同意才能上網', { rerender: true }),
+      s.portal && s.portal.on && grid2(field('入口網頁伺服器', inp(ctx, () => s.portal.ip || '', (v) => { s.portal.ip = v; }, { ph: '例如 192.168.50.5', check: isIp })),
+        field('認證前允許的位址（pre-auth ACL）', inp(ctx, () => s.portal.preauth || '', (v) => { s.portal.preauth = v; }, { ph: '例如 DNS 伺服器 8.8.8.8', mono: true }))),
+      s.portal && s.portal.on && note('muted', '同意之前只能連入口網頁與認證前允許的位址。手機與電腦要先查 DNS（captive.apple.com）才會跳出登入頁面，所以 DNS 伺服器一定要在允許的清單裡。'),
       (!s.sec || s.sec === 'open') && note('warn', '開放網路沒有任何加密，任何人都能連線，也能側錄別人的流量。'),
       s.sec === 'wep' && note('warn', 'WEP 的加密早已被破解，幾分鐘內就能算出密碼，不應該再使用。'),
       s.sec === 'wpa3' && note('muted', '純 WPA3 最安全，但比較舊的設備可能不支援。'),

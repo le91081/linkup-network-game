@@ -25,6 +25,7 @@ import { prepDtp, prepLag, prepPhysical, prepStp, prepStpTimers, prepVoice } fro
 import { prepTunnels } from './sim/tunnels.js';
 import { sessionTtl } from './sim/forward.js';
 import { scriptTick } from './script.js';
+export { portalPending, portalAccept } from './portal.js';
 import { transact } from './sim/transact.js';
 setCdpCheck((d, pid, x, xp) => cdpOn(d, pid) && cdpOn(x, xp));
 

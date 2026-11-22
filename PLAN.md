@@ -35,7 +35,7 @@ README 說明「現在有什麼、怎麼玩」，這份文件說明「整體應�
 | 4. IP 服務 | 11 | 3 | 0 |
 | 5. 網路安全 | 12 | 2 | 3 |
 | 6. VPN 與廣域網路 | 10 | 1 | 2 |
-| 7. 無線網路 | 6 | 2 | 2 |
+| 7. 無線網路 | 6 | 3 | 1 |
 | 8. IPv6 | 5 | 3 | 0 |
 | 9. 高可用 | 8 | 0 | 3 |
 | 10. 時間、效能與流量 | 9 | 2 | 0 |
@@ -45,9 +45,9 @@ README 說明「現在有什麼、怎麼玩」，這份文件說明「整體應�
 | 14. 遊戲系統 | 16 | 1 | 5 |
 | 15. 介面與體驗 | 6 | 1 | 7 |
 | 16. 工程品質 | 5 | 1 | 4 |
-| **合計** | **155** | **23** | **37** |
+| **合計** | **155** | **24** | **36** |
 
-另外：關卡 107 關（第 17 節）、證照條目涵蓋情形（第 18 節）、建議的實作順序（第 19 節）。
+另外：關卡 108 關（第 17 節）、證照條目涵蓋情形（第 18 節）、建議的實作順序（第 19 節）。
 
 ---
 
@@ -184,7 +184,7 @@ README 說明「現在有什麼、怎麼玩」，這份文件說明「整體應�
 | 多台 AP | 🟡 | 漫遊已完成：sticky client（-75 dBm 以上不換）、802.11k/v 的 BSS Transition、換 VLAN 會換 IP、「走過去」的任務測試；802.11r 只有設定，還沒有模擬漫遊時間 |
 | 無線控制器 | ✅ | Catalyst 9800 + 9120：CAPWAP 加入（手動指定的主要 / 次要控制器、option 43、同網段廣播）、N+1（heartbeat 逾時約 30 秒才加入下一台、主要的回來自動切回）、Local 與 FlexConnect（standalone）、RRM 自動分頻道、WLAN 的 VLAN / 用戶端隔離 / 802.11k/v/r、`show ap summary` 等；只能用圖形介面設定 |
 | 頻道寬度與新標準 | ✅ | 5 GHz 的 20 / 40 / 80 / 160 MHz（綁在一起的整塊頻譜重疊就干擾，自動模式像 DBS 一樣縮窄，速率跟著寬度）、DFS 頻道（關卡劇本的雷達：換頻道、用戶端斷 15 秒、30 分鐘不能回來）→ 5-4；6 GHz（三頻 AP 與 6E 用戶端、160 MHz、只廣播 WPA3 / 混合模式的 SSID → 5-5）；還沒有 Wi-Fi 7 的 320 MHz 與 MLO |
-| 訪客功能 | ⬜ | 用戶端隔離、Captive Portal、MAC 過濾、隱藏 SSID |
+| 訪客功能 | 🟡 | 用戶端隔離、Captive Portal（入口網頁、pre-auth ACL、DNS 偵測、8 小時 session → 5-6）；還沒有 MAC 過濾、隱藏 SSID、訪客碼 |
 | Mesh 與無線橋接 | ⬜ | |
 | 現場勘測 | 🟡 | 有牆的關卡顯示訊號熱力圖；還沒有現場量測、預測工具與自由模式畫牆 |
 
@@ -240,7 +240,7 @@ README 說明「現在有什麼、怎麼玩」，這份文件說明「整體應�
 | 圖形介面 | ✅ | 每一種設備都有對應的設定頁面與即時狀態 |
 | IOS CLI | ✅ | 模式切換（巢狀的子模式 `exit` 一次回一層，不認得的指令先往上一層找）、縮寫、`no`、Tab 補齊、`?` 說明、`do show`、管線過濾（include / exclude / begin / section / count）、一次貼上多行 |
 | IOS 的查看指令 | ✅ | 四十多個 `show` 指令，包含 MAC 位址表、NAT 轉換表、IPsec SA、時鐘、NTP、紀錄、介面計數器、SPAN、登入的使用者、flash、開機設定、SSH、SNMP |
-| 設定可以整份貼回 | ✅ | 測試對 209 台 Cisco 設備、10 台 FortiGate 逐一驗證 |
+| 設定可以整份貼回 | ✅ | 測試對 216 台 Cisco 設備、10 台 FortiGate 逐一驗證 |
 | running / startup-config | ✅ | `write memory`、`reload`、未存檔的提示、斷電後回到上一次存檔 |
 | FortiOS CLI | ✅ | `config` / `edit` / `set` / `next` / `end`、`show`、`get`、`diagnose`、`execute ping` |
 | 主機終端機 | ✅ | `ping`、`ipconfig`、`arp`、`tracert`、`nslookup`、`curl`、`iperf3` |
@@ -289,7 +289,7 @@ README 說明「現在有什麼、怎麼玩」，這份文件說明「整體應�
 
 | 功能 | 狀態 | 說明 |
 | --- | --- | --- |
-| 關卡 | ✅ | 17 章 107 關（清單見第 17 節） |
+| 關卡 | ✅ | 17 章 108 關（清單見第 17 節） |
 | 任務目標 | ✅ | ping、TCP、UDP、DHCP、設定檢查、故障演練、IPv6 ping、傳輸速率、遠端登入（SSH / Telnet 帳號密碼）、IP 電話註冊、通話品質 (MOS)、HTTPS（連得上之後還要通過憑證驗證）、路徑（一定要經過 / 不能經過某台設備）；TCP 的目標交握完還會送一個裝滿的資料區段（設了 DF），MTU 的問題才看得出來 |
 | 提示與星等 | ✅ | 每關 3 個提示，看一個少一顆星 |
 | 學習卡 | ✅ | 每關 2 到 4 張觀念說明 |
@@ -350,7 +350,7 @@ README 說明「現在有什麼、怎麼玩」，這份文件說明「整體應�
 
 ## 17. 關卡規劃
 
-### 現有的 107 關
+### 現有的 108 關
 
 | 章 | 關卡 |
 | --- | --- |
@@ -358,7 +358,7 @@ README 說明「現在有什麼、怎麼玩」，這份文件說明「整體應�
 | 2 小型辦公室 | 辦公室開張、部門隔離、跨樓層、跨 VLAN 路由 |
 | 3 企業網路 | 守門員、總公司與分公司、對外伺服器群 |
 | 4 資料中心 | 機櫃上線、Spine-Leaf、跨棟連線、一開 Jumbo Frame，備份就卡住 |
-| 5 無線網路 | 家裡的 Wi-Fi、辦公室基地台、訪客 Wi-Fi、下午的視訊會議一直斷（頻道寬度與 DFS）、新筆電明明支援 Wi-Fi 6E（6 GHz 與 WPA3） |
+| 5 無線網路 | 家裡的 Wi-Fi、辦公室基地台、訪客 Wi-Fi、下午的視訊會議一直斷（頻道寬度與 DFS）、新筆電明明支援 Wi-Fi 6E（6 GHz 與 WPA3）、訪客連上 Wi-Fi，卻沒有跳出登入頁面（Captive Portal） |
 | 6 網路安全 | 只開了 TCP、誰在發 IP？、不速之客、存取控制清單、管理介面加固、冒牌閘道、搶走根橋、你是誰？、偽裝成交換器、交換器變成了 Hub（MAC flooding）、跳進伺服器 VLAN 的封包（雙重標籤）、飯店的房間網路（Private VLAN）、星期一早上，有線網路全部登不進去（EAP-TLS） |
 | 7 VPN 與廣域備援 | 站對站 VPN、在家上班、雙線路備援、三個據點，一個中心、線路燈還亮著（IP SLA）、小檔案可以，大檔案卡住（PMTUD 黑洞）、兩個分公司的連線一下通一下斷（GRE 與 recursive routing）、稽核報告（GRE over IPsec）、每加一個網段就要改兩邊的 ACL（VTI）、門市之間的監視器畫面（DMVPN）、新分公司在共享辦公室裡（NAT-T）、換了主機板電池，VPN 就起不來了（IKEv2 的憑證驗證） |
 | 8 高可用與進階路由 | 迴圈與生成樹、EtherChannel、閘道備援、集中式 DHCP、OSPF 路徑選擇、切蛋糕、閘道還活著，但出不去（HSRP 追蹤）、主線斷了，電話斷了四十秒（BFD）、兩台閘道，只有一台在做事（GLBP） |
@@ -378,7 +378,6 @@ README 說明「現在有什麼、怎麼玩」，這份文件說明「整體應�
 
 | 章 | 規劃的關卡 | 需要的功能 |
 | --- | --- | --- |
-| 補進第 14 章 | 訪客入口 (Captive Portal)（控制器備援 N+1、分公司的 FlexConnect 已補上 14-4、14-5） | 第 7、13 節 |
 | 補進第 15 章 | 用 Catalyst Center 的範本下發設定、NETCONF、用 Git 管理設定 | 第 12 節 |
 | 補進第 16 章 | 多個 VPC 的 peering 與 Transit Gateway、負載平衡器、Terraform | 第 12 節 |
 | 補進第 6 章 | NGFW 設定檔、SYN flood | 第 5 節 |
@@ -427,7 +426,7 @@ CCNA v2.0 預計在 2027 年 2 月取代 v1.1，改版後整張對照表要重�
 | 17（已完成） | AAAA 與雙協定（RFC 6724、Happy Eyeballs）、IPv6 經過 IPv4 的 Tunnel（GRE、6in4）與 IPv6 over VPN → 9-7、9-8。DHCPv6 Prefix Delegation、FortiGate 的 IPv6 政策、NAT64 / DNS64 要先有 IPv6 的網際網路與防火牆，移到第 22 階段 | 第 8 節剩下的項目 |
 | 18（已完成） | BFD（OSPF、BGP）與 OSPF fast hello → 8-8；GLBP → 8-9；HSRP / VRRP 改用各自正確的虛擬 MAC。FortiGate HA、堆疊 / vPC、電力備援要先有兩台設備合成一台的模型，移到第 22 階段 | 第 9 節剩下的項目 |
 | 19（已完成） | 維運與語音補充：NetFlow 與 QoS 的 police（已完成 → 11-7）、OSPF / DHCP / crypto 的 `debug`（已完成）、NTP + Syslog 對時與 `service timestamps`（已完成 → 11-8）、PoE 預算與 Cisco AP 的 CDP / LLDP 電力協商（已完成 → 12-3）、IKEv2 的憑證驗證（PKI、時鐘不對讓憑證「尚未生效」→ 7-12）、802.1X 的 EAP-TLS（伺服器憑證、電腦憑證、用戶端的時鐘 → 6-13）、看不到接線的關卡模式與用 CDP / LLDP 畫拓撲（→ 11-9）、雙 WAN 的 QoS 與排程事件（已完成 → 12-4） → 第 11、12 章補充關卡 | 讓故障排除的工具與劇本更完整 |
-| 20（進行中） | 無線補充：頻道寬度與 DFS（已完成 → 5-4）、6 GHz（已完成 → 5-5）、控制器 N+1（已完成 → 14-4）、FlexConnect 分公司（已完成 → 14-5）；訪客入口 (Captive Portal) → 第 14 章補充關卡 | 第 7 節剩下的項目 |
+| 20（已完成） | 無線補充：頻道寬度與 DFS（已完成 → 5-4）、6 GHz（已完成 → 5-5）、控制器 N+1（已完成 → 14-4）、FlexConnect 分公司（已完成 → 14-5）、訪客入口 (Captive Portal → 5-6) | 第 7 節剩下的項目 |
 | 21 | 自動化與雲端補充：NETCONF、Catalyst Center 範本、用 Git 管理設定、VPC peering 與 Transit Gateway、負載平衡器、Terraform → 第 15、16 章補充關卡 | 第 12 節的延伸 |
 | 22 | FortiGate HA（Active-Passive、連線同步）、堆疊 / vPC、電力備援；IPv6 的網際網路與 FortiGate 的 IPv6（DHCPv6-PD、IPv6 政策、NAT64 / DNS64）；實體層與其他：收發器不相容、breakout、Console 與帶外管理、STP 進階、VTP、EIGRP / RIP、多播、TACACS+、ZBF、NGFW、SD-WAN、其他設備與廠牌 | 剩下的引擎項目 |
 | 23 | 介面與體驗（第 15 節）、工程品質（第 16 節：CI、靜態檢查、存檔格式遷移、大型拓撲效能、部署） | 引擎穩定之後再整理介面與工程 |

@@ -32,7 +32,7 @@ export const LEVEL_TOPIC = {
   l55: 'wireless', l56: 'wireless', l57: 'wireless',
   l58: 'auto', l59: 'auto', l60: 'auto', l61: 'auto', l62: 'auto',
   l63: 'routing', l64: 'routing', l65: 'ops', l66: 'routing', l67: 'switching', l68: 'vpn', l69: 'security', l71: 'services',
-  l70: 'auto', l72: 'routing', l73: 'auto', l74: 'security', l75: 'switching', l76: 'vpn', l77: 'routing', l78: 'routing', l79: 'routing', l80: 'routing', l81: 'routing', l82: 'routing', l83: 'security', l84: 'security', l85: 'switching', l86: 'security', l87: 'ipv6', l88: 'vpn', l89: 'vpn', l90: 'vpn', l91: 'vpn', l92: 'vpn', l93: 'ipv6', l94: 'ipv6', l95: 'routing', l96: 'routing', l97: 'ops', l98: 'switching', l99: 'ops', l100: 'ops', l101: 'vpn', l102: 'security', l103: 'switching', l104: 'wireless', l105: 'wireless', l106: 'wireless', l107: 'wireless',
+  l70: 'auto', l72: 'routing', l73: 'auto', l74: 'security', l75: 'switching', l76: 'vpn', l77: 'routing', l78: 'routing', l79: 'routing', l80: 'routing', l81: 'routing', l82: 'routing', l83: 'security', l84: 'security', l85: 'switching', l86: 'security', l87: 'ipv6', l88: 'vpn', l89: 'vpn', l90: 'vpn', l91: 'vpn', l92: 'vpn', l93: 'ipv6', l94: 'ipv6', l95: 'routing', l96: 'routing', l97: 'ops', l98: 'switching', l99: 'ops', l100: 'ops', l101: 'vpn', l102: 'security', l103: 'switching', l104: 'wireless', l105: 'wireless', l106: 'wireless', l107: 'wireless', l108: 'wireless',
 };
 
 export const QUESTIONS = {
@@ -99,6 +99,7 @@ export const QUESTIONS = {
     { q: '在路由器上要看 VRF CUST-A 的路由表，要用哪個指令？', a: ['show ip route', 'show ip route vrf CUST-A', 'show vrf routes', 'show running-config vrf'], c: 1, e: 'show ip route 只顯示全域的路由表。VRF 的要加 vrf <名稱>；ping、traceroute 也一樣要指定（ping vrf CUST-A 10.1.0.10）。', r: 'CCNA 1.12' },
   ],
   wireless: [
+    { q: '訪客 Wi-Fi 加了 Captive Portal，訪客的手機都顯示「已連線，無網際網路」，登入頁面從來不會跳出。最可能少了什麼？', a: ['WPA3 加密', '認證前允許的位址 (pre-auth ACL) 沒有包含 DNS 伺服器', '用戶端隔離', '更多的 DHCP 位址'], c: 1, e: '手機要先查 captive.apple.com 之類的網址，才知道需要登入並跳出頁面。同意之前只能連入口網頁與 pre-auth ACL 裡的位址，DNS 不在裡面就查不到，登入頁面也就不會出現。', r: 'Network+ 2.3' },
     { q: '分公司的 AP 由總公司的 WLC 管理，專線斷掉時希望分公司的 Wi-Fi 照常運作，AP 應該用哪一種模式？', a: ['Local 模式', 'FlexConnect（本地交換）', 'Monitor 模式', 'Sniffer 模式'], c: 1, e: 'Local 模式的用戶端流量全部回到控制器，專線一斷 AP 就停止服務。FlexConnect 在 AP 的交換器埠就地把流量放進 VLAN（AP 的埠要是 Trunk），和控制器斷線時 PSK 的 WLAN 照樣服務。', r: 'CCNA 2.6' },
     { q: '有兩台無線控制器做 N+1，主要的 WLC 關機時，AP 加入了備援的 WLC，用戶端卻連不上原本的 SSID。最可能的原因是？', a: ['AP 的 PoE 不夠', '備援 WLC 上沒有建立一樣的 WLAN', 'CAPWAP 只能連一台控制器', '用戶端要重新開機'], c: 1, e: 'SSID 是控制器推給 AP 的。AP 加入哪一台，就放送那一台的 WLAN，所以備援控制器要有一樣的 WLAN（名稱、加密、VLAN），接它的 Trunk 也要允許那些 VLAN。', r: 'CCNA 2.6' },
     { q: '三頻 AP 上的 SSID 設成 WPA2-Personal，支援 Wi-Fi 6E 的筆電會連在哪裡？', a: ['6 GHz，因為比較快', '只能連 2.4 / 5 GHz：6 GHz 規定要 WPA3，WPA2 的 SSID 不會在 6 GHz 廣播', '連不上', '6 GHz，但速度限制在 20 MHz'], c: 1, e: '6 GHz 只接受 WPA3（開放網路要 OWE）。要讓舊設備也連得上，用 WPA2 / WPA3 混合模式：2.4 / 5 GHz 同時接受兩種，6 GHz 那一邊用 WPA3。', r: 'CCNA 1.11' },

@@ -3573,6 +3573,24 @@ console.log('\n無線控制器 N+1');
   ok(cw('ap1').wlc === 'wlc1', 'WLC-1 開機回來（9800 要六分鐘）：AP 自己切回主要控制器 (AP fallback)');
 }
 
+console.log('\n訪客入口 (Captive Portal)');
+{
+  const sim = await import('../src/engine/sim.js');
+  const ok = (cond, title) => (cond ? console.log('  ✔ ' + title) : fail(title));
+  const lv = LEVELS.find((x) => x.id === 'l108');
+  const s = lv.setup(); settle(s);
+  const web = () => sim.transact(s, 'g1', { proto: 'tcp', dst: parseIp('93.184.216.34'), dport: 443, quiet: true });
+  ok(!web().ok && web().portal === parseIp('192.168.50.5') && /HTTP 302/.test(web().reason), '還沒同意：HTTPS 被導向入口網頁 192.168.50.5 (302)');
+  ok(sim.transact(s, 'g1', { proto: 'tcp', dst: parseIp('192.168.50.5'), dport: 80, quiet: true }).ok, '入口網頁本身連得到');
+  const r = sim.portalAccept(s, 'g1', sim.transact);
+  ok(!r.ok && /DNS 伺服器 8\.8\.8\.8 連不到/.test(r.why), '按同意：DNS 不在認證前允許的位址，手機偵測不到入口');
+  s.devices.ap.wifi.ssids[0].portal.preauth = '8.8.8.8'; settle(s);
+  ok(sim.portalAccept(s, 'g1', sim.transact).ok && web().ok, '允許 DNS 8.8.8.8：跳出入口網頁，同意之後可以上網');
+  ok(!sim.transact(s, 'g2', { proto: 'tcp', dst: parseIp('93.184.216.34'), dport: 443, quiet: true }).ok, '另一台沒按同意的筆電還是上不了網');
+  sim.advance(s, 8 * 3600 + 10); settle(s);
+  ok(!web().ok && web().portal, '8 小時後 session 逾時：要重新同意');
+}
+
 console.log('\nNetFlow 與 QoS 的 police');
 {
   const sim = await import('../src/engine/sim.js');

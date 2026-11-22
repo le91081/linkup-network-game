@@ -165,3 +165,19 @@ test('FlexConnect：AP 分頁切換模式，說明改成本地交換與 Trunk', 
   expect(await page.evaluate(() => window.linkup.state.devices.ap1.lwap.mode)).toBe('flex');
   expect(await scan(page, '#panel', 'AP 分頁（FlexConnect）')).toEqual([]);
 });
+
+test('訪客入口：沒有 DNS 就不跳登入頁面，加進認證前允許的位址之後按同意就能上網', async ({ page }) => {
+  await boot(page);
+  await open(page, 'l108');
+  await clickDevice(page, 'g1');
+  const btn = page.locator('#panel button', { hasText: '打開瀏覽器、在入口網頁按同意' });
+  await expect(btn).toBeVisible();
+  await btn.click();
+  await expect(page.locator('#toasts .toast.bad', { hasText: '沒有跳出登入頁面' })).toBeVisible();
+  await page.evaluate(() => { const s = window.linkup.state; s.devices.ap.wifi.ssids[0].portal.preauth = '8.8.8.8'; window.linkup.settleNow(); });
+  await clickDevice(page, 'g1');
+  await page.locator('#panel button', { hasText: '打開瀏覽器、在入口網頁按同意' }).click();
+  await expect(page.locator('#toasts .toast.ok', { hasText: '可以上網了' })).toBeVisible();
+  await expect(page.locator('#panel')).toContainText('已經在訪客入口按過同意');
+  expect(await scan(page, '#panel', '訪客入口（手機）')).toEqual([]);
+});

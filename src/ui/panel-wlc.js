@@ -36,6 +36,10 @@ export function wlanTab(ctx, body) {
         toggle(ctx, ...bind(w, 'isolate'), '用戶端隔離 (Peer-to-Peer Blocking)'),
         toggle(ctx, ...bind(w, 'kv'), '802.11k/v：提供鄰近 AP 的清單、建議用戶端換到訊號更好的 AP（改善 sticky client）'),
         toggle(ctx, ...bind(w, 'ft'), '802.11r（Fast Transition）：漫遊時沿用金鑰，不用重新做完整的驗證')),
+      w.sec !== 'wpa2ent' && toggle(ctx, () => !!(w.portal && w.portal.on), (v) => { w.portal = { ...(w.portal || {}), on: v }; }, '訪客入口 (Captive Portal)：連上之後要先在入口網頁按同意才能上網', { rerender: true }),
+      w.portal && w.portal.on && grid2(field('入口網頁伺服器', inp(ctx, () => w.portal.ip || '', (v) => { w.portal.ip = v; }, { ph: '例如 192.168.50.5', check: isIp })),
+        field('認證前允許的位址（pre-auth ACL）', inp(ctx, () => w.portal.preauth || '', (v) => { w.portal.preauth = v; }, { ph: '例如 DNS 伺服器 8.8.8.8', mono: true }))),
+      w.portal && w.portal.on && note('muted', '同意之前只能連入口網頁與認證前允許的位址。手機與電腦要先查 DNS（captive.apple.com）才會跳出登入頁面，所以 DNS 伺服器一定要在允許的清單裡。'),
       w.sec === 'wpa2ent' && note('muted', 'WPA2-Enterprise：由控制器去問 RADIUS（「管理介面」分頁設定 RADIUS 伺服器）。'),
       ctx.live(() => {
         const bad = clients().find((c) => c.iface.rt.ip == null);

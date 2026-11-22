@@ -1,6 +1,6 @@
 // 第五章補充：頻道寬度與 DFS — 三台 AP 都開 80 MHz 互相干擾，會議室那台用 DFS 頻道，雷達一來就斷線
-import { makeDevice as D, makeState, newSsid } from '../engine/model.js';
-import { DFS } from '../engine/sim.js';
+import { makeDevice as D, makeState, newSsid, setLine, cloneState } from '../engine/model.js';
+import { DFS, portalAccept, transact, runObjective, settle } from '../engine/sim.js';
 import { dev } from './util.js';
 
 const SSID = () => [newSsid({ name: 'Office', sec: 'wpa2wpa3', pass: 'Office#Wifi2026' })];
@@ -142,5 +142,65 @@ export const LEVELS32 = [
     ],
     solve(s) { dev(s, 'ap').wifi.ssids[0].sec = 'wpa2wpa3'; },
     recap: ['6 GHz 只接受 WPA3；WPA2 的 SSID 不會出現在 6 GHz。', '設備還沒全部支援 WPA3 之前，用 WPA2 / WPA3 混合模式：舊設備走 WPA2，6E 的設備在 6 GHz 走 WPA3。'],
+  },
+  {
+    id: 'l108', chapter: 5, title: '訪客連上 Wi-Fi，卻沒有跳出登入頁面', subtitle: '訪客入口 (Captive Portal) 與認證前允許的位址', tags: ['Captive Portal', 'Web Auth', '訪客 Wi-Fi', 'DNS', 'pre-auth ACL'],
+    brief: '大廳的訪客 Wi-Fi「Guest」改成連上之後要先在入口網頁同意使用條款才能上網。設定好之後，訪客的手機都顯示「已連線，無網際網路」，登入頁面從來沒有跳出來過。請讓訪客的手機跳出入口網頁、同意之後可以上網；沒有同意的照樣上不了網。',
+    given: [
+      ['AP-大廳', 'SSID Guest（開放網路 + 訪客入口）· 用戶端隔離'], ['入口網頁伺服器', '192.168.50.5（HTTP）'],
+      ['訪客網段', '192.168.50.0/24 · Router 發 DHCP，DNS 是 8.8.8.8'], ['認證前允許的位址', '（空的）'],
+    ],
+    learn: [
+      { t: '訪客入口 (Captive Portal)', d: '開放的訪客網路常加上一個入口網頁：連上之後，所有網頁都被導向 (HTTP 302) 入口網頁，按下同意（或輸入訪客碼）之後才放行。同意之前，只有入口網頁與「認證前允許的位址」(pre-auth ACL) 連得到。' },
+      { t: '登入頁面怎麼跳出來的', d: '手機與電腦連上 Wi-Fi 時會先去查 captive.apple.com、www.msftconnecttest.com 之類的網址，結果不對就知道「需要登入」並跳出頁面。要查網址就要 DNS：DNS 伺服器不在允許的清單裡，查不到，手機只會顯示「無網際網路」，登入頁面永遠不會出現。' },
+      { t: 'session 逾時', d: '同意之後通常可以用幾個小時（這裡是 8 小時），時間到了要重新同意。' },
+    ],
+    setup() {
+      return makeState([
+        setLine(D('internet', 'inet', { name: '網際網路', pos: [0, -10.5] }), 'line1', { type: 'static', gw: '203.0.113.17', mask: '255.255.255.248', assign: '203.0.113.18' }),
+        D('erx', 'rt', {
+          name: 'Router', pos: [0, -6.5],
+          init(d) {
+            Object.assign(d.ifaces[0], { ip: '203.0.113.18', mask: '255.255.255.248', gateway: '203.0.113.17', nat: true });
+            Object.assign(d.ifaces[1], { ip: '192.168.50.1', mask: '255.255.255.0' });
+            Object.assign(d.ifaces[1].dhcp, { on: true, start: '192.168.50.100', end: '192.168.50.199', dns: '8.8.8.8' });
+          },
+        }),
+        D('c2960p', 'sw', { name: 'PoE Switch', pos: [0, -2.5] }),
+        D('tower', 'portal', { name: '入口網頁伺服器', pos: [8, -2.5], ip: '192.168.50.5', gw: '192.168.50.1', services: [{ proto: 'tcp', port: 80, name: '入口網頁 (HTTP)' }, { proto: 'tcp', port: 443, name: '入口網頁 (HTTPS)' }] }),
+        D('ap', 'ap', { name: 'AP-大廳', pos: [0, 1.5], init(d) { d.wifi.ssids = [newSsid({ name: 'Guest', sec: 'open', isolate: true, portal: { on: true, ip: '192.168.50.5', preauth: '' } })]; } }),
+        D('phone', 'g1', { name: '訪客的 iPhone', pos: [-4, 5.5], wifi: { ssid: 'Guest', pass: '' } }),
+        D('laptop', 'g2', { name: '訪客的筆電', pos: [4, 5.5], wifi: { ssid: 'Guest', pass: '' } }),
+      ], [['inet:line1', 'rt:eth0'], ['rt:eth1', 'sw:Gi0/9'], ['portal:eth0', 'sw:Gi0/8'], ['ap:eth0', 'sw:Gi0/1']]);
+    },
+    objectives: [
+      { type: 'dhcp', dev: 'g1', subnet: '192.168.50.0/24', label: '訪客的 iPhone 連上 Guest，拿到 192.168.50.x' },
+      ...[['g1', '訪客的 iPhone'], ['g2', '訪客的筆電']].map(([id, who]) => ({
+        type: 'check', label: `${who}會跳出入口網頁，按同意之後可以上網`,
+        test(s) {
+          const s2 = cloneState(s); settle(s2);
+          const r = portalAccept(s2, id, transact);
+          if (!r.ok) return r.why;
+          const t = runObjective(s2, { type: 'tcp', from: id, name: 'www.example.com', port: 443 });
+          return t.pass ? true : `同意之後還是上不了網：${t.reason}`;
+        },
+      })),
+      {
+        type: 'check', label: '還沒同意的訪客照樣上不了網（訪客入口還在）',
+        test(s) {
+          const s2 = cloneState(s); settle(s2);
+          if (s2.dyn && s2.dyn.webauth) delete s2.dyn.webauth.g2;
+          const t = transact(s2, 'g2', { proto: 'tcp', dst: 0x5db8d822, dport: 443, quiet: true });
+          return !t.ok && t.portal ? true : t.ok ? '沒有同意也上得了網：訪客入口被關掉了' : `應該被導向入口網頁：${t.reason}`;
+        },
+      },
+    ],
+    hints: [
+      '選訪客的 iPhone →「網路設定」→「打開瀏覽器、在入口網頁按同意」：訊息說 DNS 伺服器 8.8.8.8 連不到，所以登入頁面沒有跳出來。',
+      '同意之前只能連入口網頁與「認證前允許的位址」，現在這個清單是空的：手機查不到 captive.apple.com，根本不知道有登入頁面。',
+      'AP-大廳的「無線網路」→ Guest → 認證前允許的位址填 8.8.8.8（DHCP 發給訪客的 DNS）。',
+    ],
+    solve(s) { dev(s, 'ap').wifi.ssids[0].portal.preauth = '8.8.8.8'; },
+    recap: ['訪客入口在同意之前只放行入口網頁與 pre-auth ACL 裡的位址；DNS 一定要在裡面，手機才偵測得到入口、跳出登入頁面。', '入口網頁擋得住「沒同意的人」，但開放網路本身沒有加密：要保護訪客流量，可以用 OWE (Enhanced Open) 或 WPA3。'],
   },
 ];

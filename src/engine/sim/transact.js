@@ -92,6 +92,8 @@ function bulkSend(state, ctx, o, mss) {
   return { ok: false, dev: o.from, reason: '資料一直送不過去（路徑上的 MTU 一再變小）' };
 }
 
+/** 訪客入口：還沒同意的 Wi-Fi 用戶端只能連入口網頁與認證前允許的位址 */
+import { portalGate } from '../portal.js';
 function transactInner(state, fromId, spec) {
   const ctx = { ct: {}, log: [], hops: [], l3: [], cid: spec.keep || null, vrf: spec.vrf || '', vrfDev: fromId };
   const src = state.devices[fromId];
@@ -110,6 +112,11 @@ function transactInner(state, fromId, spec) {
       return done({ ok: false, reason, failDev: fromId, phase: 'request' });
     }
     srcIp = t ? t.vip : r.iface.rt.ip;
+  }
+  const gate = portalGate(state, src, spec);
+  if (gate) {
+    ctx.log.push({ dev: fromId, kind: 'drop', text: gate.reason });
+    return done({ ok: false, reason: gate.reason, failDev: fromId, phase: 'request', portal: gate.redirect ?? true });
   }
   const id = 1000 + (pktSeq++ % 20000);
   const icmp = spec.proto === 'icmp';

@@ -86,7 +86,7 @@ export function rfAt(state, ap, pos) {
 export const CAPWAP_JOIN = 25;
 /** WLC 上啟用中的 WLAN，換成基地台的 SSID 格式 */
 export const wlansOf = (w) => ((w.wlc && w.wlc.wlans) || []).filter((x) => x.on !== false && x.ssid)
-  .map((x) => ({ name: x.ssid, sec: x.sec || 'wpa2', pass: x.pass || '', vlan: x.vlan || '', isolate: !!x.isolate, kv: !!x.kv, ft: !!x.ft, wlan: x.id }));
+  .map((x) => ({ name: x.ssid, sec: x.sec || 'wpa2', pass: x.pass || '', vlan: x.vlan || '', isolate: !!x.isolate, kv: !!x.kv, ft: !!x.ft, wlan: x.id, ...(x.portal ? { portal: x.portal } : {}) }));
 /** 基地台現在放送的 SSID：一般的基地台是自己的設定；輕量型 AP 要加入 WLC 之後才有（FlexConnect 斷線時沿用最後一份） */
 export const ssidsOf = (state, ap) => (ap.lwap ? ((ap.rt && ap.rt.capwap && ap.rt.capwap.wlans) || []) : ap.wifi.ssids);
 /** 頻道：輕量型 AP 由 WLC 的 RRM 自動指定 */
@@ -209,7 +209,7 @@ export function prepWifi(state) {
           const six = has6(ap) && (CATALOG[d.model] || {}).band6 && on6(s) && caps.includes('wpa3') && rf.rssi6 >= -65;
           const band = six ? '6GHz' : rf.band, rssi = six ? rf.rssi6 : rf.rssi;
           const cw = ap.rt.capwap, central = !!(cw && cw.joined && cw.mode === 'local');
-          const c = { ap: ap.id, idx, dist, key: +s.vlan > 0 ? +s.vlan : central ? 1 : 'u', isolate: !!s.isolate, sec: s.sec || 'open', rssi, band, walls: rf.walls.map((x) => x.mat), wallDb: rf.db, kv: !!s.kv, ft: !!s.ft, ssid: s.name };
+          const c = { ap: ap.id, idx, dist, key: +s.vlan > 0 ? +s.vlan : central ? 1 : 'u', isolate: !!s.isolate, sec: s.sec || 'open', rssi, band, walls: rf.walls.map((x) => x.mat), wallDb: rf.db, kv: !!s.kv, ft: !!s.ft, ssid: s.name, portal: s.portal && s.portal.on ? { ...s.portal } : null };
           if (central) Object.assign(c, { via: cw.wlc, capwap: cw.path });
           cands.push(c);
           if (!best || rssi > best.rssi) best = c;
