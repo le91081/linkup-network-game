@@ -30,10 +30,10 @@ README 說明「現在有什麼、怎麼玩」，這份文件說明「整體應�
 | 領域 | ✅ 已完成 | 🟡 部分完成 | ⬜ 尚未開始 |
 | --- | --- | --- | --- |
 | 1. 實體層與接線 | 9 | 1 | 4 |
-| 2. 第二層：交換 | 13 | 0 | 4 |
+| 2. 第二層：交換 | 15 | 0 | 2 |
 | 3. 第三層：路由 | 14 | 1 | 2 |
 | 4. IP 服務 | 11 | 3 | 0 |
-| 5. 網路安全 | 9 | 5 | 3 |
+| 5. 網路安全 | 11 | 3 | 3 |
 | 6. VPN 與廣域網路 | 6 | 3 | 4 |
 | 7. 無線網路 | 5 | 2 | 3 |
 | 8. IPv6 | 3 | 2 | 3 |
@@ -45,9 +45,9 @@ README 說明「現在有什麼、怎麼玩」，這份文件說明「整體應�
 | 14. 遊戲系統 | 16 | 1 | 5 |
 | 15. 介面與體驗 | 6 | 1 | 7 |
 | 16. 工程品質 | 5 | 1 | 4 |
-| **合計** | **138** | **29** | **48** |
+| **合計** | **142** | **27** | **46** |
 
-另外：關卡 82 關（第 17 節）、證照條目涵蓋情形（第 18 節）、建議的實作順序（第 19 節）。
+另外：關卡 87 關（第 17 節）、證照條目涵蓋情形（第 18 節）、建議的實作順序（第 19 節）。
 
 ---
 
@@ -83,12 +83,12 @@ README 說明「現在有什麼、怎麼玩」，這份文件說明「整體應�
 | EtherChannel | ✅ | LACP active / passive、on；兩端模式不相容、成員接到不同對端都會偵測 |
 | ARP | ✅ | 廣播詢問、快取、逐筆逾時、介面斷線時清除、`clear arp` |
 | MAC 位址表 | ✅ | 從實際的流量學習、300 秒過期（可調整）、斷線與生成樹拓撲改變時清除、不認得的目的 MAC 會泛洪；`show mac address-table`、`clear mac address-table dynamic` |
-| 靜態 MAC 項目 | ⬜ | `mac address-table static`；目前只有 Port Security 指定的位址會顯示成 STATIC |
+| 靜態 MAC 項目 | ✅ | `mac address-table static <MAC> vlan <V> interface <埠> \| drop`：不會老化、不會被動態學習蓋掉（MAC 偽造搬不走它），drop 丟掉那個 MAC 的訊框；MAC 位址表有容量（2960 8,192 筆、9300 32K、Nexus 92K），`show mac address-table count \| static \| interface` |
 | CDP 與 LLDP | ✅ | 依計時器通告、鄰居表與 holdtime、LLDP 的 shutdown 通告、經過 Hub / 非網管交換器的行為、全域與每個埠的開關、`show cdp / lldp neighbors [detail]`、traffic、`clear`；Native VLAN 與雙工不一致的訊息靠 CDP；LLDP-MED 給電話語音 VLAN |
 | DTP | ✅ | Catalyst 出廠 `dynamic auto`、`dynamic desirable`、`nonegotiate`、運作中的模式與原因、`show interfaces switchport`、`show dtp`；攻擊工具偽裝成交換器 (VLAN hopping)；Nexus 沒有 DTP |
 | VTP | ⬜ | VLAN 資料庫同步 |
 | Voice VLAN | ✅ | `switchport voice vlan`：資料不帶標籤、語音帶標籤；電話從 CDP 或 LLDP-MED 學到，也可以手動設定 |
-| Private VLAN、Storm Control | ⬜ | |
+| Private VLAN、Storm Control | ✅ | Private VLAN（Catalyst 9300、Nexus）：primary / isolated / community、host 與 promiscuous 埠、SVI 的 `private-vlan mapping`、DHCP 照樣通、`show vlan private-vlan`；2960 只有 `switchport protected`。Storm Control：`storm-control broadcast level`（頻寬的百分比）與 `action shutdown \| trap`，狂送的廣播佔掉整個 VLAN 每一段線路的頻寬並算進 broadcasts 計數器，`show storm-control`、`%STORM_CONTROL-3-FILTERED / SHUTDOWN`、err-disabled 原因 storm-control |
 | STP 進階 | ⬜ | MST、Loop Guard、UDLD、拓撲變更通知、交換器不是直接相連的拓撲 |
 | SPAN（連接埠鏡像） | ✅ | `monitor session` 與圖形介面；目的埠不轉送一般流量；搭配主機的封包擷取 |
 
@@ -144,15 +144,15 @@ README 說明「現在有什麼、怎麼玩」，這份文件說明「整體應�
 | 防火牆紀錄 | ✅ | 每條新連線被哪一條政策放行或拒絕 |
 | 管理介面加固 | 🟡 | 多個本機帳號（一人一個，`username` / `no username`）、SSH 取代 Telnet（要先有主機名稱、網域名稱、RSA 金鑰與 `login local`）、vty `access-class`、`exec-timeout`、`login block-for`、`banner motd`、FortiGate 各介面的 allowaccess 與 `admintimeout`、密碼以雜湊顯示；`enable secret` 會接受但沒有作用（模擬裡沒有 enable 模式） |
 | DHCP Snooping、DAI | ✅ | |
-| Port Security | ✅ | 靜態與 sticky MAC、違規時 err-disabled |
+| Port Security | ✅ | maximum、靜態 / sticky / 動態的安全位址（照 IOS 的順序學，打開 sticky 會把已經學到的轉成 sticky）、protect / restrict / shutdown（預設）、違規次數與 `%PORT_SECURITY-2-PSECURE_VIOLATION`、斷線時動態的安全位址清掉；`show port-security [interface \| address]` |
 | err-disabled | ✅ | BPDU Guard 與 Port Security 關掉的埠會一直維持，原因排除也不會自己恢復：`shutdown` → `no shutdown`、重新開機，或 `errdisable recovery cause` / `interval`（原因還在就馬上再被關）；`show interfaces status err-disabled`、`show errdisable recovery` |
 | 802.1X / RADIUS | 🟡 | 有線埠與 WPA2-Enterprise 的帳號密碼驗證；沒有憑證 (EAP-TLS) |
 | Wi-Fi 加密 | ✅ | 開放、WEP、WPA2、WPA2 / WPA3 混合、WPA3 |
-| 攻擊情境 | 🟡 | 已有冒牌 DHCP、ARP 欺騙、搶根橋、未授權設備、密碼暴力嘗試（`login block-for`）、側錄 Telnet 明文密碼；用 DTP 偽裝成交換器的 VLAN hopping；還沒有 MAC flooding、雙重標籤、SYN flood |
+| 攻擊情境 | ✅ | 冒牌 DHCP、ARP 欺騙、搶根橋、未授權設備、密碼暴力嘗試（`login block-for`）、側錄 Telnet 明文密碼、DTP 偽裝成交換器的 VLAN hopping；MAC flooding（macof 把每一台走得到的交換器的表塞滿，unknown unicast 泛洪給攻擊者，擋住之後要等老化或 clear）；雙重標籤（Access 埠收自己 VLAN 的標籤、Native VLAN 的 Trunk 不加標籤，封包單向跳進別的 VLAN、繞過 ACL；`vlan dot1q tag native` 或改 Native VLAN）；冒牌的 IPv6 RA；狂送廣播的設備。還沒有 SYN flood |
 | TACACS+ 與 AAA | ⬜ | 授權、稽核、權限等級 |
 | IOS 進階過濾 | ⬜ | Zone-Based Firewall、時間型 ACL、Reflexive ACL |
 | NGFW / UTM | ⬜ | IPS、防毒、網頁過濾、應用程式控管、SSL 檢查 |
-| IPv6 安全 | 🟡 | IPv6 ACL 已完成（見第 8 節）；還沒有 RA Guard |
+| IPv6 安全 | ✅ | IPv6 ACL（見第 8 節）；冒牌的 Router Advertisement（主機用每一個 RA 的前綴各產生一個位址、預設閘道選 Router Preference 最高的）與 RA Guard（`ipv6 nd raguard policy` / `device-role host \| router` / `attach-policy`、`show ipv6 nd raguard policy`） |
 | 憑證與 PKI | 🟡 | 公開 CA 與公司內部的 CA（公開 CA 不簽 .local、效期上限）、用戶端的信任清單（加入網域的電腦自動有公司的根憑證，`certutil -addstore root` 匯入）、有效期間用用戶端自己的時鐘判斷（`w32tm`、`timedatectl`、自動設定時間）、SAN 與萬用字元；沒有中繼憑證鏈、CRL / OCSP、ACME 自動續約，也還沒用在 802.1X (EAP-TLS) 與 IPsec |
 
 ## 6. VPN 與廣域網路
@@ -240,7 +240,7 @@ README 說明「現在有什麼、怎麼玩」，這份文件說明「整體應�
 | 圖形介面 | ✅ | 每一種設備都有對應的設定頁面與即時狀態 |
 | IOS CLI | ✅ | 模式切換（巢狀的子模式 `exit` 一次回一層，不認得的指令先往上一層找）、縮寫、`no`、Tab 補齊、`?` 說明、`do show`、管線過濾（include / exclude / begin / section / count）、一次貼上多行 |
 | IOS 的查看指令 | ✅ | 四十多個 `show` 指令，包含 MAC 位址表、NAT 轉換表、IPsec SA、時鐘、NTP、紀錄、介面計數器、SPAN、登入的使用者、flash、開機設定、SSH、SNMP |
-| 設定可以整份貼回 | ✅ | 測試對 161 台 Cisco 設備、6 台 FortiGate 逐一驗證 |
+| 設定可以整份貼回 | ✅ | 測試對 171 台 Cisco 設備、6 台 FortiGate 逐一驗證 |
 | running / startup-config | ✅ | `write memory`、`reload`、未存檔的提示、斷電後回到上一次存檔 |
 | FortiOS CLI | ✅ | `config` / `edit` / `set` / `next` / `end`、`show`、`get`、`diagnose`、`execute ping` |
 | 主機終端機 | ✅ | `ping`、`ipconfig`、`arp`、`tracert`、`nslookup`、`curl`、`iperf3` |
@@ -289,11 +289,11 @@ README 說明「現在有什麼、怎麼玩」，這份文件說明「整體應�
 
 | 功能 | 狀態 | 說明 |
 | --- | --- | --- |
-| 關卡 | ✅ | 17 章 82 關（清單見第 17 節） |
+| 關卡 | ✅ | 17 章 87 關（清單見第 17 節） |
 | 任務目標 | ✅ | ping、TCP、UDP、DHCP、設定檢查、故障演練、IPv6 ping、傳輸速率、遠端登入（SSH / Telnet 帳號密碼）、IP 電話註冊、通話品質 (MOS)、HTTPS（連得上之後還要通過憑證驗證）、路徑（一定要經過 / 不能經過某台設備）；TCP 的目標交握完還會送一個裝滿的資料區段（設了 DF），MTU 的問題才看得出來 |
 | 提示與星等 | ✅ | 每關 3 個提示，看一個少一顆星 |
 | 學習卡 | ✅ | 每關 2 到 4 張觀念說明 |
-| 題庫 | ✅ | 162 題觀念題、隨機產生的子網路計算題、過關後的小考 |
+| 題庫 | ✅ | 168 題觀念題、隨機產生的子網路計算題、過關後的小考 |
 | 證照地圖 | ✅ | 三種考試的條目與關卡對照、完成進度 |
 | 故障排除章 | ✅ | 網路已經設定好但被改壞，要自己找出原因 |
 | 自由模式 | ✅ | 自己擺設備、接線、設定；可以存目標、匯出與匯入 |
@@ -350,7 +350,7 @@ README 說明「現在有什麼、怎麼玩」，這份文件說明「整體應�
 
 ## 17. 關卡規劃
 
-### 現有的 82 關
+### 現有的 87 關
 
 | 章 | 關卡 |
 | --- | --- |
@@ -359,11 +359,11 @@ README 說明「現在有什麼、怎麼玩」，這份文件說明「整體應�
 | 3 企業網路 | 守門員、總公司與分公司、對外伺服器群 |
 | 4 資料中心 | 機櫃上線、Spine-Leaf、跨棟連線、一開 Jumbo Frame，備份就卡住 |
 | 5 無線網路 | 家裡的 Wi-Fi、辦公室基地台、訪客 Wi-Fi |
-| 6 網路安全 | 只開了 TCP、誰在發 IP？、不速之客、存取控制清單、管理介面加固、冒牌閘道、搶走根橋、你是誰？、偽裝成交換器 |
+| 6 網路安全 | 只開了 TCP、誰在發 IP？、不速之客、存取控制清單、管理介面加固、冒牌閘道、搶走根橋、你是誰？、偽裝成交換器、交換器變成了 Hub（MAC flooding）、跳進伺服器 VLAN 的封包（雙重標籤）、飯店的房間網路（Private VLAN） |
 | 7 VPN 與廣域備援 | 站對站 VPN、在家上班、雙線路備援、三個據點，一個中心、線路燈還亮著（IP SLA）、小檔案可以，大檔案卡住（PMTUD 黑洞） |
 | 8 高可用與進階路由 | 迴圈與生成樹、EtherChannel、閘道備援、集中式 DHCP、OSPF 路徑選擇、切蛋糕、閘道還活著，但出不去（HSRP 追蹤） |
-| 9 IPv6 | IPv6 初體驗、雙協定、位址從哪裡來？、IPv6 也要動態路由、封了 IPv4，忘了 IPv6 |
-| 10 故障排除 | 誰搶了我的 IP、樓層之間又斷了、分公司的求救電話、明明連得上，為什麼這麼慢、分公司的 OSPF 鄰居起不來、流量為什麼繞去實驗室、VPN 通了，資料卻過不去、DNS 改了，為什麼還連到舊的 |
+| 9 IPv6 | IPv6 初體驗、雙協定、位址從哪裡來？、IPv6 也要動態路由、封了 IPv4，忘了 IPv6、IPv6 的預設閘道被搶走了（RA Guard） |
+| 10 故障排除 | 誰搶了我的 IP、樓層之間又斷了、分公司的求救電話、明明連得上，為什麼這麼慢、分公司的 OSPF 鄰居起不來、流量為什麼繞去實驗室、VPN 通了，資料卻過不去、DNS 改了，為什麼還連到舊的、整層樓都慢了（廣播風暴與 Storm Control） |
 | 11 維運與管理 | 還好有備份、韌體升級、讓 SSH 能用、網路怎麼變慢了、是誰動了設定？、你的連線不是私人連線 |
 | 12 語音與 QoS | 電話接上了，然後呢？、語音斷斷續續 |
 | 13 進階路由 | 誰當 DR？、10G 和 1G 一樣快？、分公司自成一區、兩家 ISP 都要用、併購的工廠只會靜態路由（重分配）、備份走另一條線（PBR）、分公司的路由表太大了（stub）、工廠接了一條供應商專線（NSSA）、兩個出口，同一個 AS（iBGP）、共用服務放在全域的路由表（VRF 的 OSPF 與路由洩漏） |
@@ -383,7 +383,7 @@ README 說明「現在有什麼、怎麼玩」，這份文件說明「整體應�
 | 補進第 14 章 | 訪客入口 (Captive Portal)、分公司的 FlexConnect、控制器備援 (N+1) | 第 7、13 節 |
 | 補進第 15 章 | 用 Catalyst Center 的範本下發設定、NETCONF、用 Git 管理設定 | 第 12 節 |
 | 補進第 16 章 | 多個 VPC 的 peering 與 Transit Gateway、負載平衡器、Terraform | 第 12 節 |
-| 補進第 6 章 | MAC flooding、雙重標籤、NGFW 設定檔 | 第 2、5 節 |
+| 補進第 6 章 | NGFW 設定檔、SYN flood | 第 5 節 |
 | 補進第 7 章 | GRE over IPsec 與 VTI、DMVPN、憑證驗證 | 第 6 節 |
 | 補進第 9 章 | Prefix Delegation、FortiGate 的 IPv6 政策、NAT64 / DNS64 | 第 8 節 |
 | 補進第 10 章 | Wi-Fi 很慢（隨機故障已經由故障演練提供） | 第 7、14 節 |
@@ -424,8 +424,8 @@ CCNA v2.0 預計在 2027 年 2 月取代 v1.1，改版後整張對照表要重�
 | 12（已完成） | 第一次遊玩的導覽、參考解法示範、錯題本、2D 邏輯拓撲圖 | 新手體驗 |
 | 13（已完成） | 拆開 `sim.js`；路由重分配（靜態、直連、BGP ↔ OSPF）與政策路由 → 13-5、13-6 | 第 3 節最後幾個常見的企業路由功能 |
 | 14（已完成） | OSPF 的 stub / totally stubby / NSSA；iBGP（`update-source`、`next-hop-self`、route reflector、多跳 eBGP、community）；VRF 裡跑 OSPF 與 VRF 之間的路由洩漏 → 13-7 到 13-10 | 接著第 13 階段與 VRF-Lite，補完企業與 ISP 邊界最常見的路由設計 |
-| 15 | 第二層安全：靜態 MAC、MAC flooding（CAM 表滿了變成泛洪）、雙重標籤、Storm Control、Private VLAN、RA Guard → 第 6 章補充關卡 | 引擎已經有 MAC 表與 Native VLAN，攻擊情境可以真的跑出來；補 Security+ |
-| 16 | GRE、GRE over IPsec、IOS VTI、DMVPN、NAT-T、IKEv2 的憑證驗證 → 第 7 章補充關卡 | 第 6 節最大的缺口，也是 CCNA 1.x / Network+ 的常考題 |
+| 15（已完成） | 第二層安全：靜態 MAC、MAC flooding（CAM 表滿了變成泛洪）、雙重標籤、Storm Control、Private VLAN、RA Guard → 6-10 到 6-12、9-6、10-9 | 引擎已經有 MAC 表與 Native VLAN，攻擊情境可以真的跑出來；補 Security+ |
+| 16（進行中） | GRE、GRE over IPsec、IOS VTI、DMVPN、NAT-T、IKEv2 的憑證驗證 → 第 7 章補充關卡 | 第 6 節最大的缺口，也是 CCNA 1.x / Network+ 的常考題 |
 | 17 | IPv6 補齊：DNS 的 AAAA、DHCPv6 Prefix Delegation、FortiGate 的 IPv6 政策、NAT64 / DNS64、IPv6 over VPN → 第 9 章補充關卡 | 第 8 節剩下的項目 |
 | 18 | 高可用進階：BFD、GLBP、FortiGate HA（Active-Passive、連線同步）、堆疊 / vPC | 第 9 節剩下的項目 |
 | 19 | 維運與語音補充：NTP + Syslog 對時關卡、用 CDP / LLDP 畫拓撲、PoE 預算、雙 WAN 的 QoS、NetFlow、其他 `debug`、排程事件 → 第 11、12 章補充關卡 | 讓故障排除的工具與劇本更完整 |

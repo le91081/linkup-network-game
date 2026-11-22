@@ -32,7 +32,7 @@ export const LEVEL_TOPIC = {
   l55: 'wireless', l56: 'wireless', l57: 'wireless',
   l58: 'auto', l59: 'auto', l60: 'auto', l61: 'auto', l62: 'auto',
   l63: 'routing', l64: 'routing', l65: 'ops', l66: 'routing', l67: 'switching', l68: 'vpn', l69: 'security', l71: 'services',
-  l70: 'auto', l72: 'routing', l73: 'auto', l74: 'security', l75: 'switching', l76: 'vpn', l77: 'routing', l78: 'routing', l79: 'routing', l80: 'routing', l81: 'routing', l82: 'routing',
+  l70: 'auto', l72: 'routing', l73: 'auto', l74: 'security', l75: 'switching', l76: 'vpn', l77: 'routing', l78: 'routing', l79: 'routing', l80: 'routing', l81: 'routing', l82: 'routing', l83: 'security', l84: 'security', l85: 'switching', l86: 'security', l87: 'ipv6',
 };
 
 export const QUESTIONS = {
@@ -57,6 +57,7 @@ export const QUESTIONS = {
     { q: 'Syslog 的嚴重等級是 0 到 7。哪一個說法正確？', a: ['數字越大越嚴重', '數字越小越嚴重', '7 代表系統無法使用', '0 是除錯訊息'], c: 1, e: '0 是 Emergency（系統無法使用），7 是 Debugging。數字越小代表事件越嚴重。', r: 'CCNA 4.5' },
   ],
   switching: [
+    { q: '二樓的網路 ping 都通，但大量傳輸非常慢；某個埠收到的廣播比其他埠多了好幾個數量級，也沒有迴圈。最適合的對策是？', a: ['在接電腦的埠設定 storm-control broadcast level', '把 STP 關掉', '增加 VLAN', '把所有埠設成 Trunk'], c: 0, e: '單一台設備狂送廣播，整個 VLAN 的線路都被佔掉，STP 管不到。Storm Control 設定廣播上限，超過的丟掉或把埠關掉。', r: 'Network+ 5.3' },
     { q: '兩台伺服器都把網卡的 MTU 改成 9000，中間的交換器沒有開 Jumbo Frame。會發生什麼事？', a: ['完全連不到', 'ping 會通、TCP 連得上，但大量傳輸卡住', '速度會自動降到 1500 的水準，其他正常', '交換器會回 ICMP「需要分段」'], c: 1, e: '交握與一般 ping 的封包都小於 1500，可以通過；資料區段依 MSS 8960 裝滿，超過交換器的 MTU 被當成 giant 丟掉。第二層的設備不會回 ICMP，送的人不知道要改小。', r: 'Network+ 2.2' },
     { q: '在 Windows 上，哪一個指令可以測出整條路能不能跑 MTU 9000？', a: ['ping -l 9000', 'ping -f -l 8972', 'tracert -h 9000', 'ping -t 9000'], c: 1, e: '-f 設定 DF（不可分段），-l 是資料的大小：8972 + ICMP 標頭 8 + IP 標頭 20 = 9000。不加 -f 的話封包會被分段，測不出問題。Linux 是 ping -M do -s 8972。', r: 'Network+ 5.5' },
     { q: 'Access 埠與 Trunk 埠的差別是什麼？', a: ['Access 埠速度比較快', 'Access 埠屬於單一 VLAN；Trunk 埠用 802.1Q 標籤載送多個 VLAN', 'Trunk 埠只能接電腦', 'Access 埠不會學習 MAC 位址'], c: 1, e: 'Access 埠接終端設備，訊框不帶標籤；Trunk 埠接交換器或路由器，靠標籤區分不同 VLAN 的訊框。', r: 'CCNA 2.1' },
@@ -102,6 +103,10 @@ export const QUESTIONS = {
     { q: '和 2.4GHz 相比，5GHz 的特性是什麼？', a: ['傳得比較遠、穿牆比較好', '頻道多、干擾少，但涵蓋範圍比較小', '只能用在室外', '不支援加密'], c: 1, e: '頻率越高衰減越快，所以 5GHz 距離較短；但它的不重疊頻道多很多，適合用戶密集的環境。', r: 'CCNA 1.11' },
   ],
   security: [
+    { q: '攻擊者用 macof 把交換器的 MAC 位址表塞滿之後，會發生什麼事？', a: ['交換器當機重開', '新的 MAC 學不進來，目的地不在表裡的訊框被泛洪到整個 VLAN，攻擊者可以側錄', '所有連接埠自動進入 err-disabled', '交換器自動改用 STP 封鎖攻擊者'], c: 1, e: 'MAC 位址表的容量有限（2960 是 8,192 筆）。表滿了之後交換器像 Hub 一樣泛洪 unknown unicast。對策是 Port Security 限制每個埠的 MAC 數量。', r: 'Network+ 4.2' },
+    { q: '要讓接電腦的埠最多只接受 2 個 MAC，超過的封包丟掉並記錄、但埠不要關掉，該怎麼設定？', a: ['switchport port-security maximum 2 與 violation shutdown', 'switchport port-security maximum 2 與 violation restrict', 'switchport port-security maximum 2 與 violation protect', 'storm-control broadcast level 2'], c: 1, e: 'restrict 會丟掉違規的封包、送 syslog、違規次數加一；protect 只丟掉不記錄；shutdown（預設）把埠關成 err-disabled。', r: 'CCNA 5.7' },
+    { q: '雙重標籤 (double tagging) 攻擊要成立，攻擊者通常必須在哪裡？', a: ['任何一個 Trunk 埠', '和 Trunk 的 Native VLAN 相同的 Access VLAN 裡', '路由器的子介面上', '伺服器所在的 VLAN'], c: 1, e: '第一台交換器拿掉外層標籤後，因為那是 Native VLAN，從 Trunk 送出時不加標籤，對面看到的是裡面那層。把 Native VLAN 改成沒人用的 VLAN，或 vlan dot1q tag native，就能擋下。', r: 'Network+ 4.2' },
+    { q: '飯店希望每個房間彼此隔離、但都用同一個網段與閘道上網，最適合的功能是？', a: ['每個房間一個 VLAN', 'Private VLAN（房間用 isolated、閘道接 promiscuous 埠）', 'Port Security', 'DHCP Snooping'], c: 1, e: 'Private VLAN 讓同一個網段裡的主機在第二層彼此隔離：isolated 只能和 promiscuous 埠通，community 同組互通。2960 只有 switchport protected。', r: 'Network+ 4.3' },
     { q: 'DHCP Snooping 的信任埠 (trusted port) 應該設在哪裡？', a: ['所有接使用者電腦的埠', '通往合法 DHCP 伺服器的上行埠', '所有的埠', '沒有在使用的埠'], c: 1, e: '只有信任埠可以送出 DHCP 伺服器的訊息。使用者那一側的埠保持不信任，私接的 DHCP 伺服器就發不出位址。', r: 'CCNA 5.7' },
     { q: 'Port Security 的哪一種違規動作會讓連接埠進入 err-disabled？', a: ['protect', 'restrict', 'shutdown', 'sticky'], c: 2, e: 'shutdown 是預設動作，一違規就把整個埠關掉。protect 與 restrict 只丟棄違規的訊框，埠本身仍然運作。', r: 'CCNA 5.7' },
     { q: '每一份 ACL 的最後，都隱含一條什麼規則？', a: ['permit any', 'deny any', 'permit tcp any any established', '記錄所有封包'], c: 1, e: '沒有被任何規則允許的封包一律丟棄。所以只寫 deny 規則而沒有 permit 的 ACL，會把所有流量擋掉。', r: 'CCNA 5.6' },
@@ -128,6 +133,7 @@ export const QUESTIONS = {
     { q: '為什麼不直接用連接埠轉發把內部的 ERP 開放到網際網路？', a: ['連接埠轉發比較慢', '服務會直接暴露給全世界的攻擊者；VPN 會先驗證身分並加密', '這樣會佔用太多 IP', 'ERP 不支援 HTTPS'], c: 1, e: '開放到網際網路的服務隨時會被掃描與攻擊。只讓通過驗證的 VPN 使用者連線，可以大幅縮小攻擊面。', r: 'Security+ 3.2' },
   ],
   ipv6: [
+    { q: '辦公室有人接了一台會送 Router Advertisement 的設備，大家的 IPv6 預設閘道被搶走。交換器上該用哪個功能防？', a: ['DHCP Snooping', 'RA Guard（接電腦的埠 device-role host）', 'Dynamic ARP Inspection', 'BPDU Guard'], c: 1, e: 'RA 沒有驗證，主機會接受任何人送的 RA。RA Guard 把接電腦的埠設成 host 角色，從那裡進來的 RA 一律丟掉。', r: 'Network+ 4.3' },
     { q: 'IPv6 位址的長度是多少？', a: ['32 位元', '64 位元', '128 位元', '256 位元'], c: 2, e: 'IPv6 位址是 128 位元，寫成 8 組、每組 4 個十六進位數字。', r: 'CCNA 1.8' },
     { q: '2001:0db8:0000:0000:0000:0000:0000:0001 的最短寫法是？', a: ['2001:db8::1', '2001:db8:0:1', '2001:0db8::0001', '2001:db8:::1'], c: 0, e: '每組開頭的 0 可以省略，一段連續的全 0 可以用 :: 代替，但整個位址只能用一次。', r: 'CCNA 1.8' },
     { q: 'fe80:: 開頭的位址屬於哪一種？', a: ['全域單點位址', 'Link-local 位址', '多點傳送位址', '迴路位址'], c: 1, e: 'fe80::/10 是 link-local，每個啟用 IPv6 的介面都會自動產生，只在同一條鏈路上有效，路由器不會轉送。', r: 'CCNA 1.9' },

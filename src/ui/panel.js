@@ -12,6 +12,7 @@ import { parseIp, fmtIp } from '../engine/ip.js';
 import { routeRows, SERVICE_NAMES, hitsOf, ospfOn, setOspf, fmtDur } from '../engine/sim.js';
 import { ospfArea, ospfCost, ospfPassive, isLoopback, ospfProcOf, ospfKeys } from '../engine/ospf.js';
 import { ospfCard, ospfNeighborRows } from './panel-ospf.js';
+import * as L2S from './panel-l2sec.js';
 import { buildTerminal } from './terminal.js';
 import * as X from './panel-extra.js';
 import * as M from './panel-more.js';
@@ -261,12 +262,14 @@ function swVlans(ctx, body) {
     list.append(h('div', { class: 'line' },
       h('b', { class: 'mono vid', text: v.id }),
       inp(ctx, ...bind(v, 'name'), { mono: false, ph: '名稱' }),
-      h('span', { class: 'muted nowrap', text: `${n} 個 Access 埠` }),
+      h('span', { class: 'muted nowrap', text: v.pvlan ? `PVLAN ${v.pvlan}` : `${n} 個 Access 埠` }),
       v.id === 1 ? h('span', { class: 'mini ghost' }) : del(() => {
         sw.vlans = sw.vlans.filter((x) => x.id !== v.id);
         for (const p of Object.values(sw.ports)) { if (p.vlan === v.id) p.vlan = 1; if (p.native === v.id) p.native = 1; if (p.voice === v.id) delete p.voice; }
         ctx.commit(true);
       })));
+    const pv = L2S.pvlanField(ctx, v);
+    if (pv) list.append(pv);
   }
   body.append(list);
   const quiet = { commit() {} };
@@ -291,10 +294,15 @@ function swL3(ctx, body) {
   const svis = dev.ifaces.filter((i) => i.bind.t === 'svi').sort((a, b) => a.bind.vlan - b.bind.vlan);
   body.append(h('p', { class: 'tip', text: 'VLAN 介面 (SVI) 是交換器在某個 VLAN 裡的 IP，通常就是該網段的閘道。Routed 埠請到「連接埠」分頁把模式改成 Routed。' }));
   for (const i of svis) {
-    body.append(ifaceCard(ctx, i, {
+    const card = ifaceCard(ctx, i, {
       title: i.label, ospf: true, dhcp: true, helper: true, vrrp: true, badge: h('span', { class: 'chip tiny', text: 'VLAN ' + i.bind.vlan }),
       onDelete: () => { dev.ifaces = dev.ifaces.filter((x) => x !== i); ctx.commit(true); },
-    }));
+    });
+    // Private VLAN 的 primary：secondary VLAN 的主機也要用這個 SVI 當閘道（private-vlan mapping）
+    const pv = dev.sw.vlans.find((v) => v.id === i.bind.vlan && v.pvlan === 'primary');
+    if (pv && L2S.pvlanOk(dev)) card.append(h('div', { class: 'toggles' }, toggle(ctx, () => (i.pvMap || []).length > 0, (on) => { if (on) i.pvMap = (pv.assoc || []).slice(); else delete i.pvMap; },
+      `secondary VLAN（${(pv.assoc || []).join(', ') || '尚未關聯'}）的主機也用這個介面當閘道（private-vlan mapping）`)));
+    body.append(card);
   }
   const free = dev.sw.vlans.filter((v) => !svis.some((i) => i.bind.vlan === v.id)).sort((a, b) => a.id - b.id);
   if (free.length) {

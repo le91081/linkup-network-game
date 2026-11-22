@@ -2819,6 +2819,107 @@ console.log('\nOSPF 的 stub / NSSA、VRF 裡的 OSPF、路由洩漏、iBGP 與 
   }
 }
 
+console.log('\n第二層安全：Port Security、MAC flooding、靜態 MAC、Storm Control、Protected / Private VLAN、雙重標籤、RA Guard');
+{
+  const sim = await import('../src/engine/sim.js');
+  const s6 = await import('../src/engine/sim6.js');
+  const { iosSession, runningConfig } = await import('../src/engine/ios.js');
+  const { iosRun } = await import('../src/ui/cli.js');
+  const { makeDevice: MD, makeState: MS, newIface: NI } = await import('../src/engine/model.js');
+  const { parseIp6 } = await import('../src/engine/ip6.js');
+  const ok = (cond, title) => (cond ? console.log('  ✔ ' + title) : fail(title));
+  const cli = (s, id) => { const S = iosSession(() => s.devices[id], () => s); return (...lines) => { const out = []; for (const l of lines) { const r = iosRun({ state: s, showTrace() {}, refreshLive() {} }, id, S, l, (x) => out.push(x)); if (r.changed) settle(s); } return out.join('\n'); }; };
+  const IP = (x) => parseIp(x);
+  const leak = (r, id) => r.hops.some((h) => (h.leak || []).some((x) => x.to === id));
+  // 不快轉的版本：每一行只重新計算一次（看得到計時器還在跑的中間狀態）
+  const cliNow = (s, id) => { const S = iosSession(() => s.devices[id], () => s); return (...lines) => { for (const l of lines) { const r = iosRun({ state: s, showTrace() {}, refreshLive() {} }, id, S, l, () => {}); if (r.changed) sim.recompute(s); } }; };
+  // ── MAC flooding 與 Port Security
+  const t = MS([MD('c2960', 'sw', { name: 'SW', pos: [0, 0] }), MD('pc', 'pc1', { name: 'PC1', pos: [-4, 4], ip: '10.0.0.11' }), MD('tower', 'srv', { name: 'SRV', pos: [4, 4], ip: '10.0.0.10', services: [{ proto: 'tcp', port: 445, name: 'SMB' }] }),
+    MD('laptop', 'atk', { name: 'ATK', pos: [0, 5], ip: '10.0.0.66', init(d) { d.macFlood = true; } })], [['pc1:eth0', 'sw:Gi0/1'], ['srv:eth0', 'sw:Gi0/2'], ['atk:eth0', 'sw:Gi0/5']]);
+  settle(t);
+  const SW = cli(t, 'sw');
+  let r = sim.transact(t, 'pc1', { proto: 'tcp', dst: IP('10.0.0.10'), dport: 445 });
+  ok(r.ok && leak(r, 'atk') && /Total Mac Address Space Available: 0/.test(SW('show mac address-table count')), 'macof 把 8,192 筆的表塞滿：新的 MAC 學不進來，PC 和伺服器之間的流量被泛洪到攻擊者');
+  ok(/另外還有 8,1\d\d 筆，全部學在 Gi0\/5/.test(SW('show mac address-table')), 'show mac address-table：幾千筆亂造的 MAC 都學在 Gi0/5');
+  {
+    // 另一條路：直接打開（預設 maximum 1、violation shutdown）
+    const a = cloneState(t); sim.recompute(a);
+    cliNow(a, 'sw')('configure terminal', 'interface gi0/5', 'switchport mode access', 'switchport port-security', 'end');
+    ok(a.devices.sw.rt.err['Gi0/5'] === true && /psecure-violation/.test(cli(a, 'sw')('show interfaces status err-disabled')) && !(a.dyn.cam || {}).sw, '先打開 switchport port-security（預設 maximum 1、violation shutdown）：攻擊的埠馬上 err-disabled，從那個埠學到的亂造項目跟著清掉');
+  }
+  // 先設好 maximum 與違規動作，最後才打開
+  cliNow(t, 'sw')('configure terminal', 'interface gi0/5', 'spanning-tree portfast', 'switchport mode access', 'switchport port-security maximum 2', 'switchport port-security violation restrict', 'switchport port-security', 'end');
+  const ps = SW('show port-security interface gi0/5');
+  ok(!t.devices.sw.rt.err['Gi0/5'] && /Violation Mode\s+: Restrict/.test(ps) && /Maximum MAC Addresses\s+: 2/.test(ps) && /Port Status\s+: Secure-up/.test(ps), 'maximum 2、violation restrict：埠維持 up，違規的訊框被丟掉');
+  r = sim.transact(t, 'pc1', { proto: 'tcp', dst: IP('10.0.0.10'), dport: 445 });
+  ok(t.dyn.cam.sw && leak(r, 'atk'), '擋住了，但表裡已經塞進去的還要等老化：這段時間照樣泛洪');
+  ok(sim.pendingOf(t).some((p) => p.kind === 'mac'), '亂造的項目老化的時間排進了計時器（收斂中）');
+  settle(t);
+  sim.transact(t, 'pc1', { proto: 'tcp', dst: IP('10.0.0.10'), dport: 445 });
+  r = sim.transact(t, 'pc1', { proto: 'tcp', dst: IP('10.0.0.10'), dport: 445 });
+  ok(!t.dyn.cam.sw && !leak(r, 'atk') && r.ok, '300 秒後亂造的項目老化：表恢復正常，攻擊者收不到別人的流量');
+  ok(/PORT_SECURITY-2-PSECURE_VIOLATION/.test(SW('show logging')), 'restrict 模式記一筆 %PORT_SECURITY-2-PSECURE_VIOLATION');
+  ok(/ switchport port-security\n switchport port-security maximum 2\n switchport port-security violation restrict/.test(runningConfig(t, t.devices.sw).join('\n')), 'running-config：maximum 2、violation restrict（預設的 maximum 1 與 shutdown 不印）');
+  SW('configure terminal', 'interface gi0/1', 'switchport mode access', 'switchport port-security', 'switchport port-security mac-address sticky', 'end');
+  const mac1 = t.devices.pc1.ifaces[0].rt.mac.replace(/:/g, '').replace(/(.{4})(?=.)/g, '$1.');
+  ok(new RegExp(`switchport port-security mac-address sticky ${mac1}`).test(runningConfig(t, t.devices.sw).join('\n')), 'mac-address sticky：已經動態學到的安全位址轉成 sticky，寫進 running-config');
+  SW('configure terminal', 'interface gi0/3', 'switchport port-security maximum 1', 'end');
+  ok(/maximum 不能比它小/.test(SW('configure terminal', 'interface gi0/1', 'switchport port-security mac-address 0011.2233.4455', 'switchport port-security maximum 1', 'end')), 'maximum 不能比已經設定的安全位址還少');
+  // 靜態 MAC
+  const srvMac = t.devices.srv.ifaces[0].rt.mac.replace(/:/g, '').replace(/(.{4})(?=.)/g, '$1.');
+  SW('configure terminal', `mac address-table static ${srvMac} vlan 1 interface gi0/2`, 'end');
+  ok(new RegExp(`${srvMac}\\s+STATIC\\s+Gi0/2`).test(SW('show mac address-table static')) && new RegExp(`mac address-table static ${srvMac} vlan 1 interface GigabitEthernet0/2`).test(runningConfig(t, t.devices.sw).join('\n')), 'mac address-table static：表裡是 STATIC，running-config 也有');
+  SW('configure terminal', `mac address-table static ${t.devices.pc1.ifaces[0].rt.mac.replace(/:/g, '').replace(/(.{4})(?=.)/g, '$1.')} vlan 1 drop`, 'end');
+  ok(!sim.transact(t, 'pc1', { proto: 'icmp', dst: IP('10.0.0.10') }).ok, 'mac address-table static … drop：這個 MAC 送的訊框一律丟掉');
+
+  // ── Storm Control
+  const u = MS([MD('c2960', 'sw', { name: 'SW', pos: [0, 0] }), MD('pc', 'pc1', { name: 'PC1', pos: [-4, 4], ip: '10.0.0.11' }), MD('tower', 'srv', { name: 'SRV', pos: [4, 4], ip: '10.0.0.10', services: [{ proto: 'tcp', port: 445, name: 'SMB' }] }),
+    MD('pc', 'bad', { name: 'BAD', pos: [0, 5], ip: '10.0.0.77', init(d) { d.bcastFlood = 900; } })], [['pc1:eth0', 'sw:Gi0/1'], ['srv:eth0', 'sw:Gi0/2'], ['bad:eth0', 'sw:Gi0/5']]);
+  settle(u);
+  const U = cli(u, 'sw');
+  const sp = () => sim.throughput(u, sim.transact(u, 'pc1', { proto: 'tcp', dst: IP('10.0.0.10'), dport: 445 }).hops).mbps;
+  ok(sp() < 100, `有人狂送 900 Mbps 的廣播：PC 到伺服器只剩 ${sp()} Mbps`);
+  U('configure terminal', 'interface gi0/5', 'storm-control broadcast level 1.00', 'end');
+  ok(sp() > 800 && /Gi0\/5\s+Blocking\s+1\.00%\s+1\.00%\s+90\.00%/.test(U('show storm-control')), 'storm-control broadcast level 1.00：超過 10 Mbps 的廣播被丟掉，速度恢復；show storm-control 是 Blocking、目前 90%');
+  ok(/STORM_CONTROL-3-FILTERED/.test(U('show logging')), '過濾時記一筆 %STORM_CONTROL-3-FILTERED');
+  U('configure terminal', 'interface gi0/5', 'storm-control action shutdown', 'end');
+  ok(u.devices.sw.rt.err['Gi0/5'] === 'storm' && /storm-control/.test(U('show interfaces status err-disabled')) && /STORM_CONTROL-3-SHUTDOWN/.test(U('show logging')), 'action shutdown：埠 err-disabled，原因 storm-control');
+  ok(/ storm-control broadcast level 1\.00\n storm-control action shutdown/.test(runningConfig(u, u.devices.sw).join('\n')), 'running-config：storm-control broadcast level 1.00、action shutdown');
+  U('configure terminal', 'interface range gi0/1 , gi0/2', 'switchport protected', 'end');
+  ok(!sim.transact(u, 'pc1', { proto: 'icmp', dst: IP('10.0.0.10') }).ok && /Protected: true/.test(U('show interfaces gi0/1 switchport')), 'switchport protected：同一台的兩個 protected 埠彼此不通');
+
+  // ── Private VLAN
+  const { s: pv } = (() => { const lv = LEVELS.find((l) => l.id === 'l86'); const s = lv.setup(); settle(s); lv.solve(s); settle(s); return { s }; })();
+  const P = cli(pv, 'sw');
+  const okp = (a, b) => sim.transact(pv, a, { proto: 'tcp', dst: pv.devices[b].ifaces[0].rt.ip, dport: 445 }).ok;
+  ok(!okp('r1201', 'r1202') && okp('ca', 'cb') && !okp('ca', 'r1201') && pv.devices.r1201.ifaces[0].rt.src === 'dhcp', 'Private VLAN：isolated 彼此不通、community 同組互通、DHCP 照樣從 promiscuous 埠拿到位址');
+  ok(/100\s+101\s+isolated\s+Gi1\/0\/1, Gi1\/0\/2, Gi1\/0\/24/.test(P('show vlan private-vlan')), 'show vlan private-vlan 列出每個 secondary 對應的埠');
+  const c2960 = MS([MD('c2960', 'x', { name: 'X', pos: [0, 0] })], []); settle(c2960);
+  ok(/not supported on this platform/.test(cli(c2960, 'x')('configure terminal', 'vlan 100', 'private-vlan primary', 'end')), 'Catalyst 2960 沒有 Private VLAN（只有 switchport protected）');
+
+  // ── 雙重標籤
+  const { s: dt, lv: l84 } = (() => { const lv = LEVELS.find((l) => l.id === 'l84'); const s = lv.setup(); settle(s); return { s, lv }; })();
+  const atk = () => sim.transact(dt, 'atk', { proto: 'udp', dst: IP('10.30.20.10'), dport: 514, quiet: true });
+  ok(atk().phase === 'reply', '雙重標籤：外層 VLAN 10 被 SW-3F 拿掉，從 Native VLAN 10 的 Trunk 不加標籤送出，封包到得了 VLAN 20 的伺服器（回覆回不去）');
+  cli(dt, 'swa')('configure terminal', 'vlan dot1q tag native', 'end');
+  ok(atk().phase === 'request' && /Administrative Native VLAN tagging: enabled/.test(cli(dt, 'swa')('show interfaces gi0/9 switchport')), 'vlan dot1q tag native：Native VLAN 的訊框也加標籤，裡面那層不會被當真');
+  cli(dt, 'swa')('configure terminal', 'no vlan dot1q tag native', 'end');
+  ok(atk().phase === 'reply', '拿掉 tag native：攻擊又成立');
+  l84.solve(dt); settle(dt);
+  ok(atk().phase === 'request', 'Trunk 的 Native VLAN 改成沒人用的 999（兩端）：攻擊失效');
+
+  // ── RA Guard
+  const { s: ra } = (() => { const lv = LEVELS.find((l) => l.id === 'l87'); const s = lv.setup(); settle(s); return { s }; })();
+  const v = ra.devices.pc1.ifaces[0].rt.v6;
+  ok(v.router === 'rogue' && v.addrs.some((a) => a.rogue) && v.addrs.length === 2, '冒牌的 RA（優先權 High）：PC 多一個 2001:db8:bad:: 的位址，預設閘道是那台筆電');
+  ok(!s6.transact6(ra, 'pc1', parseIp6('2001:db8:99::10'), { proto: 'tcp', port: 443 }).ok, '筆電不轉送：IPv6 全斷（黑洞）');
+  cli(ra, 'sw')('configure terminal', 'ipv6 nd raguard policy HOSTS', 'device-role host', 'exit', 'interface range gi0/1 - 8', 'ipv6 nd raguard attach-policy HOSTS', 'end');
+  const v2 = ra.devices.pc1.ifaces[0].rt.v6;
+  ok(v2.router === 'r1' && !v2.addrs.some((a) => a.rogue) && (v2.raBlocked || [])[0].where === 'SW-RD 的 Gi0/6', 'RA Guard（device-role host）：從 Gi0/6 進來的 RA 被丟掉，預設閘道回到 R1');
+  ok(/ipv6 nd raguard policy HOSTS\n device-role host/.test(runningConfig(ra, ra.devices.sw).join('\n')) && /Gi0\/6\s+PORT\s+HOSTS\s+RA guard/.test(cli(ra, 'sw')('show ipv6 nd raguard policy')), 'running-config 與 show ipv6 nd raguard policy');
+  void NI;
+}
+
 // ── 題庫與證照對照表的資料檢查 ──
 {
   const { QUESTIONS, TOPICS, LEVEL_TOPIC } = await import('../src/data/quiz.js');

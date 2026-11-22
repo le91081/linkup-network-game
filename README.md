@@ -75,7 +75,7 @@ npm run build    # 輸出到 dist/
 - **評分**：過關時依實際作答時間（畫面在前景、沒有開對話框才算；標準時間是 3 分鐘加上每個目標 1.5 分鐘）、看了幾個提示、跑了幾次完整測試給 S / A / B / C 與分數，關卡選單上顯示最佳等級。設定變更的次數只列出來參考。
 - **關卡編輯器**：自由模式的「關卡設計」可以寫關卡名稱、任務說明、提示，指定哪些設備鎖定（玩家看得到、不能設定），然後試玩、存成自訂關卡、或匯出成關卡檔分享；關卡選單的「自訂關卡」可以遊玩、匯出、刪除與匯入。
 
-## 關卡（17 章 82 關）
+## 關卡（17 章 87 關）
 
 | 章節 | 關卡數 | 主題 |
 | --- | --- | --- |
@@ -84,11 +84,11 @@ npm run build    # 輸出到 dist/
 | 3 企業網路 | 3 | 防火牆政策與 DMZ、靜態路由與回程路由、一對一靜態 NAT |
 | 4 資料中心 | 4 | ToR 與 SVI、Spine-Leaf 與 OSPF、銅纜 / 多模 / 單模光纖與距離；Jumbo Frame 要整條路一致（交換器默默丟掉 giant、`ping -f -l 8972`、2960 的 `system mtu jumbo` 要存檔重新開機） |
 | 5 無線網路 | 3 | SSID、WPA2 / WPA3、PoE、頻道規劃、訪客 SSID 對應 VLAN |
-| 6 網路安全 | 9 | TCP 與 UDP（只放行 TCP 53 的 ACL 擋掉了 DNS、TFTP、Syslog）、DHCP Snooping、Port Security、ACL、管理加固、DAI、BPDU Guard、802.1X / RADIUS、用 DTP 偽裝成交換器的 VLAN hopping 與邊緣埠加固 |
+| 6 網路安全 | 12 | TCP 與 UDP（只放行 TCP 53 的 ACL 擋掉了 DNS、TFTP、Syslog）、DHCP Snooping、Port Security、ACL、管理加固、DAI、BPDU Guard、802.1X / RADIUS、用 DTP 偽裝成交換器的 VLAN hopping 與邊緣埠加固；MAC flooding 把交換器的表塞滿、變成 Hub（Port Security 的 maximum 與違規動作要先設好再打開、亂造的項目要等老化或 clear）；雙重標籤從 Native VLAN 跳進伺服器 VLAN、繞過 ACL（Native VLAN 改成沒人用的、或 vlan dot1q tag native）；飯店的房間用 Private VLAN 隔離（isolated、community、promiscuous） |
 | 7 VPN 與廣域備援 | 6 | 站對站 IPsec、遠端存取 VPN、雙線路浮動靜態路由；業者骨幹故障時介面還是 up，用 IP SLA 與追蹤的靜態路由切換（探測目標要綁在主線、不要用使用者的 DNS）；三個據點的 Hub-and-Spoke 與 IKEv2（版本要一致、PFS 不一致要到重新協商才斷、加密範圍與 NAT 例外要包含另一個分公司）；IPsec 讓封包變大，ICMP「需要分段」被伺服器網段的 ACL 擋掉造成 PMTUD 黑洞（上傳正常、下載卡住），放行 `packet-too-big` 並在介面上 `ip tcp adjust-mss 1360` |
 | 8 高可用與進階路由 | 7 | STP、EtherChannel、VRRP / HSRP、DHCP Relay、OSPF Cost、VLSM；HSRP 追蹤上行介面（preempt 預設是關的，兩台都要開） |
-| 9 IPv6 | 5 | Link-local、SLAAC、IPv6 靜態路由、雙協定；RA 的 M / O / A 旗標與 DHCPv6（stateless / stateful，DHCPv6 不給閘道）、OSPFv3（link-local 鄰居、純 IPv6 路由器的 Router ID）、IPv6 ACL 與隱含的 ND 允許規則 |
-| 10 故障排除 | 8 | 網路已經設定好但被改壞了：IP 衝突與 DHCP 保留、Trunk / VLAN / shutdown、閘道 / 回程路由 / NAT / ACL / DNS、ping 會通但傳檔很慢（速率寫死、duplex mismatch、舊 Hub）；OSPF 鄰居起不來（MD5 金鑰、被動介面、network 敘述）；流量繞經實驗室的交換器（根橋位置與 Root Guard）；VPN 通了資料卻過不去（NAT 例外、加密的 ACL 要涵蓋新網段）；DNS 改了卻還連到舊的（TTL 與用戶端快取、nslookup 不看快取、`ipconfig /flushdns`） |
+| 9 IPv6 | 6 | Link-local、SLAAC、IPv6 靜態路由、雙協定；RA 的 M / O / A 旗標與 DHCPv6（stateless / stateful，DHCPv6 不給閘道）、OSPFv3（link-local 鄰居、純 IPv6 路由器的 Router ID）、IPv6 ACL 與隱含的 ND 允許規則；冒牌的 Router Advertisement 搶走預設閘道（主機多一個位址、IPv6 變黑洞），RA Guard 的 device-role host |
+| 10 故障排除 | 9 | 網路已經設定好但被改壞了：IP 衝突與 DHCP 保留、Trunk / VLAN / shutdown、閘道 / 回程路由 / NAT / ACL / DNS、ping 會通但傳檔很慢（速率寫死、duplex mismatch、舊 Hub）；OSPF 鄰居起不來（MD5 金鑰、被動介面、network 敘述）；流量繞經實驗室的交換器（根橋位置與 Root Guard）；VPN 通了資料卻過不去（NAT 例外、加密的 ACL 要涵蓋新網段）；DNS 改了卻還連到舊的（TTL 與用戶端快取、nslookup 不看快取、`ipconfig /flushdns`）；整層樓都慢了：一台電腦狂送廣播（從介面的 broadcasts 計數器找出是誰），用 Storm Control 擋下 |
 | 11 維運與管理 | 6 | 是誰動了設定（設定封存、差異比對、變更紀錄、只拿掉有問題的那一行、停用帳號）；從 TFTP 還原設定（合併與整份取代的差別）、韌體升級（flash 空間、MD5、`boot system`、TFTP 與 FTP 的速度）、讓原廠交換器能用 SSH（主機名稱、網域、RSA 金鑰、`login local`）、用 SNMPv3 找出滿載的線路（線對斷掉自動降到 100 Mbps）；HTTPS 憑證錯誤（過期、新網址不在 SAN 裡、沒有加入網域的筆電不信任公司的 CA、時鐘回到兩年前變成「尚未生效」） |
 | 12 語音與 QoS | 2 | IP 電話：PoE、語音 VLAN、CDP 與 LLDP-MED、DHCP option 150、CUCM 註冊；線路塞車時用 QoS 保住通話：信任邊界、LLQ、配合營運商合約頻寬的整形 |
 | 13 進階路由 | 10 | OSPF 的 DR / BDR 選舉（不搶位、`clear ip ospf process`）、Router ID 與 Loopback、passive-interface；參考頻寬與 cost、等價多路徑 (ECMP)；多區域 OSPF、ABR 與 `area range` 彙總；用 eBGP 同時接兩家 ISP：local-preference 決定出去走哪家、AS-path prepend 影響進來走哪家、prefix-list 避免變成轉運站；把靜態路由重分配進 OSPF（ASBR、O E2、用 prefix-list + route-map 只送工廠的網段）；政策路由讓 NAS 的備份改走寬頻（ACL + route-map set ip next-hop，套在進來的介面上）；分公司的路由表太大：stub 與 totally stubby（新路由器照範本設了 `area 10 stub`、ABR 沒設，Hello 的選項位元不同，鄰居起不來）；工廠在 stub 區域裡重分配供應商的網段白做：改成 NSSA（O N2、ABR 轉成 Type-5、`no-summary` 補回預設路由）；兩台邊界路由器的 iBGP（`update-source`、`next-hop-self`、中間的 Core 沒有 BGP 是黑洞，要全網狀或 route reflector，ISP 的線斷了繞網際網路回來）；機房的 VRF 各跑自己的 OSPF 程序，共用服務靠兩個方向的靜態路由洩漏（`… global`、出口介面在另一個 VRF），只洩漏需要的網段 |
@@ -116,7 +116,7 @@ npm run build    # 輸出到 dist/
 
 沒有關卡的條目（安全計畫）是觀念題，題庫裡有對應的題目。
 條目編號依公開的考試大綱，標題是中文摘要。CCNA v2.0 預計在 2027 年 2 月取代 v1.1，改版後需要重新對照。
-題庫（162 題觀念題加上隨機產生的子網路計算題）是自行編寫的練習題，不是實際試題。
+題庫（168 題觀念題加上隨機產生的子網路計算題）是自行編寫的練習題，不是實際試題。
 
 ## CLI 設定指令
 
@@ -127,7 +127,7 @@ npm run build    # 輸出到 dist/
 | --- | --- |
 | 全域 | `hostname`、`archive`（`path`、`maximum`、`write-memory`、`log config` → `logging enable` / `notify syslog` / `hidekeys`）、`track`、`ip sla` → `icmp-echo` → `frequency`、`ip sla schedule`、`errdisable recovery cause / interval`、`interface` / `interface range` / `interface vlan` / `interface loopback`、`vlan`、`ip route`、`ipv6 route`、`router ospf`、`router bgp`、`route-map`、`ip prefix-list`、`ip as-path access-list`、`ipv6 router ospf`、`ipv6 dhcp pool`、`ipv6 access-list`、`ip dhcp pool`、`ip dhcp excluded-address`、`ip nat inside source …`、`ip access-list extended`、`spanning-tree vlan … priority`、`ip dhcp snooping`、`ip arp inspection vlan`、`line vty`、`ntp server`、`logging host`、`snmp-server …`、`username`、`ip domain name`、`ip ssh version`、`boot system`、`ip ftp username / password` |
 | 介面 | `ip address`、`shutdown`、`switchport mode / access vlan / trunk native vlan / trunk allowed vlan`、`no switchport`、`encapsulation dot1q`、`ip nat inside / outside`、`ip helper-address`、`ip ospf cost / priority / network / hello-interval / dead-interval / authentication / message-digest-key / mtu-ignore`、`ip ospf <pid> area <區域>`、`ip mtu`、`ip access-group`、`ipv6 address … [link-local]`、`ipv6 nd managed-config-flag / other-config-flag / prefix default no-autoconfig / ra suppress`、`ipv6 dhcp server / relay destination`、`ipv6 ospf 1 area / cost / priority / network / hello-interval / dead-interval`、`ipv6 traffic-filter`、`vrrp <群組> ip / priority / preempt / track`、`standby <群組> ip / priority / preempt / track`、`channel-group`、`switchport port-security`、`spanning-tree bpduguard`、`ip dhcp snooping trust`、`ipv6 address` |
-| 其他 | VLAN 的 `name`、OSPF 的 `network … area`、`router-id`、`passive-interface [default]`、`auto-cost reference-bandwidth`、`maximum-paths`、`area … range`、`area … authentication [message-digest]`、`area … stub [no-summary]`、`area … nssa [no-summary] [default-information-originate] [no-redistribution]`、`area … default-cost` 與 `default-information originate`、`router ospf <pid> vrf <名稱>`、BGP 的 `bgp router-id`、`network … mask`、`neighbor … remote-as / description / update-source / next-hop-self / route-reflector-client / ebgp-multihop / disable-connected-check / send-community / route-map / prefix-list / filter-list / weight / default-originate / shutdown`、`bgp redistribute-internal`、route-map 的 `match ip address prefix-list`、`match as-path`、`match community`、`set local-preference / as-path prepend / metric / weight / community … [additive]`、`ip community-list`、`ip bgp-community new-format`、`ip route [vrf <名稱>] <網段> <遮罩> [出口介面] <下一站> [global]`、DHCP 位址池的 `network` / `default-router` / `dns-server`、ACL 的 `permit` / `deny`、`line vty` 的 `transport input` / `access-class` |
+| 其他 | VLAN 的 `name`、OSPF 的 `network … area`、`router-id`、`passive-interface [default]`、`auto-cost reference-bandwidth`、`maximum-paths`、`area … range`、`area … authentication [message-digest]`、`area … stub [no-summary]`、`area … nssa [no-summary] [default-information-originate] [no-redistribution]`、`area … default-cost` 與 `default-information originate`、`router ospf <pid> vrf <名稱>`、BGP 的 `bgp router-id`、`network … mask`、`neighbor … remote-as / description / update-source / next-hop-self / route-reflector-client / ebgp-multihop / disable-connected-check / send-community / route-map / prefix-list / filter-list / weight / default-originate / shutdown`、`bgp redistribute-internal`、route-map 的 `match ip address prefix-list`、`match as-path`、`match community`、`set local-preference / as-path prepend / metric / weight / community … [additive]`、`ip community-list`、`ip bgp-community new-format`、`mac address-table static`、`vlan dot1q tag native`、`ipv6 nd raguard policy`（`device-role`）、VLAN 的 `private-vlan primary | isolated | community` 與 `association`、介面的 `switchport port-security maximum / violation protect | restrict | shutdown / mac-address [sticky]`、`storm-control broadcast level / action`、`switchport protected`、`switchport mode private-vlan host | promiscuous`、`switchport private-vlan host-association / mapping`、`ipv6 nd raguard attach-policy`、SVI 的 `private-vlan mapping`、`ip route [vrf <名稱>] <網段> <遮罩> [出口介面] <下一站> [global]`、DHCP 位址池的 `network` / `default-router` / `dns-server`、ACL 的 `permit` / `deny`、`line vty` 的 `transport input` / `access-class` |
 
 在設定模式下要看狀態請用 `do show …`。按 Tab 可以補齊指令，指令打到一半加上 `?` 會列出接下來可以輸入的字。
 `show` 的輸出可以用 `| include`、`| exclude`、`| begin`、`| section`、`| count` 加正規表示式篩選（例如 `show run | i http|restconf`、`sh run | sec interface`）。
@@ -153,6 +153,7 @@ npm run build    # 輸出到 dist/
 - **OSPF**：`show ip ospf`（每個程序一段：stub / NSSA、是不是負責 Type-7 的轉換、VRF 的程序）、`show ip ospf neighbor`（Pri、FULL/DR、2WAY/DROTHER、EXSTART；所有程序的鄰居在同一張表）、`show ip ospf interface [brief | <介面>]`、`show ip ospf database`（Summary 的 0.0.0.0、Type-7、轉換出來的 Type-5，只列自己網域的 LSA）、`show ip protocols [vrf <名稱>]`、`show ip route vrf <名稱> [ospf | static | <位址>]`、`clear ip ospf process`（Router ID 改了要清除程序才會生效；全域與 VRF 的程序一起重來）。
 - **路由表**：`show ip route` 和真的 IOS 一樣依主網段分組（`is subnetted` / `is variably subnetted`）、列出介面自己的位址 (L)、動態路由的存在時間與 Gateway of last resort；可以篩選 `show ip route ospf | bgp | static | connected`，也可以查單一網段 `show ip route <位址> [遮罩]`（Known via、distance、metric、from、等價的每一條路）。沒放進路由表的路（下一站不通的靜態路由、管理距離比較大的備援路由）會在最後用提示說明原因。
 - **路由重分配與政策路由**：`router ospf 1` 底下的 `redistribute static | connected | bgp <AS> [subnets] [metric <n>] [metric-type 1|2] [tag <n>] [route-map <名稱>]`、`router bgp` 底下的 `redistribute static | connected | ospf <程序> [metric <n>] [route-map <名稱>]`；route-map 的 `match ip address prefix-list <名稱>` / `match ip address <ACL>`、`match tag`、`set metric`、`set metric-type type-1`、`set tag`、`set ip next-hop`、`set ip default next-hop`；介面的 `ip policy route-map`、全域的 `ip local policy route-map`；`show route-map`（政策路由比對到幾個封包）、`show ip policy`、`show ip ospf`（ASBR 與重分配的來源）、`show ip ospf database`（每一筆 Type-5）、`show ip route <網段>`（type extern 1 / 2、Tag）。
+- **第二層安全**：`show port-security [interface <埠> | address]`、`show mac address-table [count | static | interface <埠>]`（表被 MAC flooding 塞滿時看得到幾千筆亂造的項目）、`show storm-control [<埠>]`、`show vlan private-vlan`、`show ipv6 nd raguard policy`、`show interfaces <埠> switchport`（Protected、Private VLAN、Native VLAN tagging）。
 - **BGP**：`show ip bgp`（`*>i`、`r` RIB-failure、下一站查不到的沒有 `*`）、`show ip bgp <網段>`（inaccessible、metric、internal / external、Community、Originator 與 Cluster list、沒被選上的原因）、`show ip bgp summary`、`show ip bgp neighbors [<IP> [advertised-routes | received-routes | routes]]`（internal / external link、Route-Reflector Client、update-source）、`show ip prefix-list`、`show ip community-list`、`show route-map`、`show ip as-path-access-list`、`clear ip bgp *`。
 - **IPv6**：`show ipv6 route [ospf | static | connected | local | <位址或前綴>]`（IOS 原樣的格式，含 L 與 FF00::/8）、`show ipv6 interface [brief | <介面>]`（加入的多點傳送群組、RA 的設定、主機要用 SLAAC 還是 DHCPv6）、`show ipv6 ospf [neighbor | interface brief]`、`show ipv6 dhcp pool | binding | interface`、`show ipv6 access-list`（命中次數與序號）、`clear ipv6 ospf process`、`clear ipv6 dhcp binding *`；`ipv6 route` 可以寫「出口介面 + link-local 下一站」與管理距離。主機上有 `ipconfig /renew6`，`tracert`、`curl`、`telnet` 都可以用 IPv6 位址（網址寫成 `http://[2001:db8::10]/`）。
 - **ACL 的來源埠**：`permit tcp any eq 179 any`（回應的封包、或對方主動連過來時的來源埠）。
@@ -332,6 +333,9 @@ npm run build    # 輸出到 dist/
 - **IPv6 ACL**：和 IPv4 的 ACL 是兩套，IPv4 的 ACL 管不到 IPv6。結尾隱含 `permit icmp any any nd-na`、`nd-ns` 再 `deny ipv6 any any`；自己在最後寫了 `deny ipv6 any any`，鄰居探索就被擋掉，整個網段的 IPv6 都會斷。
 - **BGP 的最佳路徑**：weight → local-preference → 自己發出的 → AS path 長短 → origin → MED（同一個鄰居 AS 才比）→ eBGP 比 iBGP 好 → 往下一站的 IGP metric → Router ID。下一站查不到 (inaccessible) 的路不能當最佳路徑。
 - **iBGP**：可以隔好幾台路由器，通常用 Loopback 建立：沒有 `update-source` 時 TCP 179 從出口介面的位址送出，對方設定的鄰居對不上就停在 Active（只要一個方向對得上就起得來）。送給 iBGP 鄰居時 AS path 與下一站都不變，邊界路由器要 `next-hop-self`；從 iBGP 學到的路不轉送給其他 iBGP 鄰居，中間沒有 BGP 的路由器會變成黑洞，要全網狀或 route reflector（反射的路帶 Originator 與 Cluster list）。iBGP 的管理距離 200，比 OSPF 大；`redistribute bgp` 預設不包含 iBGP 的路。eBGP 的 TTL 是 1，用 Loopback 建立要 `ebgp-multihop`。community 要 `send-community` 才會送出去，`no-export` 不出 AS、`no-advertise` 不送任何人；沒有 `ip bgp-community new-format` 時 IOS 印成十進位。同時接兩家 ISP 時，從 ISP-A 學到的路如果沒有過濾就送給 ISP-B，ISP-B 會把往 ISP-A 的流量丟給你（ISP 偏好客戶給的路），公司就成了兩家 ISP 之間的轉運站。
+- **Port Security**：maximum 預設 1，安全位址依序是設定的（靜態、sticky）、再來是先看到的 MAC；超過就是違規：protect 默默丟掉、restrict 丟掉並記紀錄與計次數、shutdown（預設）把埠關成 err-disabled。先打開 switchport port-security 再設 maximum，預設的 shutdown 可能已經把埠關掉了。
+- **MAC 位址表的容量**：表滿了新的 MAC 學不進來，目的地不在表裡的訊框泛洪到整個 VLAN；MAC flooding 的攻擊工具送得到的每一台交換器都會被塞滿。擋住之後亂造的項目要等老化（300 秒）或 clear；學到它們的埠斷線時會立刻清掉。靜態的 MAC 不受影響。
+- **雙重標籤**：Access 埠照收標籤剛好是自己 VLAN 的訊框；Trunk 送出 Native VLAN 時不加標籤，所以外層被拿掉後，裡面那層就被對面當真。只能單向（回覆回不去）。
 - **管理存取**：FortiGate 每個介面各自決定開放 ping / HTTPS / SSH / SNMP / HTTP / Telnet。
 - **故障模擬**：任何設備都可以關機，路由器的介面與交換器的連接埠可以 `shutdown`；錯誤訊息會指出是哪一台關機或哪個介面被停用。
 
@@ -370,11 +374,10 @@ npm run build    # 輸出到 dist/
 
 完整的功能規劃（每個領域已完成、部分完成、尚未開始的項目，以及建議的實作順序）在 [PLAN.md](PLAN.md)。以下是最接近的幾項：
 
-1. 第二層安全：靜態 MAC、MAC flooding、雙重標籤、Storm Control、Private VLAN、RA Guard（PLAN 的第 15 階段）。
-2. GRE、GRE over IPsec、IOS VTI、DMVPN、NAT-T；FortiGate 的 IPv6 政策、DHCPv6 Prefix Delegation、TACACS+、IOS 的 Dialer 介面。
-3. BGP 的 VRF 與 MP-BGP route-target、自由模式畫牆、訪客入口 (Captive Portal)。
-4. 802.1X 與 IPsec 的憑證驗證（EAP-TLS、RSA 簽章）、中繼憑證鏈與撤銷檢查。
-5. NTP 與 Syslog 的維運關卡（引擎已經有了，還沒有獨立的關卡）。
+1. GRE、GRE over IPsec、IOS VTI、DMVPN、NAT-T（PLAN 的第 16 階段）；FortiGate 的 IPv6 政策、DHCPv6 Prefix Delegation、TACACS+、IOS 的 Dialer 介面。
+2. BGP 的 VRF 與 MP-BGP route-target、自由模式畫牆、訪客入口 (Captive Portal)。
+3. 802.1X 與 IPsec 的憑證驗證（EAP-TLS、RSA 簽章）、中繼憑證鏈與撤銷檢查。
+4. NTP 與 Syslog 的維運關卡（引擎已經有了，還沒有獨立的關卡）。
 
 ## 程式結構
 
@@ -414,6 +417,7 @@ src/engine/   模擬引擎（不依賴瀏覽器，可直接用 Node 測試）
   automation.js   Ansible：inventory、Jinja 變數、network_cli 與 cisco.ios 模組、PLAY RECAP
   cloud.js        公有雲的 VPC：子網路與路由表、IGW 與彈性 IP、NAT 閘道、安全群組、網路 ACL、VPN 設定檔
   faults.js       故障演練：可能的故障清單、在副本上驗證、依種子重現
+  l2sec.js        第二層安全：Port Security 的安全位址與違規、MAC 位址表的容量與 MAC flooding、靜態 MAC、Storm Control 的門檻、RA Guard
   policy.js       路由政策：prefix-list、route-map 套在路由上（重分配進 OSPF / BGP 時的比對與 set）
   mtu.js          MTU：每個介面的 IP MTU、交換器能收的訊框、IPsec 的額外負擔、TCP MSS 的調整
   virt.js         虛擬化主機：vSwitch、連接埠群組與 VLAN 標籤
@@ -421,7 +425,7 @@ src/engine/   模擬引擎（不依賴瀏覽器，可直接用 Node 測試）
   web.js          網站與 HTTPS 憑證：信任的 CA、有效期間（用戶端的時鐘）、SAN 與萬用字元
   dns.js          DNS 伺服器的記錄、TTL 與用戶端快取
   sim6.js         IPv6：SLAAC 與 DHCPv6（RA 的 M / O / A 旗標、relay、binding）、鄰居探索、靜態路由與 OSPFv3、IPv6 ACL、ICMPv6 / TCP / UDP
-src/levels/   關卡定義：設備、初始設定、任務目標、提示、參考解法（trouble.js 是故障排除章，maint.js 是維運章，voip.js 是語音與 QoS 章，routing.js 是進階路由章，ipv6.js 是 IPv6 章的補充，vpn2.js 是多站台 VPN，wireless.js 是無線控制器章，auto.js 是自動化章，cloud.js 是雲端章，virtual.js 是虛擬化章（vSwitch、VRF、容器），tls.js 是 HTTPS 憑證，mtu.js 是 Jumbo Frame 與 PMTUD，redist.js 是路由重分配與政策路由，routing2.js 是 OSPF 的 stub / NSSA、iBGP、VRF 裡的 OSPF 與路由洩漏，resil.js / audit.js / trouble2.js 是各章的補充關卡）
+src/levels/   關卡定義：設備、初始設定、任務目標、提示、參考解法（trouble.js 是故障排除章，maint.js 是維運章，voip.js 是語音與 QoS 章，routing.js 是進階路由章，ipv6.js 是 IPv6 章的補充，vpn2.js 是多站台 VPN，wireless.js 是無線控制器章，auto.js 是自動化章，cloud.js 是雲端章，virtual.js 是虛擬化章（vSwitch、VRF、容器），tls.js 是 HTTPS 憑證，mtu.js 是 Jumbo Frame 與 PMTUD，redist.js 是路由重分配與政策路由，routing2.js 是 OSPF 的 stub / NSSA、iBGP、VRF 裡的 OSPF 與路由洩漏，l2sec.js 是第二層的攻擊與防護（MAC flooding、雙重標籤、Storm Control、Private VLAN、RA Guard），resil.js / audit.js / trouble2.js 是各章的補充關卡）
 src/data/     題庫與證照對照表
 src/scene/    three.js 場景、設備模型、網路線、無線涵蓋範圍與封包動畫
 src/ui/       設定面板、終端機、CLI、任務面板、測驗、模擬考、故障演練、評分、自由模式與關卡編輯器、對話框

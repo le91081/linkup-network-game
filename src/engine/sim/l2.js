@@ -328,6 +328,7 @@ export function prepL2Attacks(state) {
   const rt = state.rt, now = state.clock, down = state.down || {};
   const cam = (state.dyn.cam ||= {});
   rt.bcast = {}; rt.storms = [];
+  const fresh = new Set(); // 這一輪還在被塞的交換器
   for (const d of Object.values(state.devices)) {
     if (down[d.id] || rt.off[d.id]) { delete cam[d.id]; continue; } // 關機：整張表都沒了
     if (!d.macFlood && !(+d.bcastFlood > 0)) continue;
@@ -335,7 +336,7 @@ export function prepL2Attacks(state) {
     if (!iface) continue;
     if (d.macFlood) {
       const e = l2Explore(state, d.id, iface, { mac: 'macof', trace: true });
-      for (const w of e.sws) { const x = state.devices[w.dev]; if (learns(x)) cam[x.id] = { t: now, by: d.id, port: w.port, key: w.key }; }
+      for (const w of e.sws) { const x = state.devices[w.dev]; if (learns(x)) { cam[x.id] = { t: now, by: d.id, port: w.port, key: w.key }; fresh.add(x.id); } }
     }
     if (+d.bcastFlood > 0) {
       const li = linkInfo(state, d.id, iface.bind.port), rate = Math.min(+d.bcastFlood, (li && li.speed) || 1000);
@@ -358,5 +359,12 @@ export function prepL2Attacks(state) {
       rt.storms.push({ dev: d.id, rate, lim });
     }
   }
-  for (const k of Object.keys(cam)) if (!state.devices[k] || now - cam[k].t >= macAgeOf(state.devices[k])) delete cam[k];
+  for (const k of Object.keys(cam)) {
+    const x = state.devices[k];
+    if (!x || now - cam[k].t >= macAgeOf(x)) { delete cam[k]; continue; }
+    // 學到這些 MAC 的那個埠斷線了（被 err-disabled、shutdown、拔線）：從那個埠學到的項目立刻清掉
+    if (cam[k].port && !rt.links[k + ':' + cam[k].port]) { delete cam[k]; continue; }
+    // 攻擊已經停了（這一輪沒有再被塞）：亂造的項目老化之後表才會空出來
+    if (!fresh.has(k)) rt.pending.push({ at: cam[k].t + macAgeOf(x), dev: k, kind: 'mac', text: `${x.name}：MAC flooding 留下的項目還要等老化（或 clear mac address-table dynamic）` });
+  }
 }

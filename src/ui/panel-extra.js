@@ -12,6 +12,7 @@ import { visibleSsids, WIFI_SEC, macsBehind, isBridgePort, hitsOf, P1, accessOf,
 import { cdpCfg, lldpCfg, cdpOn, lldpTxOn, lldpRxOn, portNd, setPortNd, neighbors, speaksCdp, speaksLldp } from '../engine/disc.js';
 import { ntpInfo, deviceTime, plainStamp, logRows, clearLog, syslogStats, NTP_POLL } from '../engine/ops.js';
 import * as M from './panel-more.js';
+import * as L2 from './panel-l2sec.js';
 import * as OPS from './panel-ops.js';
 import * as V from './panel-voice.js';
 
@@ -253,7 +254,7 @@ function errdisCard(ctx, p) {
   const { dev, state } = ctx;
   const r = errdisRows(state, dev).find((x) => x.pid === p.id);
   if (!r) return null;
-  const why = r.cause === 'bpdu' ? 'BPDU Guard 偵測到對面是一台交換器' : '偵測到不在允許清單裡的 MAC（Port Security 違規）';
+  const why = r.cause === 'bpdu' ? 'BPDU Guard 偵測到對面是一台交換器' : r.cause === 'storm' ? 'Storm Control 偵測到廣播超過門檻' : '這個埠後面的 MAC 超過允許的數量（Port Security 違規）';
   const when = r.left != null ? `errdisable recovery 會在 ${fmtDur(r.left)}後試著打開（原因還在的話會再被關掉）。` : '沒有設定 errdisable recovery：原因排除之後也不會自己恢復。';
   return h('div', { class: 'note warn errdis' },
     h('span', { text: `err-disabled：${why}，整個埠被關閉${r.n > 1 ? `（第 ${r.n} 次）` : ''}。${when}` }),
@@ -262,10 +263,9 @@ function errdisCard(ctx, p) {
 
 export function portAdvanced(ctx, p, pc) {
   const { dev, state } = ctx;
-  const ps = (pc.ps ||= { on: false, macs: '', mode: 'restrict' });
+  const ps = (pc.ps ||= { on: false, macs: '', mode: 'shutdown' });
   if (pc.lag == null) pc.lag = '';
   if (!pc.lagMode) pc.lagMode = 'active';
-  const macInp = inp(ctx, ...bind(ps, 'macs'), { ph: '例如 02:1a:2b:3c:4d:5e', check: isMacList });
   return h('div', { class: 'sub' },
     h('div', { class: 'toggles' },
       toggle(ctx, ...bind(pc, 'shut'), '停用此連接埠 (shutdown)'),
@@ -278,25 +278,15 @@ export function portAdvanced(ctx, p, pc) {
       toggle(ctx, ...bind(pc, 'bpduguard'), 'BPDU Guard（對面是交換器就關閉此埠）'),
       toggle(ctx, ...bind(pc, 'rootguard'), 'Root Guard（不允許這個埠後面的交換器成為根橋）'),
       toggle(ctx, ...bind(pc, 'dot1x'), '802.1X（通過 RADIUS 驗證才放行）'),
-      toggle(ctx, ...bind(ps, 'on'), 'Port Security（只接受指定的 MAC 位址）', { rerender: true })),
+      toggle(ctx, ...bind(ps, 'on'), 'Port Security（限制這個埠後面最多幾個 MAC）', { rerender: true })),
     ctx.live(() => [
       errdisCard(ctx, p),
       dev.rt.err[p.id] === 'root' && note('warn', 'root-inconsistent：對面的交換器宣稱自己是更優先的根橋，Root Guard 把這個埠擋下了。對方不再搶根橋之後會自動恢復。'),
       pc.dot1x && (dev.rt.unauth && dev.rt.unauth[p.id] ? note('warn', '802.1X 尚未通過：' + dev.rt.unauth[p.id]) : note('ok', '802.1X 驗證通過，連接埠已放行。')),
     ]),
-    ps.on && field('允許的 MAC 位址', h('div', { class: 'addrow' }, macInp, button('帶入目前看到的', {
-      small: true,
-      onclick: () => { ps.macs = macsBehind(state, dev, p.id).map((m) => m.mac).join(', '); ctx.commit(true); },
-    })), '多個 MAC 用逗號分隔'),
-    ps.on && field('違規時的動作', sel(ctx, ...bind(ps, 'mode'), [['restrict', 'Restrict — 只丟棄違規的封包'], ['shutdown', 'Shutdown — 整個連接埠停用 (err-disabled)']])),
-    ps.on && ctx.live(() => {
-      if (dev.rt.err[p.id] === true) return null; // 上面的 err-disabled 說明已經講了
-      const seen = macsBehind(state, dev, p.id);
-      const okList = String(ps.macs || '').toLowerCase().split(/[,\s]+/).filter(Boolean);
-      if (!seen.length) return note('muted', '這個埠後面目前沒有看到任何設備。');
-      return seen.map((m) => h('div', { class: 'line' }, h('b', { text: nameOf(ctx, m.dev) }), h('span', { class: 'mono muted', text: m.mac }),
-        badge(okList.includes(m.mac) ? 'on' : 'warn', okList.includes(m.mac) ? '允許' : '擋下')));
-    }),
+    L2.psecBlock(ctx, p, pc),
+    L2.pvlanPortBlock(ctx, p, pc),
+    L2.portGuards(ctx, p, pc),
     p.poe && h('div', { class: 'toggles' }, toggle(ctx, () => pc.poe !== 'never', (v) => { if (v) delete pc.poe; else pc.poe = 'never'; }, 'PoE 供電（power inline auto）')),
     V.portTrustField(ctx, pc),
     p.media === 'rj45' && phyFields(ctx, pc),
@@ -363,10 +353,11 @@ export function secTab(ctx, body) {
     if (!r.causes.length && !r.interval) delete sw.errRec;
   };
   body.append(h('div', { class: 'card' }, cardHead('err-disabled 自動恢復'),
-    note('muted', 'BPDU Guard 或 Port Security（shutdown 模式）把埠關掉之後，預設會一直維持 err-disabled，要管理員 shutdown 再 no shutdown。打開自動恢復，計時器到了交換器會自己試著打開。'),
+    note('muted', 'BPDU Guard、Port Security 或 Storm Control（shutdown 模式）把埠關掉之後，預設會一直維持 err-disabled，要管理員 shutdown 再 no shutdown。打開自動恢復，計時器到了交換器會自己試著打開。'),
     h('div', { class: 'toggles' },
       toggle(ctx, () => (rec.causes || []).includes(ERR_CAUSES.bpdu), (v) => setCause(ERR_CAUSES.bpdu, v), 'BPDU Guard（errdisable recovery cause bpduguard）'),
-      toggle(ctx, () => (rec.causes || []).includes(ERR_CAUSES.psec), (v) => setCause(ERR_CAUSES.psec, v), 'Port Security 違規（errdisable recovery cause psecure-violation）')),
+      toggle(ctx, () => (rec.causes || []).includes(ERR_CAUSES.psec), (v) => setCause(ERR_CAUSES.psec, v), 'Port Security 違規（errdisable recovery cause psecure-violation）'),
+      toggle(ctx, () => (rec.causes || []).includes(ERR_CAUSES.storm), (v) => setCause(ERR_CAUSES.storm, v), 'Storm Control（errdisable recovery cause storm-control）')),
     field('計時器（秒）', inp(ctx, () => String((sw.errRec && sw.errRec.interval) || ERR_RECOVERY_DEFAULT), (v) => {
       const n = +v;
       if (!(n >= 30 && n <= 86400)) return;
@@ -380,6 +371,7 @@ export function secTab(ctx, body) {
       return rows.map((x) => h('div', { class: 'line' }, h('b', { class: 'mono', text: x.pid }), h('span', { class: 'muted', text: ERR_CAUSES[x.cause] }),
         badge('warn', x.left != null ? `${fmtDur(x.left)}後恢復` : '要手動恢復')));
     })));
+  L2.l2secCards(ctx, body);
   body.append(h('div', { class: 'card' }, cardHead('閒置的連接埠'),
     ctx.live(() => {
       const idle = dev.ports.filter((p) => isBridgePort(dev, p.id) && !peerOf(state, dev.id, p.id) && !sw.ports[p.id].shut);
