@@ -3400,6 +3400,40 @@ console.log('\nNTP、時區與 service timestamps');
   ok(/Clock is synchronized, stratum 3, reference is 10\.10\.0\.5/.test(cli(s, 'sw')('show ntp status')), 'show ntp status：synchronized，stratum 3');
 }
 
+console.log('\n雙 WAN 的 QoS');
+{
+  const { iosSession } = await import('../src/engine/ios.js');
+  const { runObjective } = await import('../src/engine/sim/objectives.js');
+  const ok = (cond, title) => (cond ? console.log('  ✔ ' + title) : fail(title));
+  const lv = LEVELS.find((x) => x.id === 'l100');
+  const typeIn = (s, id, lines) => { const S = iosSession(() => s.devices[id], () => s); for (const l of lines) S.exec(l); settle(s); };
+  const res = (s) => lv.objectives.map((o) => { const r = o.type === 'check' ? o.test(s) : runObjective(s, o); return r === true || r.pass ? true : (r.reason || r); });
+  const s = lv.setup(); settle(s);
+  let r = res(s);
+  ok(r[0] === true && /營運商的合約頻寬 10 Mbps/.test(r[1]) && /沒有整形/.test(r[2]) && r[3] === true, '平常走主線沒問題；故障演練切到備援線路，超過 10 Mbps 的語音被營運商丟掉');
+  typeIn(s, 'brt', ['configure terminal', 'interface Gi0/0/2', 'service-policy output WAN-OUT', 'end']);
+  r = res(s);
+  ok(r[1] !== true && /超過備援線路的合約 10 Mbps/.test(r[2]), '照搬主線的 WAN-OUT（shape 50 Mbps）到備援線路：還是超過合約');
+  typeIn(s, 'brt', ['configure terminal', 'policy-map WAN-BACKUP', 'class class-default', 'shape average 10000000', 'service-policy VOICE-PRI', 'exit', 'exit', 'interface Gi0/0/2', 'service-policy output WAN-BACKUP', 'end']);
+  r = res(s);
+  ok(r.every((x) => x === true), '備援線路依自己的合約 shape 10 Mbps、共用 VOICE-PRI：切過去之後通話一樣清楚，備份照樣在跑');
+  // 關卡劇本：三分鐘後主線被挖斷，十分鐘後修好
+  const { takeScriptNews, nextScript } = await import('../src/engine/script.js');
+  const sim = await import('../src/engine/sim.js');
+  const g = lv.setup(); lv.solve(g); settle(g);
+  const pc = () => g.cables.find((c) => [c.a, c.b].some((e) => e.dev === 'brt' && e.port === 'Gi0/0/0'));
+  ok(nextScript(g).at === 180 && g.rt.cable[pc().id] === 'up' && !takeScriptNews(g).length, '一開始主線正常，下一個劇本事件在 180 秒');
+  sim.advance(g, 200); settle(g);
+  const news = takeScriptNews(g);
+  const dft = g.devices.brt.rt.routes.find((x) => x.net === 0 && x.bits === 0 && !x.bad);
+  ok(g.rt.cable[pc().id] === 'down' && /道路施工/.test(g.rt.why[pc().id]) && news.length === 1 && /挖斷了主線/.test(news[0].text) && news[0].tone === 'bad' && dft && dft.via === parseIp('10.255.1.2'),
+    '180 秒：主線被挖斷（線路的原因寫著道路施工），通知跳出來，預設路由切到備援線路');
+  ok(lv.objectives.every((o) => (o.type === 'check' ? o.test(g) : runObjective(g, o).pass) === true), '主線斷掉的這段時間，任務照樣算得出來（平常走主線的項目在複本上把線接回去再測）');
+  sim.advance(g, 420); settle(g);
+  const n2 = takeScriptNews(g);
+  ok(g.rt.cable[pc().id] === 'up' && n2.length === 1 && n2[0].tone === 'ok' && !nextScript(g), '600 秒：主線修好了，劇本結束');
+}
+
 console.log('\nNetFlow 與 QoS 的 police');
 {
   const sim = await import('../src/engine/sim.js');

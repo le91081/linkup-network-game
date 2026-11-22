@@ -50,3 +50,15 @@ test('NTP 與 service timestamps：Syslog 伺服器分頁看得到設備寫的�
   await expect(page.locator('#panel .logbox')).toContainText(/TST: %LINK-3-UPDOWN/);
   expect(await scan(page, '#panel', 'Syslog 分頁')).toEqual([]);
 });
+
+test('雙 WAN 的 QoS：劇本三分鐘後挖斷主線，跳出通知、路由切到備援線路', async ({ page }) => {
+  await boot(page);
+  await open(page, 'l100');
+  await page.evaluate(() => window.linkup.tick(200));
+  await expect(page.locator('#toasts .toast.bad')).toContainText('道路施工又挖斷了主線');
+  await clickDevice(page, 'brt');
+  await page.locator('#panel .tab', { hasText: 'CLI' }).click();
+  await typeCmd(page, 'enable', 'show ip route static');
+  await expect(page.locator('#panel .term-out')).toContainText('[10/0] via 10.255.1.2');
+  expect(await scan(page, '#panel', 'CLI（雙 WAN）')).toEqual([]);
+});

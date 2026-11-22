@@ -32,7 +32,7 @@ export const LEVEL_TOPIC = {
   l55: 'wireless', l56: 'wireless', l57: 'wireless',
   l58: 'auto', l59: 'auto', l60: 'auto', l61: 'auto', l62: 'auto',
   l63: 'routing', l64: 'routing', l65: 'ops', l66: 'routing', l67: 'switching', l68: 'vpn', l69: 'security', l71: 'services',
-  l70: 'auto', l72: 'routing', l73: 'auto', l74: 'security', l75: 'switching', l76: 'vpn', l77: 'routing', l78: 'routing', l79: 'routing', l80: 'routing', l81: 'routing', l82: 'routing', l83: 'security', l84: 'security', l85: 'switching', l86: 'security', l87: 'ipv6', l88: 'vpn', l89: 'vpn', l90: 'vpn', l91: 'vpn', l92: 'vpn', l93: 'ipv6', l94: 'ipv6', l95: 'routing', l96: 'routing', l97: 'ops', l98: 'switching', l99: 'ops',
+  l70: 'auto', l72: 'routing', l73: 'auto', l74: 'security', l75: 'switching', l76: 'vpn', l77: 'routing', l78: 'routing', l79: 'routing', l80: 'routing', l81: 'routing', l82: 'routing', l83: 'security', l84: 'security', l85: 'switching', l86: 'security', l87: 'ipv6', l88: 'vpn', l89: 'vpn', l90: 'vpn', l91: 'vpn', l92: 'vpn', l93: 'ipv6', l94: 'ipv6', l95: 'routing', l96: 'routing', l97: 'ops', l98: 'switching', l99: 'ops', l100: 'ops',
 };
 
 export const QUESTIONS = {
@@ -160,6 +160,7 @@ export const QUESTIONS = {
     { q: '雙協定 (dual stack) 的意思是什麼？', a: ['同一個介面同時執行 IPv4 與 IPv6', '把 IPv6 封包包在 IPv4 裡傳送', '用 NAT 在兩種位址之間轉換', '一台設備裝兩張網路卡'], c: 0, e: '雙協定讓兩種協定並存、各走各的。把 IPv6 包進 IPv4 是通道 (tunneling)，位址轉換則是 NAT64。', r: 'Network+ 1.8' },
   ],
   ops: [
+    { q: '主線的出口介面套了 shape 50 Mbps + LLQ。主線斷掉、路由切到 10 Mbps 的備援線路後電話斷斷續續，最可能的原因是？', a: ['LLQ 的 priority 太小', '備援線路的介面沒有自己的 service-policy（或照搬了 50 Mbps 的整形）', 'Floating static 的管理距離設錯', '電話的 DSCP 被改掉了'], c: 1, e: 'service-policy 只管它所在的介面。切到備援之後流量從另一個介面出去，要有依備援合約整形（shape 10 Mbps）的 parent，再掛同一個 LLQ child；照搬 50 Mbps 的話，超過的部分仍在營運商那端被丟。', r: 'CCNA 4.7' },
     { q: 'IOS 設了 clock timezone TST 8，show clock 是台灣時間，但 show logging 的紀錄還是差了 8 小時。原因是？', a: ['NTP 還沒同步', 'service timestamps 沒有加 localtime', '時區名稱不能用 TST', 'Syslog 伺服器的時區設錯'], c: 1, e: 'clock timezone 只影響 show clock；IOS 15 預設的 service timestamps log datetime msec 用 UTC 記錄。加上 localtime（最好再加 show-timezone）紀錄才是當地時間。', r: 'CCNA 4.2' },
     { q: 'IOS 的紀錄時間前面出現 *（例如 *Mar  1 00:12:33.123），代表什麼？', a: ['這是嚴重的錯誤訊息', '時鐘不可信：沒有對時也沒有手動設定', '訊息是從別的設備轉送來的', '紀錄緩衝區已經滿了'], c: 1, e: '* 表示時間不可信 (not authoritative)；對過時但目前失去同步則是一個點。Catalyst 2960 這類沒有電池時鐘的機型，重開機之後從 1993 年 3 月 1 日開始算。', r: 'CCNA 4.2' },
     { q: 'SNMP 顯示專線一直是滿的，要找出「是哪一台、往哪裡」在用頻寬，最適合的工具是？', a: ['Syslog', 'NetFlow', 'CDP', 'NTP'], c: 1, e: 'SNMP 只有介面的計數器（收送了多少位元組）；NetFlow 記下每一條流量的來源、目的、協定、埠與位元組數，匯出到收集器就能排出流量大戶。', r: 'Network+ 3.2' },

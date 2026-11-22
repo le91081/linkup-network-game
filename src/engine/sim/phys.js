@@ -57,7 +57,8 @@ export function prepPhysical(state) {
       rt.cable[c.id] = 'down';
       const dead = [A, B].find((x) => down[x.id]);
       const adm = shut(A, c.a.port) ? [A, c.a.port] : shut(B, c.b.port) ? [B, c.b.port] : null;
-      if (dead) rt.why[c.id] = `${dead.name} 已經關機`;
+      if (cut[c.id]) rt.why[c.id] = (state.cutWhy || {})[c.id] || '線路斷了';
+      else if (dead) rt.why[c.id] = `${dead.name} 已經關機`;
       else if (adm) rt.why[c.id] = `${adm[0].name} 的 ${(adm[0].ports.find((p) => p.id === adm[1]) || {}).label || adm[1]} 被停用 (shutdown)`;
       continue;
     }

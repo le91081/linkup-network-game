@@ -24,6 +24,7 @@ import { ifaceActive, isBridgePort, l2Explore, macAgeOf, prepL2Attacks } from '.
 import { prepDtp, prepLag, prepPhysical, prepStp, prepStpTimers, prepVoice } from './sim/phys.js';
 import { prepTunnels } from './sim/tunnels.js';
 import { sessionTtl } from './sim/forward.js';
+import { scriptTick } from './script.js';
 import { transact } from './sim/transact.js';
 setCdpCheck((d, pid, x, xp) => cdpOn(d, pid) && cdpOn(x, xp));
 
@@ -89,6 +90,8 @@ export function recompute(state) {
   // 擷取到的封包、命令列上的輸出可能很多，而且和這次計算無關：先拿出來，算完再放回去
   const side = {};
   for (const k of ['cap', 'con']) if (state.dyn[k]) { side[k] = state.dyn[k]; delete state.dyn[k]; }
+  // 關卡劇本：時間到了的事件（線路被挖斷、修好）先套用到網路上
+  if (!state.dyn.boot) scriptTick(state);
   // 還在開機的設備：這一次計算把它當成關機（沒有燈號、不轉送、不回應），算完再把 state.down 還原
   wlcVlans(state);
   for (const d of Object.values(state.devices)) if (d.kind === 'hypervisor') syncVsw(d); // 連接埠群組 → vSwitch 的 VLAN

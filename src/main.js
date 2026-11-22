@@ -3,6 +3,7 @@ import './style.css';
 import { Scene3D } from './scene/scene.js';
 import { LEVELS } from './levels/index.js';
 import { recompute, runObjective, advance, settle, pendingOf, fmtDur } from './engine/sim.js';
+import { takeScriptNews } from './engine/script.js';
 import { cloneState, addCable, cableAt, portOf } from './engine/model.js';
 import * as hud from './ui/hud.js';
 import { renderDevicePanel } from './ui/panel.js';
@@ -117,6 +118,8 @@ const app = {
   tick(n) {
     const before = pendingOf(app.state).map((p) => p.text + p.at).join('|');
     advance(app.state, n);
+    // 關卡劇本的事件（線路被挖斷、修好）：跳出通知
+    for (const t of takeScriptNews(app.state)) toast(t.text, t.tone, 6000);
     app.scene.sync(app.state);
     app.refreshLive();
     hud.updateClock(app);
