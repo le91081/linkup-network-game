@@ -1,6 +1,6 @@
 // 任務目標的檢查
 // （從 sim.js 拆出來的一部分；其他程式一律從 engine/sim.js 引入，不直接引入這裡）
-import { PHONE_TEXT, callQuality, mosText, phoneState } from '../voice.js';
+import { PHONE_TEXT, callQuality, sipQuality, mosText, phoneState } from '../voice.js';
 import { cloneState, primaryIface } from '../model.js';
 import { fmtIp, netOf, parseCidr, parseIp } from '../ip.js';
 import { globalIp6, transact6 } from '../sim6.js';
@@ -57,6 +57,13 @@ export function runObjective(state, o) {
     const ok = q.ok && q.mos >= min;
     const reason = ok ? '' : !q.ok ? q.why : `通話品質 MOS ${q.mos}（${mosText(q.mos)}），要 ${min} 以上：${q.why || '延遲、抖動或遺失太多'}`;
     return { pass: ok, ok, reason, call: q, failDev: o.from, log: [], hops: [] };
+  }
+  if (o.type === 'voip') {
+    // 電腦上的軟體電話打到網際網路上的 SIP 業者：語音的品質 (MOS)
+    const q = sipQuality(state, o.from, parseIp(o.ip), o.port || 16384), min = o.mos || 4.0;
+    const ok = q.ok && q.mos >= min;
+    const reason = ok ? '' : !q.ok ? `語音封包送不到 ${o.ip}：${q.why}` : `通話品質 MOS ${q.mos}（${mosText(q.mos)}），要 ${min} 以上：${q.why[0] || '延遲、抖動或遺失太多'}`;
+    return { pass: ok, ok, reason, failDev: o.from, log: q.res ? q.res.log : [], hops: q.res ? q.res.hops : [], voip: q };
   }
   if (o.type === 'ping6') {
     const expect = o.expect ?? true;

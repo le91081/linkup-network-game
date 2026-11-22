@@ -336,3 +336,23 @@ test('TACACS+：ISE 的分頁列出帳號；vendor 從工作站 SSH 進 SW-1，s
   await expect(out).toContainText('aaa new-model');
   await expect(page.locator('#panel .prompt')).toHaveText('SW-1#');
 });
+
+test('SD-WAN：政策還用著 wan1 不能加成員；改成 virtual-wan-link 之後加成員，效能 SLA 列出 wan1 不合格', async ({ page }) => {
+  await boot(page);
+  await open(page, 'l117');
+  await clickDevice(page, 'fg');
+  await page.locator('#panel .tab', { hasText: 'SD-WAN' }).click();
+  await page.locator('#panel .btn', { hasText: '啟用 SD-WAN' }).click();
+  await page.locator('#panel .btn', { hasText: '新增成員' }).click();
+  await expect(page.locator('#panel .note.warn')).toContainText('正被政策 #1「上網」 使用');
+  await page.locator('#panel .tab', { hasText: '政策' }).click();
+  await page.locator('#panel .card.policy').first().locator('select').nth(1).selectOption('virtual-wan-link');
+  await page.locator('#panel .tab', { hasText: 'SD-WAN' }).click();
+  await page.locator('#panel .btn', { hasText: '新增成員' }).click();
+  await page.locator('#panel .btn', { hasText: '新增成員' }).click();
+  const gw = page.locator('#panel .sdw-member input.inp').nth(1);
+  await gw.fill('192.0.2.1'); await gw.press('Enter');
+  await expect(page.locator('#panel .sdw-sla')).toContainText('✗ 抖動 45 ms > 30、遺失 4% > 1%');
+  await expect(page.locator('#panel .sdw-sla')).toContainText('✓ 符合');
+  expect(await scan(page, '#panel', 'SD-WAN 分頁')).toEqual([]);
+});

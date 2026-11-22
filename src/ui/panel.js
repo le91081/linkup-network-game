@@ -1,5 +1,7 @@
 // 設備設定面板：依設備類別產生對應的管理頁面
 import * as AUTO from './panel-auto.js';
+import { sdwanTab } from './panel-sdwan.js';
+import { ZONE, sdwanOn } from '../engine/sdwan.js';
 import * as CL from './panel-cloud.js';
 import * as W from './panel-wlc.js';
 import { h, icon, button, faceplate, toast } from './dom.js';
@@ -530,7 +532,7 @@ function fwIfaces(ctx, body) {
 function fwPolicies(ctx, body) {
   const { dev } = ctx;
   const ifOpts = [['any', 'any（任何介面）'], ...dev.ifaces.map((i) => [i.id, i.label]),
-    ...(dev.vpns || []).map((t) => ['vpn:' + (t.name || 'VPN'), 'VPN ' + (t.name || 'VPN')])];
+    ...(sdwanOn(dev) ? [[ZONE, `${ZONE}（SD-WAN）`]] : []), ...(dev.vpns || []).map((t) => ['vpn:' + (t.name || 'VPN'), 'VPN ' + (t.name || 'VPN')])];
   if (dev.vpnServer) ifOpts.push(['vpn:remote', '遠端使用者 VPN']);
   const withCur = (cur) => (ifOpts.some((o) => o[0] === cur) ? ifOpts : [...ifOpts, [cur, cur + '（不存在）']]);
   body.append(h('p', { class: 'tip', text: '由上往下比對，第一條符合的政策決定放行或拒絕。回程封包會自動放行，只需要為「發起連線的方向」寫政策。' }));
@@ -573,7 +575,8 @@ function inetInfo(ctx, body) {
     const ln = i.line || {};
     body.append(h('div', { class: 'card' }, cardHead(i.label, linkBadge(ctx, i.bind.port)),
       h('div', { class: 'kv' }, kv('連線方式', T[ln.type] || '—'), kv('配發給客戶的 IP', ln.assign || '—'),
-        kv('ISP 閘道', i.ip), kv('子網路遮罩', i.mask), kv('DNS', ln.dns || '—'))));
+        kv('ISP 閘道', i.ip), kv('子網路遮罩', i.mask), kv('DNS', ln.dns || '—'),
+        ...(ln.q ? [kv('線路品質', `延遲 ${ln.q.delay ?? 4} ms、抖動 ${ln.q.jitter ?? 1} ms、遺失 ${ln.q.loss ?? 0}%`)] : []))));
   }
   body.append(h('div', { class: 'card' }, cardHead('網際網路上的主機'),
     dev.inet.hosts.map((x) => h('div', { class: 'line' }, h('b', { text: x.name }), h('span', { class: 'mono muted', text: x.ip })))),
@@ -619,7 +622,7 @@ function baseTabs(dev) {
     case 'l3switch': return [T.swports, T.vlan, T.l3, T.route, T.sec, ['qos', 'QoS', V.qosTab], T.mgmt, T.status];
     case 'router': return [T.ifs, T.route, T.nat, T.acl, T.vpn, ['qos', 'QoS', V.qosTab], T.mgmt, T.status];
     case 'homerouter': return [['wan', '網際網路 (WAN)', hrWan], ['lan', '區域網路 (LAN)', hrLan], ['wifi', '無線網路', X.ssidTab], ['nat', '連接埠轉發', forwardsTab], T.status];
-    case 'firewall': return [['if', '介面', fwIfaces], ['pol', '政策', fwPolicies], ['nat', '虛擬 IP', forwardsTab], T.vpn, T.route, T.mgmt, ['log', '紀錄', M.logTab], T.status, ['fcli', 'CLI', buildFortiCli]];
+    case 'firewall': return [['if', '介面', fwIfaces], ['sdwan', 'SD-WAN', sdwanTab], ['pol', '政策', fwPolicies], ['nat', '虛擬 IP', forwardsTab], T.vpn, T.route, T.mgmt, ['log', '紀錄', M.logTab], T.status, ['fcli', 'CLI', buildFortiCli]];
     default: return [['info', '線路資訊', inetInfo]];
   }
 }

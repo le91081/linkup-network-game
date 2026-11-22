@@ -6,6 +6,7 @@
 // state.dyn.phone[電話] = { st, why, ext, cucm, since, ok }   電話螢幕上看到的狀態
 // state.calls = [{ id, a, b, on }]                            一直在進行的通話（關卡或玩家建立的）
 import { CATALOG } from './model.js';
+import { lineAt } from './sdwan.js';
 import { fmtIp, parseIp } from './ip.js';
 import { transact } from './sim.js';
 import { egressOf, markAlong, classify, queueFate, policerFate } from './qos.js';
@@ -133,6 +134,13 @@ function pathQuality(state, p) {
     const pol = policerFate(eg, q);
     const cable = state.cables.find((c) => c.id === h.cable);
     delay += f.delay + (cable && +cable.cir > 0 ? 2 : 0.01); // 營運商的網路多 2 毫秒
+    // 往網際網路的那一段：ISP 線路本身的延遲、抖動與遺失（例如尖峰時段塞車的光世代）
+    const ln = state.devices[h.to].kind === 'internet' ? lineAt(state, h.from, h.fromPort) : null;
+    if (ln && (ln.q.delay > 4 || ln.q.jitter > 1 || ln.q.loss > 0)) {
+      delay += ln.q.delay; jit2 += ln.q.jitter * ln.q.jitter; keep *= 1 - ln.q.loss / 100;
+      if (ln.q.loss > 0) burst = 2;
+      why.push(`${state.devices[h.from].name} 的 ${h.fromPort} → ISP：線路本身延遲 ${ln.q.delay} ms、抖動 ${ln.q.jitter} ms、遺失 ${ln.q.loss}%`);
+    }
     jit2 += f.jitter * f.jitter;
     const loss = 1 - (1 - f.loss / 100) * (1 - (pol ? pol.loss / 100 : 0));
     keep *= 1 - loss;
@@ -148,6 +156,22 @@ function pathQuality(state, p) {
   const notes = (p.marks.notes || []).filter(Boolean);
   if (notes.length) why.unshift(...notes.map((t) => t + '：後面的設備認不出這是語音'));
   return { ...q, ...m, why, hops };
+}
+
+/**
+ * 軟體電話（電腦上的 softphone）打到網際網路上的 SIP 業者：上傳方向的語音品質。
+ * 回傳 { ok, why, mos, delay, jitter, loss, hops }
+ */
+export function sipQuality(state, fromId, ip, port = RTP_PORT) {
+  const X = state.devices[fromId];
+  const src = X.ifaces[0].rt.ip;
+  if (src == null) return { ok: false, why: `${X.name} 沒有 IP` };
+  const r = transact(state, X.id, { proto: 'udp', dst: ip, dport: port, quiet: true, data: { kind: 'rtp' } });
+  if (!r.ok) return { ok: false, why: r.reason, res: r };
+  const hops = once(fwd(r));
+  const pkt = { proto: 'udp', kind: 'rtp', src, dst: ip, dport: port };
+  const q = pathQuality(state, { hops, pkt, marks: markAlong(state, hops, { ...pkt, dscp: 46, cos: 5 }) });
+  return { ok: true, ...q, res: r };
 }
 
 /** 兩支電話之間的通話品質（雙向）。回傳 { ok, why, ab, ba, mos } */

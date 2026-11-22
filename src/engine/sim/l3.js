@@ -12,6 +12,7 @@ import { l2Explore, learnPath, reversed } from './l2.js';
 import { transact } from './transact.js';
 import { greLines, greReach, greRecursion, isTun, nhrpRoutes, tunIfaces } from './gre.js';
 import { prepTunnels } from './tunnels.js';
+import { sdwanOn, sdwanRoutes } from '../sdwan.js';
 
 // ───────────────────────── 位址取得 / 路由表 ─────────────────────────
 
@@ -313,8 +314,11 @@ function buildRoutes(state, d) {
   for (const i of d.ifaces) {
     if (up(i)) r.push({ net: netOf(i.rt.ip, i.rt.bits), bits: i.rt.bits, via: null, iface: i, type: 'C', ad: 0, metric: 0, vrf: vrfOf(i) });
   }
+  // SD-WAN 的成員：預設路由改由 SD-WAN 決定（成員的閘道、活著才有）
+  const sdw = sdwanOn(d) ? new Set(d.sdwan.members.map((m) => m.iface)) : null;
+  if (sdw) r.push(...sdwanRoutes(state, d));
   for (const i of d.ifaces) {
-    if (!up(i) || i.rt.gw == null) continue;
+    if (!up(i) || i.rt.gw == null || (sdw && sdw.has(i.id))) continue;
     const ok = sameNet(i.rt.gw, i.rt.ip, i.rt.bits) && i.rt.gw !== i.rt.ip;
     r.push({
       net: 0, bits: 0, via: i.rt.gw, iface: i, type: i.rt.src === 'static' ? 'S' : 'D', ad: 1, metric: 0, vrf: vrfOf(i),

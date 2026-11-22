@@ -3891,6 +3891,57 @@ console.log('\n權限等級與 AAA（TACACS+）');
   void aaaAccount;
 }
 
+console.log('\nSD-WAN（FortiGate）');
+{
+  const { memberHealth, sdwanPick, newSdwan } = await import('../src/engine/sdwan.js');
+  const { sipQuality } = await import('../src/engine/voice.js');
+  const { fortiSession, fortiConfig } = await import('../src/engine/fortios.js');
+  const sim = await import('../src/engine/sim.js');
+  const ok = (cond, title) => (cond ? console.log('  ✔ ' + title) : fail(title));
+  const lv = LEVELS.find((x) => x.id === 'l117');
+  const s = lv.setup(); settle(s);
+  const fg = s.devices.fg, SIP = parseIp('198.51.100.60'), WEB = parseIp('93.184.216.34');
+  const q0 = sipQuality(s, 'pc-v', SIP);
+  ok(q0.ok && q0.mos < 4 && q0.loss === 4 && /線路本身延遲 35 ms/.test(q0.why.join()), `沒有 SD-WAN：電話走塞車的光世代，MOS ${q0.mos}（ISP 線路的延遲、抖動、遺失算進去）`);
+  const egress = (st, from, dst, proto = 'tcp', port = 443) => { const r = sim.transact(st, from, { proto, dst, dport: port, quiet: true }); const h = r.hops.find((x) => x.from === 'fg' && !x.reply && /^wan/.test(x.fromPort || '')); return { ok: r.ok, port: h && h.fromPort, r }; };
+  // 啟用 SD-WAN、加成員，但政策還寫 wan1
+  const F = fortiSession(() => s.devices.fg, () => s);
+  const cli = (lines) => { const o = []; for (const l of lines) o.push(...F.exec(l).out); settle(s); return o.join('\n'); };
+  ok(/interface is in use/.test(cli(['config system sdwan', 'set status enable', 'config members', 'edit 1', 'set interface "wan1"', 'set gateway 203.0.113.33', 'next', 'end', 'end'])), 'wan1 還被政策使用：不能加進 SD-WAN（interface is in use）');
+  fg.policies[0].dstIf = 'virtual-wan-link';
+  ok(!/Command fail/.test(cli(['config system sdwan', 'set status enable', 'config members', 'edit 1', 'set interface "wan1"', 'set gateway 203.0.113.33', 'next', 'edit 2', 'set interface "wan2"', 'set gateway 192.0.2.1', 'next', 'end',
+    'config health-check', 'edit "Default_DNS"', 'set server "8.8.8.8"', 'set members 1 2', 'config sla', 'edit 1', 'set latency-threshold 150', 'set jitter-threshold 30', 'set packetloss-threshold 1', 'next', 'end', 'next', 'end', 'end'])) && fg.sdwan.on && fg.sdwan.members.length === 2, 'config system sdwan：成員與效能 SLA（巢狀的 config sla）');
+  const H = memberHealth(s, fg);
+  ok(H[0].alive && !H[0].sla && /抖動 45 ms > 30/.test(H[0].slaWhy) && /遺失 4% > 1%/.test(H[0].slaWhy) && H[1].alive && H[1].sla && H[1].latency === 20, `效能 SLA：wan1 不符合（${H[0].slaWhy}），wan2 符合（${H[1].latency} ms）`);
+  ok(/Seq\(1 wan1\): state\(alive\), packet-loss\(4\.000%\) latency\(72\.000\), jitter\(45\.000\), sla_map=0x0/.test(cli(['diagnose sys sdwan health-check'])), 'diagnose sys sdwan health-check：和 FortiOS 一樣的格式');
+  const rt = (fg.rt.routes || []).filter((r) => r.bits === 0);
+  ok(rt.length === 2 && rt.every((r) => r.sdwan != null), '路由表：兩個成員各一條預設路由（等價）');
+  // 規則：VoIP 用 SLA，其他走 wan1
+  cli(['config system sdwan', 'config service', 'edit 1', 'set name "VoIP"', 'set mode sla', 'set protocol 17', 'set dst "198.51.100.60"', 'config sla', 'edit "Default_DNS"', 'set id 1', 'next', 'end', 'set priority-members 1 2', 'next',
+    'edit 2', 'set name "其他上網"', 'set mode manual', 'set dst "all"', 'set priority-members 1 2', 'next', 'end', 'end']);
+  const pk = sdwanPick(s, fg, { proto: 'udp', src: parseIp('192.168.10.21'), dst: SIP, dport: 16384 });
+  ok(pk.route.iface.id === 'wan2' && /wan1 不符合 SLA/.test(pk.why), `VoIP 規則（SLA）：${pk.why}`);
+  const q1 = sipQuality(s, 'pc-v', SIP);
+  ok(q1.mos >= 4.3 && egress(s, 'pc-w', WEB).port === 'wan1', `電話改走 wan2（MOS ${q1.mos}），一般上網照樣走 wan1`);
+  ok(/Seq_num\(2 wan2\), alive, sla\(0x1\), cfg_order\(1\), selected/.test(cli(['diagnose sys sdwan service'])), 'diagnose sys sdwan service：wan2 是 selected');
+  // 線路斷了：dead、改走另一條
+  const c2 = s.cables.find((c) => [c.a.port, c.b.port].includes('wan2'));
+  (s.cut ||= {})[c2.id] = true; settle(s);
+  const H2 = memberHealth(s, fg);
+  ok(!H2[1].alive && egress(s, 'pc-v', SIP, 'udp', 16384).port === 'wan1' && sipQuality(s, 'pc-v', SIP).ok, 'wan2 斷線：成員 dead、從路由表移除；電話改走 wan1（SLA 全部不符合時用第一條活著的）');
+  delete s.cut[c2.id]; settle(s);
+  // 政策要寫 virtual-wan-link
+  fg.policies[0].dstIf = 'wan1'; settle(s);
+  const r3 = egress(s, 'pc-v', SIP, 'udp', 16384);
+  ok(!r3.ok && /SD-WAN 的成員：政策的目的介面要用 virtual-wan-link/.test(r3.r.reason), '政策還寫 wan1：走 wan2 的流量被 implicit deny（提示改用 virtual-wan-link）');
+  fg.policies[0].dstIf = 'virtual-wan-link'; settle(s);
+  // show 的輸出貼回新的設備
+  const txt = fortiConfig(s, fg).join('\n');
+  ok(txt.indexOf('config system sdwan') < txt.indexOf('config firewall policy') && /set priority-members 1 2/.test(txt) && /set packetloss-threshold 1/.test(txt), 'show：SD-WAN 在防火牆政策前面，包含巢狀的 sla 與 priority-members');
+  const g2 = { ...fg, sdwan: newSdwan() };
+  ok(g2.sdwan.on && g2.sdwan.hc.server === '8.8.8.8' && !g2.sdwan.members.length, '圖形介面「啟用 SD-WAN」：預設的效能 SLA 偵測 8.8.8.8，還沒有成員');
+}
+
 console.log('\nNetFlow 與 QoS 的 police');
 {
   const sim = await import('../src/engine/sim.js');

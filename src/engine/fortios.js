@@ -6,6 +6,7 @@ import { SERVICE_NAMES, accessOf, sessionLog, routeRows, sessionRows, clearSessi
 import { ntpInfo, plainStamp, logRows, clearLog, syslogStats, vtyRows, markReboot, bootTime } from './ops.js';
 import { counters, startSniff, bpf, dflowOf, fgIfName } from './wire.js';
 import { linkInfo, cloneState, makeDevice } from './model.js';
+import { ZONE, sdwanOn, diagHealth, diagService, sdwanConfigLines, applySdwanCli } from './sdwan.js';
 import { recompute } from './sim.js';
 import { transfer, configFile, IMAGES, PLATFORM, PLATFORM_NAME, ensureFlash } from './files.js';
 
@@ -86,6 +87,7 @@ function intfName(d, id) {
 }
 function intfId(d, name) {
   if (name === 'any') return 'any';
+  if (name === ZONE && sdwanOn(d)) return ZONE;
   if (d.ifaces.some((i) => i.id === name)) return name;
   if (name === sslIntf && d.vpnServer) return 'vpn:remote';
   if (tunnels(d).some((t) => t.name === name)) return 'vpn:' + name;
@@ -724,6 +726,8 @@ export function fortiConfig(state, dev) {
     const sec = SEC[name];
     if (sec.only && !sec.only(dev)) continue;
     const entries = sec.read(dev, state);
+    // 和 FortiOS 一樣，SD-WAN 印在防火牆政策前面（政策會用到 virtual-wan-link）
+    if (name === 'firewall policy') o.push(...sdwanConfigLines(dev));
     if (hasContent(entries)) o.push(...block(name, sec, entries));
   }
   return o;
@@ -763,6 +767,8 @@ function getInfo(state, d, what) {
   return null;
 }
 function diagnose(state, d, what, raw = what) {
+  if (what === 'sys sdwan health-check' || what === 'sys virtual-wan-link health-check') return diagHealth(state, d);
+  if (what === 'sys sdwan service' || what === 'sys virtual-wan-link service') return diagService(state, d);
   if (what === 'vpn tunnel list') {
     const ts = tunnels(d);
     if (!ts.length) return ['list all ipsec tunnel in vd 0', '沒有任何 IPsec 通道'];
@@ -896,6 +902,21 @@ export function fortiSession(getDev, getState) {
     let changed = false;
     const res = (extra) => ({ out, changed, ...extra });
     if (pend) { const p = pend; pend = null; return p(line.trim(), out); }
+    const rawT = top();
+    if (rawT && rawT.t === 'raw') {
+      const w = (line.trim().split(/\s+/)[0] || '').toLowerCase();
+      if (w === 'config') rawT.depth++;
+      if (w === 'end' && --rawT.depth === 0) {
+        stack.pop();
+        const e = applySdwanCli(dev(), rawT.lines);
+        if (e) { out.push(e, 'Command fail. Return code -651'); return res(); }
+        changed = true;
+        return res();
+      }
+      if (w === 'abort' && rawT.depth === 1) { stack.pop(); return res(); }
+      if (line.trim()) rawT.lines.push(line.trim());
+      return res();
+    }
     const tok = tokenize(line.trim());
     if (!tok.length || tok[0].startsWith('#')) return res();
     const cmd = tok[0].toLowerCase(), t = top(), d = dev();
@@ -904,6 +925,8 @@ export function fortiSession(getDev, getState) {
     if (cmd === 'config') {
       const name = tok.slice(1).join(' ').toLowerCase();
       if (!t) {
+        // SD-WAN 的設定有好幾層（members、health-check 底下的 sla…）：整段收下來，最後的 end 再一次套用
+        if (name === 'system sdwan' || name === 'system virtual-wan-link') { stack.push({ t: 'raw', label: 'sdwan', depth: 1, lines: [] }); return res(); }
         const sec = SEC[name];
         if (!sec || (sec.only && !sec.only(d))) return fail([...parseErr(tok[1] || ''), '（輸入 ? 可以看到有哪些設定區段）']);
         if (sec.single) stack.push({ t: 'edit', single: true, sec, label: label(name), name, key: '', ...clone({ f: {}, sub: {}, ...sec.read(d, st())[0] }) });

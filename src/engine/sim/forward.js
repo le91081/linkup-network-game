@@ -1,6 +1,7 @@
 // 封包轉送：服務、ACL、NAT、防火牆政策、交給本機的服務、逐站轉送、連線表、廣播的波形
 // （從 sim.js 拆出來的一部分；其他程式一律從 engine/sim.js 引入，不直接引入這裡）
 import { BCAST, countGiant, debugOf, flowTraceStart, onHop } from '../wire.js';
+import { sdwanPick, zoneHas, isMember, ZONE } from '../sdwan.js';
 import { CATALOG } from '../model.js';
 import { IPSEC_OVERHEAD, MTU_DEF, WIFI_MTU, icmpTypeMatch, ipMtu, isNexus, l2Mtu, mssClampOf, rxMtu } from '../mtu.js';
 import { agentOn } from '../snmp.js';
@@ -217,15 +218,15 @@ function filter(dev, inIf, outIf, pkt, dnat) {
     for (let n = 0; n < list.length; n++) {
       const p = list[n];
       if (p.off) continue;
-      if (p.srcIf !== 'any' && p.srcIf !== inIf.id) continue;
-      if (p.dstIf !== 'any' && p.dstIf !== outIf.id) continue;
+      if (p.srcIf !== 'any' && p.srcIf !== inIf.id && !zoneHas(dev, p.srcIf, inIf)) continue;
+      if (p.dstIf !== 'any' && p.dstIf !== outIf.id && !zoneHas(dev, p.dstIf, outIf)) continue;
       if (!addrMatch(p.src, pkt.src) || !addrMatch(p.dst, pkt.dst)) continue;
       if (!svcMatch(p.service, pkt)) continue;
       hit(p);
       if (p.action === 'accept') return { ok: true, nat: !!p.nat, rule: n + 1 };
       return { ok: false, rule: n + 1, reason: `${dev.name} 的政策 #${n + 1}「${p.name || '未命名'}」拒絕了這個連線` };
     }
-    return { ok: false, reason: `${dev.name} 沒有符合的政策（${inIf.label} → ${outIf.label}），預設全部拒絕 (implicit deny)` };
+    return { ok: false, reason: `${dev.name} 沒有符合的政策（${inIf.label} → ${outIf.label}${isMember(dev, outIf.id) ? `，${outIf.label} 是 SD-WAN 的成員：政策的目的介面要用 ${ZONE}` : ''}），預設全部拒絕 (implicit deny)` };
   }
   return { ok: true, nat: outIf.nat };
 }
@@ -525,7 +526,13 @@ export function forward(state, ctx, startId, pkt) {
     const vrfNow = inIf ? vrfOf(inIf) : dev.id === ctx.vrfDev ? ctx.vrf : '';
     // 政策路由：介面上的 ip policy route-map（路由器自己送出的封包看 ip local policy route-map）先決定下一站，沒有符合才查路由表
     const pbrName = cloud ? null : inIf ? inIf.policyRm : dev.localPolicy;
-    const route = (pbrName && pbrRoute(dev, pbrName, pkt, vrfNow, log)) || (cloud ? cloud.out : lookupRoute(dev, pkt.dst, pkt.src, vrfNow));
+    let route = (pbrName && pbrRoute(dev, pbrName, pkt, vrfNow, log)) || (cloud ? cloud.out : lookupRoute(dev, pkt.dst, pkt.src, vrfNow));
+    // SD-WAN：查到的是 SD-WAN 的預設路由，就由 SD-WAN 規則挑成員（沒有符合的規則：照來源位址分散）
+    if (route && route.sdwan != null) {
+      const pk = sdwanPick(state, dev, pkt);
+      if (pk && pk.route) { route = pk.route; log.push({ dev: dev.id, kind: 'info', text: pk.why }); }
+      else if (pk && !pk.route) return drop(`${dev.name}：${pk.why}`);
+    }
     if (!route) {
       D('packet', `IP: s=${fmtIp(pkt.src)} (${inIf ? longIf(inIf.label) : 'local'}), d=${fmtIp(pkt.dst)}, len ${ipLen(pkt)}, unroutable`);
       return drop(noRouteReason(state, dev, pkt.dst));
