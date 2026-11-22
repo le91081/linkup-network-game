@@ -190,10 +190,26 @@ const SHOW = {
         `    Address: ${x.addr.toUpperCase()}`, `            preferred lifetime ${DHCP6_PREF}, valid lifetime ${DHCP6_VALID}`, `            expires in ${left} seconds`];
     });
   },
+  'show ipv6 general-prefix': (st, d) => {
+    const gp = (d.rt && d.rt.gp) || {};
+    const names = [...new Set([...Object.keys(gp), ...d.ifaces.filter((i) => i.gp6).map((i) => i.gp6.name)])];
+    if (!names.length) return ['（沒有任何一般前綴：WAN 介面用 ipv6 dhcp client pd <名稱> 向 ISP 要）'];
+    return names.flatMap((n) => {
+      const p = gp[n], users = d.ifaces.filter((i) => i.gp6 && i.gp6.name === n);
+      if (!p || p.prefix == null) return [`IPv6 Prefix ${n}, acquired via DHCP PD`, `  （還沒有拿到前綴${p && p.why ? '：' + p.why : '：沒有任何介面設定 ipv6 dhcp client pd ' + n}）`];
+      return [`IPv6 Prefix ${n}, acquired via DHCP PD`, `  ${fmtIp6(p.prefix).toUpperCase()}/${p.bits} Valid lifetime 2591999, preferred lifetime 604799`, ...users.map((i) => `  ${longIf(i.label)} (Address command)`)];
+    });
+  },
   'show ipv6 dhcp interface': (st, d) => {
-    const on = d.ifaces.filter((i) => i.dhcp6 || i.relay6);
-    if (!on.length) return ['（沒有任何介面是 DHCPv6 伺服器或轉送）'];
-    return on.flatMap((i) => i.dhcp6
+    const on = d.ifaces.filter((i) => i.dhcp6 || i.relay6 || i.pd6);
+    if (!on.length) return ['（沒有任何介面是 DHCPv6 伺服器、轉送或用戶端）'];
+    return on.flatMap((i) => i.pd6 ? (() => {
+      const p = ((d.rt && d.rt.gp) || {})[i.pd6];
+      const ok = p && p.prefix != null;
+      return [`${longIf(i.label)} is in client mode`, `  Prefix State is ${ok ? 'OPEN' : 'SOLICIT'}`, '  Renew will be sent in 3d11h', `  Address State is IDLE`, `  List of known servers:`,
+        ...(ok ? [`    Reachable via address: ${fmtIp6(st.devices[p.isp].ifaces.find((x) => x.line && x.line.v6 && parseCidr6(x.line.v6.pd || '') && net6(parseCidr6(x.line.v6.pd).ip, parseCidr6(x.line.v6.pd).bits) === p.prefix).rt.v6.ll).toUpperCase()}`, `    Prefix: ${fmtIp6(p.prefix).toUpperCase()}/${p.bits} preferred lifetime 604800, valid lifetime 2592000`] : ['    （沒有收到任何 DHCPv6 Advertise）']),
+        `  Prefix name: ${i.pd6}`, '  Rapid-Commit: disabled'];
+    })() : i.dhcp6
       ? [`${longIf(i.label)} is in server mode`, `  Using pool: ${i.dhcp6}`, '  Preference value: 0', '  Hint from client: ignored', '  Rapid-Commit: disabled']
       : [`${longIf(i.label)} is in relay mode`, '  Relay destinations:', `    ${i.relay6.toUpperCase()}`]);
   },

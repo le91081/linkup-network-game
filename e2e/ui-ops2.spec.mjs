@@ -356,3 +356,20 @@ test('SD-WAN：政策還用著 wan1 不能加成員；改成 virtual-wan-link �
   await expect(page.locator('#panel .sdw-sla')).toContainText('✓ 符合');
   expect(await scan(page, '#panel', 'SD-WAN 分頁')).toEqual([]);
 });
+
+test('IPv6 PD：R1 的 WAN 用 autoconfig 與 dhcp client pd 拿到 /56，LAN 用一般前綴，電腦 ping6 得到網際網路', async ({ page }) => {
+  await boot(page);
+  await open(page, 'l118');
+  await clickDevice(page, 'r1');
+  await page.locator('#panel .tab', { hasText: 'CLI' }).click();
+  await typeCmd(page, 'enable', 'configure terminal', 'interface gi0/0/0', 'ipv6 address autoconfig default', 'ipv6 dhcp client pd ISP-PD', 'exit',
+    'interface gi0/0/1', 'no ipv6 address 2001:db8:1111:1::1/64', 'ipv6 address ISP-PD ::1:0:0:0:1/64', 'exit', 'interface gi0/0/2', 'ipv6 address ISP-PD ::2:0:0:0:1/64', 'end', 'show ipv6 general-prefix');
+  const out = page.locator('#panel .term-out');
+  await expect(out).toContainText('IPv6 Prefix ISP-PD, acquired via DHCP PD');
+  await expect(out).toContainText('2001:DB8:4F20:7A00::/56');
+  expect(await scan(page, '#panel', 'R1 的 CLI（show ipv6 general-prefix）')).toEqual([]);
+  await clickDevice(page, 'pc1');
+  await page.locator('#panel .tab', { hasText: '終端機' }).click();
+  await typeCmd(page, 'ping 2606:2800:220:1:248:1893:25c8:1946');
+  await expect(page.locator('#panel .term-out')).toContainText('回覆自 2606:2800:220:1:248:1893:25c8:1946');
+});

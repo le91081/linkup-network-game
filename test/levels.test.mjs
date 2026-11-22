@@ -3942,6 +3942,46 @@ console.log('\nSD-WAN（FortiGate）');
   ok(g2.sdwan.on && g2.sdwan.hc.server === '8.8.8.8' && !g2.sdwan.members.length, '圖形介面「啟用 SD-WAN」：預設的效能 SLA 偵測 8.8.8.8，還沒有成員');
 }
 
+console.log('\n網際網路的 IPv6 與 DHCPv6 Prefix Delegation');
+{
+  const { iosSession, runningConfig } = await import('../src/engine/ios.js');
+  const { transact6, globalIp6 } = await import('../src/engine/sim6.js');
+  const { parseIp6, fmtIp6 } = await import('../src/engine/ip6.js');
+  const ok = (cond, title) => (cond ? console.log('  ✔ ' + title) : fail(title));
+  const lv = LEVELS.find((x) => x.id === 'l118');
+  const s = lv.setup(); settle(s);
+  const R = iosSession(() => s.devices.r1, () => s);
+  const run = (lines) => { const o = []; for (const l of lines) o.push(...R.exec(l).out); settle(s); return o; };
+  const WEB = parseIp6('2606:2800:220:1:248:1893:25c8:1946');
+  const inet = s.devices.inet;
+  ok(inet.ifaces[0].rt.v6.addrs.some((a) => fmtIp6(a.ip) === '2001:db8:ff00:12::1'), 'ISP 那一端的線路：IPv6 位址 2001:db8:ff00:12::1/64、送 RA');
+  run(['configure terminal', 'interface gi0/0/0', 'ipv6 address autoconfig', 'end']);
+  const wan = s.devices.r1.ifaces[0].rt.v6;
+  ok(wan.addrs.some((a) => a.src === 'slaac' && fmtIp6(a.ip).startsWith('2001:db8:ff00:12:')) && !(s.devices.r1.rt.routes6 || []).some((r) => r.bits === 0), 'ipv6 address autoconfig：WAN 用 SLAAC 拿到位址，但沒有 default 就沒有預設路由');
+  run(['configure terminal', 'interface gi0/0/0', 'ipv6 address autoconfig default', 'end']);
+  ok((s.devices.r1.rt.routes6 || []).some((r) => r.bits === 0), 'ipv6 address autoconfig default：ISP 的路由器變成 IPv6 預設路由');
+  const r0 = transact6(s, 'pc1', WEB, { quiet: true });
+  ok(!r0.ok && r0.phase === 'reply' && /不是 ISP 配給任何客戶的前綴/.test(r0.reason), `舊業者的前綴：封包出得去，回程沒有路（${r0.reason.slice(0, 40)}…）`);
+  run(['configure terminal', 'interface gi0/0/0', 'ipv6 dhcp client pd ISP-PD', 'end']);
+  const gp = s.devices.r1.rt.gp['ISP-PD'];
+  ok(gp && fmtIp6(gp.prefix) === '2001:db8:4f20:7a00::' && gp.bits === 56, 'ipv6 dhcp client pd ISP-PD：拿到 2001:db8:4f20:7a00::/56（一般前綴）');
+  ok((inet.rt.routes6 || []).some((r) => r.pd && fmtIp6(r.net) === '2001:db8:4f20:7a00::' && r.bits === 56), 'ISP 的路由表：委派出去的 /56 指回 R1 的 WAN');
+  run(['configure terminal', 'interface gi0/0/1', 'no ipv6 address 2001:db8:1111:1::1/64', 'ipv6 address ISP-PD ::1:0:0:0:1/64', 'exit', 'interface gi0/0/2', 'ipv6 address ISP-PD ::2:0:0:0:1/64', 'end']);
+  const a1 = globalIp6(s.devices.pc1), a2 = globalIp6(s.devices.pc2);
+  ok(fmtIp6(a1).startsWith('2001:db8:4f20:7a01:') && fmtIp6(a2).startsWith('2001:db8:4f20:7a02:'), `一般前綴 + 子網路編號：辦公室 ${fmtIp6(a1)}、訪客 ${fmtIp6(a2)}`);
+  ok(transact6(s, 'pc1', WEB, { quiet: true }).ok && transact6(s, 'pc2', WEB, { quiet: true }).ok, '兩個網段都用 IPv6 連到網際網路上的網站');
+  const rc = runningConfig(s, s.devices.r1).join('\n');
+  ok(/interface GigabitEthernet0\/0\/0\n[^]*? ipv6 address autoconfig default\n ipv6 dhcp client pd ISP-PD/.test(rc) && / ipv6 address ISP-PD ::1:0:0:0:1\/64/.test(rc), 'running-config：autoconfig default、dhcp client pd 與一般前綴的位址');
+  const { iosRun } = await import('../src/ui/cli.js');
+  const show = (line) => { const o = []; iosRun({ state: s }, 'r1', iosSession(() => s.devices.r1, () => s), line, (l) => o.push(l)); return o.join('\n'); };
+  const gpTxt = show('show ipv6 general-prefix'), dhTxt = show('show ipv6 dhcp interface');
+  ok(/IPv6 Prefix ISP-PD, acquired via DHCP PD\n  2001:DB8:4F20:7A00::\/56 Valid lifetime/.test(gpTxt) && /GigabitEthernet0\/0\/2 \(Address command\)/.test(gpTxt), 'show ipv6 general-prefix：前綴與使用它的介面');
+  ok(/GigabitEthernet0\/0\/0 is in client mode\n  Prefix State is OPEN/.test(dhTxt) && /Prefix name: ISP-PD/.test(dhTxt), 'show ipv6 dhcp interface：PD 的用戶端（Prefix State is OPEN）');
+  // ISP 換了委派的前綴
+  s.devices.inet.ifaces[0].line.v6.pd = '2001:db8:9c31:b500::/56'; settle(s);
+  ok(fmtIp6(globalIp6(s.devices.pc1)).startsWith('2001:db8:9c31:b501:') && transact6(s, 'pc1', WEB, { quiet: true }).ok, 'ISP 換了前綴：LAN 的位址跟著換，照樣連得到');
+}
+
 console.log('\nNetFlow 與 QoS 的 police');
 {
   const sim = await import('../src/engine/sim.js');

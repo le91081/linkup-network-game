@@ -779,13 +779,35 @@ export function iosSession(getDev, getState, who = null) {
 
     ['ipv6 address <ll> link-local', ([a]) => (parseIp6(a) != null && isLinkLocal(parseIp6(a)) ? onL3((i) => { i.ll6 = fmtIp6(parseIp6(a)); }) : err('link-local 位址要在 FE80::/10 裡，例如 ipv6 address FE80::1 link-local'))],
     ['no ipv6 address <ll> link-local', () => onL3((i) => { delete i.ll6; })],
+    // WAN 用 SLAAC 取得位址；加 default 才會把送 RA 的路由器當成預設路由
+    ['ipv6 address autoconfig [...]', ([rest]) => {
+      const t = String(rest || '').trim().toLowerCase();
+      if (t && t !== 'default') return err('用法：ipv6 address autoconfig [default]');
+      return onL3((i) => { i.mode6 = 'auto'; if (t) i.v6default = true; else delete i.v6default; });
+    }],
+    ['no ipv6 address autoconfig [...]', () => onL3((i) => { delete i.mode6; delete i.v6default; })],
+    // 用 DHCPv6 PD 拿到的一般前綴寫位址：ipv6 address HOME ::1:0:0:0:1/64
+    ['ipv6 address <name> <sfx>', ([name, sfx]) => {
+      if (parseIp6(name) != null || parseCidr6(name) != null) return err('用法：ipv6 address <位址/前綴長度>，或 ipv6 address <一般前綴名稱> <後面的位址/前綴長度>');
+      const x = parseCidr6(sfx);
+      if (!x) return err(`用法：ipv6 address ${name} ::1:0:0:0:1/64（一般前綴後面接的位址：子網路編號與主機的部分）`);
+      return onL3((i) => { if (!i.ip6 && !i.gp6) i.ra = true; i.gp6 = { name, suffix: sfx.toLowerCase() }; });
+    }],
     ['ipv6 address <cidr>', ([c]) => {
       const x = parseCidr6(c);
       if (x == null) return err('IPv6 位址要帶前綴長度，例如 2001:db8:a::1/64');
       if (isLinkLocal(x.ip)) return err('FE80:: 開頭的是 link-local 位址：要手動指定請用 ipv6 address FE80::1 link-local');
       return onL3((i) => { if (!i.ip6) i.ra = true; i.ip6 = c; });
     }],
-    ['no ipv6 address [...]', () => onL3((i) => { i.ip6 = ''; })],
+    ['no ipv6 address [...]', ([rest]) => onL3((i) => {
+      const t = String(rest || '').trim().split(/\s+/)[0] || '';
+      if (i.gp6 && (!t || t === i.gp6.name)) delete i.gp6;
+      if (!t || parseCidr6(t)) i.ip6 = '';
+      if (!t) { delete i.mode6; delete i.v6default; }
+    })],
+    // DHCPv6 Prefix Delegation 的用戶端：向 ISP 要一段前綴，存成一般前綴
+    ['ipv6 dhcp client pd <name> [...]', ([name]) => onL3((i) => { i.pd6 = name; })],
+    ['no ipv6 dhcp client pd [...]', () => onL3((i) => { delete i.pd6; })],
     ['ipv6 enable', () => onL3(() => {})],
     ['no ipv6 enable', () => onL3(() => {})],
     ['ipv6 nd ra suppress [...]', () => onL3((i) => { i.ra = false; })],
@@ -3990,10 +4012,13 @@ export function runningConfig(state, dev) {
     if (i.vrrp && (i.vrrp.on || +i.vrrp.prio !== 100 || (i.vrrp.track || []).length)) l.push(...fhrpLines(i.vrrp));
     if (i.ll6) l.push(` ipv6 address ${i.ll6.toUpperCase()} link-local`);
     if (i.ip6) l.push(` ipv6 address ${i.ip6.toUpperCase()}`);
+    if (i.gp6) l.push(` ipv6 address ${i.gp6.name} ${i.gp6.suffix.toUpperCase()}`);
+    if (i.mode6 === 'auto' && dev.kind !== 'host') l.push(` ipv6 address autoconfig${i.v6default ? ' default' : ''}`);
     if (i.raNoAuto) l.push(' ipv6 nd prefix default no-autoconfig');
     if (i.raM) l.push(' ipv6 nd managed-config-flag');
     if (i.raO) l.push(' ipv6 nd other-config-flag');
-    if (i.ip6 && !i.ra) l.push(' ipv6 nd ra suppress all');
+    if ((i.ip6 || i.gp6) && !i.ra) l.push(' ipv6 nd ra suppress all');
+    if (i.pd6) l.push(` ipv6 dhcp client pd ${i.pd6}`);
     if (i.dhcp6) l.push(` ipv6 dhcp server ${i.dhcp6}`);
     if (i.relay6) l.push(` ipv6 dhcp relay destination ${i.relay6.toUpperCase()}`);
     if (i.ospf6Cost) l.push(` ipv6 ospf cost ${i.ospf6Cost}`);

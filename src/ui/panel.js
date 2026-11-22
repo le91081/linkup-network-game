@@ -576,6 +576,7 @@ function inetInfo(ctx, body) {
     body.append(h('div', { class: 'card' }, cardHead(i.label, linkBadge(ctx, i.bind.port)),
       h('div', { class: 'kv' }, kv('連線方式', T[ln.type] || '—'), kv('配發給客戶的 IP', ln.assign || '—'),
         kv('ISP 閘道', i.ip), kv('子網路遮罩', i.mask), kv('DNS', ln.dns || '—'),
+        ...(ln.v6 ? [kv('IPv6 鏈路', ln.v6.link || '—'), kv('委派的前綴 (DHCPv6 PD)', ln.v6.pd || '—')] : []),
         ...(ln.q ? [kv('線路品質', `延遲 ${ln.q.delay ?? 4} ms、抖動 ${ln.q.jitter ?? 1} ms、遺失 ${ln.q.loss ?? 0}%`)] : []))));
   }
   body.append(h('div', { class: 'card' }, cardHead('網際網路上的主機'),

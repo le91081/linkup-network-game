@@ -19,7 +19,9 @@ import { fmtIp } from './ip.js';
 
 export const mode6 = (dev, i) => i.mode6 || (dev.kind === 'host' ? 'auto' : 'static');
 const owns6 = (i, ip) => !!i.rt.v6 && (i.rt.v6.ll === ip || i.rt.v6.addrs.some((a) => a.ip === ip));
-const isLocal6 = (dev, ip) => dev.ifaces.some((i) => owns6(i, ip));
+/** 網際網路上的主機（inet.hosts 的 ip6） */
+const inetHost6 = (dev, ip) => (dev.kind === 'internet' ? (dev.inet.hosts || []).find((h) => h.ip6 && parseIp6(h.ip6) === ip) : null);
+const isLocal6 = (dev, ip) => dev.ifaces.some((i) => owns6(i, ip)) || !!inetHost6(dev, ip);
 
 /** DHCPv6 address prefix 的預設壽命：preferred 1 天、valid 2 天（IOS 的預設值） */
 export const DHCP6_PREF = 86400, DHCP6_VALID = 172800;
@@ -108,7 +110,7 @@ function raOf(state, d, i) {
   for (const e of l2Explore(state, d.id, i)) {
     const r = e.iface, rd = state.devices[e.dev];
     const guard = raGuarded(state, e.path);
-    if (rd.routing && rd.v6routing && r.ra && r.rt.v6 && r.rt.v6.addrs.length) {
+    if (rd.routing && (rd.v6routing || rd.kind === 'internet') && r.ra && r.rt.v6 && r.rt.v6.addrs.length) {
       const pfx = r.rt.v6.addrs.find((a) => a.bits === 64) || r.rt.v6.addrs[0];
       cands.push({ dev: rd.id, iface: r, M: !!r.raM, O: !!r.raO, A: !r.raNoAuto, prefix: net6(pfx.ip, pfx.bits), bits: pfx.bits, ll: r.rt.v6.ll, prio: 'medium', guard });
     } else if (r.rogueRa && r.rt.v6 && r.rt.v6.ll != null) {
@@ -128,8 +130,14 @@ export function recompute6(state) {
   // 1. 介面：link-local、手動位址
   for (const d of devs) {
     d.rt.routes6 = [];
+    d.rt.gp = {}; // DHCPv6 PD 拿到的一般前綴 (general prefix)
     for (const i of d.ifaces) {
       const v = (i.rt.v6 = { ll: null, addrs: [], gw: null, note: '', router: null, dns: [], domain: '', ra: null, dhcp: null });
+      if (d.kind === 'internet') {
+        const c = i.line && i.line.v6 && parseCidr6(i.line.v6.link || '');
+        if (c && i.rt.link) { v.ll = linkLocal(i.rt.mac); v.addrs.push({ ip: net6(c.ip, c.bits) | 1n, bits: c.bits, src: 'static' }); }
+        continue;
+      }
       const m = mode6(d, i);
       if (!i.rt.active || !i.rt.link || m === 'off') continue;
       const ll = parseIp6(i.ll6 || '');
@@ -144,7 +152,10 @@ export function recompute6(state) {
     }
   }
   // 2. 自動取得：RA 的 A 旗標 → SLAAC；預設閘道永遠來自 RA（DHCPv6 不提供閘道）
+  //    路由器的 WAN（ipv6 address autoconfig）先做；接著 DHCPv6 PD 與一般前綴的位址；主機最後做
+  const autoconf = (hosts) => {
   for (const d of devs) {
+    if ((d.kind === 'host') !== hosts) continue;
     for (const i of d.ifaces) {
       const v = i.rt.v6;
       if (mode6(d, i) !== 'auto' || v.ll == null) continue;
@@ -153,12 +164,40 @@ export function recompute6(state) {
       v.ra = { dev: ra.dev, M: ra.M, O: ra.O, A: ra.A, prefix: ra.prefix, bits: ra.bits, rogue: !!ra.rogue, prio: ra.prio };
       // 每一個收到的 RA 都產生一個 SLAAC 位址（同一張網卡同時有合法與冒牌的前綴）
       for (const x of ra.all) if (x.A && x.bits === 64 && !v.addrs.some((a) => net6(a.ip, 64) === x.prefix)) v.addrs.push({ ip: eui64(x.prefix, i.rt.mac), bits: 64, src: 'slaac', ...(x.rogue ? { rogue: true } : {}) });
-      v.gw = ra.ll;
+      // 路由器要寫 ipv6 address autoconfig default 才會把 RA 的路由器當成預設路由
+      v.gw = hosts || i.v6default ? ra.ll : null;
       v.router = ra.dev;
       v.routers = ra.all.map((x) => ({ dev: x.dev, ll: fmtIp6(x.ll), prio: x.prio, rogue: !!x.rogue }));
       if (ra.blocked.length) v.raBlocked = ra.blocked.map((x) => ({ dev: x.dev, where: x.guard }));
     }
   }
+  };
+  autoconf(false);
+  // DHCPv6 Prefix Delegation：WAN 介面向 ISP 要一整段前綴（例如 /56），存成一般前綴；LAN 介面再從裡面切出 /64
+  const pdRoutes = [];
+  for (const d of devs) {
+    if (d.kind === 'host' || d.kind === 'internet') continue;
+    for (const i of d.ifaces) {
+      if (!i.pd6 || !i.rt.v6 || i.rt.v6.ll == null) continue;
+      const isp = l2Explore(state, d.id, i).find((e) => state.devices[e.dev].kind === 'internet' && e.iface.line && e.iface.line.v6 && e.iface.line.v6.pd);
+      if (!isp) { d.rt.gp[i.pd6] = { why: `${i.label} 送出 DHCPv6 Solicit（要求前綴委派），但這條鏈路上沒有提供 PD 的 ISP` }; continue; }
+      const c = parseCidr6(isp.iface.line.v6.pd);
+      d.rt.gp[i.pd6] = { prefix: net6(c.ip, c.bits), bits: c.bits, iface: i.id, isp: isp.dev, dns: isp.iface.line.v6.dns || [] };
+      pdRoutes.push({ inet: state.devices[isp.dev], iface: isp.iface, net: net6(c.ip, c.bits), bits: c.bits, via: i.rt.v6.ll });
+    }
+  }
+  // 用一般前綴寫的位址：ipv6 address HOME ::1:0:0:0:1/64 → 前綴 + 後面這一段
+  for (const d of devs) {
+    for (const i of d.ifaces) {
+      const g = i.gp6, v = i.rt.v6;
+      if (!g || !v || v.ll == null) continue;
+      const p = d.rt.gp[g.name], sfx = parseCidr6(g.suffix || '');
+      if (!sfx) { v.note = `ipv6 address ${g.name} 後面的位址寫錯了（例如 ::1:0:0:0:1/64）`; continue; }
+      if (!p || p.prefix == null) { v.note = `一般前綴 ${g.name} 還沒有拿到${p && p.why ? '：' + p.why : '（WAN 介面要有 ipv6 dhcp client pd ' + g.name + '）'}`; continue; }
+      v.addrs.push({ ip: p.prefix | (sfx.ip & ((1n << BigInt(128 - p.bits)) - 1n)), bits: sfx.bits, src: 'static', gp: g.name });
+    }
+  }
+  autoconf(true);
   // 3. 直連與靜態路由（DHCPv6 的轉送要用到路由表，所以先算）
   const build = () => {
     for (const d of devs) {
@@ -181,6 +220,7 @@ export function recompute6(state) {
     }
   };
   build();
+  for (const x of pdRoutes) x.inet.rt.routes6.push({ net: x.net, bits: x.bits, via: x.via, iface: x.iface, type: 'S', ad: 1, metric: 0, pd: true });
   // 4. OSPFv3
   computeOspf6(state);
   // 5. DHCPv6：M 旗標 → 向 DHCPv6 要位址 (stateful)；只有 O 旗標 → 只要 DNS 這些「其他設定」(stateless)
@@ -327,6 +367,8 @@ function ndBlocked(state, dev, ifc, tgt) {
 /** 封包到了目的地：有沒有服務在聽 */
 function deliver6(dev, pkt) {
   if (pkt.reply || pkt.proto === 'icmp') return '';
+  const h = inetHost6(dev, pkt.dst);
+  if (h) return (h.services || []).some((s) => s.proto === pkt.proto && s.port === pkt.dport) ? '' : `${h.name} 沒有在 ${pkt.proto.toUpperCase()}/${pkt.dport} 提供服務（連線被拒絕）`;
   if (pkt.proto === 'udp' && pkt.dport === 547 && dev.ifaces.some((i) => i.dhcp6)) return '';
   if (pkt.proto === 'tcp' && pkt.dport === 5201 && dev.kind === 'host') return '';
   if ((dev.services || []).some((s) => s.proto === pkt.proto && s.port === pkt.dport)) return '';
@@ -353,7 +395,7 @@ function forward6(state, ctx, startId, pkt) {
     if (isLocal6(dev, pkt.dst)) return { ok: true, dev: dev.id, rxIf: inIf };
     if (inIf) {
       if (!dev.routing) return drop(`${dev.name} 收到不是給自己的 IPv6 封包，它不是路由器所以直接丟棄`);
-      if (!dev.v6routing) return drop(`${dev.name} 沒有啟用 IPv6 路由 (ipv6 unicast-routing)，不會轉送 IPv6 封包`);
+      if (!dev.v6routing && dev.kind !== 'internet') return drop(`${dev.name} 沒有啟用 IPv6 路由 (ipv6 unicast-routing)，不會轉送 IPv6 封包`);
       if (--pkt.hl <= 0) return drop('Hop Limit 歸零，封包被丟棄（可能有路由迴圈）');
       if (!pkt.reply) ctx.l3.push({ dev: dev.id, ip6: inIf.rt.v6.addrs[0] ? inIf.rt.v6.addrs[0].ip : inIf.rt.v6.ll });
     }
@@ -362,6 +404,7 @@ function forward6(state, ctx, startId, pkt) {
       const any = dev.ifaces.some((i) => i.rt.v6 && i.rt.v6.addrs.length);
       const note = dev.ifaces.map((i) => i.rt.v6 && i.rt.v6.note).find(Boolean);
       if (dev.kind === 'host') return drop(any ? `${fmtIp6(pkt.dst)} 不在 ${dev.name} 的網段內，而且沒有 IPv6 預設閘道${note ? '（' + note + '）' : ''}` : `${dev.name} 沒有可用的 IPv6 位址${note ? '（' + note + '）' : ''}`);
+      if (dev.kind === 'internet') return drop(`${fmtIp6(pkt.dst)} 不是 ISP 配給任何客戶的前綴：網際網路上沒有往它的路由（是不是用了以前的 ISP 或自己編的前綴？）`);
       const bad = (dev.rt.routes6 || []).find((x) => x.bad);
       return drop(`${dev.name} 的 IPv6 路由表裡沒有通往 ${fmtIp6(pkt.dst)} 的路由${bad ? '（' + bad.bad + '）' : ''}`);
     }
