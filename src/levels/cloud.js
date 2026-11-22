@@ -2,6 +2,7 @@
 import { makeDevice as D, makeState, setLine } from '../engine/model.js';
 import { iosSession } from '../engine/ios.js';
 import { vpnConfig } from '../engine/cloud.js';
+import { terraform, tfPlan, addTfHosts, newTf, ruleHcl } from '../engine/terraform.js';
 import { recompute } from '../engine/sim.js';
 import { dev } from './util.js';
 
@@ -16,6 +17,60 @@ const WEB = { id: 'i-0a3f9c2e71b45d801', name: 'web-1', subnet: 'subnet-0pub1a',
 const DB = { id: 'i-0d71e5b0c9a2f4436', name: 'db-1', subnet: 'subnet-0prv1a', ip: '10.50.2.20', eip: '', sgs: ['sg-0db'], type: 'r6g.large', services: [{ proto: 'tcp', port: 3306, name: 'MySQL' }, { proto: 'tcp', port: 22, name: 'SSH' }] };
 const UPDATES = '93.184.216.34';
 const VPN_PSK = 'Kq7vX2mR9tLw4pZ8nB3cH6yJ1sD5fG0a';
+
+const PARTNER = '198.51.100.25';
+/** 16-5 的 main.tf（partner：有沒有補上合作夥伴的 8443） */
+const mainTf = (partner) => `terraform {
+  required_providers {
+    aws = {
+      source  = "hashicorp/aws"
+      version = "~> 5.0"
+    }
+  }
+}
+
+provider "aws" {
+  region = "ap-northeast-1"
+}
+
+# 官網 web-1 的安全群組：HTTPS 對外，SSH 只給公司
+resource "aws_security_group" "web" {
+  name        = "web"
+  description = "web-1: HTTPS public, SSH from office"
+  vpc_id      = "vpc-0c4e8a1f27d9b3650"
+
+  ingress {
+    description = "HTTPS"
+    from_port   = 443
+    to_port     = 443
+    protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  ingress {
+    description = "SSH from office"
+    from_port   = 22
+    to_port     = 22
+    protocol    = "tcp"
+    cidr_blocks = ["${OFFICE_PUB}/32"]
+  }
+${partner ? `
+  ingress {
+    description = "Partner API"
+    from_port   = 8443
+    to_port     = 8443
+    protocol    = "tcp"
+    cidr_blocks = ["${PARTNER}/32"]
+  }
+` : ''}
+  egress {
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+}
+`;
 
 /** 公司（地端）與網際網路：兩章共用 */
 function office() {
@@ -304,5 +359,69 @@ export const LEVELS12 = [
       dev(s, 'prod').vpc.sgs.find((g) => g.id === 'sg-0db').in.push({ proto: 'tcp', port: '3306', src: '10.30.0.0/16' });
     },
     recap: ['VPC peering 是一對一、不能轉送的：A ↔ B、B ↔ C 不代表 A 到得了 C。', 'Transit Gateway 讓所有 VPC 接到同一台雲端路由器；兩邊的子網路路由表都要指向它，目的地的安全群組也要允許新的來源。'],
+  },
+
+  // ════════════════════════ 16-5 ════════════════════════
+  {
+    id: 'l112', chapter: 16, title: '昨晚有人在主控台改了安全群組', subtitle: 'Terraform：基礎架構即程式碼與組態漂移 (drift)', tags: ['雲端', 'Terraform', 'IaC', 'drift', '安全群組'],
+    brief: `公司的 AWS 安全群組一律用 Terraform 管理，main.tf 放在 Git 上（自動化工作站剛 clone 下來）。昨晚值班的同事為了救火，直接在 AWS 主控台改了 web 的安全群組：替合作夥伴開了 8443（他們的 API 今天正式上線，要保留），又為了讓廠商遠端除錯，把 SSH 開給了全世界（忘了關）。請讓 main.tf 重新成為唯一的依據：合作夥伴照樣連得上 8443、SSH 只開給公司，最後 terraform plan 要顯示沒有任何變更。`,
+    given: [
+      ['自動化工作站', '10.20.0.50 · Linux · main.tf 在「Terraform」分頁（終端機也可以下 terraform 指令）'],
+      ['web 安全群組', 'sg-0web · 由 Terraform 管理（state 裡有它）'],
+      ['合作夥伴', `${PARTNER} · 呼叫 https://${WEB_EIP}:8443`], ['公司對外的公用 IP', OFFICE_PUB],
+    ],
+    learn: [
+      { t: '基礎架構即程式碼 (IaC)', d: '把雲端資源寫成文字檔（Terraform 的 .tf，HCL 語法），放進 Git 做版本控制與審查。它是宣告式的：檔案寫的是「最後要長什麼樣子」，不是一步一步的操作；同一份檔案套用幾次，結果都一樣。' },
+      { t: 'init、plan、apply', d: 'terraform init 下載 provider（和雲端 API 溝通的外掛）。plan 先讀取雲端現況 (refresh)，和 .tf 比對，列出要新增 (+)、修改 (~)、刪除 (-) 的地方；apply 照計畫真的去改，要回答 yes 才會動手。state 檔 (terraform.tfstate) 記錄 Terraform 管理了哪些資源、它們在雲端的 ID。' },
+      { t: '組態漂移 (drift)', d: '有人繞過 Terraform 直接在主控台改，雲端就和程式碼不一樣了。plan 會先列出「Objects have changed outside of Terraform」，接著計畫把它改回 .tf 寫的樣子。要保留的手動變更就補進 .tf（程式碼才是依據），不要的就讓 apply 拿掉。' },
+      { t: 'inline 規則是整組管理', d: 'ingress / egress 直接寫在 aws_security_group 裡時，Terraform 管的是「整組規則」：不在 .tf 裡的規則，apply 一律刪掉。所以先看清楚 plan 的每一個「-」再 apply。' },
+    ],
+    setup() {
+      const o = office();
+      addTfHosts(o[0]);
+      o[0].inet.hosts.push({ ip: PARTNER, name: '合作夥伴（API 用戶端）', services: [] });
+      return makeState([
+        ...o,
+        D('laptop', 'tf', { name: '自動化工作站', pos: [-4, 5], ip: '10.20.0.50', gw: '10.20.0.1', dns: '8.8.8.8', init(d) { d.tf = newTf(mainTf(false), { state: { 'aws_security_group.web': { id: 'sg-0web', in: [{ proto: 'tcp', port: '443', src: '0.0.0.0/0' }, { proto: 'tcp', port: '22', src: OFFICE_PUB + '/32' }], out: [{ proto: 'all', port: '', dst: '0.0.0.0/0' }] } } }); } }),
+        cloud((d, v) => {
+          publicDone(v);
+          // 昨晚在主控台手動加的兩條
+          v.sgs.find((g) => g.id === 'sg-0web').in.push({ proto: 'tcp', port: '8443', src: PARTNER + '/32' }, { proto: 'tcp', port: '22', src: '0.0.0.0/0' });
+          v.instances[0].services.push({ proto: 'tcp', port: 8443, name: 'Partner API' });
+        }),
+      ], [...officeCables, ['inet:line2', 'aws:inet'], ['tf:eth0', 'sw:3']]);
+    },
+    objectives: [
+      { type: 'tcp', from: 'inet', srcIp: PARTNER, ip: WEB_EIP, port: 8443, label: `合作夥伴（${PARTNER}）連得上 https://${WEB_EIP}:8443` },
+      { type: 'tcp', from: 'inet', ip: WEB_EIP, port: 443, label: '官網照常對外（443）' },
+      { type: 'tcp', from: 'pc', ip: WEB_EIP, port: 22, label: '公司的管理員照樣可以 SSH 到 web-1' },
+      { type: 'tcp', from: 'inet', ip: WEB_EIP, port: 22, expect: false, label: '公司以外的人 SSH 連不進去' },
+      {
+        type: 'check', label: 'main.tf 和雲端一致：terraform plan 顯示 No changes',
+        test(s) {
+          const d = dev(s, 'tf');
+          if (!d.tf.inited) return '自動化工作站還沒有 terraform init';
+          const p = tfPlan(s, d);
+          if (p.err) return 'main.tf 有錯誤：' + p.err[0].replace(/^Error: /, '');
+          if (!p.changes.length) return true;
+          const c = p.changes[0];
+          return `terraform plan 還有要改的：${c.addr} ${c.d.map(([dir, r, sg]) => `${sg === '+' ? '加上' : '拿掉'}${dir === 'in' ? '輸入' : '輸出'}規則 ${ruleHcl(r, dir)}`).join('；')}`;
+        },
+      },
+    ],
+    hints: [
+      '自動化工作站 →「Terraform」分頁（或終端機）：先 terraform init 下載 AWS provider，再 terraform plan 看看。',
+      'plan 最上面的「Objects have changed outside of Terraform」就是昨晚在主控台改的兩條。直接 apply 會兩條都拿掉 — 包括合作夥伴要用的 8443。',
+      `在 main.tf 的 web 加一個 ingress 區塊：from_port = 8443、to_port = 8443、protocol = "tcp"、cidr_blocks = ["${PARTNER}/32"]。再 plan 一次，應該只剩「拿掉 SSH 0.0.0.0/0」。`,
+      'terraform apply，看清楚計畫之後回答 yes（分頁上按「yes」，或在終端機用 terraform apply -auto-approve）。最後再 plan 一次：No changes。',
+    ],
+    solve(s) {
+      recompute(s);
+      dev(s, 'tf').tf.main = mainTf(true);
+      terraform(s, 'tf', ['init']);
+      terraform(s, 'tf', ['apply', '-auto-approve']);
+      recompute(s);
+    },
+    recap: ['Terraform 的 .tf 寫的是「應該長什麼樣子」：plan 比對雲端現況、列出差異，apply 把差異改掉。', '在主控台手動改是 drift：要留的補進程式碼，不要的交給 apply 拿掉；改設定一律走「程式碼 → plan → apply」。'],
   },
 ];

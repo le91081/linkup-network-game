@@ -2,6 +2,7 @@
 import { sendApi, sendNetconf } from './panel-auto.js';
 import { ansibleRun } from './panel-auto.js';
 import { parseYaml, yamlErrorText } from '../engine/yaml.js';
+import { terraform, tfApplyConfirmed, tfStateJson } from '../engine/terraform.js';
 
 /** 依照 shell 的規則切開參數：單引號、雙引號、反斜線 */
 export function shellWords(s) {
@@ -169,5 +170,40 @@ export function fileCmd(dev, c, args, print) {
   }
   if (c === 'ansible' && args[0] === '--version') { ['ansible [core 2.16.3]', '  config file = /home/netops/ansible.cfg', '  python version = 3.11.6', '  jinja version = 3.1.3', '  libyaml = True'].forEach((l) => print(l, 'pre')); return true; }
   if (c === 'ansible-galaxy' && args[0] === 'collection' && args[1] === 'list') { ['# /home/netops/.ansible/collections/ansible_collections', 'Collection        Version', '----------------- -------', 'ansible.netcommon 6.1.1', 'ansible.utils     3.1.0', 'cisco.ios         8.0.0'].forEach((l) => print(l, 'pre')); return true; }
+  return false;
+}
+
+// ───────────────────────── Terraform ─────────────────────────
+
+const tfPrint = (print, lines) => { for (const l of lines) print(l.t, 'tf ' + (l.c || '')); };
+
+/** terraform <子指令>：apply 沒有 -auto-approve 的話，下一行輸入是 yes / no 的回答 */
+export function terraformCmd(app, dev, line, print) {
+  const sw = shellWords(line);
+  if (sw.err) { print(`-bash: ${sw.err}`, 'bad'); return; }
+  const r = terraform(app.state, dev.id, sw.words.slice(1));
+  tfPrint(print, r.ask ? r.lines.slice(0, -1) : r.lines);
+  if (r.ask) (app.tfAsk ||= {})[dev.id] = true;
+}
+/** 回答 apply 的「Enter a value:」 */
+export function tfAnswer(app, dev, line, print) {
+  delete app.tfAsk[dev.id];
+  print('  Enter a value: ' + line, 'tf head');
+  print('');
+  if (line.trim() !== 'yes') { print('Apply cancelled.', 'tf bad'); return; }
+  tfPrint(print, tfApplyConfirmed(app.state, dev.id).lines);
+}
+const LOCK = '# This file is maintained automatically by "terraform init".\n# Manual edits may be lost in future updates.\n\nprovider "registry.terraform.io/hashicorp/aws" {\n  version     = "5.31.0"\n  constraints = "~> 5.0"\n  hashes = [\n    "h1:ltxyuBWIy9cq0kIKDJH1jeWJy/y7XJLjS4QrsQK4plA=",\n  ]\n}';
+/** 控制主機上的檔案：ls、cat main.tf / terraform.tfstate */
+export function tfFileCmd(dev, c, args, print) {
+  const tf = dev.tf;
+  const files = { 'main.tf': tf.main, 'terraform.tfstate': tfStateJson(tf), ...(tf.inited ? { '.terraform.lock.hcl': LOCK } : {}) };
+  if (c === 'ls') { print(Object.keys(files).filter((f) => args.includes('-a') || args.includes('-la') || !f.startsWith('.')).join('  ')); return true; }
+  if (c === 'cat' || c === 'less' || c === 'more') {
+    if (!args[0]) { print(`${c}: missing operand`, 'bad'); return true; }
+    if (!(args[0] in files)) { print(`${c}: ${args[0]}: No such file or directory`, 'bad'); return true; }
+    for (const l of files[args[0]].replace(/\n$/, '').split('\n')) print(l, 'pre');
+    return true;
+  }
   return false;
 }

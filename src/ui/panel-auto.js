@@ -7,6 +7,7 @@ import { runPlaybook, MODULES } from '../engine/automation.js';
 import { parseYaml, YamlError } from '../engine/yaml.js';
 import { IOS_XE, iosSession } from '../engine/ios.js';
 import { iosRun } from './cli.js';
+import { parseHcl, terraform, tfApplyConfirmed, tfStateJson } from '../engine/terraform.js';
 
 const YANG = 'application/yang-data+json';
 const CTYPES = [[YANG, YANG], ['application/yang-data+xml', 'application/yang-data+xml'], ['application/json', 'application/json'], ['', '（不指定）']];
@@ -354,4 +355,71 @@ export function ansibleTab(ctx, body) {
       'task 的選項：name、register、loop、when、ignore_errors、check_mode、changed_when',
     ].join('\n') }), h('div', { class: 'muted', text: `（共 ${MODULES.length} 個模組）` })));
   void toggle;
+}
+
+// ───────────────────────── Terraform ─────────────────────────
+
+const TF_CMDS = [['init', 'init'], ['validate', 'validate'], ['plan', 'plan'], ['apply', 'apply']];
+const tfLine = (l) => h('div', { class: `tl tf ${l.c || ''}`, text: l.t || ' ' });
+
+export function terraformTab(ctx, body) {
+  const { app, dev } = ctx, tf = dev.tf;
+  const ui = ((app.tfUi ||= {})[dev.id] ||= { file: 'main', out: null, ask: false });
+  const rerender = () => app.renderPanel();
+  const isMain = ui.file === 'main';
+  body.append(h('p', { class: 'tip', text: 'Terraform 控制主機：main.tf 用 HCL 描述雲端資源「應該長什麼樣子」。plan 先讀取雲端現況，列出要新增 (+)、修改 (~)、刪除 (-) 的地方；apply 要你回答 yes 才真的去改。' }));
+  const area = h('textarea', { class: 'code ans-edit', rows: 16, spellcheck: 'false', wrap: 'off', value: isMain ? tf.main : tfStateJson(tf) });
+  area.readOnly = !isMain;
+  const lint = h('div', { class: 'api-lint' });
+  const doLint = () => {
+    if (!isMain) { lint.replaceChildren(note('info', '唯讀：state 是 Terraform 自己維護的，不要手動改')); return; }
+    try { parseHcl(area.value); lint.replaceChildren(note('ok', 'HCL 語法正確')); } catch (e) { lint.replaceChildren(note('warn', e.hcl ? `第 ${e.line} 行：${e.message}` : e.message)); }
+  };
+  if (isMain) {
+    area.addEventListener('keydown', (e) => { if (codeKey(area, e)) doLint(); ownKeys(e); });
+    area.addEventListener('input', doLint);
+    area.addEventListener('change', () => { tf.main = area.value; ui.ask = false; ctx.commit(false); });
+  }
+  const fileBtn = (id, label) => h('button', { type: 'button', class: ui.file === id ? 'on' : '', onclick: () => { if (isMain) tf.main = area.value; ui.file = id; ctx.commit(false); rerender(); } }, label);
+  const run = (args) => {
+    if (isMain) tf.main = area.value;
+    const r = terraform(app.state, dev.id, args);
+    ui.out = { cmd: 'terraform ' + args.join(' '), lines: r.lines, rc: r.rc };
+    ui.ask = !!r.ask;
+    ui.scrollToOut = true;
+    ctx.commit(false);
+    rerender();
+  };
+  const answer = (yes) => {
+    const r = yes ? tfApplyConfirmed(app.state, dev.id) : { lines: [{ t: 'Apply cancelled.', c: 'bad' }], rc: 1 };
+    ui.out = { cmd: ui.out.cmd, lines: [...ui.out.lines.slice(0, -1), { t: '  Enter a value: ' + (yes ? 'yes' : 'no'), c: 'head' }, { t: '' }, ...r.lines], rc: r.rc };
+    ui.ask = false;
+    ui.scrollToOut = true;
+    ctx.commit(false);
+    rerender();
+  };
+  const bar = h('div', { class: 'ans-bar tf-bar' }, h('span', { class: 'mono muted', text: '$ terraform' }),
+    ...TF_CMDS.map(([sub, label]) => button(label, { kind: sub === 'apply' ? 'primary' : undefined, small: true, onclick: () => run([sub]) })));
+  body.append(h('div', { class: 'card' }, h('div', { class: 'seg' }, fileBtn('main', 'main.tf'), fileBtn('state', 'terraform.tfstate')), bar, area, lint));
+  doLint();
+  if (ui.out) {
+    const outCard = h('div', { class: 'card' }, cardHead('輸出', badge(ui.out.rc === 0 ? 'on' : 'off', `結束代碼 ${ui.out.rc}`)),
+      h('div', { class: 'term ans-out' }, h('div', { class: 'term-out' }, h('div', { class: 'tl cmd', text: '$ ' + ui.out.cmd }), ...ui.out.lines.map(tfLine))),
+      ui.ask && h('div', { class: 'ans-bar tf-ask' }, h('span', { text: '確定要照上面的計畫修改雲端嗎？' }),
+        button('yes', { kind: 'primary', small: true, onclick: () => answer(true) }), button('取消', { small: true, onclick: () => answer(false) })));
+    body.append(outCard);
+    if (ui.scrollToOut) { ui.scrollToOut = false; requestAnimationFrame(() => { body.scrollTop += outCard.getBoundingClientRect().top - body.getBoundingClientRect().top - 12; }); }
+  }
+  body.append(h('details', { class: 'card api-tpl' }, h('summary', { text: '支援的語法' }),
+    h('div', { class: 'mono muted ans-mods', text: [
+      'terraform { required_providers { aws = { source = "hashicorp/aws", version = "~> 5.0" } } }',
+      'provider "aws" { region = "ap-northeast-1" }',
+      'resource "aws_security_group" "名稱" {',
+      '  name   = "web"            vpc_id = "vpc-…"',
+      '  ingress { from_port = 443  to_port = 443  protocol = "tcp"  cidr_blocks = ["0.0.0.0/0"] }',
+      '  egress  { from_port = 0    to_port = 0    protocol = "-1"   cidr_blocks = ["0.0.0.0/0"] }',
+      '}',
+      'protocol：tcp、udp、icmp、"-1"（全部）· 來源也可以寫 security_groups = ["sg-…"]',
+      '指令：init、validate、plan、apply（-auto-approve、-refresh-only）、import <位址> <ID>、state list',
+    ].join('\n') })));
 }

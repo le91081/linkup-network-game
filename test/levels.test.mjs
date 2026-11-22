@@ -3646,6 +3646,53 @@ console.log('\nNETCONF');
   ok(e.ok && /<ok\/>/.test(e.xml) && /interface Loopback100\n description MGMT\n ip address 10\.255\.255\.1 255\.255\.255\.255/.test(rc) && /\nnetconf-yang/.test(rc), '<edit-config>：建立 Loopback100，回 <ok/>；running-config 有 netconf-yang');
 }
 
+console.log('\nTerraform');
+{
+  const sim = await import('../src/engine/sim.js');
+  const { terraform, tfPlan, parseHcl } = await import('../src/engine/terraform.js');
+  const ok = (cond, title) => (cond ? console.log('  ✔ ' + title) : fail(title));
+  const lv = LEVELS.find((x) => x.id === 'l112');
+  const fresh = () => { const s = lv.setup(); settle(s); return s; };
+  const txt = (r) => r.lines.map((l) => l.t).join('\n');
+  const partner = (s) => sim.transact(s, 'inet', { proto: 'tcp', srcIp: parseIp('198.51.100.25'), dst: parseIp('54.199.20.10'), dport: 8443, quiet: true });
+  const s = fresh();
+  const tf = (...a) => terraform(s, 'tf', a);
+  ok(tf('plan').rc === 1 && /terraform init/.test(txt(tf('plan'))), '還沒 init：plan 提示先 terraform init');
+  ok(/successfully initialized/.test(txt(tf('init'))) && s.devices.tf.tf.inited, 'terraform init：經過 R1 的 NAT 連到 registry.terraform.io 下載 provider');
+  const p = txt(tf('plan'));
+  ok(/Objects have changed outside of Terraform/.test(p) && /\+ ingress \{ protocol = "tcp", from_port = 8443, to_port = 8443, cidr_blocks = \["198\.51\.100\.25\/32"\] \}/.test(p), 'plan：列出主控台手動加的規則 (drift)');
+  ok(/Plan: 0 to add, 1 to change, 0 to destroy\./.test(p) && /- ingress \{ protocol = "tcp", from_port = 22, to_port = 22, cidr_blocks = \["0\.0\.0\.0\/0"\] \}/.test(p), 'plan：要把兩條手動規則拿掉（1 to change）');
+  const a = tf('apply');
+  ok(a.ask && /Only 'yes' will be accepted/.test(txt(a)) && s.devices.aws.vpc.sgs.find((g) => g.id === 'sg-0web').in.length === 4, 'apply 沒有 -auto-approve：先問 yes，雲端還沒動');
+  // 直接 apply：合作夥伴的 8443 也被拿掉
+  const s2 = fresh();
+  terraform(s2, 'tf', ['init']);
+  const a2 = terraform(s2, 'tf', ['apply', '-auto-approve']); settle(s2);
+  ok(/Apply complete! Resources: 0 added, 1 changed, 0 destroyed\./.test(txt(a2)) && !partner(s2).ok && /No changes/.test(txt(terraform(s2, 'tf', ['plan']))), '沒看清楚就 apply：合作夥伴的 8443 也被拿掉了（plan 變成 No changes）');
+  // 語法錯誤、不支援的資源
+  s.devices.tf.tf.main = s.devices.tf.tf.main.replace('protocol    = "-1"', 'protocol    = "-1');
+  ok(/Invalid configuration syntax/.test(txt(tf('validate'))) && /on main\.tf line \d+/.test(txt(tf('plan'))), 'main.tf 少了引號：validate / plan 指出第幾行');
+  s.devices.tf.tf.main = 'provider "aws" {\n  region = "ap-northeast-1"\n}\nresource "aws_instance" "x" {\n}\n';
+  ok(/只支援 aws_security_group/.test(txt(tf('validate'))), '不支援的資源類型：明確的錯誤');
+  // import：state 裡沒有，雲端已經有同名的
+  const s3 = fresh();
+  s3.devices.tf.tf.state = {};
+  terraform(s3, 'tf', ['init']);
+  const a3 = terraform(s3, 'tf', ['apply', '-auto-approve']);
+  ok(a3.rc === 1 && /InvalidGroup\.Duplicate/.test(txt(a3)) && /terraform import/.test(txt(a3)), 'state 裡沒有的安全群組：apply 要建立，撞到 InvalidGroup.Duplicate，提示 terraform import');
+  ok(/Import successful/.test(txt(terraform(s3, 'tf', ['import', 'aws_security_group.web', 'sg-0web']))) && /1 to change/.test(txt(terraform(s3, 'tf', ['plan']))), 'terraform import 之後：plan 變成就地修改');
+  // 控制主機連不上網際網路
+  const s4 = fresh();
+  s4.devices.tf.ifaces[0].gateway = ''; settle(s4);
+  const i4 = terraform(s4, 'tf', ['init']);
+  ok(i4.rc === 1 && /could not connect to registry\.terraform\.io/.test(txt(i4)), '控制主機沒有預設閘道：init 連不到 registry.terraform.io');
+  // 解法：補上 8443 再 apply
+  const s5 = fresh();
+  lv.solve(s5); settle(s5);
+  ok(partner(s5).ok && /No changes/.test(txt(terraform(s5, 'tf', ['plan']))) && !tfPlan(s5, s5.devices.tf).drift.length, '補上 8443 再 apply：合作夥伴連得上、plan 是 No changes、state 和雲端一致');
+  ok(parseHcl('terraform {\n  required_providers {\n    aws = { source = "hashicorp/aws", version = "~> 5.0" }\n  }\n}').length === 1, 'HCL：物件值（required_providers）');
+}
+
 console.log('\nNetFlow 與 QoS 的 police');
 {
   const sim = await import('../src/engine/sim.js');

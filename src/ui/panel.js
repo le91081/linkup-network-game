@@ -608,7 +608,7 @@ function baseTabs(dev) {
       dev.web && ['web', '網站', webTab], dev.docker && ['docker', 'Docker', dockerTab],
       (dev.services || []).some((s) => s.proto === 'udp' && s.port === 514) && ['syslog', 'Syslog', M.syslogTab],
       (isTftp(dev) || isFtp(dev)) && ['files', '檔案', OPS.filesTab], dev.nms && ['nms', '網管', OPS.nmsTab], dev.cucm && ['cucm', 'CUCM', V.cucmTab],
-      (dev.apps || []).includes('api') && ['api', 'API', AUTO.apiTab], ((dev.apps || []).includes('ansible') || dev.ansible) && ['ansible', 'Ansible', AUTO.ansibleTab],
+      (dev.apps || []).includes('api') && ['api', 'API', AUTO.apiTab], ((dev.apps || []).includes('ansible') || dev.ansible) && ['ansible', 'Ansible', AUTO.ansibleTab], dev.tf && ['tf', 'Terraform', AUTO.terraformTab],
       ['cap', '封包擷取', DG.captureTab], T.term].filter(Boolean);
     case 'hub': case 'switch': return [T.ports];
     case 'ap': return dev.lwap ? [['lwap', 'AP', W.lwapTab]] : [['ssid', '無線網路', X.ssidTab], ['radio', '無線電', X.radioTab], T.ports];

@@ -229,3 +229,29 @@ test('NETCONF：API 分頁切到 NETCONF，沒有 netconf-yang 時連線被拒�
   await expect(page.locator('#panel .card', { hasText: '回應' })).toContainText('urn:ietf:params:netconf:base:1.1');
   expect(await scan(page, '#panel', 'API 分頁（NETCONF）')).toEqual([]);
 });
+
+test('Terraform：init、plan 列出主控台改過的地方 (drift)，main.tf 補上 8443 之後 apply 回答 yes，plan 變成 No changes', async ({ page }) => {
+  await boot(page);
+  await open(page, 'l112');
+  await clickDevice(page, 'tf');
+  await page.locator('#panel .tab', { hasText: 'Terraform' }).click();
+  const out = page.locator('#panel .ans-out');
+  await page.locator('#panel .tf-bar button', { hasText: 'init' }).click();
+  await expect(out).toContainText('Terraform has been successfully initialized!');
+  await page.locator('#panel .tf-bar button', { hasText: 'plan' }).click();
+  await expect(out).toContainText('Objects have changed outside of Terraform');
+  await expect(out).toContainText('Plan: 0 to add, 1 to change, 0 to destroy.');
+  const ta = page.locator('#panel textarea.ans-edit');
+  const v = await ta.inputValue();
+  await ta.fill(v.replace('  egress {', '  ingress {\n    from_port   = 8443\n    to_port     = 8443\n    protocol    = "tcp"\n    cidr_blocks = ["198.51.100.25/32"]\n  }\n\n  egress {'));
+  await expect(page.locator('#panel .api-lint')).toContainText('HCL 語法正確');
+  await page.locator('#panel .tf-bar button', { hasText: 'apply' }).click();
+  await expect(page.locator('#panel .tf-ask')).toBeVisible();
+  expect(await scan(page, '#panel', 'Terraform 分頁')).toEqual([]);
+  await page.locator('#panel .tf-ask button', { hasText: 'yes' }).click();
+  await expect(out).toContainText('Apply complete! Resources: 0 added, 1 changed, 0 destroyed.');
+  await page.locator('#panel .tf-bar button', { hasText: 'plan' }).click();
+  await expect(out).toContainText('No changes. Your infrastructure matches the configuration.');
+  await page.locator('#panel .seg button', { hasText: 'terraform.tfstate' }).click();
+  await expect(page.locator('#panel textarea.ans-edit')).toHaveValue(/"from_port": 8443/);
+});

@@ -12,7 +12,7 @@ import { counters, onBulk } from '../engine/wire.js';
 import { fortiRun } from './forticli.js';
 import { transact6, dhcp6Trace, duidOf, iaidOf } from '../engine/sim6.js';
 import { parseIp6, fmtIp6 } from '../engine/ip6.js';
-import { isApiCurl, curlApi, ansibleCmd, fileCmd, netconfCmd } from './term-auto.js';
+import { isApiCurl, curlApi, ansibleCmd, fileCmd, netconfCmd, terraformCmd, tfAnswer, tfFileCmd } from './term-auto.js';
 import { dockerCmd } from './term-docker.js';
 import { dockerDeliver } from '../engine/docker.js';
 import { tlsCheck, fmtDate, certSelf, CORP_CA, PUBLIC_CAS } from '../engine/web.js';
@@ -74,8 +74,8 @@ const HELP_LINUX = [
 export function buildTerminal(ctx, body) {
   const { app, dev } = ctx;
   // Ansible 的控制主機跑的是 Linux（Ansible 不能裝在 Windows 上）
-  const linux = !!dev.ansible || !!dev.docker;
-  const PS = linux ? `${dev.ansible ? 'netops' : 'admin'}@${dev.name.replace(/[^\w-]+/g, '-').replace(/^-+|-+$/g, '').toLowerCase() || 'ansible'}:~$` : 'C:\\>';
+  const linux = !!dev.ansible || !!dev.docker || !!dev.tf;
+  const PS = linux ? `${dev.ansible || dev.tf ? 'netops' : 'admin'}@${dev.name.replace(/[^\w-]+/g, '-').replace(/^-+|-+$/g, '').toLowerCase() || 'ansible'}:~$` : 'C:\\>';
   const logs = (app.termLog[dev.id] ||= [{ t: `${dev.name} 終端機 — 輸入 help 查看指令`, c: 'dim' }]);
   const hist = (app.termHist[dev.id] ||= []);
   let hi = hist.length;
@@ -242,6 +242,8 @@ export function buildTerminal(ctx, body) {
 
   const run = async (line) => {
     if (remote()) { remoteInput(line); draw(); return; }
+    // terraform apply 在等 yes / no
+    if (dev.tf && (app.tfAsk || {})[dev.id]) { tfAnswer(app, dev, line, print); ctx.commit(false); draw(); return; }
     print(PS + ' ' + line, 'cmd');
     const parts = line.trim().split(/\s+/);
     const sudo = linux && parts[0] === 'sudo' && parts.length > 1;
@@ -252,6 +254,7 @@ export function buildTerminal(ctx, body) {
       (linux ? HELP_LINUX : HELP).forEach((x) => print(x, 'dim'));
       if ((dev.apps || []).includes('api')) print('  curl -k -u 帳號:密碼 -H "Accept: application/yang-data+json" https://<IP>/restconf/data/…   呼叫 REST API（-X 方法、-d 內容、-i 顯示標頭）', 'dim');
       if ((dev.apps || []).includes('api')) print('  netconf-console2 --host=<IP> --port=830 -u 帳號 -p 密碼 --hello | --get-config   NETCONF（SSH 的 830 埠；edit-config 用 API 分頁）', 'dim');
+      if (dev.tf) { print('  terraform init | validate | plan | apply [-auto-approve]   Terraform（main.tf 也可以在 Terraform 分頁編輯）', 'dim'); print('  terraform import <位址> <ID> · terraform state list · ls / cat main.tf', 'dim'); }
       if (dev.ansible) { print('  ansible-playbook -i inventory.ini <playbook> [--check] [-v] [--limit 主機]   執行 playbook', 'dim'); print('  ls / cat <檔名>          列出 / 顯示控制主機上的檔案', 'dim'); }
       if (dev.docker) {
         print('  docker ps [-a]          列出容器；PORTS 欄是發佈的連接埠（主機:埠->容器埠）', 'dim');
@@ -568,6 +571,11 @@ export function buildTerminal(ctx, body) {
     } else if (c === 'netconf-console2' && ((dev.apps || []).includes('api') || dev.ansible)) {
       netconfCmd(app, dev, line.trim(), print);
       ctx.commit(false);
+    } else if (c === 'terraform' && dev.tf) {
+      terraformCmd(app, dev, line.trim(), print);
+      ctx.commit(false);
+    } else if (dev.tf && ['ls', 'cat', 'less', 'more'].includes(c) && tfFileCmd(dev, c, args, print)) {
+      // Terraform 控制主機上的檔案
     } else if (c === 'ansible-playbook' && dev.ansible) {
       ansibleCmd(app, dev, line.trim(), print);
       ctx.commit(false);
@@ -804,7 +812,7 @@ export function buildTerminal(ctx, body) {
   // 提示字元跟著目前的狀態變：本機、等待輸入密碼，或已經登入對方的命令列
   drawPrompt = () => {
     const r = remote();
-    promptEl.textContent = !r ? PS : r.stage === 'key' ? '(yes/no)?' : r.stage === 'user' ? 'Username:' : r.stage === 'pass' ? 'Password:' : r.sess.prompt();
+    promptEl.textContent = !r ? ((app.tfAsk || {})[dev.id] ? '  Enter a value:' : PS) : r.stage === 'key' ? '(yes/no)?' : r.stage === 'user' ? 'Username:' : r.stage === 'pass' ? 'Password:' : r.sess.prompt();
     input.type = r && r.stage === 'pass' ? 'password' : 'text';
     input.placeholder = r ? '' : 'ping 192.168.1.1';
   };
@@ -816,7 +824,7 @@ export function buildTerminal(ctx, body) {
     if (!a.ok) { lost(r, a); draw(); return; }
     if ((r.kind !== 'ios' || r.monitor) && consoleFollow(app, r.conn.to, 'vty:' + r.conn.cid, print)) draw();
   });
-  const chips = dev.docker ? ['docker ps -a', 'docker port web', 'curl http://localhost:8080', 'ip addr', 'help'] : linux ? ['ls', 'cat inventory.ini', `ansible-playbook -i inventory.ini ${dev.ansible.file}`, `ansible-playbook -i inventory.ini ${dev.ansible.file} --check -v`, 'help']
+  const chips = dev.docker ? ['docker ps -a', 'docker port web', 'curl http://localhost:8080', 'ip addr', 'help'] : dev.tf ? ['ls', 'cat main.tf', 'terraform init', 'terraform plan', 'terraform apply', 'help'] : linux ? ['ls', 'cat inventory.ini', `ansible-playbook -i inventory.ini ${dev.ansible.file}`, `ansible-playbook -i inventory.ini ${dev.ansible.file} --check -v`, 'help']
     : ['ipconfig', 'ping 8.8.8.8', 'tracert 8.8.8.8', 'nslookup www.example.com', 'arp -a', 'help'];
   body.append(term, h('div', { class: 'chips' }, chips.map((x) =>
     h('button', { class: 'chip btnchip', type: 'button', title: x, onclick: () => { hist.push(x); hi = hist.length; run(x); } }, h('span', { class: 'ell', text: x })))));
