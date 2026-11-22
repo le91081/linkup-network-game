@@ -4330,6 +4330,33 @@ console.log('\nFortiGate 的應用程式控管與 IPS');
     && t.indexOf('config ips sensor') < t.indexOf('config firewall policy') && /set application-list "corp-app"/.test(t) && /set ips-sensor "watch"/.test(t), 'show：application list、ips sensor 印在政策前面');
 }
 
+console.log('\nQSFP28 的 breakout');
+{
+  const { iosSession, runningConfig } = await import('../src/engine/ios.js');
+  const { addCable, linkInfo } = await import('../src/engine/model.js');
+  const sim = await import('../src/engine/sim.js');
+  const ok = (cond, title) => (cond ? console.log('  ✔ ' + title) : fail(title));
+  const lv = LEVELS.find((x) => x.id === 'l128');
+  const s = lv.setup(); settle(s);
+  const tor = s.devices.tor;
+  const cli = (lines) => { const S = iosSession(() => s.devices.tor, () => s); const o = []; for (const l of lines) o.push(...S.exec(l).out); settle(s); return o.join('\n'); };
+  ok(tor.ports.some((p) => p.id === 'Eth1/32/1') && !tor.ports.some((p) => p.id === 'Eth1/32') && linkInfo(s, 'store', 'eth0').speed === 25000, '開場：Eth1/32 已經拆成 4 × 25G，儲存伺服器跑 25G');
+  ok(/接頭規格不同.*breakout/.test(addCable(s, 'gpu1', 'eth0', 'tor', 'Eth1/1')), 'SFP28 接 QSFP28：接頭不合，提示可以 breakout');
+  ok(/這台只有 module 1/.test(cli(['configure terminal', 'interface breakout module 2 port 1 map 25g-4x', 'end'])), '只有 module 1');
+  ok(/map 要是/.test(cli(['configure terminal', 'interface breakout module 1 port 1 map 50g-2x', 'end'])), '不認得的 map');
+  cli(['configure terminal', 'interface breakout module 1 port 1 map 10g-4x', 'end']);
+  ok(tor.ports.filter((p) => p.parent === 'Eth1/1').length === 4 && tor.ports.findIndex((p) => p.id === 'Eth1/1/1') === 0, 'breakout：Eth1/1 變成 Eth1/1/1 – 1/1/4，留在原本的位置');
+  addCable(s, 'gpu1', 'eth0', 'tor', 'Eth1/1/1'); settle(s);
+  ok(linkInfo(s, 'gpu1', 'eth0').speed === 10000 && /只跑 10 Gbps/.test(lv.objectives[2].test(s)), '10g-4x：連得上，但只有 10G');
+  ok(/還接著線/.test(cli(['configure terminal', 'no interface breakout module 1 port 1 map 10g-4x', 'end'])), '子埠還接著線：不能合回去');
+  s.cables = s.cables.filter((c) => !(c.a.dev === 'gpu1' || c.b.dev === 'gpu1')); settle(s);
+  cli(['configure terminal', 'no interface breakout module 1 port 1 map 10g-4x', 'interface breakout module 1 port 1 map 25g-4x', 'interface ethernet1/1/2', 'description GPU-2', 'end']);
+  addCable(s, 'gpu1', 'eth0', 'tor', 'Eth1/1/1'); addCable(s, 'gpu2', 'eth0', 'tor', 'Eth1/1/2'); settle(s);
+  ok(lv.objectives.every((o) => (o.type === 'check' ? o.test(s) === true : sim.runObjective(s, o).pass)), '25g-4x：兩台 GPU 伺服器都跑 25G、連得到儲存伺服器');
+  const rc = runningConfig(s, tor).join('\n');
+  ok(/^interface breakout module 1 port 1 map 25g-4x$/m.test(rc) && /^interface breakout module 1 port 32 map 25g-4x$/m.test(rc) && rc.indexOf('interface breakout') < rc.indexOf('interface Ethernet1/1/2') && /interface Ethernet1\/1\/2\n\s+description GPU-2/.test(rc), 'running-config：breakout 印在 interface 前面，子埠的設定照常');
+}
+
 console.log('\nNetFlow 與 QoS 的 police');
 {
   const sim = await import('../src/engine/sim.js');

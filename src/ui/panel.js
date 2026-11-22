@@ -8,6 +8,7 @@ import { utmTab, policyUtmFields } from './panel-utm.js';
 import { powerTab } from './panel-power.js';
 import { consoleTab, remoteOnlyInfo, needsConsole } from './panel-console.js';
 import { hasPsuSlots } from '../engine/power.js';
+import { breakoutCard } from './panel-breakout.js';
 import { ZONE, sdwanOn } from '../engine/sdwan.js';
 import * as CL from './panel-cloud.js';
 import * as W from './panel-wlc.js';
@@ -263,7 +264,7 @@ function swPorts(ctx, body) {
       !routed && open && X.portAdvanced(ctx, p, pc)));
   }
   body.append(DG.spanCard(ctx));
-  for (const c of [V.poeCard(ctx), V.mlsQosCard(ctx), switchMtuCard(ctx)]) if (c) body.append(c);
+  for (const c of [V.poeCard(ctx), V.mlsQosCard(ctx), switchMtuCard(ctx), breakoutCard(ctx)]) if (c) body.append(c);
 }
 
 function swVlans(ctx, body) {

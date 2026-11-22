@@ -597,3 +597,22 @@ test('應用程式控管與 IPS：安全設定檔分頁建立清單與感測器�
   expect(await page.evaluate(() => { const p = window.linkup.state.devices.fg.policies; return [p[0].utm, p[0].app, p[1].utm, p[1].ips].join(); })).toBe('true,corp-app,true,protect-web');
   expect(await scan(page, '#panel', 'FortiGate 的政策（應用程式控管、IPS）')).toEqual([]);
 });
+
+test('breakout：連接埠分頁把 Eth1/1 拆成 4 × 25G，GPU 伺服器接上子埠，running-config 有 interface breakout', async ({ page }) => {
+  await boot(page);
+  await open(page, 'l128');
+  await clickDevice(page, 'tor');
+  await page.locator('#panel .tab', { hasText: '連接埠' }).click();
+  const row = page.locator('#panel .card.breakout label.field').filter({ has: page.locator('.f-label', { hasText: /^Eth1\/1$/ }) });
+  await row.locator('select').selectOption('25g-4x');
+  await expect(page.locator('#panel .card.breakout')).toContainText('2 個埠已拆開');
+  expect(await scan(page, '#panel', 'Nexus 的連接埠分頁（breakout）')).toEqual([]);
+  await page.evaluate(() => { window.linkup.connect('gpu1', 'eth0', 'tor', 'Eth1/1/1'); window.linkup.connect('gpu2', 'eth0', 'tor', 'Eth1/1/2'); });
+  await page.locator('#panel .tab', { hasText: 'CLI' }).click();
+  await typeCmd(page, 'show running-config');
+  await expect(page.locator('#panel .term-out')).toContainText('interface breakout module 1 port 1 map 25g-4x');
+  await clickDevice(page, 'gpu1');
+  await page.locator('#panel .tab', { hasText: '終端機' }).click();
+  await typeCmd(page, 'ping 10.0.0.50');
+  await expect(page.locator('#panel .term-out')).toContainText('回覆自 10.0.0.50');
+});

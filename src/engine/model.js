@@ -390,7 +390,7 @@ export function addCable(state, aDev, aPort, bDev, bPort, kind) {
   if (aDev === bDev) return '不能把線接回同一台設備';
   const pa = portOf(A, aPort), pb = portOf(B, bPort);
   if (!pa || !pb) return '找不到連接埠';
-  if (pa.media !== pb.media) return `接頭規格不同（${MEDIA[pa.media].name} ↔ ${MEDIA[pb.media].name}）`;
+  if (pa.media !== pb.media) return `接頭規格不同（${MEDIA[pa.media].name} ↔ ${MEDIA[pb.media].name}）${[pa.media, pb.media].sort().join() === 'qsfp,sfp' ? '。QSFP28 的埠可以用 breakout 拆成 4 個 25G / 10G 的子埠（Nexus：interface breakout module 1 port <n> map 25g-4x），再用分歧線接 SFP28' : ''}`;
   if (cableAt(state, aDev, aPort)) return `${A.name} 的 ${pa.label} 已經插了線`;
   if (cableAt(state, bDev, bPort)) return `${B.name} 的 ${pb.label} 已經插了線`;
   const k = kind && CABLES[kind] && CABLES[kind].media.includes(pa.media) ? kind : pa.media === 'rj45' ? 'cat6' : pa.media === 'virt' ? 'virtual' : 'dac';
@@ -425,7 +425,7 @@ export const isIp = (s) => parseIp(s) != null;
 // ── 連接埠速率 ──
 const MEDIA_SPEED = { rj45: 1000, sfp: 10000, qsfp: 100000, virt: 10000 };
 const SFP_SPEED = { rack1u: 25000, esxi: 25000, n93180: 25000, c2960: 1000, c2960p: 1000 };
-export const portSpeed = (dev, p) => (dev.kind === 'hub' ? 10 : p.media === 'sfp' ? SFP_SPEED[dev.model] || 10000 : MEDIA_SPEED[p.media]);
+export const portSpeed = (dev, p) => (p.speed ? p.speed : dev.kind === 'hub' ? 10 : p.media === 'sfp' ? SFP_SPEED[dev.model] || 10000 : MEDIA_SPEED[p.media]); // breakout 拆出來的子埠有自己的速率
 export const fmtSpeed = (m) => (m >= 1000 ? m / 1000 + ' Gbps' : m + ' Mbps');
 /** 連接埠手動設定的速率與雙工（沒設定就是 null，代表自動協商）。交換器的設定在埠上，路由器在介面上 */
 export function phyConfig(dev, pid) {
@@ -465,6 +465,8 @@ export function linkInfo(state, devId, pid) {
   if (!peer) return null;
   const A = state.devices[devId], B = state.devices[peer.dev];
   const pa = portOf(A, pid), pb = portOf(B, peer.port);
+  // 線接著的埠不存在了（例如 breakout 合回去、設定還沒貼上）：沒有燈號
+  if (!pa || !pb) return { down: `${!pa ? A.name : B.name} 上沒有 ${!pa ? pid : peer.port} 這個連接埠` };
   const max0 = Math.min(portSpeed(A, pa), portSpeed(B, pb));
   // 網路線有線對斷了：1000BASE-T 要四對線都正常，只剩兩對能用的時候自動降到 100 Mbps (speed downshift)
   const cab = state.cables.find((x) => x.id === peer.cable);

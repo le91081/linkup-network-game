@@ -21,6 +21,7 @@ import { fhrpProto, fhrpGroup, fhrpPreempt } from './track.js';
 import { archiveNow, archiveLines, cfgLog, cfgDiff, ARCH_MAX_DEFAULT } from './archive.js';
 import { vtpCapable, vtpOf, vtpSet } from './vtp.js';
 import { ZBF_PROTO, newZbf, zbfConfigLines } from './zbf.js';
+import { breakoutPort, unbreakoutPort, breakoutLines, BREAKOUT_MAPS } from './breakout.js';
 
 // ───────────────────────── running-config 與 startup-config ─────────────────────────
 // IOS 設備改的是記憶體裡的 running-config；要下 write memory 才會存進 startup-config。
@@ -1356,6 +1357,21 @@ export function iosSession(getDev, getState, who = null) {
     ['no lldp timer', () => { if (dev().lldp) delete dev().lldp.timer; tidy(dev(), 'lldp'); }],
     ['lldp holdtime <n>', ([n]) => (+n >= 0 && +n <= 65535 ? void ((dev().lldp ||= {}).hold = +n === LLDP_HOLD ? undefined : +n, tidy(dev(), 'lldp')) : err('LLDP holdtime 的範圍是 0 – 65535 秒'))],
     ['no lldp holdtime', () => { if (dev().lldp) delete dev().lldp.hold; tidy(dev(), 'lldp'); }],
+    // Nexus：QSFP 埠拆成 4 個子埠（要放在 interface <名稱> 前面先比對）
+    ['interface breakout module <m> port <n> map <map>', ([m, n, map]) => {
+      const d = dev();
+      if (!isNexus(d)) return err('interface breakout 是 NX-OS 的指令（Nexus 的 QSFP 埠）');
+      if (m !== '1') return err('這台只有 module 1');
+      if (!BREAKOUT_MAPS[map.toLowerCase()]) return err(`map 要是 ${Object.keys(BREAKOUT_MAPS).join(' 或 ')}`);
+      const e = breakoutPort(getState(), d, 'Eth1/' + n, map.toLowerCase());
+      return e ? err(e) : undefined;
+    }],
+    ['no interface breakout module <m> port <n> [...]', ([m, n]) => {
+      const d = dev();
+      if (!isNexus(d)) return err('interface breakout 是 NX-OS 的指令');
+      const e = unbreakoutPort(getState(), d, 'Eth1/' + n);
+      return e ? err(e) : undefined;
+    }],
     ['interface range <...>', ([text]) => { const r = resolveRange(dev(), text); if (isErr(r)) return r; enter('if', r); return undefined; }],
     ['interface <...>', ([text]) => { const r = resolveIf(dev(), text); if (isErr(r)) return r; enter('if', [r]); return undefined; }],
     ['no interface <...>', ([text]) => {
@@ -4009,6 +4025,7 @@ export function runningConfig(state, dev) {
   }
   if (isSw(dev)) {
     const sw = dev.sw;
+    if (isNexus(dev) && dev.breakout) o.push(...breakoutLines(dev), '!');
     // VTP：真的 IOS 把這些存在 vlan.dat，這裡為了貼回設定方便印在 running-config；client 的 VLAN 由 server 同步，不印
     const vt = vtpCapable(dev) ? vtpOf(dev) : null;
     if (vt && (vt.domain || vt.mode !== 'server' || vt.pass || vt.ver !== 1)) o.push(...(vt.domain ? [`vtp domain ${vt.domain}`] : []), ...(vt.mode !== 'server' ? [`vtp mode ${vt.mode}`] : []), ...(vt.ver !== 1 ? [`vtp version ${vt.ver}`] : []), ...(vt.pass ? [`vtp password ${vt.pass}`] : []), '!');
