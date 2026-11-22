@@ -34,6 +34,7 @@ import { LEVELS29 } from './certvpn.js';
 import { LEVELS30 } from './eaptls.js';
 import { LEVELS31 } from './nolabel.js';
 import { LEVELS32 } from './wifi2.js';
+import { LEVELS33 } from './wlc2.js';
 import { isCiscoOs } from '../engine/files.js';
 
 export const CHAPTERS = [
@@ -648,7 +649,7 @@ export const LEVELS = [
 ];
 
 CHAPTERS.push(...CHAPTERS2, ...CHAPTERS3, ...CHAPTERS4, ...CHAPTERS5, ...CHAPTERS6, ...CHAPTERS7, ...CHAPTERS8, ...CHAPTERS9, ...CHAPTERS10, ...CHAPTERS11);
-LEVELS.push(...LEVELS2, ...LEVELS3, ...LEVELS4, ...LEVELS5, ...LEVELS6, ...LEVELS7, ...LEVELS8, ...LEVELS9, ...LEVELS10, ...LEVELS11, ...LEVELS12, ...LEVELS13, ...LEVELS14, ...LEVELS15, ...LEVELS16, ...LEVELS17, ...LEVELS18, ...LEVELS19, ...LEVELS20, ...LEVELS21, ...LEVELS22, ...LEVELS23, ...LEVELS24, ...LEVELS25, ...LEVELS26, ...LEVELS27, ...LEVELS28, ...LEVELS29, ...LEVELS30, ...LEVELS31, ...LEVELS32);
+LEVELS.push(...LEVELS2, ...LEVELS3, ...LEVELS4, ...LEVELS5, ...LEVELS6, ...LEVELS7, ...LEVELS8, ...LEVELS9, ...LEVELS10, ...LEVELS11, ...LEVELS12, ...LEVELS13, ...LEVELS14, ...LEVELS15, ...LEVELS16, ...LEVELS17, ...LEVELS18, ...LEVELS19, ...LEVELS20, ...LEVELS21, ...LEVELS22, ...LEVELS23, ...LEVELS24, ...LEVELS25, ...LEVELS26, ...LEVELS27, ...LEVELS28, ...LEVELS29, ...LEVELS30, ...LEVELS31, ...LEVELS32, ...LEVELS33);
 LEVELS.sort((a, b) => a.chapter - b.chapter); // 穩定排序：補充關卡排到所屬章節的最後
 
 // 關卡裡的交換器都由「前任管理員」下過 spanning-tree portfast default：接終端設備的埠一連上就開始轉送。

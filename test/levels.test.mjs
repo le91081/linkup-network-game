@@ -3552,6 +3552,27 @@ console.log('\n6 GHz (Wi-Fi 6E)');
   ok(a('nbNew') && a('nbNew').band === '5GHz', '6 GHz 傳得比較近：離 AP 6 公尺，5 GHz 還收得到、6 GHz 就退回 5 GHz');
 }
 
+console.log('\n無線控制器 N+1');
+{
+  const sim = await import('../src/engine/sim.js');
+  const ok = (cond, title) => (cond ? console.log('  ✔ ' + title) : fail(title));
+  const lv = LEVELS.find((x) => x.id === 'l106');
+  const s = lv.setup(); settle(s);
+  const cw = (id) => s.devices[id].rt.capwap || {};
+  s.devices.ap1.lwap.secondary = '10.10.10.6'; settle(s);
+  ok(cw('ap1').wlc === 'wlc2' && cw('ap2').wlc === 'wlc1', '只填次要控制器：AP 先試手動指定的，平常就跑到 WLC-2');
+  lv.solve(s); settle(s);
+  ok(cw('ap1').wlc === 'wlc1' && cw('ap2').wlc === 'wlc1', '主要 10.10.10.5、次要 10.10.10.6：平常在 WLC-1');
+  s.down = { wlc1: true }; sim.recompute(s);
+  ok(!cw('ap1').joined && /heartbeat 逾時/.test(s.dyn.capwap.ap1.why || '') || /正在加入 WLC-2/.test(cw('ap1').why || ''), 'WLC-1 關機：AP 要等 heartbeat 逾時才去加入 WLC-2');
+  sim.advance(s, 40);
+  ok(!cw('ap1').joined, '40 秒後還在切換（heartbeat 30 秒 + 加入 25 秒）');
+  sim.advance(s, 20);
+  ok(cw('ap1').joined && cw('ap1').wlc === 'wlc2' && sim.runObjective(s, { type: 'tcp', from: 'nb1', ip: '10.10.40.10', port: 443 }).pass, '大約一分鐘後加入 WLC-2，筆電照樣開得了檔案伺服器');
+  delete s.down; settle(s, 900);
+  ok(cw('ap1').wlc === 'wlc1', 'WLC-1 開機回來（9800 要六分鐘）：AP 自己切回主要控制器 (AP fallback)');
+}
+
 console.log('\nNetFlow 與 QoS 的 police');
 {
   const sim = await import('../src/engine/sim.js');

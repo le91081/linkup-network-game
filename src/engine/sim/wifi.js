@@ -78,7 +78,7 @@ export function rfAt(state, ap, pos) {
   return { dist, rssi24: r24, rssi5: r5, rssi6: r6, band, rssi: band === '5GHz' ? r5 : r24, walls: w.walls, db: band === '5GHz' ? w.db5 : w.db24 };
 }
 // ── 無線控制器 (WLC) 與輕量型 AP ──
-// 輕量型 AP (d.lwap = { mode: 'local' | 'flex', primary }) 自己沒有 SSID：拿到 IP 之後找 WLC（手動指定、DHCP option 43、
+// 輕量型 AP (d.lwap = { mode: 'local' | 'flex', primary, secondary }) 自己沒有 SSID：拿到 IP 之後找 WLC（手動指定、DHCP option 43、
 // 同一個網段的廣播），CAPWAP (UDP 5246) 通了之後約 25 秒加入，WLC 才把 WLAN 推給它。
 // Local 模式：用戶端的流量包在 CAPWAP 裡回到 WLC，從 WLC 的 Trunk 放進 WLAN 對應的 VLAN；
 // FlexConnect：在 AP 自己的交換器埠就地放進 VLAN（AP 的埠要是 Trunk），WLC 斷線時本地交換的 WLAN 照樣服務。
@@ -268,6 +268,8 @@ export function capwapTick(state) {
       // 找 WLC：手動指定的主要控制器 > DHCP option 43 > 同一個網段的廣播 (CAPWAP Discovery)
       const cands = [];
       if (parseIp(ap.lwap.primary || '') != null) cands.push({ ip: parseIp(ap.lwap.primary), how: '手動指定的主要控制器' });
+      // N+1：主要控制器不在了，就加入次要控制器；主要的回來之後 AP 會自己切回去 (AP fallback)
+      if (parseIp(ap.lwap.secondary || '') != null) cands.push({ ip: parseIp(ap.lwap.secondary), how: '手動指定的次要控制器' });
       for (const ip of mi.rt.wlc || []) cands.push({ ip, how: 'DHCP option 43' });
       for (const e of l2Explore(state, ap.id, mi)) {
         const x = state.devices[e.dev];
@@ -283,7 +285,12 @@ export function capwapTick(state) {
       if (!cands.length) fail(`找不到無線控制器：AP 在 ${fmtIp(netOf(mi.rt.ip, mi.rt.bits))}/${mi.rt.bits}，這個網段上沒有 WLC，DHCP 也沒有提供 option 43`);
       else if (!got) fail(why);
       else {
-        if (rec.wlc !== got.w.id) { if (rec.joined) fail('換到另一台控制器'); rec.wlc = got.w.id; rec.since = state.dyn.boot ? -1e9 : now; }
+        if (rec.wlc !== got.w.id) {
+          // 原本的控制器突然不在了：AP 要等 heartbeat 逾時（約 30 秒）才發現，再去加入下一台
+          const prev = rec.wlc && state.devices[rec.wlc], gone = rec.joined && prev && ((state.down || {})[prev.id] || state.rt.off[prev.id]);
+          if (rec.joined) fail(gone ? `${prev.name} 沒有回應（heartbeat 逾時）` : '換到另一台控制器');
+          rec.wlc = got.w.id; rec.since = state.dyn.boot ? -1e9 : now + (gone ? 30 : 0);
+        }
         rec.how = got.how;
         rec.path = got.hops.map((h) => ({ cable: h.cable, from: h.from, to: h.to, fromPort: h.fromPort, toPort: h.toPort, tag: h.tag ?? null, wifi: !!h.wifi }));
         const ready = rec.since + CAPWAP_JOIN;

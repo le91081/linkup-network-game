@@ -137,3 +137,19 @@ test('Wi-Fi 6E：WPA2 的 SSID 不在 6 GHz 廣播，改成混合模式後新筆
   expect(await page.evaluate(() => ['nbNew', 'prn'].map((id) => (window.linkup.state.devices[id].ifaces.map((i) => i.rt.assoc).find(Boolean) || {}).band))).toEqual(['6GHz', '5GHz']);
   expect(await scan(page, '#panel', 'SSID 卡片（6 GHz）')).toEqual([]);
 });
+
+test('控制器 N+1：AP 分頁可以填次要控制器，平常仍在 WLC-1', async ({ page }) => {
+  await boot(page);
+  await open(page, 'l106');
+  await clickDevice(page, 'ap1');
+  const card = page.locator('#panel .card', { hasText: '次要控制器' });
+  await expect(card).toContainText('已加入 WLC-1');
+  await card.locator('label', { hasText: '主要控制器' }).locator('input').fill('10.10.10.5');
+  await card.locator('label', { hasText: '主要控制器' }).locator('input').press('Enter');
+  await card.locator('label', { hasText: '次要控制器' }).locator('input').fill('10.10.10.6');
+  await card.locator('label', { hasText: '次要控制器' }).locator('input').press('Enter');
+  await page.evaluate(() => window.linkup.settleNow());
+  expect(await page.evaluate(() => ({ ...window.linkup.state.devices.ap1.lwap }))).toMatchObject({ primary: '10.10.10.5', secondary: '10.10.10.6' });
+  expect(await page.evaluate(() => window.linkup.state.devices.ap1.rt.capwap.wlc)).toBe('wlc1');
+  expect(await scan(page, '#panel', 'AP 分頁（N+1）')).toEqual([]);
+});

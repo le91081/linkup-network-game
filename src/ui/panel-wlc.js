@@ -118,7 +118,8 @@ export function lwapTab(ctx, body) {
   }),
   grid2(
     field('模式', sel(ctx, () => L.mode || 'local', (v) => { L.mode = v; }, MODE, { rerender: true })),
-    field('主要控制器（選填）', inp(ctx, ...bind(L, 'primary'), { ph: '留空＝用 option 43 或廣播找', check: (v) => parseIp(v) != null }))),
+    field('主要控制器（選填）', inp(ctx, ...bind(L, 'primary'), { ph: '留空＝用 option 43 或廣播找', check: (v) => parseIp(v) != null })),
+    field('次要控制器（N+1，選填）', inp(ctx, ...bind(L, 'secondary'), { ph: '主要控制器不在時加入', check: (v) => parseIp(v) != null }))),
   note('muted', L.mode === 'flex'
     ? 'FlexConnect：用戶端的流量在 AP 的交換器埠就地放進 WLAN 的 VLAN，所以 AP 接的埠要是 Trunk（Native VLAN 是 AP 自己的管理 VLAN）。控制器斷線時，本地交換的 WLAN 照樣服務。'
     : 'Local：所有用戶端的流量都包在 CAPWAP 裡送回控制器，AP 接的埠是一般的 Access 埠。控制器斷線，用戶端也跟著斷線。')),
