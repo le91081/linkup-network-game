@@ -10,8 +10,9 @@ import { parseDscp, dscpName, COS_DSCP_DEFAULT } from './qos.js';
 import { clearOspfProcess, clearOspfAll, ospfArea, ospfProc, ospfKeys, ospfProcs } from './ospf.js';
 import { parseComm } from './bgp.js';
 import { transfer, configFile, ensureFlash, flashFree, flashPath, fsName, IMAGES, PLATFORM, PLATFORM_NAME, imageFile, fmtBytes } from './files.js';
-import { macsBehind, recompute, ospfOn, ikeVer, isTun, tunMode } from './sim.js';
-import { logEvent, markReboot, setClock, deviceTime, SEVERITY, bootTime, longIf, localUsers } from './ops.js';
+import { macsBehind, recompute, ospfOn, ikeVer, isTun, tunMode, transact } from './sim.js';
+import { tpOf, urlTarget, caCert, validityError, issue, certHex, hexCert } from './pki.js';
+import { logEvent, markReboot, setClock, deviceTime, SEVERITY, bootTime, longIf, localUsers, iosClock } from './ops.js';
 import { isNexus, isCat2960, isCat9300, ICMP_TYPES } from './mtu.js';
 import { spanDest } from './wire.js';
 import { genKey } from './remote.js';
@@ -99,7 +100,7 @@ const TYPES = { gi: 'gigabitethernet', te: 'tengigabitethernet', fa: 'fastethern
 const PROMPT = {
   exec: '#', config: '(config)#', if: '(config-if)#', vlan: '(config-vlan)#', raguard: '(config-ra-guard)#', router: '(config-router)#', dhcp: '(dhcp-config)#',
   line: '(config-line)#', acl: '(config-ext-nacl)#', stdacl: '(config-std-nacl)#', radius: '(config-radius-server)#',
-  isakmp: '(config-isakmp)#', tset: '(cfg-crypto-trans)#', cmap: '(config-crypto-map)#', ipsecprof: '(ipsec-profile)#', flowrec: '(config-flow-record)#', flowexp: '(config-flow-exporter)#', flowmon: '(config-flow-monitor)#',
+  isakmp: '(config-isakmp)#', tset: '(cfg-crypto-trans)#', cmap: '(config-crypto-map)#', ipsecprof: '(ipsec-profile)#', flowrec: '(config-flow-record)#', flowexp: '(config-flow-exporter)#', flowmon: '(config-flow-monitor)#', pkitp: '(ca-trustpoint)#', pkichain: '(config-cert-chain)#', pkicert: '(config-pubkey)#',
   ikev2prop: '(config-ikev2-proposal)#', ikev2pol: '(config-ikev2-policy)#', ikev2kr: '(config-ikev2-keyring)#', ikev2peer: '(config-ikev2-keyring-peer)#', ikev2prof: '(config-ikev2-profile)#', track: '(config-track)#', vrfdef: '(config-vrf)#', vrfaf: '(config-vrf-af)#', ipvrf: '(config-vrf)#', archive: '(config-archive)#', archlog: '(config-archive-log-cfg)#', ipsla: '(config-ip-sla)#', slaecho: '(config-ip-sla-echo)#', bgp: '(config-router)#', rmap: '(config-route-map)#', qcmap: '(config-cmap)#', pmap: '(config-pmap)#', pmapc: '(config-pmap-c)#',
 };
 const SERVICE_PORT = { www: 80, http: 80, https: 443, domain: 53, dns: 53, ssh: 22, telnet: 23, ftp: 21, smtp: 25, ntp: 123, snmp: 161, snmptrap: 162, tftp: 69, bgp: 179, syslog: 514, isakmp: 500, bootps: 67, bootpc: 68, 'non500-isakmp': 4500 };
@@ -465,7 +466,8 @@ const HELP = {
   ikev2pol: ['proposal <名稱>'],
   ikev2kr: ['peer <名稱>'],
   ikev2peer: ['address <對端 IP>', 'pre-shared-key <金鑰>', 'pre-shared-key local <金鑰> / pre-shared-key remote <金鑰>'],
-  ikev2prof: ['match identity remote address <對端 IP> 255.255.255.255', 'authentication remote pre-share', 'authentication local pre-share', 'keyring local <名稱>'],
+  ikev2prof: ['match identity remote address <對端 IP> 255.255.255.255 | fqdn domain <網域>', 'identity local address <IP> | fqdn <名稱>', 'match identity remote any', 'authentication remote pre-share | rsa-sig', 'authentication local pre-share | rsa-sig', 'keyring local <名稱>', 'pki trustpoint <名稱>'],
+  pkitp: ['enrollment url http://<CA 的 IP>[:埠][/路徑]', 'subject-name CN=<名稱>', 'revocation-check none | crl | crl none', 'rsakeypair <名稱>', 'fqdn <名稱>', 'serial-number none', 'ip-address none'],
   qcmap: ['match dscp ef | af41 | cs3 | <0-63>', 'match access-group name <ACL>', 'match protocol rtp | sip', 'match cos <0-7>', 'match any'],
   pmap: ['class <class-map 名稱> | class class-default'],
   pmapc: ['priority percent <n> | priority <kbps>（LLQ：語音用）', 'bandwidth percent <n> | bandwidth remaining percent <n>', 'set dscp <值>', 'police cir <bps>', 'shape average <bps>', 'service-policy <子政策>（parent 做 shape、child 排隊）', 'fair-queue', 'queue-limit <n> packets'],
@@ -2185,6 +2187,20 @@ export function iosSession(getDev, getState, who = null) {
     ['no crypto ikev2 policy <name>', ([n]) => { const v = v2of(); if (v) delete v.pols[n]; }],
     ['crypto ikev2 keyring <name>', ([n]) => { const v = v2of(); if (!v) return err('這台設備不支援 IPsec VPN'); v.krs[n] ||= { peers: {} }; enter('ikev2kr', n); return undefined; }],
     ['no crypto ikev2 keyring <name>', ([n]) => { const v = v2of(); if (v) delete v.krs[n]; }],
+    // ── PKI：trustpoint、向 CA 取得根憑證 (authenticate)、申請自己的憑證 (enroll) ──
+    ['crypto pki trustpoint <name>', ([n]) => { if (dev().kind !== 'router') return err('這個模擬只有路由器支援 PKI'); ((dev().pki ||= { tps: {} }).tps ||= {})[n] ||= { revoke: 'crl' }; enter('pkitp', n); return undefined; }],
+    ['no crypto pki trustpoint <name>', ([n]) => ({ delegate: (o) => {
+      const tp = tpOf(dev(), n);
+      if (!tp) { o.push(`% Trustpoint ${n} not found`); return { out: o, changed: false }; }
+      const drop = (o2) => { delete dev().pki.tps[n]; return { out: o2, changed: true }; };
+      if (!tp.ca && !tp.cert) return drop(o);
+      o.push('% Removing an enrolled trustpoint will destroy all certificates', 'received from the related Certificate Authority.', '', 'Are you sure you want to do this? [yes/no]: ');
+      S.pending = { fn: (ans, o2) => { S.pending = null; if (!/^y/i.test(ans)) return { out: o2, changed: false }; o2.push('% Be sure to ask the CA administrator to revoke your certificates.'); return drop(o2); } };
+      return { out: o, changed: false };
+    } })],
+    ['crypto pki authenticate <name>', ([n]) => ({ delegate: (o) => pkiAuthenticate(n, o) })],
+    ['crypto pki enroll <name>', ([n]) => ({ delegate: (o) => pkiEnroll(n, o) })],
+    ['crypto pki certificate chain <name>', ([n]) => { if (!tpOf(dev(), n)) return err(`% Trustpoint ${n} not found（先用 crypto pki trustpoint ${n} 建立）`); enter('pkichain', n); return undefined; }],
     ['crypto ikev2 profile <name>', ([n]) => { const v = v2of(); if (!v) return err('這台設備不支援 IPsec VPN'); v.profs[n] ||= {}; enter('ikev2prof', n); return undefined; }],
     ['no crypto ikev2 profile <name>', ([n]) => {
       const v = v2of();
@@ -2628,6 +2644,35 @@ export function iosSession(getDev, getState, who = null) {
       if (ts) { if (/^transport$/i.test(m)) ts.mode = 'transport'; else delete ts.mode; }
       return undefined;
     }]],
+    pkitp: [
+      ['enrollment url <url>', ([u]) => (urlTarget(u) ? void (dev().pki.tps[S.cur].url = u) : err('用法：enrollment url http://<CA 的 IP>[:埠][/路徑]'))],
+      ['no enrollment url [...]', () => { delete dev().pki.tps[S.cur].url; }],
+      ['enrollment <...>', () => err('這個模擬只支援 enrollment url（SCEP）')],
+      ['subject-name <...>', ([x]) => { dev().pki.tps[S.cur].subject = x; }],
+      ['no subject-name [...]', () => { delete dev().pki.tps[S.cur].subject; }],
+      ['revocation-check <...>', ([x]) => { const w = x.toLowerCase().split(' ').filter(Boolean); if (!w.length || !w.every((y) => y === 'none' || y === 'crl')) return err('用法：revocation-check none | crl | crl none'); dev().pki.tps[S.cur].revoke = w.join(' '); return undefined; }],
+      ['no revocation-check [...]', () => { dev().pki.tps[S.cur].revoke = 'crl'; }],
+      ['rsakeypair <name> [...]', ([n]) => { dev().pki.tps[S.cur].rsakey = n; }],
+      ['no rsakeypair [...]', () => { delete dev().pki.tps[S.cur].rsakey; }],
+      ['fqdn <name>', ([n]) => { dev().pki.tps[S.cur].fqdn = n; }],
+      ['serial-number none', () => { dev().pki.tps[S.cur].noSerial = true; }],
+      ['ip-address none', () => { dev().pki.tps[S.cur].noIp = true; }],
+    ],
+    pkichain: [
+      ['certificate ca <serial>', ([sn]) => { enter('pkicert', { tp: S.cur, ca: true, serial: sn, lines: [] }); return undefined; }],
+      ['certificate <serial>', ([sn]) => { enter('pkicert', { tp: S.cur, ca: false, serial: sn, lines: [] }); return undefined; }],
+      ['no certificate [...]', ([x]) => { const tp = tpOf(dev(), S.cur); if (/^ca\b/i.test(x || '')) delete tp.ca; else delete tp.cert; }],
+    ],
+    pkicert: [
+      ['quit', () => {
+        const c = S.cur, cert = hexCert(c.lines), tp = tpOf(dev(), c.tp);
+        enter('pkichain', c.tp);
+        if (!cert || !tp) return err('% 憑證的內容不完整，無法匯入');
+        if (c.ca) tp.ca = cert; else tp.cert = cert;
+        return undefined;
+      }],
+      ['<...>', ([x]) => { if (!/^[0-9A-F ]+$/i.test(x)) return err('% 憑證的內容是十六進位，最後一行輸入 quit 結束'); S.cur.lines.push(x); return undefined; }],
+    ],
     flowrec: [
       ['match <...>', ([x]) => { const r = dev().nf.records[S.cur]; r.lines = [...new Set([...r.lines, 'match ' + x.toLowerCase()])]; }],
       ['collect <...>', ([x]) => { const r = dev().nf.records[S.cur]; r.lines = [...new Set([...r.lines, 'collect ' + x.toLowerCase()])]; }],
@@ -2797,10 +2842,24 @@ export function iosSession(getDev, getState, who = null) {
       ['threshold <n>', () => undefined],
     ],
     ikev2prof: [
-      ['match identity remote address <ip> [...]', ([ip]) => { if (parseIp(ip) == null) return err('用法：match identity remote address <對端 IP> 255.255.255.255'); dev().ikev2.profs[S.cur].remote = ip; return undefined; }],
-      ['no match identity remote [...]', () => { delete dev().ikev2.profs[S.cur].remote; }],
-      ['authentication <dir> pre-share', () => undefined],
-      ['authentication <...>', () => err('這個模擬只支援預先共用金鑰：authentication remote pre-share、authentication local pre-share')],
+      ['match identity remote address <ip> [...]', ([ip]) => { if (parseIp(ip) == null) return err('用法：match identity remote address <對端 IP> 255.255.255.255'); const p = dev().ikev2.profs[S.cur]; p.remote = ip; delete p.remoteFqdn; delete p.remoteAny; return undefined; }],
+      ['match identity remote fqdn domain <name>', ([n]) => { const p = dev().ikev2.profs[S.cur]; p.remoteFqdn = n.toLowerCase(); delete p.remote; delete p.remoteAny; return undefined; }],
+      ['no match identity remote [...]', () => { const p = dev().ikev2.profs[S.cur]; delete p.remote; delete p.remoteFqdn; delete p.remoteAny; }],
+      ['match identity remote any', () => { const p = dev().ikev2.profs[S.cur]; p.remoteAny = true; delete p.remote; delete p.remoteFqdn; }],
+      ['identity local fqdn <name>', ([n]) => { dev().ikev2.profs[S.cur].idFqdn = n.toLowerCase(); }],
+      ['identity local address [...]', () => { delete dev().ikev2.profs[S.cur].idFqdn; }],
+      ['identity local <...>', () => err('這個模擬支援 identity local address <IP> 與 identity local fqdn <名稱>')],
+      ['no identity local [...]', () => { delete dev().ikev2.profs[S.cur].idFqdn; }],
+      ['authentication <dir> <method>', ([dir, m]) => {
+        const p = dev().ikev2.profs[S.cur], k = 'remote'.startsWith(dir.toLowerCase()) ? 'authR' : 'local'.startsWith(dir.toLowerCase()) ? 'authL' : null;
+        const meth = 'pre-share'.startsWith(m.toLowerCase()) ? 'pre-share' : 'rsa-sig'.startsWith(m.toLowerCase()) ? 'rsa-sig' : null;
+        if (!k || !meth) return err('用法：authentication remote | local pre-share | rsa-sig（這個模擬沒有 ecdsa-sig 與 eap）');
+        if (meth === 'pre-share') delete p[k]; else p[k] = meth;
+        return undefined;
+      }],
+      ['authentication <...>', () => err('用法：authentication remote | local pre-share | rsa-sig')],
+      ['pki trustpoint <name> [...]', ([n]) => { if (!tpOf(dev(), n)) return err(`% Trustpoint ${n} does not exist（先用 crypto pki trustpoint ${n} 建立）`); dev().ikev2.profs[S.cur].tp = n; return undefined; }],
+      ['no pki trustpoint [...]', () => { delete dev().ikev2.profs[S.cur].tp; }],
       ['keyring local <name>', ([n]) => { if (!dev().ikev2.krs[n]) return err(`% Keyring ${n} does not exist（先用 crypto ikev2 keyring 定義）`); dev().ikev2.profs[S.cur].keyring = n; return undefined; }],
       ['no keyring [...]', () => { delete dev().ikev2.profs[S.cur].keyring; }],
       ['lifetime <n>', ([n]) => (/^\d+$/.test(n) && +n >= 120 && +n <= 86400 ? void (dev().ikev2.profs[S.cur].life = +n === 86400 ? undefined : +n) : err('lifetime 的範圍是 120 – 86400 秒'))],
@@ -3102,8 +3161,11 @@ export function iosSession(getDev, getState, who = null) {
         const mo = m && (/^\d+$/.test(m[4]) ? mon(m[5]) : mon(m[4]));
         if (!m || !(day >= 1 && day <= 31) || mo < 0 || +m[1] > 23 || +m[2] > 59 || +m[3] > 59) { out.push('% 用法：clock set <時:分:秒> <日> <月份> <年>，例如 clock set 14:30:00 5 January 2026'); return done(false); }
         const tz = (dev().mgmt && dev().mgmt.tz) || { off: 0 };
+        // IOS 的訊息：from 舊的時間 to 新的時間（不含毫秒與 * 記號）
+        const clk = () => iosClock(getState(), dev()).replace(/^[*.]/, '').replace(/[.][0-9]{3}/, '');
+        const was = clk();
         setClock(getState(), dev(), Date.UTC(+m[6], mo, day, +m[1], +m[2], +m[3]) - tz.off * 3600000);
-        logEvent(getState(), dev(), 6, 'SYS-6-CLOCKUPDATE', `System clock has been updated from ${new Date(deviceTime(getState(), dev()).ms).toISOString().slice(11, 19)} UTC, configured from console by console.`);
+        logEvent(getState(), dev(), 6, 'SYS-6-CLOCKUPDATE', `System clock has been updated from ${was} to ${clk()}, configured from console by console.`);
         return done(true);
       }
       if (match(tok, 'reload')) {
@@ -3175,6 +3237,62 @@ export function iosSession(getDev, getState, who = null) {
     S.touched = true;
     logCfg(text, viaSub);
     return done(true);
+  }
+
+  /** PKI：連到 enrollment url（SCEP，TCP 80），回傳 { caDev } 或錯誤說明 */
+  function pkiReach(tp) {
+    const d = dev(), st = getState(), tgt = urlTarget(tp.url);
+    if (!tgt) return { why: '' };
+    const r = transact(st, d.id, { proto: 'tcp', dst: tgt.ip, dport: tgt.port, quiet: true });
+    if (!r.ok) return { why: `連不到 ${fmtIp(tgt.ip)} 的 TCP ${tgt.port}：${r.reason}` };
+    const caDev = st.devices[r.responder];
+    if (!caDev || !caDev.ca) return { why: `${caDev ? caDev.name : fmtIp(tgt.ip)} 不是 CA（沒有提供 SCEP 的憑證服務）` };
+    return { caDev };
+  }
+  const pkiLog = (v) => { const m = /^%([^:]+): (.*)$/.exec(v.log); if (m) logEvent(getState(), dev(), 3, m[1], m[2]); };
+  /** 指紋：同一張憑證每次都一樣（看起來像 MD5 / SHA1） */
+  const fp = (cert, n) => { let h = 2166136261; const s = cert.cn + cert.serial + cert.from + '/' + n; const out = []; for (let i = 0; i < n; i++) { for (const ch of s + i) h = Math.imul(h ^ ch.charCodeAt(0), 16777619); out.push((h >>> 0).toString(16).toUpperCase().padStart(8, '0')); } return out.join(' '); };
+  /** crypto pki authenticate：向 CA 取得它的根憑證，確認指紋之後存進 trustpoint */
+  function pkiAuthenticate(n, o) {
+    const d = dev(), st = getState(), tp = tpOf(d, n);
+    if (!tp) { o.push(`% Trustpoint ${n} not found`); return { out: o, changed: false }; }
+    if (!tp.url) { o.push(`% You must configure an enrollment url or enrollment terminal for trustpoint ${n}`); return { out: o, changed: false }; }
+    const r = pkiReach(tp);
+    if (!r.caDev) { o.push('% Error in receiving Certificate Authority certificate: status = FAIL, cert length = 0', `（${r.why}）`); return { out: o, changed: false }; }
+    const cert = caCert(r.caDev.ca), v = validityError(st, d, cert);
+    if (v) { pkiLog(v); o.push('% Error in saving certificate: status = FAIL', `（${v.why}）`); return { out: o, changed: false }; }
+    o.push('Certificate has the following attributes:', `       Fingerprint MD5: ${fp(cert, 4)}`, `      Fingerprint SHA1: ${fp(cert, 5)}`, '', '% Do you accept this certificate? [yes/no]: ');
+    S.pending = { fn: (ans, o2) => {
+      S.pending = null;
+      if (!/^y/i.test(ans)) { o2.push('% Certificate not accepted.'); return { out: o2, changed: false }; }
+      tp.ca = cert;
+      o2.push('Trustpoint CA certificate accepted.');
+      return { out: o2, changed: true };
+    } };
+    return { out: o, changed: false };
+  }
+  /** crypto pki enroll：向 CA 申請自己的憑證（CA 自動核發），收到之後用自己的時鐘檢查 */
+  function pkiEnroll(n, o) {
+    const d = dev(), st = getState(), tp = tpOf(d, n), m = d.mgmt || {};
+    if (!tp) { o.push(`% Trustpoint ${n} not found`); return { out: o, changed: false }; }
+    if (!tp.ca) { o.push('% You must authenticate the Certificate Authority before', '  you can enroll with it.', `（先 crypto pki authenticate ${n}）`); return { out: o, changed: false }; }
+    const subject = tp.subject || `CN=${hostName(d)}${m.domain ? '.' + m.domain : ''}`;
+    if (tp.cert) o.push('%', '% You already have a certificate from the CA.', '% Re-enrolling will replace the existing certificate.');
+    o.push('%', '% Start certificate enrollment ..', '', `% The subject name in the certificate will include: ${subject}`, ...(tp.fqdn ? [`% The fully-qualified domain name in the certificate will be: ${tp.fqdn}`] : []), 'Request certificate from CA? [yes/no]: ');
+    S.pending = { fn: (ans, o2) => {
+      S.pending = null;
+      if (!/^y/i.test(ans)) return { out: o2, changed: false };
+      if (!tp.key) { tp.key = true; o2.push(`% Generating 2048 bit RSA keys, keys will be non-exportable...`, '[OK] (elapsed time was 2 seconds)'); }
+      const r = pkiReach(tp);
+      if (!r.caDev) { o2.push('% Certificate request sent to Certificate Authority', `%PKI-3-POLLRACERT: Polling RA certificate .....`, `（${r.why}，申請送不出去）`); return { out: o2, changed: true }; }
+      const cert = issue(st, r.caDev, subject), v = validityError(st, d, cert);
+      o2.push('% Certificate request sent to Certificate Authority', `% The 'show crypto pki certificate verbose ${n}' commmand will show the fingerprint.`);
+      if (v) { pkiLog(v); o2.push(`（收到憑證了，但${v.why}，被丟棄）`); return { out: o2, changed: true }; }
+      tp.cert = cert;
+      logEvent(st, d, 6, 'PKI-6-CERTRET', 'Certificate received from Certificate Authority');
+      return { out: o2, changed: true };
+    } };
+    return { out: o, changed: false };
   }
 
   /** archive log config：記下這一行（子模式裡的指令前面空一格，和 show archive log config 一樣） */
@@ -3625,6 +3743,17 @@ export function runningConfig(state, dev) {
     const i = T.cfg && !T.cfg.cmap && !T.prot && T.localIp != null && dev.ifaces.find((x) => x.rt && x.rt.ip === T.localIp);
     if (i) cmIf.set(i, cmapOf(T.cfg));
   }
+  for (const [n, tp] of Object.entries((dev.pki && dev.pki.tps) || {})) {
+    o.push(`crypto pki trustpoint ${n}`, ...(tp.url ? [` enrollment url ${tp.url}`] : []), ...(tp.noSerial ? [' serial-number none'] : []), ...(tp.fqdn ? [` fqdn ${tp.fqdn}`] : []), ...(tp.noIp ? [' ip-address none'] : []),
+      ...(tp.subject ? [` subject-name ${tp.subject}`] : []), ...(tp.revoke && tp.revoke !== 'crl' ? [` revocation-check ${tp.revoke}`] : []), ...(tp.rsakey ? [` rsakeypair ${tp.rsakey}`] : []), '!');
+  }
+  for (const [n, tp] of Object.entries((dev.pki && dev.pki.tps) || {})) {
+    if (!tp.ca && !tp.cert) continue;
+    o.push(`crypto pki certificate chain ${n}`);
+    if (tp.cert) o.push(` certificate ${tp.cert.serial}`, ...certHex(tp.cert).map((l) => '  ' + l), '  \tquit');
+    if (tp.ca) o.push(` certificate ca ${tp.ca.serial}`, ...certHex(tp.ca).map((l) => '  ' + l), '  \tquit');
+    o.push('!');
+  }
   const v2 = ikev2Objects(dev);
   {
     const V = v2.v;
@@ -3635,7 +3764,8 @@ export function runningConfig(state, dev) {
       for (const [pn, pe] of Object.entries(x.peers)) o.push(` peer ${pn}`, ...(pe.address ? [`  address ${pe.address}`] : []), ...(pe.psk ? [`  pre-shared-key ${pe.psk}`] : []), ...(pe.pskLocal ? [`  pre-shared-key local ${pe.pskLocal}`] : []), ...(pe.pskRemote ? [`  pre-shared-key remote ${pe.pskRemote}`] : []), ' !');
       o.push('!');
     }
-    for (const [n, x] of Object.entries(V.profs)) o.push(`crypto ikev2 profile ${n}`, ...(x.remote ? [` match identity remote address ${x.remote} 255.255.255.255`] : []), ' authentication remote pre-share', ' authentication local pre-share', ...(x.keyring ? [` keyring local ${x.keyring}`] : []), ...(+x.life > 0 ? [` lifetime ${x.life}`] : []), '!');
+    for (const [n, x] of Object.entries(V.profs)) o.push(`crypto ikev2 profile ${n}`, ...(x.remote ? [` match identity remote address ${x.remote} 255.255.255.255`] : []), ...(x.remoteFqdn ? [` match identity remote fqdn domain ${x.remoteFqdn}`] : []), ...(x.remoteAny ? [' match identity remote any'] : []),
+      ...(x.idFqdn ? [` identity local fqdn ${x.idFqdn}`] : []), ` authentication remote ${x.authR || 'pre-share'}`, ` authentication local ${x.authL || 'pre-share'}`, ...(x.keyring ? [` keyring local ${x.keyring}`] : []), ...(x.tp ? [` pki trustpoint ${x.tp}`] : []), ...(+x.life > 0 ? [` lifetime ${x.life}`] : []), '!');
   }
   const profs = Object.entries(dev.ipsecProfiles || {});
   if (vp.length || (dev.isakmp && dev.isakmp.length) || profs.length || Object.keys(dev.ikeKeys || {}).length || Object.keys(dev.tsets || {}).length) {

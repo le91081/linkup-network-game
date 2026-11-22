@@ -3434,6 +3434,64 @@ console.log('\n雙 WAN 的 QoS');
   ok(g.rt.cable[pc().id] === 'up' && n2.length === 1 && n2[0].tone === 'ok' && !nextScript(g), '600 秒：主線修好了，劇本結束');
 }
 
+console.log('\nPKI 與 IKEv2 的憑證驗證');
+{
+  const sim = await import('../src/engine/sim.js');
+  const { iosSession, runningConfig } = await import('../src/engine/ios.js');
+  const { iosRun } = await import('../src/ui/cli.js');
+  const { logRows, iosClock } = await import('../src/engine/ops.js');
+  const { makeState, makeDevice } = await import('../src/engine/model.js');
+  const ok = (cond, title) => (cond ? console.log('  ✔ ' + title) : fail(title));
+  const cli = (s, id) => { const S = iosSession(() => s.devices[id], () => s); return (...lines) => { const out = []; for (const l of lines) { const r = iosRun({ state: s, showTrace() {}, refreshLive() {} }, id, S, l, (x) => out.push(x)); if (r.changed) settle(s); } return out.join('\n'); }; };
+  // trustpoint、authenticate、enroll
+  const p = makeState([makeDevice('isr4331', 'r1', { name: 'BR-RT' }), makeDevice('tower', 'ca', { name: 'CA', ip: '10.0.0.7', gw: '10.0.0.1', services: [{ proto: 'tcp', port: 80, name: 'SCEP' }] })], [['r1:Gi0/0/1', 'ca:eth0']]);
+  p.devices.ca.ca = { name: 'Corp Root CA' };
+  settle(p);
+  const R = cli(p, 'r1');
+  R('configure terminal', 'interface Gi0/0/1', 'ip address 10.0.0.1 255.255.255.0', 'no shutdown', 'exit', 'crypto pki trustpoint CORP', 'enrollment url http://10.0.0.7:80/certsrv/mscep/mscep.dll', 'subject-name CN=br-rt.corp.local', 'revocation-check none', 'exit');
+  ok(/You must authenticate the Certificate Authority/.test(R('crypto pki enroll CORP')), '還沒 authenticate 就 enroll：IOS 要求先取得 CA 的根憑證');
+  const a = R('crypto pki authenticate CORP');
+  ok(/Fingerprint MD5: [0-9A-F]{8} /.test(a) && /Do you accept this certificate\? \[yes\/no\]/.test(a) && /Trustpoint CA certificate accepted/.test(R('yes')), 'crypto pki authenticate：顯示指紋、確認之後接受 CA 的根憑證');
+  const e = R('crypto pki enroll CORP');
+  ok(/Request certificate from CA\? \[yes\/no\]/.test(e) && /Certificate request sent to Certificate Authority/.test(R('yes')) && p.devices.r1.pki.tps.CORP.cert && p.devices.r1.pki.tps.CORP.cert.cn === 'br-rt.corp.local', 'crypto pki enroll：CA 核發憑證（CN=br-rt.corp.local）');
+  R('end');
+  ok(/%PKI-6-CERTRET: Certificate received from Certificate Authority/.test(logRows(p, p.devices.r1).map((x) => x.line).join('\n')), 'log：%PKI-6-CERTRET');
+  const sc = R('show crypto pki certificates');
+  ok(/Certificate\n  Status: Available\n  Certificate Serial Number \(hex\): 02/.test(sc) && /CA Certificate\n  Status: Available/.test(sc) && /cn=Corp Root CA/.test(sc) && /Issuing CA authenticated \.+ Yes/.test(R('show crypto pki trustpoints status')), 'show crypto pki certificates / trustpoints status');
+  const rc = runningConfig(p, p.devices.r1).join('\n');
+  ok(/crypto pki trustpoint CORP\n enrollment url http:\/\/10\.0\.0\.7:80\/certsrv\/mscep\/mscep\.dll\n subject-name CN=br-rt\.corp\.local\n revocation-check none/.test(rc) && /crypto pki certificate chain CORP\n certificate 02\n  3082[0-9A-F]{4} [0-9A-F]{8}/.test(rc) && / certificate ca 01\n/.test(rc) && /\tquit/.test(rc), 'running-config：trustpoint 與 certificate chain（貼回去可以還原）');
+  ok(/% Trustpoint NOPE does not exist/.test(R('configure terminal', 'crypto ikev2 profile X', 'pki trustpoint NOPE', 'end')), 'ikev2 profile 指定不存在的 trustpoint：IOS 拒絕');
+
+  // 關卡：換了主機板電池的 BR-RT
+  const lv = LEVELS.find((x) => x.id === 'l101');
+  const s = lv.setup(); settle(s); sim.advance(s, 70); settle(s);
+  const B = cli(s, 'br'), T = () => s.devices.br.rt.tunnels.find((t) => t.name === 'Tunnel0');
+  ok(/^\*\d\d:\d\d:\d\d\.\d{3} UTC Tue Jan 1 2002$/.test(iosClock(s, s.devices.br)) && !T().up && /還沒生效/.test(T().why), 'BR-RT 的時鐘回到 2002 年（*），HQ-RT 的憑證「還沒生效」，VPN 建不起來');
+  ok(/%PKI-3-CERTIFICATE_INVALID_NOT_YET_VALID: Certificate chain validation has failed\.  The certificate \(SN: 02\) is not yet valid   Validity period starts on 01:50:00 UTC Jun 2 2025/.test(B('show logging')) && /Status: Not yet valid/.test(B('show crypto pki certificates')),
+    'show logging：%PKI-3-CERTIFICATE_INVALID_NOT_YET_VALID；show crypto pki certificates：Not yet valid');
+  B('debug crypto ikev2'); sim.advance(s, 12);
+  ok(/IKEv2:\(SESSION ID = 1,SA ID = 1\):Verify cert failed/.test(B('show logging')), 'debug crypto ikev2：Verify cert failed');
+  B('undebug all', 'clock set 01:02:00 5 January 2026');
+  ok(T().up && sim.runObjective(s, lv.objectives[0]).pass, 'clock set 把時間設對：VPN 起來，分公司打得開 ERP');
+  // revocation-check 的預設是 crl：CA 在 VPN 另一邊就拿不到 CRL
+  B('configure terminal', 'crypto pki trustpoint CORP', 'no revocation-check', 'end');
+  ok(!T().up && /拿不到 CRL/.test(T().why), 'revocation-check crl（預設）：CA 要經過 VPN 才到得了，拿不到 CRL，驗證失敗');
+  B('configure terminal', 'crypto pki trustpoint CORP', 'revocation-check crl none', 'end');
+  ok(T().up, 'revocation-check crl none：拿不到 CRL 就算了，VPN 恢復');
+  // 身分與驗證方式
+  B('configure terminal', 'crypto ikev2 profile PROF', 'no identity local', 'end');
+  ok(!T().up && /找不到符合的 ikev2 profile.*match identity remote fqdn domain corp\.local/.test(T().why), '拿掉 identity local fqdn：身分變成位址，HQ-RT 的 match identity remote fqdn domain 對不上');
+  B('configure terminal', 'crypto ikev2 profile PROF', 'identity local fqdn br-rt.corp.local', 'authentication local pre-share', 'end');
+  ok(!T().up && /沒有指定 keyring/.test(T().why), 'authentication local pre-share 卻沒有 keyring：IKEv2 拿不到預先共用金鑰');
+  B('configure terminal', 'crypto ikev2 keyring KR', 'peer HQ', 'address 203.0.113.10', 'pre-shared-key Br!2026', 'exit', 'exit', 'crypto ikev2 profile PROF', 'keyring local KR', 'end');
+  ok(!T().up && /用 pre-share 證明自己.*卻要用 rsa-sig 驗證它/.test(T().why), '有了 keyring，但 HQ-RT 要用 rsa-sig 驗證：驗證方式不一致');
+  B('configure terminal', 'crypto ikev2 profile PROF', 'no keyring', 'end');
+  B('configure terminal', 'crypto ikev2 profile PROF', 'authentication local rsa-sig', 'end');
+  ok(T().up && / authentication local rsa-sig\n pki trustpoint CORP/.test(runningConfig(s, s.devices.br).join('\n')), '改回 rsa-sig：VPN 恢復；running-config 有 authentication rsa-sig 與 pki trustpoint');
+  const s2 = lv.setup(); settle(s2); lv.solve(s2); settle(s2);
+  ok(lv.objectives.every((o) => (o.type === 'check' ? o.test(s2) : sim.runObjective(s2, o).pass) === true), '解法：clock set 加上 ntp server 216.239.35.0（不經過 VPN），四個目標都通過');
+}
+
 console.log('\nNetFlow 與 QoS 的 police');
 {
   const sim = await import('../src/engine/sim.js');

@@ -32,7 +32,7 @@ export const LEVEL_TOPIC = {
   l55: 'wireless', l56: 'wireless', l57: 'wireless',
   l58: 'auto', l59: 'auto', l60: 'auto', l61: 'auto', l62: 'auto',
   l63: 'routing', l64: 'routing', l65: 'ops', l66: 'routing', l67: 'switching', l68: 'vpn', l69: 'security', l71: 'services',
-  l70: 'auto', l72: 'routing', l73: 'auto', l74: 'security', l75: 'switching', l76: 'vpn', l77: 'routing', l78: 'routing', l79: 'routing', l80: 'routing', l81: 'routing', l82: 'routing', l83: 'security', l84: 'security', l85: 'switching', l86: 'security', l87: 'ipv6', l88: 'vpn', l89: 'vpn', l90: 'vpn', l91: 'vpn', l92: 'vpn', l93: 'ipv6', l94: 'ipv6', l95: 'routing', l96: 'routing', l97: 'ops', l98: 'switching', l99: 'ops', l100: 'ops',
+  l70: 'auto', l72: 'routing', l73: 'auto', l74: 'security', l75: 'switching', l76: 'vpn', l77: 'routing', l78: 'routing', l79: 'routing', l80: 'routing', l81: 'routing', l82: 'routing', l83: 'security', l84: 'security', l85: 'switching', l86: 'security', l87: 'ipv6', l88: 'vpn', l89: 'vpn', l90: 'vpn', l91: 'vpn', l92: 'vpn', l93: 'ipv6', l94: 'ipv6', l95: 'routing', l96: 'routing', l97: 'ops', l98: 'switching', l99: 'ops', l100: 'ops', l101: 'vpn',
 };
 
 export const QUESTIONS = {
@@ -128,6 +128,8 @@ export const QUESTIONS = {
     { q: '公司用內部 CA 簽發 intranet.corp.local 的憑證。加入網域的電腦都正常，員工自己帶的筆電卻出現憑證錯誤。原因是？', a: ['筆電不支援 TLS 1.3', '筆電沒有安裝公司的根憑證，不信任這個 CA', '憑證的名稱打錯了', '筆電的 DNS 快取過期'], c: 1, e: '加入網域的電腦由群組原則自動安裝公司的根憑證；自己帶的設備要手動匯入或用 MDM 派送。公開 CA 不會簽發 .local 這種內部名稱，所以內部網站只能用公司的 CA。', r: 'Security+ 1.4' },
   ],
   vpn: [
+    { q: 'IKEv2 用憑證 (rsa-sig) 互相驗證的 VPN，在某一端的時鐘被重設回 2002 年之後就建不起來。最直接的原因是？', a: ['憑證的私鑰遺失了', '那一端用自己的時鐘判斷，對方的憑證「還沒生效」', 'CA 撤銷了憑證', 'IKEv2 不支援 2002 年以前的時間'], c: 1, e: '憑證的有效期間是用驗證那一端「自己的時鐘」判斷的。時鐘錯了，好好的憑證也會變成還沒生效或已經到期（%PKI-3-CERTIFICATE_INVALID_NOT_YET_VALID）。用憑證的 VPN，NTP 不能只靠那條 VPN 才到得了。', r: 'CCNA 5.5' },
+    { q: 'IOS 的 trustpoint 沒有設定 revocation-check，CA 又在 VPN 的另一邊，會發生什麼事？', a: ['不檢查撤銷，直接通過', '預設 revocation-check crl：拿不到 CRL，憑證驗證失敗', '自動改用 OCSP', '只有第一次建立時會檢查'], c: 1, e: 'IOS 的預設是 revocation-check crl：驗證對方的憑證時要先拿到 CRL，拿不到就判定失敗。CA 只能經過 VPN 到達時，要改成 revocation-check crl none（拿不到就算了）或 none。', r: 'CCNA 5.5' },
     { q: 'GRE 通道上跑 OSPF，結果 Tunnel 一直 up / down，log 出現 %TUN-5-RECURDOWN。最可能的原因是？', a: ['兩端的 tunnel key 不一致', 'OSPF 透過 Tunnel 學到了 tunnel destination 所在的網段，往 destination 的路變成要先走 Tunnel', 'Tunnel 的 MTU 太小', '沒有設定 keepalive'], c: 1, e: 'Tunnel 的 destination 一定要從外層（實體線路）學到。外層的網段被放進 Tunnel 上的 OSPF，學到的路比預設路由精確，就變成 recursive routing：IOS 暫停 Tunnel、路由消失、Tunnel 又起來，一直 flapping。', r: 'CCNA 3.4' },
     { q: '沒有設定 keepalive 的點對點 GRE Tunnel，什麼情況下 line protocol 是 up？', a: ['對端的 Tunnel 也設定好、互相收得到', 'tunnel source 是 up，而且路由表裡有路到 tunnel destination', '有 OSPF 鄰居', 'IPsec SA 建好了'], c: 1, e: 'GRE 預設不確認對端在不在：只要來源介面正常、有路到 destination 就是 up/up。要偵測對端，在 Tunnel 上設定 keepalive；VTI 則是跟著 IPsec SA。', r: 'ENCOR 2.2' },
     { q: 'GRE 和 IPsec 站對站 VPN（crypto map）比起來，GRE 的優點與缺點是？', a: ['GRE 有加密、IPsec 沒有', 'GRE 能帶 multicast、跑 OSPF，但本身不加密', 'GRE 只能用在同一個網段', 'GRE 比較省頻寬，因為沒有標頭'], c: 1, e: 'GRE 多包一層 IP + 4 位元組 GRE 標頭（共 24 位元組），可以載送 multicast 與各種路由協定，但完全不加密。實務上常用 GRE over IPsec 或 VTI 兩者兼得。', r: 'CCNA 5.5' },

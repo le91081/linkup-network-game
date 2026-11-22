@@ -34,7 +34,7 @@ README 說明「現在有什麼、怎麼玩」，這份文件說明「整體應�
 | 3. 第三層：路由 | 14 | 1 | 2 |
 | 4. IP 服務 | 11 | 3 | 0 |
 | 5. 網路安全 | 11 | 3 | 3 |
-| 6. VPN 與廣域網路 | 9 | 2 | 2 |
+| 6. VPN 與廣域網路 | 10 | 1 | 2 |
 | 7. 無線網路 | 5 | 2 | 3 |
 | 8. IPv6 | 5 | 3 | 0 |
 | 9. 高可用 | 8 | 0 | 3 |
@@ -45,9 +45,9 @@ README 說明「現在有什麼、怎麼玩」，這份文件說明「整體應�
 | 14. 遊戲系統 | 16 | 1 | 5 |
 | 15. 介面與體驗 | 6 | 1 | 7 |
 | 16. 工程品質 | 5 | 1 | 4 |
-| **合計** | **152** | **25** | **38** |
+| **合計** | **153** | **24** | **38** |
 
-另外：關卡 100 關（第 17 節）、證照條目涵蓋情形（第 18 節）、建議的實作順序（第 19 節）。
+另外：關卡 101 關（第 17 節）、證照條目涵蓋情形（第 18 節）、建議的實作順序（第 19 節）。
 
 ---
 
@@ -165,7 +165,7 @@ README 說明「現在有什麼、怎麼玩」，這份文件說明「整體應�
 | 遠端存取 SSL-VPN | 🟡 | 使用者、群組、入口、連接埠；加密流量在引擎內仍當成一層封裝處理 |
 | ISP 線路型態 | ✅ | DHCP、固定 IP、PPPoE |
 | 雙線路備援 | ✅ | 浮動靜態路由 |
-| IKEv2 與憑證驗證 | 🟡 | IKEv2 已完成：版本不一致、非對稱的預先共用金鑰、PFS 不一致要到第一次重新協商才失敗、IOS 的 proposal / policy / keyring / profile、FortiOS 的 `ike-version` 與 `psksecret-remote`、`show crypto ikev2 sa`。還沒有憑證與 EAP |
+| IKEv2 與憑證驗證 | ✅ | IKEv2：版本不一致、非對稱的預先共用金鑰、PFS 不一致要到第一次重新協商才失敗、IOS 的 proposal / policy / keyring / profile、FortiOS 的 `ike-version` 與 `psksecret-remote`、`show crypto ikev2 sa`。PKI：trustpoint、SCEP 的 `crypto pki authenticate` / `enroll`、`rsa-sig`、用自己的時鐘判斷有效期間、`revocation-check crl` 要拿得到 CRL、`identity local fqdn` 與 `match identity remote fqdn domain`、`%PKI-3-…` 紀錄、running-config 的 certificate chain（→ 7-12）。沒有 EAP 與 FortiGate 的憑證 |
 | SA 的時間面 | ✅ | 協商 2 秒、兩個階段的金鑰壽命（兩端取較短的）與自動重新協商、DPD；IOS 沒設 keepalive 時要等金鑰到期才發現對端失聯 |
 | NAT-T | ✅ | NAT-D 從 IKE 的來源位址偵測 NAT，兩端都開著時 IKE 與 ESP 改走 UDP 4500（NAT 設備保留轉換，總公司主動連過去也通）；關掉 NAT-T 時 ESP 被 PAT 丟掉；對端要指向 NAT 之後的位址；ACL 要放 UDP 4500（→ 7-11）。NAT keepalive 與轉換逾時沒有模擬 |
 | GRE、IOS VTI、DMVPN | ✅ | Tunnel 介面（`tunnel source / destination / mode / key`、keepalive）、line protocol 看外層的路由、recursive routing 的暫停與 flapping、OSPF 的 cost 1000 與 point-to-point；`tunnel protection ipsec profile`（GRE over IPsec、VTI 的 line protocol 跟著 SA）；DMVPN 的 NHRP 註冊、multicast 複製、phase 2 的解析與 spoke 之間的動態 IPsec、phase 3 的 redirect / shortcut（H 路由）（→ 7-7 到 7-10）。沒有 OSPF point-to-multipoint、FortiGate 的 IPsec 介面模式、DMVPN 在 NAT 後面 |
@@ -240,7 +240,7 @@ README 說明「現在有什麼、怎麼玩」，這份文件說明「整體應�
 | 圖形介面 | ✅ | 每一種設備都有對應的設定頁面與即時狀態 |
 | IOS CLI | ✅ | 模式切換（巢狀的子模式 `exit` 一次回一層，不認得的指令先往上一層找）、縮寫、`no`、Tab 補齊、`?` 說明、`do show`、管線過濾（include / exclude / begin / section / count）、一次貼上多行 |
 | IOS 的查看指令 | ✅ | 四十多個 `show` 指令，包含 MAC 位址表、NAT 轉換表、IPsec SA、時鐘、NTP、紀錄、介面計數器、SPAN、登入的使用者、flash、開機設定、SSH、SNMP |
-| 設定可以整份貼回 | ✅ | 測試對 197 台 Cisco 設備、10 台 FortiGate 逐一驗證 |
+| 設定可以整份貼回 | ✅ | 測試對 203 台 Cisco 設備、10 台 FortiGate 逐一驗證 |
 | running / startup-config | ✅ | `write memory`、`reload`、未存檔的提示、斷電後回到上一次存檔 |
 | FortiOS CLI | ✅ | `config` / `edit` / `set` / `next` / `end`、`show`、`get`、`diagnose`、`execute ping` |
 | 主機終端機 | ✅ | `ping`、`ipconfig`、`arp`、`tracert`、`nslookup`、`curl`、`iperf3` |
@@ -289,7 +289,7 @@ README 說明「現在有什麼、怎麼玩」，這份文件說明「整體應�
 
 | 功能 | 狀態 | 說明 |
 | --- | --- | --- |
-| 關卡 | ✅ | 17 章 100 關（清單見第 17 節） |
+| 關卡 | ✅ | 17 章 101 關（清單見第 17 節） |
 | 任務目標 | ✅ | ping、TCP、UDP、DHCP、設定檢查、故障演練、IPv6 ping、傳輸速率、遠端登入（SSH / Telnet 帳號密碼）、IP 電話註冊、通話品質 (MOS)、HTTPS（連得上之後還要通過憑證驗證）、路徑（一定要經過 / 不能經過某台設備）；TCP 的目標交握完還會送一個裝滿的資料區段（設了 DF），MTU 的問題才看得出來 |
 | 提示與星等 | ✅ | 每關 3 個提示，看一個少一顆星 |
 | 學習卡 | ✅ | 每關 2 到 4 張觀念說明 |
@@ -350,7 +350,7 @@ README 說明「現在有什麼、怎麼玩」，這份文件說明「整體應�
 
 ## 17. 關卡規劃
 
-### 現有的 100 關
+### 現有的 101 關
 
 | 章 | 關卡 |
 | --- | --- |
@@ -360,7 +360,7 @@ README 說明「現在有什麼、怎麼玩」，這份文件說明「整體應�
 | 4 資料中心 | 機櫃上線、Spine-Leaf、跨棟連線、一開 Jumbo Frame，備份就卡住 |
 | 5 無線網路 | 家裡的 Wi-Fi、辦公室基地台、訪客 Wi-Fi |
 | 6 網路安全 | 只開了 TCP、誰在發 IP？、不速之客、存取控制清單、管理介面加固、冒牌閘道、搶走根橋、你是誰？、偽裝成交換器、交換器變成了 Hub（MAC flooding）、跳進伺服器 VLAN 的封包（雙重標籤）、飯店的房間網路（Private VLAN） |
-| 7 VPN 與廣域備援 | 站對站 VPN、在家上班、雙線路備援、三個據點，一個中心、線路燈還亮著（IP SLA）、小檔案可以，大檔案卡住（PMTUD 黑洞）、兩個分公司的連線一下通一下斷（GRE 與 recursive routing）、稽核報告（GRE over IPsec）、每加一個網段就要改兩邊的 ACL（VTI）、門市之間的監視器畫面（DMVPN）、新分公司在共享辦公室裡（NAT-T） |
+| 7 VPN 與廣域備援 | 站對站 VPN、在家上班、雙線路備援、三個據點，一個中心、線路燈還亮著（IP SLA）、小檔案可以，大檔案卡住（PMTUD 黑洞）、兩個分公司的連線一下通一下斷（GRE 與 recursive routing）、稽核報告（GRE over IPsec）、每加一個網段就要改兩邊的 ACL（VTI）、門市之間的監視器畫面（DMVPN）、新分公司在共享辦公室裡（NAT-T）、換了主機板電池，VPN 就起不來了（IKEv2 的憑證驗證） |
 | 8 高可用與進階路由 | 迴圈與生成樹、EtherChannel、閘道備援、集中式 DHCP、OSPF 路徑選擇、切蛋糕、閘道還活著，但出不去（HSRP 追蹤）、主線斷了，電話斷了四十秒（BFD）、兩台閘道，只有一台在做事（GLBP） |
 | 9 IPv6 | IPv6 初體驗、雙協定、位址從哪裡來？、IPv6 也要動態路由、封了 IPv4，忘了 IPv6、IPv6 的預設閘道被搶走了（RA Guard）、內部網站加了 IPv6 之後（AAAA 與 Happy Eyeballs）、IPv6 過不了 VPN（VTI 只載 IPv4） |
 | 10 故障排除 | 誰搶了我的 IP、樓層之間又斷了、分公司的求救電話、明明連得上，為什麼這麼慢、分公司的 OSPF 鄰居起不來、流量為什麼繞去實驗室、VPN 通了，資料卻過不去、DNS 改了，為什麼還連到舊的、整層樓都慢了（廣播風暴與 Storm Control） |
@@ -384,7 +384,7 @@ README 說明「現在有什麼、怎麼玩」，這份文件說明「整體應�
 | 補進第 15 章 | 用 Catalyst Center 的範本下發設定、NETCONF、用 Git 管理設定 | 第 12 節 |
 | 補進第 16 章 | 多個 VPC 的 peering 與 Transit Gateway、負載平衡器、Terraform | 第 12 節 |
 | 補進第 6 章 | NGFW 設定檔、SYN flood | 第 5 節 |
-| 補進第 7 章 | 憑證驗證（GRE over IPsec、VTI、DMVPN、NAT-T 已補上 7-7 到 7-11） | 第 6 節 |
+| 補進第 7 章 | （GRE over IPsec、VTI、DMVPN、NAT-T、憑證驗證已補上 7-7 到 7-12） | 第 6 節 |
 | 補進第 9 章 | Prefix Delegation、FortiGate 的 IPv6 政策、NAT64 / DNS64 | 第 8 節 |
 | 補進第 10 章 | Wi-Fi 很慢（隨機故障已經由故障演練提供） | 第 7、14 節 |
 
@@ -428,7 +428,7 @@ CCNA v2.0 預計在 2027 年 2 月取代 v1.1，改版後整張對照表要重�
 | 16（已完成） | GRE 與 recursive routing、GRE over IPsec、IOS VTI、DMVPN（phase 2 / 3）、NAT-T → 7-7 到 7-11；命名 ACL 的序號照 IOS 保留、ACL 可以寫 esp / gre。IKEv2 的憑證驗證移到第 19 階段 | 第 6 節最大的缺口，也是 CCNA 5.5 / Network+ 的常考題 |
 | 17（已完成） | AAAA 與雙協定（RFC 6724、Happy Eyeballs）、IPv6 經過 IPv4 的 Tunnel（GRE、6in4）與 IPv6 over VPN → 9-7、9-8。DHCPv6 Prefix Delegation、FortiGate 的 IPv6 政策、NAT64 / DNS64 要先有 IPv6 的網際網路與防火牆，移到第 22 階段 | 第 8 節剩下的項目 |
 | 18（已完成） | BFD（OSPF、BGP）與 OSPF fast hello → 8-8；GLBP → 8-9；HSRP / VRRP 改用各自正確的虛擬 MAC。FortiGate HA、堆疊 / vPC、電力備援要先有兩台設備合成一台的模型，移到第 22 階段 | 第 9 節剩下的項目 |
-| 19（進行中） | 維運與語音補充：NetFlow 與 QoS 的 police（已完成 → 11-7）、OSPF / DHCP / crypto 的 `debug`（已完成）、NTP + Syslog 對時與 `service timestamps`（已完成 → 11-8）、PoE 預算與 Cisco AP 的 CDP / LLDP 電力協商（已完成 → 12-3）；IKEv2 / 802.1X 的憑證驗證（PKI、時鐘不對讓憑證「尚未生效」）、用 CDP / LLDP 畫拓撲（要先做「看不到線」的關卡模式）；雙 WAN 的 QoS 與排程事件（已完成 → 12-4） → 第 11、12 章補充關卡 | 讓故障排除的工具與劇本更完整 |
+| 19（進行中） | 維運與語音補充：NetFlow 與 QoS 的 police（已完成 → 11-7）、OSPF / DHCP / crypto 的 `debug`（已完成）、NTP + Syslog 對時與 `service timestamps`（已完成 → 11-8）、PoE 預算與 Cisco AP 的 CDP / LLDP 電力協商（已完成 → 12-3）、IKEv2 的憑證驗證（PKI、時鐘不對讓憑證「尚未生效」→ 7-12）；802.1X 的 EAP-TLS、用 CDP / LLDP 畫拓撲（要先做「看不到線」的關卡模式）；雙 WAN 的 QoS 與排程事件（已完成 → 12-4） → 第 11、12 章補充關卡 | 讓故障排除的工具與劇本更完整 |
 | 20 | 無線補充：頻道寬度、6 GHz 與 DFS、訪客入口 (Captive Portal)、FlexConnect 分公司、控制器 N+1 → 第 14 章補充關卡 | 第 7 節剩下的項目 |
 | 21 | 自動化與雲端補充：NETCONF、Catalyst Center 範本、用 Git 管理設定、VPC peering 與 Transit Gateway、負載平衡器、Terraform → 第 15、16 章補充關卡 | 第 12 節的延伸 |
 | 22 | FortiGate HA（Active-Passive、連線同步）、堆疊 / vPC、電力備援；IPv6 的網際網路與 FortiGate 的 IPv6（DHCPv6-PD、IPv6 政策、NAT64 / DNS64）；實體層與其他：收發器不相容、breakout、Console 與帶外管理、STP 進階、VTP、EIGRP / RIP、多播、TACACS+、ZBF、NGFW、SD-WAN、其他設備與廠牌 | 剩下的引擎項目 |

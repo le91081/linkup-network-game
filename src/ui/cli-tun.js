@@ -3,6 +3,7 @@ import { fmtIp, fmtMask, parseIp, sameNet } from '../engine/ip.js';
 import { bfdCfg, ospfBfd } from '../engine/ospf.js';
 import { MODE_TEXT, isTun, nhrpCache, saInfo, tunMode, tunOverhead, ikeVer } from '../engine/sim.js';
 import { longIf } from '../engine/ops.js';
+import { validityError, pkiDate } from '../engine/pki.js';
 
 const pad = (s, n) => String(s).padEnd(n);
 const lpad = (s, n) => String(s).padStart(n);
@@ -180,5 +181,36 @@ export function bfdLines(st, d, detail) {
     }
     if (!r.ok) o.push(`（${r.peer && !bfdCfg(r.peer) ? `對面的 ${r.peer.label} 沒有 bfd interval` : r.c.who === 'OSPF' && r.peer && !ospfBfd(st.devices[r.c.dev], r.peer) ? '對面的 OSPF 沒有用 BFD' : '鄰居還沒建立'}）`);
   });
+  return o;
+}
+
+// ── PKI ──
+const certState = (st, d, c) => { const v = validityError(st, d, c); return v ? (v.code === 'NOT_YET_VALID' ? 'Not yet valid' : 'Expired') : 'Available'; };
+function certBlock(st, d, name, c, ca) {
+  return [ca ? 'CA Certificate' : 'Certificate', `  Status: ${certState(st, d, c)}`, `  Certificate Serial Number (hex): ${c.serial}`, `  Certificate Usage: ${ca ? 'Signature' : 'General Purpose'}`,
+    '  Issuer:', `    cn=${c.issuer}`, '  Subject:', ...(ca ? [`    cn=${c.cn}`] : [`    Name: ${c.cn}`, `    cn=${c.cn}`]), '  Validity Date:', `    start date: ${pkiDate(c.from)}`, `    end   date: ${pkiDate(c.to)}`, `  Associated Trustpoints: ${name}`, ''];
+}
+/** show crypto pki certificates [trustpoint]：自己的憑證與 CA 的根憑證，狀態用這台設備自己的時鐘判斷 */
+export function pkiCertLines(st, d, only) {
+  const o = [];
+  for (const [n, tp] of Object.entries((d.pki && d.pki.tps) || {})) {
+    if (only && n.toLowerCase() !== only.toLowerCase()) continue;
+    if (tp.cert) o.push(...certBlock(st, d, n, tp.cert, false));
+    if (tp.ca) o.push(...certBlock(st, d, n, tp.ca, true));
+  }
+  if (!o.length) o.push('（沒有任何憑證：先 crypto pki authenticate <trustpoint> 取得 CA 的根憑證，再 crypto pki enroll <trustpoint> 申請自己的憑證）');
+  return o;
+}
+/** show crypto pki trustpoints [status] */
+export function pkiTrustpointLines(st, d, status) {
+  const tps = Object.entries((d.pki && d.pki.tps) || {});
+  if (!tps.length) return ['（沒有設定任何 trustpoint：crypto pki trustpoint <名稱>）'];
+  const o = [];
+  for (const [n, tp] of tps) {
+    if (!status) { o.push(`Trustpoint ${n}:`, ...(tp.ca ? ['    Subject Name: ', `    cn=${tp.ca.cn}`, `          Serial Number (hex): ${tp.ca.serial}`, '    Certificate configured.'] : ['    Not authenticated.']), ...(tp.url ? [`    SCEP URL: ${tp.url}`] : []), ''); continue; }
+    o.push(`Trustpoint ${n}:`, '  Issuing CA certificate configured:', ...(tp.ca ? [`    Subject Name:`, `     cn=${tp.ca.cn}`, `    Fingerprint MD5: (略)`] : ['    (none)']),
+      '  Router General Purpose certificate configured:', ...(tp.cert ? [`    Subject Name:`, `     cn=${tp.cert.cn}`] : ['    (none)']), '  State:', `    Keys generated ............. ${tp.key || tp.cert ? 'Yes (General Purpose, non-exportable)' : 'No'}`,
+      `    Issuing CA authenticated ....... ${tp.ca ? 'Yes' : 'No'}`, `    Certificate request(s) ..... ${tp.cert ? 'None' : 'Pending'}`, ...(tp.ca ? [`    Revocation check ........... ${tp.revoke || 'crl'}`] : []), '');
+  }
   return o;
 }

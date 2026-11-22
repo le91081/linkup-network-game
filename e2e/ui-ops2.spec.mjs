@@ -62,3 +62,20 @@ test('雙 WAN 的 QoS：劇本三分鐘後挖斷主線，跳出通知、路由�
   await expect(page.locator('#panel .term-out')).toContainText('[10/0] via 10.255.1.2');
   expect(await scan(page, '#panel', 'CLI（雙 WAN）')).toEqual([]);
 });
+
+test('憑證驗證的 IKEv2：show crypto pki certificates 是 Not yet valid，clock set 之後 VPN 恢復', async ({ page }) => {
+  await boot(page);
+  await open(page, 'l101');
+  await clickDevice(page, 'br');
+  await page.locator('#panel .tab', { hasText: 'CLI' }).click();
+  await typeCmd(page, 'enable', 'show clock', 'show crypto pki certificates');
+  const out = page.locator('#panel .term-out');
+  await expect(out).toContainText('2002');
+  await expect(out).toContainText('Status: Not yet valid');
+  await typeCmd(page, 'clock set 01:02:00 5 January 2026');
+  await expect(out).toContainText(/System clock has been updated from 00:00:\d\d UTC Tue Jan 1 2002 to 01:02:00 UTC Mon Jan 5 2026/);
+  await page.evaluate(() => window.linkup.tick(5));
+  await typeCmd(page, 'show crypto ikev2 sa');
+  await expect(out).toContainText('READY');
+  expect(await scan(page, '#panel', 'CLI（PKI）')).toEqual([]);
+});

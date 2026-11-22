@@ -100,6 +100,8 @@ function ikeLines(T, ver, f) {
   }
   if (v2 && f.ikev2) {
     if (/沒有回應|到不了對端|沒有通往對端|沒有指向|那一端的通道已停用|IKE 版本/.test(w)) out.push(pkt('tx', 'IKE_SA_INIT', '\nPayload contents:\n SA KE N VID VID NOTIFY(NAT_DETECTION_SOURCE_IP) NOTIFY(NAT_DETECTION_DESTINATION_IP)'), `${sess}:Retransmitting packet`);
+    else if (/找不到符合的 ikev2 profile/.test(w)) out.push(pkt('rx', 'IKE_AUTH', '\nPayload contents:\n NOTIFY(AUTHENTICATION_FAILED)'), 'IKEv2:% IKEv2 profile not found', `${sess}:Auth exchange failed`);
+    else if (/AUTHENTICATION_FAILED/.test(w) && /憑證|CRL|trustpoint/.test(w)) out.push(pkt('rx', 'IKE_AUTH', '\nPayload contents:\n NOTIFY(AUTHENTICATION_FAILED)'), `${sess}:Verify cert failed`, `${sess}:Auth exchange failed`, `%IKEV2-5-SA_DOWN: Bad SA ${me}:500 ${peer}:500`);
     else if (/AUTHENTICATION_FAILED/.test(w)) out.push(pkt('rx', 'IKE_AUTH', '\nPayload contents:\n NOTIFY(AUTHENTICATION_FAILED)'), `${sess}:Auth exchange failed`, `%IKEV2-5-SA_DOWN: Bad SA ${me}:500 ${peer}:500`);
     else if (/IKE_SA_INIT.*加密提案/.test(w)) out.push(pkt('rx', 'IKE_SA_INIT', '\nPayload contents:\n NOTIFY(NO_PROPOSAL_CHOSEN)'), `${sess}:Received no proposal chosen notify`, `${sess}:Failed SA init exchange`);
     else if (/CHILD_SA|proxy ID|網段沒有互相對應|找不到可用的 profile|沒有指定 keyring|keyring/.test(w)) {
@@ -153,6 +155,23 @@ function dhcpTick(state) {
   for (const seen of Object.values(state.dyn.dbgSeen || {})) for (const [k, x] of Object.entries(seen)) if (k.startsWith('dhcp|') && state.clock - x.t > 600) delete seen[k];
 }
 
+/** IKEv2 用憑證驗證失敗：驗證的那一端不用開 debug 也會記 %PKI-3-…（同一則一分鐘最多一次） */
+function pkiFail(state) {
+  for (const d of Object.values(state.devices)) {
+    for (const T of (d.rt && d.rt.tunnels) || []) {
+      const a = T.auth;
+      if (!a || !a.log || !a.at || a.log[0] !== '%') continue;
+      const y = state.devices[a.at];
+      if (!y || !isIos(y) || (state.down || {})[y.id]) continue;
+      const seen = ((state.dyn.dbgSeen ||= {})[y.id] ||= {}), key = 'pki|' + a.log;
+      if (seen[key] && state.clock - seen[key].t < 60) continue;
+      seen[key] = { t: state.clock, n: 1 };
+      const m = /^%([^:]+): (.*)$/.exec(a.log);
+      if (m) logEvent(state, y, 3, m[1], m[2]);
+    }
+  }
+}
+
 /** OSPF 偵測到 Router ID 重複：不用開 debug，IOS 本來就會記一筆（每個鄰居一分鐘最多一次） */
 function dupRid(state, d) {
   for (const [k, o] of Object.entries(d.rt)) {
@@ -183,6 +202,7 @@ export function debugTick(state) {
     if (f.ospfAdj || f.ospfHello) ospfTick(state, d, f);
     if (f.isakmp || f.ikev2 || f.ipsec) ikeTick(state, d, f);
   }
+  pkiFail(state);
   dhcpTick(state);
   for (const id of Object.keys(dyn.dbgSeen || {})) if (!state.devices[id]) delete dyn.dbgSeen[id];
 }

@@ -75,7 +75,7 @@ npm run build    # 輸出到 dist/
 - **評分**：過關時依實際作答時間（畫面在前景、沒有開對話框才算；標準時間是 3 分鐘加上每個目標 1.5 分鐘）、看了幾個提示、跑了幾次完整測試給 S / A / B / C 與分數，關卡選單上顯示最佳等級。設定變更的次數只列出來參考。
 - **關卡編輯器**：自由模式的「關卡設計」可以寫關卡名稱、任務說明、提示，指定哪些設備鎖定（玩家看得到、不能設定），然後試玩、存成自訂關卡、或匯出成關卡檔分享；關卡選單的「自訂關卡」可以遊玩、匯出、刪除與匯入。
 
-## 關卡（17 章 100 關）
+## 關卡（17 章 101 關）
 
 | 章節 | 關卡數 | 主題 |
 | --- | --- | --- |
@@ -85,7 +85,7 @@ npm run build    # 輸出到 dist/
 | 4 資料中心 | 4 | ToR 與 SVI、Spine-Leaf 與 OSPF、銅纜 / 多模 / 單模光纖與距離；Jumbo Frame 要整條路一致（交換器默默丟掉 giant、`ping -f -l 8972`、2960 的 `system mtu jumbo` 要存檔重新開機） |
 | 5 無線網路 | 3 | SSID、WPA2 / WPA3、PoE、頻道規劃、訪客 SSID 對應 VLAN |
 | 6 網路安全 | 12 | TCP 與 UDP（只放行 TCP 53 的 ACL 擋掉了 DNS、TFTP、Syslog）、DHCP Snooping、Port Security、ACL、管理加固、DAI、BPDU Guard、802.1X / RADIUS、用 DTP 偽裝成交換器的 VLAN hopping 與邊緣埠加固；MAC flooding 把交換器的表塞滿、變成 Hub（Port Security 的 maximum 與違規動作要先設好再打開、亂造的項目要等老化或 clear）；雙重標籤從 Native VLAN 跳進伺服器 VLAN、繞過 ACL（Native VLAN 改成沒人用的、或 vlan dot1q tag native）；飯店的房間用 Private VLAN 隔離（isolated、community、promiscuous） |
-| 7 VPN 與廣域備援 | 11 | 站對站 IPsec、遠端存取 VPN、雙線路浮動靜態路由；業者骨幹故障時介面還是 up，用 IP SLA 與追蹤的靜態路由切換（探測目標要綁在主線、不要用使用者的 DNS）；三個據點的 Hub-and-Spoke 與 IKEv2（版本要一致、PFS 不一致要到重新協商才斷、加密範圍與 NAT 例外要包含另一個分公司）；IPsec 讓封包變大，ICMP「需要分段」被伺服器網段的 ACL 擋掉造成 PMTUD 黑洞（上傳正常、下載卡住），放行 `packet-too-big` 並在介面上 `ip tcp adjust-mss 1360`；GRE 通道上的 OSPF 學到 tunnel destination 的網段，造成 recursive routing、Tunnel 一直 flapping（`%TUN-5-RECURDOWN`，network 敘述不要包含 WAN）；GRE 不加密，用 `tunnel protection ipsec profile` 改成 GRE over IPsec，外部 ACL 改放 UDP 500 與 ESP、不再放行明文 GRE；crypto map 換成 VTI（`tunnel mode ipsec ipv4`），transform-set 不一致時 VTI 是 up/down，再讓 OSPF 在 VTI 上學到新網段；DMVPN（mGRE + NHRP + IPsec）：hub 少了 `ip nhrp map multicast dynamic` 讓 OSPF 只有單向的 Hello，spoke 搶到 DR，門市之間的流量在 NHRP 解析之後直接走；分公司在大樓的 PAT 後面：總公司的對端要寫 NAT 之後的位址，NAT-T 改走 UDP 4500，ACL 要放行 |
+| 7 VPN 與廣域備援 | 12 | 站對站 IPsec、遠端存取 VPN、雙線路浮動靜態路由；業者骨幹故障時介面還是 up，用 IP SLA 與追蹤的靜態路由切換（探測目標要綁在主線、不要用使用者的 DNS）；三個據點的 Hub-and-Spoke 與 IKEv2（版本要一致、PFS 不一致要到重新協商才斷、加密範圍與 NAT 例外要包含另一個分公司）；IPsec 讓封包變大，ICMP「需要分段」被伺服器網段的 ACL 擋掉造成 PMTUD 黑洞（上傳正常、下載卡住），放行 `packet-too-big` 並在介面上 `ip tcp adjust-mss 1360`；GRE 通道上的 OSPF 學到 tunnel destination 的網段，造成 recursive routing、Tunnel 一直 flapping（`%TUN-5-RECURDOWN`，network 敘述不要包含 WAN）；GRE 不加密，用 `tunnel protection ipsec profile` 改成 GRE over IPsec，外部 ACL 改放 UDP 500 與 ESP、不再放行明文 GRE；crypto map 換成 VTI（`tunnel mode ipsec ipv4`），transform-set 不一致時 VTI 是 up/down，再讓 OSPF 在 VTI 上學到新網段；DMVPN（mGRE + NHRP + IPsec）：hub 少了 `ip nhrp map multicast dynamic` 讓 OSPF 只有單向的 Hello，spoke 搶到 DR，門市之間的流量在 NHRP 解析之後直接走；分公司在大樓的 PAT 後面：總公司的對端要寫 NAT 之後的位址，NAT-T 改走 UDP 4500，ACL 要放行；用憑證驗證的 IKEv2：分公司換了主機板電池、時鐘回到 2002 年，總公司的憑證「還沒生效」，偏偏 NTP 伺服器在 VPN 的另一邊（先 `clock set`，再改用不經過 VPN 的 NTP） |
 | 8 高可用與進階路由 | 9 | STP、EtherChannel、VRRP / HSRP、DHCP Relay、OSPF Cost、VLSM；HSRP 追蹤上行介面（preempt 預設是關的，兩台都要開）；主線在業者那一端斷掉、介面燈號還亮著，OSPF 要等 40 秒的 Dead timer，用 BFD（或 fast hello）兩秒內切到備援；兩台閘道只有 HSRP 的 Active 在做事，改成 GLBP 讓兩台一起轉送（AVG 輪流發虛擬 MAC、AVF 壞掉時其他台接手） |
 | 9 IPv6 | 8 | Link-local、SLAAC、IPv6 靜態路由、雙協定；RA 的 M / O / A 旗標與 DHCPv6（stateless / stateful，DHCPv6 不給閘道）、OSPFv3（link-local 鄰居、純 IPv6 路由器的 Router ID）、IPv6 ACL 與隱含的 ND 允許規則；冒牌的 Router Advertisement 搶走預設閘道（主機多一個位址、IPv6 變黑洞），RA Guard 的 device-role host；內部網站加了 AAAA 之後雙協定的電腦 ping 名稱逾時、瀏覽器靠 Happy Eyeballs 改用 IPv4 才打得開（AAAA 寫錯、伺服器少了 IPv6 閘道，`nslookup -type=aaaa`、`ping -4 / -6`）；IPv6 過不了 VPN：`tunnel mode ipsec ipv4` 的 VTI 只載 IPv4，改成 GRE over IPsec，OSPFv3 在 Tunnel 上建鄰居 |
 | 10 故障排除 | 9 | 網路已經設定好但被改壞了：IP 衝突與 DHCP 保留、Trunk / VLAN / shutdown、閘道 / 回程路由 / NAT / ACL / DNS、ping 會通但傳檔很慢（速率寫死、duplex mismatch、舊 Hub）；OSPF 鄰居起不來（MD5 金鑰、被動介面、network 敘述）；流量繞經實驗室的交換器（根橋位置與 Root Guard）；VPN 通了資料卻過不去（NAT 例外、加密的 ACL 要涵蓋新網段）；DNS 改了卻還連到舊的（TTL 與用戶端快取、nslookup 不看快取、`ipconfig /flushdns`）；整層樓都慢了：一台電腦狂送廣播（從介面的 broadcasts 計數器找出是誰），用 Storm Control 擋下 |
@@ -136,7 +136,8 @@ npm run build    # 輸出到 dist/
 
 另外還支援：
 
-- **VPN**：`crypto isakmp policy`（encryption / hash / group）、`crypto isakmp key … address …`、`crypto ipsec transform-set`、`crypto map … ipsec-isakmp`（`set peer`、`set transform-set`、`set pfs`、`set ikev2-profile`、`match address`），以及介面上的 `crypto map`。IKEv2：`crypto ikev2 proposal`（encryption aes-cbc-128 / aes-cbc-256、integrity、group）、`crypto ikev2 policy`、`crypto ikev2 keyring` → `peer` →（`address`、`pre-shared-key [local | remote]`）、`crypto ikev2 profile`（`match identity remote address`、`authentication local / remote pre-share`、`keyring local`）；`show crypto ikev2 sa`、`show crypto ikev2 profile`。
+- **VPN**：`crypto isakmp policy`（encryption / hash / group）、`crypto isakmp key … address …`、`crypto ipsec transform-set`、`crypto map … ipsec-isakmp`（`set peer`、`set transform-set`、`set pfs`、`set ikev2-profile`、`match address`），以及介面上的 `crypto map`。IKEv2：`crypto ikev2 proposal`（encryption aes-cbc-128 / aes-cbc-256、integrity、group）、`crypto ikev2 policy`、`crypto ikev2 keyring` → `peer` →（`address`、`pre-shared-key [local | remote]`）、`crypto ikev2 profile`（`match identity remote address | fqdn domain | any`、`identity local fqdn`、`authentication local / remote pre-share | rsa-sig`、`keyring local`、`pki trustpoint`）；`show crypto ikev2 sa`、`show crypto ikev2 profile`。
+- **PKI**：`crypto pki trustpoint`（`enrollment url`（SCEP）、`subject-name`、`revocation-check none | crl | crl none`、`rsakeypair`、`fqdn`、`serial-number none`、`ip-address none`）、`crypto pki authenticate`（核對指紋後接受 CA 的根憑證）、`crypto pki enroll`、`crypto pki certificate chain`（running-config 裡的憑證可以整份貼回）；`show crypto pki certificates`、`show crypto pki trustpoints [status]`。CA 伺服器用 SCEP（TCP 80）自動核發，憑證往前推 10 分鐘生效。
 - **NAT 的範圍**：`ip nat inside source list <ACL>` 可以指定編號或具名的 ACL，`access-list <編號>` 也能用。
 - **DHCP 保留位址**：只有一台主機的位址池（`host` 加上 `hardware-address`）。
 - **實體層**：`speed`、`duplex`。
@@ -321,6 +322,7 @@ npm run build    # 輸出到 dist/
 - **Root Guard**：啟用的埠如果收到更優先的根橋 BPDU 就進入 root-inconsistent 而被擋下；開在朝向根橋的埠上（錯誤設定）一樣會被擋。
 - **TCP 三向交握**：TCP 連線會走完 SYN → SYN-ACK → ACK；防火牆與 NAT 設備用連線紀錄比對後續的封包，不會重新比對政策。
 - **DHCP 發放前先確認**：伺服器發出新位址前會先 ping，已經有人在用就跳過並記成衝突；但設備離線期間發出去的租約不會重新檢查，回來之後照樣衝突。
+- **憑證驗證**：IKEv2 的 `rsa-sig` 由驗證的那一端用 trustpoint 裡 CA 的根憑證檢查對方的憑證，有效期間看的是「自己的時鐘」：時鐘錯了就是 `%PKI-3-CERTIFICATE_INVALID_NOT_YET_VALID` 或 `EXPIRED`。trustpoint 預設 `revocation-check crl`，要連得到 CA 拿 CRL（CA 在 VPN 另一邊時改成 `crl none`）；對方的 profile 要找得到符合的身分（`identity local fqdn` 對上 `match identity remote fqdn domain`）。換過主機板電池的路由器，時鐘回到 2002 年、而且重開機也一樣。
 - **IKEv2**：IKE_SA_INIT 與 IKE_AUTH 四個訊息就建好 IKE SA 和第一個 CHILD_SA（IKEv1 要 Main Mode 加 Quick Mode）。兩端版本不一致時協商失敗；預先共用金鑰可以兩個方向不同（A 用來簽的要等於 B 用來驗證的）。第一個 CHILD_SA 不做 PFS 的 DH，所以 PFS 不一致時一開始照樣通，到第一次重新協商才斷 — 任務裡有「一小時後再測一次」。
 - **Hub-and-Spoke**：分公司只和總公司建通道，分公司之間的流量在總公司解密、比對政策（VPN → VPN）、再加密送出去；兩條通道的加密範圍、總公司的政策、Cisco 分公司的 NAT 例外都要包含另一個分公司。
 - **IPsec 兩階段**：第一階段 (IKE) 與第二階段 (IPsec SA、PFS) 分開協商，哪一個階段不一致會分別指出。IOS 的 ISAKMP 政策整台共用。
@@ -372,7 +374,7 @@ npm run build    # 輸出到 dist/
 - DTP 不模擬 VTP 網域不同造成的協商失敗，也不模擬經過非網管交換器的 DTP。雙重標籤 (double tagging) 的 VLAN hopping 只在觀念題出現。
 - 遠端存取的 SSL-VPN 沒有連線建立的時間。
 - STP 以每個 VLAN 各算一棵樹的方式近似 Rapid PVST+，只處理交換器直接相連的情況；非網管交換器形成迴圈會被判定為廣播風暴。邊緣埠用的是傳統的 30 秒計時（和 Cisco 預設的 PVST+ 一樣）。
-- DNS 查詢一律經由 IPv4 送到 DNS 伺服器；網際網路（ISP）沒有 IPv6，也沒有 DHCPv6 Prefix Delegation、NAT64 / DNS64、FortiGate 的 IPv6 政策。IPsec 有 IKEv1 與 IKEv2，只用預先共用金鑰（沒有憑證、EAP）；IOS 的 IKEv2 smart defaults 簡化成 AES-CBC-128/256、SHA-1/256、DH 2/5/14/19 的組合。Tunnel 介面只有 IOS 路由器有（沒有 FortiGate 的 IPsec 介面模式、L3 交換器的 Tunnel、GRE over IPv6、tunnel vrf）；OSPF 沒有 point-to-multipoint；NHRP 的註冊與解析是即時的（沒有計時重送），NHRP 項目到 holdtime 才過期；DMVPN 不能放在 NAT 後面、沒有 IPv6 的 NHRP；NAT-T 的 NAT 對應一直保留（不模擬 NAT keepalive 與轉換逾時）。圖形介面建立的 FortiGate 通道會自動帶出通往對端的路由（相當於用精靈建立）。SSL-VPN 的加密流量在引擎內部仍然當成一層封裝來處理。
+- DNS 查詢一律經由 IPv4 送到 DNS 伺服器；網際網路（ISP）沒有 IPv6，也沒有 DHCPv6 Prefix Delegation、NAT64 / DNS64、FortiGate 的 IPv6 政策。IPsec 有 IKEv1 與 IKEv2；IKEv1 只用預先共用金鑰，IKEv2 可以用預先共用金鑰或 IOS 之間的憑證 (rsa-sig)，沒有 EAP、ECDSA、FortiGate 的憑證與 `match certificate`；CA 自動核發（沒有人工核准、撤銷與 OCSP）；IOS 的 IKEv2 smart defaults 簡化成 AES-CBC-128/256、SHA-1/256、DH 2/5/14/19 的組合。Tunnel 介面只有 IOS 路由器有（沒有 FortiGate 的 IPsec 介面模式、L3 交換器的 Tunnel、GRE over IPv6、tunnel vrf）；OSPF 沒有 point-to-multipoint；NHRP 的註冊與解析是即時的（沒有計時重送），NHRP 項目到 holdtime 才過期；DMVPN 不能放在 NAT 後面、沒有 IPv6 的 NHRP；NAT-T 的 NAT 對應一直保留（不模擬 NAT keepalive 與轉換逾時）。圖形介面建立的 FortiGate 通道會自動帶出通往對端的路由（相當於用精靈建立）。SSL-VPN 的加密流量在引擎內部仍然當成一層封裝來處理。
 - Wi-Fi 的訊號依距離估算再扣掉沿路穿過的牆，沒有反射、多路徑與樓層；牆只能由關卡預先放好，自由模式還不能畫牆。802.11r 只是設定，沒有模擬漫遊所花的時間。無線控制器沒有 DNS 探索、DTLS、映像檔下載、AP group / tag 與跨控制器漫遊 (Mobility Group)，只能用圖形介面設定。
 - 802.1X 只驗證帳號密碼（沒有憑證）。
 - 路由重分配只有 OSPF 與 BGP 之間、以及靜態與直連；沒有 EIGRP / RIP，所以也沒有雙向重分配造成的迴圈。政策路由只有 `set ip next-hop` 與 `set ip default next-hop`（沒有 `set interface`、`verify-availability` 搭配 track），FortiGate 的政策路由還沒有做。
@@ -392,7 +394,7 @@ npm run build    # 輸出到 dist/
 
 完整的功能規劃（每個領域已完成、部分完成、尚未開始的項目，以及建議的實作順序）在 [PLAN.md](PLAN.md)。以下是最接近的幾項：
 
-1. 維運與語音補充（PLAN 的第 19 階段：IKEv2 / 802.1X 的憑證驗證、NTP + Syslog 對時、用 CDP / LLDP 畫拓撲、PoE 預算）；FortiGate HA、堆疊 / vPC；IKEv2 的憑證驗證、OSPF point-to-multipoint、FortiGate 的 IPsec 介面模式與 IPv6 政策、DHCPv6 Prefix Delegation、NAT64 / DNS64、TACACS+。
+1. 維運與語音補充（PLAN 的第 19 階段：802.1X 的 EAP-TLS、用 CDP / LLDP 畫拓撲）；無線補充（第 20 階段）；FortiGate HA、堆疊 / vPC；OSPF point-to-multipoint、FortiGate 的 IPsec 介面模式與 IPv6 政策、DHCPv6 Prefix Delegation、NAT64 / DNS64、TACACS+。
 2. BGP 的 VRF 與 MP-BGP route-target、自由模式畫牆、訪客入口 (Captive Portal)。
 3. 802.1X 與 IPsec 的憑證驗證（EAP-TLS、RSA 簽章）、中繼憑證鏈與撤銷檢查。
 4. NTP 與 Syslog 的維運關卡（引擎已經有了，還沒有獨立的關卡）。
@@ -416,6 +418,7 @@ src/engine/   模擬引擎（不依賴瀏覽器，可直接用 Node 測試）
   voice.js        IP 電話的開機與註冊、CUCM、通話品質（E-model / MOS）
   wire.js         線路上的訊框：介面計數器、封包擷取、SPAN、IOS debug、FortiGate sniffer 與 debug flow
   debug.js        IOS 的 debug ip ospf、debug ip dhcp server、debug crypto isakmp / ikev2 / ipsec 的輸出
+  pki.js          IOS 的 PKI：trustpoint、CA 的根憑證與核發、用設備自己的時鐘驗證憑證
   sim.js          對外的入口：重新計算 (recompute)、模擬時鐘（advance / settle / pendingOf），並匯出 sim/ 底下各模組公開的函式。
   script.js       關卡劇本的排程事件（幾秒後線路斷掉、修好、背景流量開始或停止）
                   其他程式一律 import sim.js，不直接 import sim/ 裡面的檔案

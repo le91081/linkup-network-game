@@ -29,7 +29,7 @@ import { route6Rows } from '../engine/sim6.js';
 import { CATALOG, MEDIA, peerOf, portOf, linkInfo, phyConfig } from '../engine/model.js';
 import { iosSession, runningConfig, startupConfig, hostName as host, aclName, aclLine, aclSeqs } from '../engine/ios.js';
 import { ipMtu, l2Mtu, jumboNow, isCat2960, isCat9300, isNexus } from '../engine/mtu.js';
-import { tunByName, tunnelDetail, dmvpnLines, nhrpLines, nhsLines, ipsecProfileLines, cryptoSessionLines, transformSetLines, bfdLines } from './cli-tun.js';
+import { tunByName, tunnelDetail, dmvpnLines, nhrpLines, nhsLines, ipsecProfileLines, cryptoSessionLines, transformSetLines, bfdLines, pkiCertLines, pkiTrustpointLines } from './cli-tun.js';
 import { cacheFlowLines, flowMonitorLines, flowExporterLines } from './cli-flow.js';
 
 const pad = (s, n) => String(s).padEnd(n);
@@ -1789,6 +1789,14 @@ function showOrPing(app, devId, line, print) {
     if (bg) { for (const m of bg.sample) print(pad(String(bg.vlan).padStart(4), 8) + pad(dotMac(m), 18) + pad('DYNAMIC', 12) + bg.label, 'pre'); print(`（… 另外還有 ${(bg.n - bg.sample.length).toLocaleString('en')} 筆亂造的 MAC 都學在這個埠）`, 'hint'); }
     print(`Total Mac Addresses for this criterion: ${rows.length + (bg ? bg.n : 0)}`, 'pre');
     return true;
+  }
+  // show crypto pki certificates [verbose] [trustpoint]、show crypto pki trustpoints [status]
+  if (tok[0].length >= 2 && 'show'.startsWith(tok[0]) && (tok[1] || '').length >= 3 && 'crypto'.startsWith(tok[1]) && tok[2] === 'pki' && (tok[3] || '').length >= 4) {
+    const raw = line.trim().split(/\s+/), rest = raw.slice(4).filter((x) => !/^verbose$/i.test(x));
+    let lines = null;
+    if ('certificates'.startsWith(tok[3])) lines = pkiCertLines(st, d, rest[0]);
+    else if ('trustpoints'.startsWith(tok[3])) lines = pkiTrustpointLines(st, d, /^st/i.test(rest[0] || ''));
+    if (lines) { lines.forEach((l) => print(l, l.startsWith('（') ? 'hint' : 'pre')); return true; }
   }
   // show flow monitor <名稱> cache：Flexible NetFlow 的快取
   if (tok[0].length >= 2 && 'show'.startsWith(tok[0]) && tok[1] === 'flow' && (tok[2] || '').length >= 3 && 'monitor'.startsWith(tok[2]) && tok[3] && (!tok[4] || 'cache'.startsWith(tok[4]))) {

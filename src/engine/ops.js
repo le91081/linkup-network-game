@@ -64,7 +64,8 @@ export function deviceTime(state, d, depth = 0) {
     const ref = state.devices[n.ref];
     return out(ref && ref.mgmt ? deviceTime(state, ref, depth + 1).ms : wall, 'ntp', true, true);
   }
-  if (c.set) return out(c.set.wall + (now - c.set.at) * 1000, c.set.free ? 'ntp' : 'manual', true, false);
+  // c.set.rtc：硬體時鐘被重設過（換了主機板電池）的時間，和手動設定一樣會走，但不可信（前面有 *）
+  if (c.set) return out(c.set.wall + (now - c.set.at) * 1000, c.set.free ? 'ntp' : c.set.rtc ? 'rtc' : 'manual', !c.set.rtc, false);
   if (NO_RTC.has(d.model)) return out(FACTORY + (now - (c.boot ?? now - UPTIME0)) * 1000, 'boot', false, false);
   return out(wall + drift(d), 'rtc', false, false);
 }
@@ -337,7 +338,9 @@ function wipe(state, d) {
   }
   // OSPF 的鄰居關係要從頭建立
   for (const k of Object.keys(dyn.adj || {})) if (k.split('~').some((x) => x.startsWith(d.id + '/'))) delete dyn.adj[k];
-  delete c.ntp; delete c.set; delete c.reload;
+  // 硬體時鐘被重設過的設備（c.set.rtc）：重開機之後還是那個錯的時間，照樣往下走
+  delete c.ntp; delete c.reload;
+  if (!(c.set && c.set.rtc)) delete c.set;
   delete (dyn.ev || {})[d.id];
 }
 

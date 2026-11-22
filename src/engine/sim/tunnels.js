@@ -6,6 +6,7 @@ import { findOwner } from './forward.js';
 import { leaseFrom, lookupRoute } from './l3.js';
 import { transact } from './transact.js';
 import { isTun, protPeers, tunMode } from './gre.js';
+import { tpOf, urlTarget, verifyPeer } from '../pki.js';
 
 // ───────────────────────────── VPN 通道 ─────────────────────────────
 
@@ -66,6 +67,43 @@ const p2set = (t) => {
 /** IKEv2 的提案比對：先不看 PFS（第一個 CHILD_SA 不做 DH） */
 const strip6 = (xs) => [...new Set(xs.map((x) => x.replace(/ \/ PFS \d+$/, '')))];
 /** IKEv1：兩端同一把金鑰；IKEv2：A 送出的要等於 B 用來驗證的，反過來也一樣 */
+/** 這一端證明自己用什麼方法：IKEv2 的 profile 可以是 rsa-sig（憑證），其他都是預先共用金鑰 */
+const authL = (d, t) => { const o = v2obj(d, t); return (o && o.prof.authL) || 'pre-share'; };
+const authR = (d, t) => { const o = v2obj(d, t); return (o && o.prof.authR) || 'pre-share'; };
+/** 需不需要預先共用金鑰：兩個方向都用憑證就不用 */
+export const needsPsk = (d, t) => authL(d, t) === 'pre-share' || authR(d, t) === 'pre-share';
+/**
+ * IKEv2 的 IKE_AUTH：每一端用自己的 local 方法證明身分，對方依它的 profile（match identity、authentication remote）驗證。
+ * 只有用到憑證或 FQDN 身分時才走這裡；回傳 null（通過）或 { why, log, at }（log 是驗證失敗那一端記的 PKI 訊息）
+ */
+function certAuth(state, A, ta, B, tb, ipA, ipB) {
+  const pa = (v2obj(A, ta) || {}).prof || {}, pb = (v2obj(B, tb) || {}).prof || {};
+  const fancy = (p) => p.authL === 'rsa-sig' || p.authR === 'rsa-sig' || p.idFqdn || p.remoteFqdn || p.remoteAny;
+  if (!fancy(pa) && !fancy(pb)) return undefined; // 傳統的預先共用金鑰：沿用原本的檢查
+  for (const [x, px, tx, ipx, y, py, ty] of [[A, pa, ta, ipA, B, pb, tb], [B, pb, tb, ipB, A, pa, ta]]) {
+    // 對方要找得到符合這個身分的 profile
+    const id = px.idFqdn ? { t: 'fqdn', v: px.idFqdn } : { t: 'address', v: ipx };
+    const idTxt = id.t === 'fqdn' ? `FQDN ${id.v}` : `位址 ${fmtIp(id.v)}`;
+    if (py.remoteFqdn && !(id.t === 'fqdn' && (id.v === py.remoteFqdn || id.v.endsWith('.' + py.remoteFqdn)))) return { why: `${y.name} 找不到符合的 ikev2 profile：${x.name} 的身分是 ${idTxt}，profile 要的是 match identity remote fqdn domain ${py.remoteFqdn}${id.t === 'address' ? `（${x.name} 要 identity local fqdn <名稱>）` : ''}`, log: 'IKEv2:% IKEv2 profile not found', at: y.id };
+    if (py.remote && !py.remoteFqdn && !(id.t === 'address' && id.v === parseIp(py.remote))) return { why: `${y.name} 找不到符合的 ikev2 profile：${x.name} 的身分是 ${idTxt}，profile 要的是 match identity remote address ${py.remote}`, log: 'IKEv2:% IKEv2 profile not found', at: y.id };
+    const mine = px.authL || 'pre-share', theirs = py.authR || 'pre-share';
+    if (mine !== theirs) return { why: `IKEv2 驗證失敗 (AUTHENTICATION_FAILED)：${x.name} 用 ${mine} 證明自己（authentication local ${mine}），${y.name} 卻要用 ${theirs} 驗證它（authentication remote ${theirs}）` };
+    if (mine === 'pre-share') {
+      const a = pskOf(x, tx), b = pskOf(y, ty);
+      if (!a.loc || a.loc !== b.rem) return { why: `IKEv2 驗證失敗 (AUTHENTICATION_FAILED)：${x.name} 用來簽的金鑰，和 ${y.name} 用來驗證它的金鑰不同` };
+      continue;
+    }
+    const v = verifyPeer(state, x, px.tp, y, py.tp);
+    if (v) return { why: `IKEv2 驗證失敗 (AUTHENTICATION_FAILED)：${v.why}`, log: v.log, at: y.id };
+    // 撤銷檢查：IOS 的 trustpoint 預設 revocation-check crl，要連得到 CA 拿 CRL（crl none 是拿不到就算了）
+    const tpy = tpOf(y, py.tp);
+    if (tpy && (tpy.revoke || 'crl') === 'crl') {
+      const tgt = urlTarget(tpy.url), r = tgt && transact(state, y.id, { proto: 'tcp', dst: tgt.ip, dport: tgt.port, quiet: true });
+      if (!r || !r.ok) return { why: `IKEv2 驗證失敗 (AUTHENTICATION_FAILED)：${y.name} 的 trustpoint ${py.tp} 要檢查撤銷清單（revocation-check crl，IOS 的預設），可是連不到 CA${tgt ? ' ' + fmtIp(tgt.ip) : ''} 拿不到 CRL${r && r.reason ? '（' + r.reason + '）' : ''}。CA 在通道的另一邊時，改成 revocation-check crl none 或 none`, log: `%PKI-3-CRL_FETCH_FAIL: CRL fetch for trustpoint ${py.tp} failed`, at: y.id };
+    }
+  }
+  return null;
+}
 function pskMatch(da, ta, db, tb) {
   const a = pskOf(da, ta), b = pskOf(db, tb);
   return ikeVer(da, ta) === 1 ? a.loc === b.loc : a.loc === b.rem && a.rem === b.loc;
@@ -175,7 +213,7 @@ function protT(d, i, peerIp, responder) {
   };
   if (prof.tset && !(d.tsets || {})[prof.tset]) T.why = `IPsec profile ${i.tun.prot} 用的 transform-set ${prof.tset} 不存在`;
   else if (prof.ikev2 && !v2obj(d, cfg)) T.why = `IPsec profile ${i.tun.prot} 指定的 ikev2 profile「${prof.ikev2}」不存在`;
-  else if (!pskOf(d, cfg).loc) T.why = pskOf(d, cfg).why || `沒有給 ${peer} 的預先共用金鑰（crypto isakmp key <金鑰> address ${peer}${tunMode(i) === 'mgre' ? '，DMVPN 的 spoke 之間要用 address 0.0.0.0' : ''}）`;
+  else if (needsPsk(d, cfg) && !pskOf(d, cfg).loc) T.why = pskOf(d, cfg).why || `沒有給 ${peer} 的預先共用金鑰（crypto isakmp key <金鑰> address ${peer}${tunMode(i) === 'mgre' ? '，DMVPN 的 spoke 之間要用 address 0.0.0.0' : ''}）`;
   return T;
 }
 
@@ -197,7 +235,7 @@ export function prepTunnels(state) {
       else if (!T.local.length || !T.remote.length) T.why = '尚未設定本地 / 遠端網段';
       else if (t.ikev2 && !v2obj(d, t)) T.why = `crypto map 指定的 ikev2 profile「${t.ikev2}」不存在`;
       else if (t.ikev2 && v2obj(d, t).prof.remote && v2obj(d, t).prof.remote !== '0.0.0.0' && v2obj(d, t).prof.remote !== t.peer) T.why = `ikev2 profile「${t.ikev2}」的 match identity remote address 是 ${v2obj(d, t).prof.remote}，和對端 ${t.peer} 不符：IKEv2 找不到可用的 profile`;
-      else if (!pskOf(d, t).loc) T.why = pskOf(d, t).why || '尚未設定預先共用金鑰 (PSK)';
+      else if (needsPsk(d, t) && !pskOf(d, t).loc) T.why = pskOf(d, t).why || '尚未設定預先共用金鑰 (PSK)';
       else {
         const r = lookupRoute(d, T.peerIp);
         if (!r) T.why = `沒有通往對端 ${fmtIp(T.peerIp)} 的路由`;
@@ -246,7 +284,9 @@ export function prepTunnels(state) {
     else if (ikeVer(state.devices[T.dev], T.cfg) !== ikeVer(pd, P.cfg)) {
       const mine = ikeVer(state.devices[T.dev], T.cfg);
       T.why = `IKE 版本不一致（本端 IKEv${mine}，對端 IKEv${3 - mine}）— ${mine === 2 ? '對端只聽得懂 IKEv1 的 Main Mode，不回應 IKE_SA_INIT' : '對端送來的是 IKEv2 的 IKE_SA_INIT，這一端只跑 IKEv1'}，協商失敗`;
-    } else if (!pskMatch(state.devices[T.dev], T.cfg, pd, P.cfg)) {
+    } else if ((T.auth = certAuth(state, state.devices[T.dev], T.cfg, pd, P.cfg, T.localIp, T.peerIp))) {
+      T.why = T.auth.why;
+    } else if (T.auth === undefined && !pskMatch(state.devices[T.dev], T.cfg, pd, P.cfg)) {
       const v2 = ikeVer(pd, P.cfg) === 2, a = pskOf(state.devices[T.dev], T.cfg), b = pskOf(pd, P.cfg);
       T.why = !v2 ? '兩端的預先共用金鑰 (PSK) 不一致 — IKE 驗證失敗'
         : `IKEv2 驗證失敗 (AUTHENTICATION_FAILED)：${a.loc !== b.rem ? `這一端用來簽的金鑰，和 ${pd.name} 用來驗證它的金鑰不同` : `${pd.name} 用來簽的金鑰，和這一端用來驗證它的金鑰不同`}`;
