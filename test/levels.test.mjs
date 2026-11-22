@@ -3591,6 +3591,35 @@ console.log('\n訪客入口 (Captive Portal)');
   ok(!web().ok && web().portal, '8 小時後 session 逾時：要重新同意');
 }
 
+console.log('\nVPC peering 與 Transit Gateway');
+{
+  const sim = await import('../src/engine/sim.js');
+  const { peerState, tgwRoutes } = await import('../src/engine/cloud.js');
+  const ok = (cond, title) => (cond ? console.log('  ✔ ' + title) : fail(title));
+  const lv = LEVELS.find((x) => x.id === 'l110');
+  const s = lv.setup(); settle(s);
+  const tcp = (from, src, dst, port) => sim.transact(s, from, { proto: 'tcp', srcIp: parseIp(src), dst: parseIp(dst), dport: port, quiet: true });
+  ok(tcp('shared', '10.20.1.10', '10.10.1.20', 3306).ok && tcp('shared', '10.20.1.10', '10.30.1.10', 443).ok, 'shared 經過兩條 peering 連得到 prod 與 dev');
+  const r = tcp('dev', '10.30.1.10', '10.10.1.20', 3306);
+  ok(!r.ok && /non-transitive/.test(r.reason), `dev → prod：peering 不能轉送（${r.reason.slice(0, 40)}…）`);
+  const pv = s.devices.prod.vpc, PS = pv.peers[0];
+  s.devices.shared.vpc.peers.find((x) => x.id === PS.id).status = 'pending'; settle(s);
+  ok(!peerState(s, s.devices.prod, PS).ok && /pending-acceptance/.test(peerState(s, s.devices.prod, PS).why) && !tcp('shared', '10.20.1.10', '10.10.1.20', 3306).ok, '對方還沒接受 (pending-acceptance)：peering 不通');
+  s.devices.shared.vpc.peers.find((x) => x.id === PS.id).status = 'active'; settle(s);
+  const T = 'tgw-0f3a8c27d1e94b605';
+  s.devices.tgw.tgw.attach = ['prod', 'shared', 'dev'];
+  ok(tgwRoutes(s, s.devices.tgw).filter((x) => x.prop).map((x) => x.dst).join() === '10.10.0.0/16,10.20.0.0/16,10.30.0.0/16', 'Transit Gateway 的路由表：三個 VPC 的網段都傳播進來');
+  s.devices.dev.vpc.rts[0].routes.find((x) => x.dst === '10.10.0.0/16').target = T;
+  s.devices.prod.vpc.sgs.find((g) => g.id === 'sg-0db').in.push({ proto: 'tcp', port: '3306', src: '10.30.0.0/16' }); settle(s);
+  const r2 = tcp('dev', '10.30.1.10', '10.10.1.20', 3306);
+  ok(!r2.ok && r2.phase === 'reply', `去程經過 Transit Gateway 到得了，但 prod 沒有往 dev 的回程路由：${r2.reason.slice(0, 50)}`);
+  s.devices.prod.vpc.rts[0].routes.push({ dst: '10.30.0.0/16', target: T }); settle(s);
+  const r3 = tcp('dev', '10.30.1.10', '10.10.1.20', 3306);
+  ok(r3.ok && r3.hops.some((h) => h.to === 'tgw') && r3.log.some((l) => /Transit Gateway 的路由表：10\.10\.0\.0\/16 → AWS · prod/.test(l.text) || /路由表：10\.10\.0\.0\/16/.test(l.text)), 'prod 加上回程路由：dev → Transit Gateway → prod 的 db 通了');
+  s.devices.tgw.tgw.noProp = ['prod']; settle(s);
+  ok(!tcp('dev', '10.30.1.10', '10.10.1.20', 3306).ok, '關掉 prod 的路由傳播：Transit Gateway 不知道 10.10.0.0/16 在哪裡');
+}
+
 console.log('\nNetFlow 與 QoS 的 police');
 {
   const sim = await import('../src/engine/sim.js');

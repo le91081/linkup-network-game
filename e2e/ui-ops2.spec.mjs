@@ -196,3 +196,18 @@ test('負載平衡器：EC2 主控台的分頁顯示目標不健康的原因，�
   await expect(page.locator('#panel .card', { hasText: 'web-alb' })).toContainText('健康的目標 2 / 2');
   expect(await scan(page, '#panel', '負載平衡器分頁')).toEqual([]);
 });
+
+test('Transit Gateway：peering 分頁列出 active 的連線，TGW 主控台 attach 三個 VPC 之後路由表學到三個網段', async ({ page }) => {
+  await boot(page);
+  await open(page, 'l110');
+  await clickDevice(page, 'shared');
+  await page.locator('#panel .tab', { hasText: 'Peering' }).click();
+  await expect(page.locator('#panel .card', { hasText: 'pcx-0a7e3c19d2b84f560' })).toContainText('active');
+  expect(await scan(page, '#panel', 'Peering 分頁')).toEqual([]);
+  await clickDevice(page, 'tgw');
+  const att = page.locator('#panel .card', { hasText: 'VPC attachment' });
+  for (const name of ['prod', 'shared', 'dev']) await att.locator('label.switch', { hasText: `AWS · ${name}` }).click();
+  await expect(page.locator('#panel .card', { hasText: '路由表' })).toContainText('10.30.0.0/16');
+  expect(await page.evaluate(() => window.linkup.state.devices.tgw.tgw.attach.length)).toBe(3);
+  expect(await scan(page, '#panel', 'Transit Gateway 主控台')).toEqual([]);
+});

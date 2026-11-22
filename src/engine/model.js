@@ -188,6 +188,10 @@ export const CATALOG = {
     kind: 'ap', shape: 'ap', vendor: 'Cisco', title: 'Cisco Catalyst 9120AXI',
     tagline: '輕量型基地台 · 要由無線控制器管理 · 802.3at PoE', ports: [rj('Gi0', 'Gi0 / PoE')], needsPoe: true, poe: { cls: 4, watts: 20.9 }, lwap: true,
   },
+  tgw: {
+    kind: 'cloud', shape: 'cloud', vendor: 'AWS', title: 'AWS Transit Gateway',
+    tagline: '區域裡的雲端路由器 · 把很多個 VPC（與 VPN）接在一起', ports: [], tgw: true,
+  },
   vpc: {
     kind: 'cloud', shape: 'cloud', vendor: 'AWS', title: 'Amazon VPC',
     tagline: '公有雲的虛擬私有雲 · 東京區域', ports: [rj('inet', '網際網路')],
@@ -309,6 +313,8 @@ export function makeDevice(model, id, o = {}) {
       d.vpnServer = { on: false, start: '', end: '', subnets: '', users: [] };
       break;
     case 'cloud':
+      // Transit Gateway：沒有實體的線，VPC 用 attachment 接上來；路由表由各 VPC 的網段傳播而來（也可以加靜態路由）
+      if (m.tgw) { d.routing = true; d.ifaces = []; d.tgw = { id: 'tgw-0' + (id.length * 2654435761 >>> 0).toString(16).padStart(8, '0') + 'a1b2c3d4', attach: [], routes: [], noProp: [] }; break; }
       // 雲端業者那一端：「網際網路閘道」介面接 ISP，VPC 裡的東西都在 d.vpc；站對站 VPN 沿用 d.vpns
       d.ifaces = [iface('igw', '網際網路閘道', { t: 'port', port: 'inet' }, { ping: false })];
       d.routing = true; d.vpns = []; d.vpc = newVpc();

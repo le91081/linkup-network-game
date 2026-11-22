@@ -359,6 +359,13 @@ export function forward(state, ctx, startId, pkt) {
       const c = cloudStep(state, ctx, dev, inIf, pkt, { findTunnel, track });
       if (c.drop) return drop(c.drop);
       if (c.done) return { ok: true, dev: dev.id };
+      // VPC peering / Transit Gateway：經過雲端業者的骨幹直接到下一個 VPC（沒有實體的線）
+      if (c.jump) {
+        hops.push({ from: dev.id, to: c.jump.dev, fromPort: c.jump.via.id, toPort: c.jump.via.id, reply: pkt.reply, proto: pkt.proto, cloud: true });
+        dev = state.devices[c.jump.dev];
+        inIf = c.jump.via;
+        continue;
+      }
       if (!c.pass) cloud = c;
     }
     if (inIf && !cloud) {

@@ -136,6 +136,19 @@ export function renderTopo(app, svg, rect) {
       parts.push(`<line class="t2-link wifi${hotWifi.has([apId, cl.dev].sort().join('|')) ? ' hot' : ''}" x1="${e.pa.x}" y1="${e.pa.y}" x2="${e.pb.x}" y2="${e.pb.y}"><title>${esc(`${st.devices[cl.dev].name} 透過 Wi-Fi 連到 ${st.devices[apId].name}`)}</title></line>`);
     }
   }
+  // 雲端的邏輯連線：VPC peering、Transit Gateway 的 attachment（沒有實體的線）
+  for (const d of devs) {
+    for (const p of (d.vpc && d.vpc.peers) || []) {
+      if (!(d.id < p.peer) || !P.has(p.peer)) continue;
+      const e = edge(d.id, p.peer);
+      parts.push(`<line class="t2-link virt" x1="${e.pa.x}" y1="${e.pa.y}" x2="${e.pb.x}" y2="${e.pb.y}"><title>${esc(`VPC peering ${p.id}：${d.name} ↔ ${st.devices[p.peer].name}`)}</title></line>`);
+    }
+    for (const id of (d.tgw && d.tgw.attach) || []) {
+      if (!P.has(id)) continue;
+      const e = edge(d.id, id);
+      parts.push(`<line class="t2-link virt" x1="${e.pa.x}" y1="${e.pa.y}" x2="${e.pb.x}" y2="${e.pb.y}"><title>${esc(`${st.devices[id].name} 的 Transit Gateway attachment`)}</title></line>`);
+    }
+  }
   // 建立好的 VPN 通道：兩端之間的弧線
   const owner = (ip) => devs.find((d) => d.ifaces.some((i) => i.rt && i.rt.ip === ip));
   const seen = new Set();

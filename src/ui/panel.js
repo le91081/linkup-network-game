@@ -613,7 +613,7 @@ function baseTabs(dev) {
     case 'hub': case 'switch': return [T.ports];
     case 'ap': return dev.lwap ? [['lwap', 'AP', W.lwapTab]] : [['ssid', '無線網路', X.ssidTab], ['radio', '無線電', X.radioTab], T.ports];
     case 'hypervisor': return [['vsw', '虛擬交換器', VZ.vswTab], ['vms', '虛擬機器', VZ.vmsTab], T.status];
-    case 'cloud': return [['vpc', 'VPC', CL.vpcTab], ['sub', '子網路', CL.subnetTab], ['rtb', '路由表', CL.rtTab], ['ec2', 'EC2', CL.ec2Tab], ['sg', '安全群組', CL.sgTab], ['nacl', '網路 ACL', CL.naclTab], ['nat', 'NAT 閘道', CL.natTab], ['alb', '負載平衡器', CL.lbTab], ['cvpn', 'VPN', CL.cloudVpnTab]];
+    case 'cloud': return dev.tgw ? [['tgw', 'Transit Gateway', CL.tgwTab]] : [['vpc', 'VPC', CL.vpcTab], ['sub', '子網路', CL.subnetTab], ['rtb', '路由表', CL.rtTab], ['ec2', 'EC2', CL.ec2Tab], ['sg', '安全群組', CL.sgTab], ['nacl', '網路 ACL', CL.naclTab], ['nat', 'NAT 閘道', CL.natTab], ['alb', '負載平衡器', CL.lbTab], ['pcx', 'Peering', CL.peeringTab], ['cvpn', 'VPN', CL.cloudVpnTab]];
     case 'wlc': return [['wlan', 'WLAN', W.wlanTab], ['aps', 'AP', W.apsTab], ['wcl', '用戶端', W.wlcClientsTab], ['wmi', '管理介面', W.wmiTab], T.swports];
     case 'mswitch': return [T.swports, T.vlan, T.sec, T.mgmt, T.status];
     case 'l3switch': return [T.swports, T.vlan, T.l3, T.route, T.sec, ['qos', 'QoS', V.qosTab], T.mgmt, T.status];

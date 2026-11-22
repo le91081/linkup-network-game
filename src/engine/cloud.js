@@ -22,7 +22,7 @@ export function newVpc() {
     rts: [{ id: 'rtb-main', name: '主路由表', main: true, routes: [], prop: false }],
     nacls: [{ id: 'acl-default', name: '預設 ACL', def: true, in: [{ n: 100, act: 'allow', ...ALL }], out: [{ n: 100, act: 'allow', ...ALL }] }],
     sgs: [{ id: 'sg-default', name: 'default', in: [{ proto: 'all', port: '', src: 'sg-default' }], out: [{ proto: 'all', port: '', dst: '0.0.0.0/0' }] }],
-    natgws: [], instances: [], vgw: false, lbs: [],
+    natgws: [], instances: [], vgw: false, lbs: [], peers: [],
   };
 }
 
@@ -161,6 +161,42 @@ export function cloudOwns(dev, ip) {
   return !!instOf(v, ip) || v.instances.some((x) => x.rtWhy === '' && parseIp(x.eip || '') === ip) || v.natgws.some((n) => parseIp(n.eip || '') === ip) || (v.lbs || []).some((l) => parseIp(l.eip || '') === ip);
 }
 
+// ── VPC peering 與 Transit Gateway ──
+// peering：兩個 VPC 一對一相連（網段不能重疊、要對方接受），不能轉送 (non-transitive)：從 peering 進來的封包只能到這個 VPC 自己的執行個體。
+// Transit Gateway：區域裡的路由器，VPC 用 attachment 接上去，路由表由各 VPC 的網段傳播而來；兩邊的子網路路由表都要指向它。
+/** 一條 peering 現在能不能用：回傳 { ok, peerDev, why } */
+export function peerState(state, dev, p) {
+  const B = state.devices[p.peer], q = B && B.vpc && (B.vpc.peers || []).find((x) => x.id === p.id);
+  if (!B || !q) return { ok: false, why: '對方的 VPC 找不到這條 peering（已經被刪除）' };
+  const a = parseCidr(dev.vpc.cidr), b = parseCidr(B.vpc.cidr);
+  if (a && b && netOf(a.net, Math.min(a.bits, b.bits)) === netOf(b.net, Math.min(a.bits, b.bits))) return { ok: false, peerDev: B, why: `兩個 VPC 的網段重疊（${dev.vpc.cidr} 與 ${B.vpc.cidr}）：peering 建立失敗` };
+  if (p.status !== 'active' || q.status !== 'active') return { ok: false, peerDev: B, why: `還在等 ${p.status === 'pending' ? dev.name : B.name} 接受 (pending-acceptance)` };
+  return { ok: true, peerDev: B };
+}
+/** Transit Gateway 的路由表：附加的 VPC 傳播進來的網段，加上靜態路由 */
+export function tgwRoutes(state, dev) {
+  const t = dev.tgw, out = [];
+  for (const id of t.attach || []) {
+    const B = state.devices[id];
+    if (!B || !B.vpc || (t.noProp || []).includes(id)) continue;
+    const c = parseCidr(B.vpc.cidr);
+    if (c) out.push({ dst: B.vpc.cidr, net: c.net, bits: c.bits, attach: id, prop: true });
+  }
+  for (const r of t.routes || []) { const c = parseCidr(r.dst || ''); if (c) out.push({ dst: r.dst, net: c.net, bits: c.bits, attach: r.attach, blackhole: !(t.attach || []).includes(r.attach) }); }
+  return out;
+}
+function tgwStep(state, ctx, dev, inIf, pkt) {
+  const log = (kind, text) => ctx.log.push({ dev: dev.id, kind, text });
+  if (!inIf || !inIf.bind || inIf.bind.t !== 'tgwatt') return { drop: `${dev.name} 只轉送從 VPC attachment 進來的流量` };
+  const r = tgwRoutes(state, dev).filter((x) => netOf(pkt.dst, x.bits) === x.net).sort((a, b) => b.bits - a.bits)[0];
+  if (!r) return { drop: `${dev.name} 的路由表沒有往 ${fmtIp(pkt.dst)} 的路由（目的地的 VPC 有沒有 attach、有沒有開啟路由傳播？）` };
+  if (r.blackhole) return { drop: `${dev.name} 的靜態路由 ${r.dst} 指向的 attachment 不存在（黑洞路由）` };
+  if (r.attach === inIf.from) return { drop: `${dev.name} 的路由表把 ${fmtIp(pkt.dst)} 送回原本的 VPC` };
+  const B = state.devices[r.attach];
+  log('fwd', `${dev.name} 的路由表：${r.dst} → ${B.name} 的 attachment${r.prop ? '（傳播）' : '（靜態）'}`);
+  return { jump: { dev: B.id, via: { id: 'tgw', label: dev.name, bind: { t: 'tgw' }, from: dev.id, rt: { ip: null } } } };
+}
+
 /**
  * 封包進到 VPC（或從 VPC 裡的執行個體送出）時的處理。回傳：
  *   { pass: true }      不是給執行個體的（VPN 端點自己的 IKE / ESP）：照一般路由器的流程
@@ -170,6 +206,7 @@ export function cloudOwns(dev, ip) {
  *   { tunnel: T }        走站對站 VPN
  */
 export function cloudStep(state, ctx, dev, inIf, pkt, H) {
+  if (dev.tgw) return tgwStep(state, ctx, dev, inIf, pkt);
   const v = dev.vpc;
   const igw = dev.ifaces.find((i) => i.id === 'igw');
   const log = (kind, text) => ctx.log.push({ dev: dev.id, kind, text });
@@ -232,6 +269,12 @@ export function cloudStep(state, ctx, dev, inIf, pkt, H) {
     if (!v.vgw) return { drop: '這個 VPC 沒有連接虛擬私有閘道 (VGW)' };
     return toInstance(instOf(v, pkt.dst), null, 'VPN：');
   }
+  // ── 從 VPC peering 或 Transit Gateway 進來：只能到這個 VPC 自己的執行個體 ──
+  if (inIf && inIf.bind && (inIf.bind.t === 'pcx' || inIf.bind.t === 'tgw')) {
+    const y = instOf(v, pkt.dst);
+    if (!y) return { drop: inIf.bind.t === 'pcx' ? `VPC peering 不能轉送 (non-transitive)：${fmtIp(pkt.dst)} 不在 ${dev.name}（${v.cidr}）裡，從 peering 進來的封包不會再被送到別的 VPC、網際網路或 VPN` : `${fmtIp(pkt.dst)} 不在 ${dev.name}（${v.cidr}）裡` };
+    return toInstance(y, null, inIf.bind.t === 'pcx' ? `VPC peering ${inIf.id}：` : `Transit Gateway：`);
+  }
   if (inIf) return { drop: `${dev.name} 不轉送別人的封包` };
 
   // ── 從 VPC 裡的執行個體送出 ──
@@ -274,6 +317,22 @@ export function cloudStep(state, ctx, dev, inIf, pkt, H) {
     log('nat', `NAT 閘道 ${n.id}（在 ${ns.name}）：來源 ${x.ip} 換成 ${n.eip}`);
     pkt.src = nSrc;
     return { out: { iface: igw, via: igw.rt.gw } };
+  }
+  if (/^pcx-/.test(r.target)) {
+    const p = (v.peers || []).find((x) => x.id === r.target);
+    if (!p) return { drop: `路由表「${rt.name}」指向的 peering ${r.target} 不存在（黑洞路由）` };
+    const st = peerState(state, dev, p);
+    if (!st.ok) return { drop: `VPC peering ${p.id}：${st.why}` };
+    if (!inCidr(pkt.dst, parseCidr(st.peerDev.vpc.cidr))) return { drop: `VPC peering 只能到對方 VPC 自己的網段（${st.peerDev.name}：${st.peerDev.vpc.cidr}）：${fmtIp(pkt.dst)} 不在裡面，對方也不會幫忙轉送 (non-transitive)` };
+    log('fwd', `經過 VPC peering ${p.id} 到 ${st.peerDev.name}`);
+    return { jump: { dev: st.peerDev.id, via: { id: p.id, label: `peering ${p.id}`, bind: { t: 'pcx' }, from: dev.id, rt: { ip: null } } } };
+  }
+  if (/^tgw-/.test(r.target)) {
+    const T = Object.values(state.devices).find((x) => x.tgw && x.tgw.id === r.target);
+    if (!T) return { drop: `路由表「${rt.name}」指向的 Transit Gateway ${r.target} 不存在（黑洞路由）` };
+    if (!(T.tgw.attach || []).includes(dev.id)) return { drop: `${dev.name} 沒有 attach 到 ${T.name}：路由表指向它也送不過去` };
+    log('fwd', `交給 Transit Gateway ${T.name}`);
+    return { jump: { dev: T.id, via: { id: 'tgw-attach', label: dev.name, bind: { t: 'tgwatt' }, from: dev.id, rt: { ip: null } } } };
   }
   if (r.target === 'vgw') {
     if (!v.vgw) return { drop: `路由表「${rt.name}」指向虛擬私有閘道，但 VPC 沒有連接 VGW` };

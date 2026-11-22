@@ -233,4 +233,76 @@ export const LEVELS12 = [
     solve(s) { dev(s, 'aws').vpc.sgs.find((g) => g.id === 'sg-0web').in.push({ proto: 'tcp', port: '443', src: 'sg-0alb' }); },
     recap: ['ALB 只把流量分給通過健康檢查的目標；一台都不健康就回 503。', '健康檢查從 ALB 發出：目標的安全群組用「來源 = ALB 的安全群組」允許它，網站伺服器放在私有子網路、不對外開放。'],
   },
+  // ════════════════════════ 16-4 ════════════════════════
+  {
+    id: 'l110', chapter: 16, title: '兩條 peering 接好了，開發環境還是連不到正式環境', subtitle: 'VPC peering 不能轉送：改用 Transit Gateway', tags: ['雲端', 'VPC peering', 'Transit Gateway', '路由表', 'non-transitive'],
+    brief: '公司在 AWS 有三個 VPC：正式環境 prod、共用服務 shared、開發環境 dev。prod ↔ shared、dev ↔ shared 各有一條 peering，dev 的路由表也把 prod 的網段指向往 shared 的 peering，可是 dev 的 app 怎麼樣都連不到 prod 的資料庫。接下來還要再加十幾個 VPC，網路團隊已經建好一個 Transit Gateway。請讓 dev 的 app 經過 Transit Gateway 連到 prod 的 db（MySQL 3306），shared 的監控照樣連得到 db。',
+    given: [
+      ['prod', '10.10.0.0/16 · db 10.10.1.20（MySQL 3306，安全群組 db 只允許 shared 的網段）'], ['shared', '10.20.0.0/16 · mon 10.20.1.10（監控）'], ['dev', '10.30.0.0/16 · app 10.30.1.10'],
+      ['peering', 'prod ↔ shared、dev ↔ shared'], ['Transit Gateway', '已經建好，還沒有任何 attachment'],
+    ],
+    learn: [
+      { t: 'peering 不能轉送', d: 'VPC peering 是兩個 VPC 之間的一對一連線。A ↔ B、B ↔ C 都接了，A 的封包到了 B 也不會被轉給 C (non-transitive)：從 peering 進來的封包只能到 B 自己的執行個體。要互通就得 A ↔ C 再接一條，N 個 VPC 要 N×(N-1)/2 條。' },
+      { t: 'Transit Gateway', d: '區域裡的雲端路由器：每個 VPC 用一個 attachment 接上去，路由表由各 VPC 的網段傳播 (propagation) 而來，任兩個 VPC 都經過它互通，VPN 與專線也可以接上來。新增 VPC 只要多一個 attachment。' },
+      { t: '兩個方向都要有路', d: '去程：dev 的子網路路由表把 prod 的網段指向 Transit Gateway。回程：prod 的路由表也要把 dev 的網段指向 Transit Gateway，不然回應找不到路。目的地的安全群組也要允許新的來源網段。' },
+    ],
+    setup() {
+      const vpc = (id, name, pos, cidr, sub, inst, sgs, routes, peers) => D('vpc', id, {
+        name, pos,
+        init(d) {
+          const v = d.vpc;
+          Object.assign(v, { id: `vpc-0${id}7a2c91e4d3b5f`, cidr });
+          v.rts[0].id = `rtb-0${id}main4c8e2`;
+          v.rts[0].routes.push(...routes);
+          v.subnets.push(sub);
+          v.sgs.push(...sgs);
+          v.instances.push(inst);
+          v.peers = peers;
+        },
+      });
+      const PS = 'pcx-0a7e3c19d2b84f560', SD = 'pcx-0c41f8e2a95b7d031';
+      const s = makeState([
+        vpc('prod', 'AWS · prod（正式環境）', [-8, -2], '10.10.0.0/16', { id: 'subnet-0proda', name: 'prod-a', cidr: '10.10.1.0/24', az: 'ap-northeast-1a' },
+          { id: 'i-0db71e5c9a2f44360', name: 'db', subnet: 'subnet-0proda', ip: '10.10.1.20', eip: '', sgs: ['sg-0db'], type: 'r6g.large', services: [{ proto: 'tcp', port: 3306, name: 'MySQL' }] },
+          [{ id: 'sg-0db', name: 'db', in: [{ proto: 'tcp', port: '3306', src: '10.20.0.0/16' }], out: [{ proto: 'all', port: '', dst: '0.0.0.0/0' }] }],
+          [{ dst: '10.20.0.0/16', target: PS }], [{ id: PS, peer: 'shared', status: 'active' }]),
+        vpc('shared', 'AWS · shared（共用服務）', [0, -6.5], '10.20.0.0/16', { id: 'subnet-0shra', name: 'shared-a', cidr: '10.20.1.0/24', az: 'ap-northeast-1a' },
+          { id: 'i-0e9a4c2d7b13f8605', name: 'mon', subnet: 'subnet-0shra', ip: '10.20.1.10', eip: '', sgs: ['sg-0mon'], type: 't3.medium', services: [{ proto: 'tcp', port: 443, name: '監控' }] },
+          [{ id: 'sg-0mon', name: 'mon', in: [{ proto: 'tcp', port: '443', src: '10.0.0.0/8' }], out: [{ proto: 'all', port: '', dst: '0.0.0.0/0' }] }],
+          [{ dst: '10.10.0.0/16', target: PS }, { dst: '10.30.0.0/16', target: SD }], [{ id: PS, peer: 'prod', status: 'active' }, { id: SD, peer: 'dev', status: 'active' }]),
+        vpc('dev', 'AWS · dev（開發環境）', [8, -2], '10.30.0.0/16', { id: 'subnet-0deva', name: 'dev-a', cidr: '10.30.1.0/24', az: 'ap-northeast-1a' },
+          { id: 'i-0a5f3e8c1d27b9402', name: 'app', subnet: 'subnet-0deva', ip: '10.30.1.10', eip: '', sgs: ['sg-0app'], type: 't3.small', services: [{ proto: 'tcp', port: 443, name: 'App' }] },
+          [{ id: 'sg-0app', name: 'app', in: [{ proto: 'tcp', port: '443', src: '10.0.0.0/8' }], out: [{ proto: 'all', port: '', dst: '0.0.0.0/0' }] }],
+          [{ dst: '10.20.0.0/16', target: SD }, { dst: '10.10.0.0/16', target: SD }], [{ id: SD, peer: 'shared', status: 'active' }]),
+        D('tgw', 'tgw', { name: 'Transit Gateway', pos: [0, 3] }),
+      ], []);
+      s.devices.tgw.tgw.id = 'tgw-0f3a8c27d1e94b605';
+      return s;
+    },
+    objectives: [
+      { type: 'tcp', from: 'dev', srcIp: '10.30.1.10', ip: '10.10.1.20', port: 3306, via: 'tgw', label: 'dev 的 app 經過 Transit Gateway 連到 prod 的 db（3306）' },
+      { type: 'tcp', from: 'shared', srcIp: '10.20.1.10', ip: '10.10.1.20', port: 3306, label: 'shared 的監控照樣連得到 prod 的 db' },
+      {
+        type: 'check', label: '三個 VPC 都 attach 到 Transit Gateway（之後新增 VPC 只要再接一個）',
+        test(s) {
+          const t = dev(s, 'tgw').tgw;
+          for (const id of ['prod', 'shared', 'dev']) if (!(t.attach || []).includes(id)) return `${dev(s, id).name} 還沒有 attach 到 Transit Gateway`;
+          return true;
+        },
+      },
+    ],
+    hints: [
+      '先看現在為什麼不通：dev 把 10.10.0.0/16 送進往 shared 的 peering，到了 shared 就被丟掉 — peering 不能轉送。',
+      'Transit Gateway 的主控台：把 prod、shared、dev 三個 VPC 都 attach 上去（路由傳播會自動學到三個網段）。再到 dev 的路由表把 10.10.0.0/16 改指向 Transit Gateway；prod 的路由表也要加 10.30.0.0/16 → Transit Gateway（回程）。',
+      '還是不通？prod 的安全群組 db 只允許 shared 的 10.20.0.0/16，要加上 dev 的 10.30.0.0/16（TCP 3306）。',
+    ],
+    solve(s) {
+      const T = 'tgw-0f3a8c27d1e94b605';
+      dev(s, 'tgw').tgw.attach = ['prod', 'shared', 'dev'];
+      dev(s, 'dev').vpc.rts[0].routes.find((r) => r.dst === '10.10.0.0/16').target = T;
+      dev(s, 'prod').vpc.rts[0].routes.push({ dst: '10.30.0.0/16', target: T });
+      dev(s, 'prod').vpc.sgs.find((g) => g.id === 'sg-0db').in.push({ proto: 'tcp', port: '3306', src: '10.30.0.0/16' });
+    },
+    recap: ['VPC peering 是一對一、不能轉送的：A ↔ B、B ↔ C 不代表 A 到得了 C。', 'Transit Gateway 讓所有 VPC 接到同一台雲端路由器；兩邊的子網路路由表都要指向它，目的地的安全群組也要允許新的來源。'],
+  },
 ];

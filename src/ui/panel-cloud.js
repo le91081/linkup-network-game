@@ -3,7 +3,7 @@ import { h, button, icon, toast, ownKeys, escLine } from './dom.js';
 import { inp, sel, toggle, field, note, kv, del, cardHead, grid2, bind, badge } from './form.js';
 import { parseIp, parseCidr, fmtIp, netOf } from '../engine/ip.js';
 import { transact } from '../engine/sim.js';
-import { subnetOf, rtOf, naclOf, isPublic, reservedWhy, CLOUD_REGION, AWS_P1, AWS_DH, awsPsk, vpnConfig, lbIp } from '../engine/cloud.js';
+import { subnetOf, rtOf, naclOf, isPublic, reservedWhy, CLOUD_REGION, AWS_P1, AWS_DH, awsPsk, vpnConfig, lbIp, peerState, tgwRoutes } from '../engine/cloud.js';
 
 const isCidr = (v) => v.includes('/') && parseCidr(v) != null;
 const isIpv4 = (v) => parseIp(v) != null;
@@ -86,7 +86,9 @@ export function subnetTab(ctx, body) {
 export function rtTab(ctx, body) {
   const { dev } = ctx, v = dev.vpc;
   body.append(tip('子網路送出的封包，依照它那張路由表的「最長相符」決定往哪裡送。每張路由表都有一條不能刪的 local 路由（VPC 內部互通）；沒有明確指定路由表的子網路用主路由表。'));
-  const targets = [['igw', '網際網路閘道 (igw)'], ...v.natgws.map((n) => [n.id, `NAT 閘道 ${n.id}`]), ['vgw', '虛擬私有閘道 (vgw)']];
+  const tgws = Object.values(ctx.state.devices).filter((x) => x.tgw && (x.tgw.attach || []).includes(dev.id));
+  const targets = [['igw', '網際網路閘道 (igw)'], ...v.natgws.map((n) => [n.id, `NAT 閘道 ${n.id}`]), ['vgw', '虛擬私有閘道 (vgw)'],
+    ...(v.peers || []).map((p) => [p.id, `peering ${p.id}（${(ctx.state.devices[p.peer] || {}).name || p.peer}）`]), ...tgws.map((x) => [x.tgw.id, `Transit Gateway ${x.tgw.id}`])];
   v.rts.forEach((r, n) => {
     const subs = v.subnets.filter((s) => rtOf(v, s) === r).map((s) => s.name);
     const card = h('div', { class: 'card' }, cardHead(r.name, r.main ? badge('on', '主路由表') : null, !r.main && del(() => { v.rts.splice(n, 1); for (const s of v.subnets) if (s.rtb === r.id) delete s.rtb; ctx.commit(true); })),
@@ -223,6 +225,57 @@ export function natTab(ctx, body) {
       s && !isPublic(v, s) ? note('warn', `${s.name} 的路由表沒有 0.0.0.0/0 → igw：NAT 閘道自己出不去，要放在公有子網路。`) : null));
   });
   body.append(h('div', { class: 'addrow' }, button('建立 NAT 閘道', { ic: 'plus', kind: 'primary', small: true, onclick: () => { v.natgws.push({ id: awsId('nat'), subnet: (v.subnets[0] || {}).id || '', eip: '' }); ctx.commit(true); } })));
+}
+
+// ───────────────────────── VPC peering ─────────────────────────
+
+export function peeringTab(ctx, body) {
+  const { dev, state } = ctx, v = dev.vpc;
+  v.peers ||= [];
+  body.append(tip('VPC peering 把兩個 VPC 一對一接起來（網段不能重疊、對方要接受）。它不能轉送 (non-transitive)：A ↔ B、B ↔ C 都接了，A 還是到不了 C。接好之後，兩邊子網路的路由表都要加往對方網段 → pcx 的路由。VPC 一多，改用 Transit Gateway。'));
+  const others = Object.values(state.devices).filter((x) => x.vpc && x.id !== dev.id);
+  v.peers.forEach((p, n) => {
+    const st = peerState(state, dev, p), B = state.devices[p.peer];
+    body.append(h('div', { class: 'card' }, cardHead(p.id, st.ok ? badge('on', 'active') : badge('warn', p.status === 'pending' ? '等你接受' : p.status === 'requested' ? '等對方接受' : '失敗'), del(() => {
+      v.peers.splice(n, 1);
+      if (B && B.vpc) B.vpc.peers = (B.vpc.peers || []).filter((x) => x.id !== p.id);
+      ctx.commit(true);
+    })),
+      kv('對方的 VPC', B ? `${B.name}（${B.vpc.cidr}）` : p.peer),
+      !st.ok ? note('warn', st.why) : note('ok', `已經接通。兩邊子網路的路由表要有往對方網段 → ${p.id} 的路由。`),
+      p.status === 'pending' && h('div', { class: 'addrow' }, button('接受這個 peering 要求', { ic: 'check', small: true, onclick: () => {
+        p.status = 'active';
+        const q = B && B.vpc && (B.vpc.peers || []).find((x) => x.id === p.id);
+        if (q) q.status = 'active';
+        ctx.commit(true);
+      } }))));
+  });
+  if (!others.length) body.append(note('muted', '這個關卡沒有別的 VPC 可以接。'));
+  else body.append(h('div', { class: 'addrow' }, ...others.filter((x) => !v.peers.some((p) => p.peer === x.id)).map((x) => button(`向 ${x.name} 提出 peering`, { ic: 'plus', small: true, onclick: () => {
+    const id = awsId('pcx');
+    v.peers.push({ id, peer: x.id, status: 'requested' });
+    (x.vpc.peers ||= []).push({ id, peer: dev.id, status: 'pending' });
+    ctx.commit(true);
+  } }))));
+}
+
+// ───────────────────────── Transit Gateway ─────────────────────────
+
+export function tgwTab(ctx, body) {
+  const { dev, state } = ctx, t = dev.tgw;
+  body.append(tip('Transit Gateway 是區域裡的雲端路由器：每個 VPC 用一個 attachment 接上來，路由表自動學到各 VPC 的網段（路由傳播），任兩個 VPC 都能經過它互通。別忘了每個 VPC 的子網路路由表，也要把往其他 VPC 的網段指向這個 Transit Gateway。'));
+  const vpcs = Object.values(state.devices).filter((x) => x.vpc);
+  body.append(h('div', { class: 'card' }, cardHead('VPC attachment'), kv('Transit Gateway ID', t.id),
+    h('div', { class: 'toggles' }, vpcs.map((x) => toggle(ctx, () => (t.attach || []).includes(x.id), (on) => { t.attach = on ? [...new Set([...(t.attach || []), x.id])] : (t.attach || []).filter((y) => y !== x.id); }, `${x.name}（${x.vpc.cidr}）`, { rerender: true }))),
+    (t.attach || []).length ? h('div', { class: 'toggles' }, (t.attach || []).map((id) => toggle(ctx, () => !(t.noProp || []).includes(id), (on) => { t.noProp = on ? (t.noProp || []).filter((y) => y !== id) : [...new Set([...(t.noProp || []), id])]; }, `路由傳播：${(state.devices[id] || {}).name || id}`, { rerender: true }))) : null));
+  const card = h('div', { class: 'card' }, cardHead('路由表'), h('div', { class: 'cl-route head' }, h('span', { text: '目的地' }), h('span', { text: '目標' }), h('span')));
+  card.append(ctx.live(() => tgwRoutes(state, dev).filter((r) => r.prop).map((r) => h('div', { class: 'cl-route prop' }, h('span', { class: 'mono', text: r.dst }), h('span', { class: 'mono', text: `${(state.devices[r.attach] || {}).name}（傳播）` }), h('span')))));
+  (t.routes ||= []).forEach((r, k) => card.append(h('div', { class: 'cl-route' },
+    inp(ctx, ...bind(r, 'dst'), { ph: '10.0.0.0/8', check: isCidr }),
+    sel(ctx, ...bind(r, 'attach'), (t.attach || []).map((id) => [id, (state.devices[id] || {}).name || id])),
+    del(() => { t.routes.splice(k, 1); ctx.commit(true); }))));
+  card.append(h('div', { class: 'addrow' }, button('新增靜態路由', { ic: 'plus', small: true, onclick: () => { t.routes.push({ dst: '', attach: (t.attach || [])[0] || '' }); ctx.commit(true); } })));
+  body.append(card);
 }
 
 // ───────────────────────── 負載平衡器 ─────────────────────────
