@@ -3,7 +3,7 @@ import { h, button, icon, toast, ownKeys, escLine } from './dom.js';
 import { inp, sel, toggle, field, note, kv, del, cardHead, grid2, bind, badge } from './form.js';
 import { parseIp, parseCidr, fmtIp, netOf } from '../engine/ip.js';
 import { transact } from '../engine/sim.js';
-import { subnetOf, rtOf, naclOf, isPublic, reservedWhy, CLOUD_REGION, AWS_P1, AWS_DH, awsPsk, vpnConfig } from '../engine/cloud.js';
+import { subnetOf, rtOf, naclOf, isPublic, reservedWhy, CLOUD_REGION, AWS_P1, AWS_DH, awsPsk, vpnConfig, lbIp } from '../engine/cloud.js';
 
 const isCidr = (v) => v.includes('/') && parseCidr(v) != null;
 const isIpv4 = (v) => parseIp(v) != null;
@@ -223,6 +223,34 @@ export function natTab(ctx, body) {
       s && !isPublic(v, s) ? note('warn', `${s.name} 的路由表沒有 0.0.0.0/0 → igw：NAT 閘道自己出不去，要放在公有子網路。`) : null));
   });
   body.append(h('div', { class: 'addrow' }, button('建立 NAT 閘道', { ic: 'plus', kind: 'primary', small: true, onclick: () => { v.natgws.push({ id: awsId('nat'), subnet: (v.subnets[0] || {}).id || '', eip: '' }); ctx.commit(true); } })));
+}
+
+// ───────────────────────── 負載平衡器 ─────────────────────────
+
+export function lbTab(ctx, body) {
+  const { dev } = ctx, v = dev.vpc;
+  v.lbs ||= [];
+  body.append(tip('應用程式負載平衡器 (ALB)：用戶端連到 ALB 的公用 IP，ALB 再把連線分給目標群組裡「健康」的執行個體。目標可以放在私有子網路（不需要公用 IP）；健康檢查是 ALB 自己連到目標的目標埠，所以目標的安全群組要允許 ALB（通常用 ALB 的安全群組當來源）。'));
+  const free = (l) => v.eips.filter((e) => e === l.eip || (!v.instances.some((i) => i.eip === e) && !v.natgws.some((x) => x.eip === e) && !v.lbs.some((x) => x !== l && x.eip === e)));
+  v.lbs.forEach((l, n) => {
+    const s = v.subnets.find((q) => q.id === l.subnet);
+    body.append(h('div', { class: 'card' }, cardHead(l.name || l.id, ctx.live(() => { const r = ((dev.rt.cloud || {}).lb || {})[l.id] || { healthy: [] }; return badge(r.healthy.length ? 'on' : 'warn', `健康的目標 ${r.healthy.length} / ${(l.targets || []).length}`); }), del(() => { v.lbs.splice(n, 1); ctx.commit(true); })),
+      grid2(
+        field('名稱', inp(ctx, ...bind(l, 'name'), { mono: false, ph: '例如 web-alb' })),
+        field('子網路', sel(ctx, ...bind(l, 'subnet'), v.subnets.map((q) => [q.id, `${q.name}（${isPublic(v, q) ? '公有' : '私有'}）`]), { rerender: true })),
+        field('彈性 IP（對外的位址）', sel(ctx, () => l.eip || '', (val) => { l.eip = val; }, [['', '（沒有）'], ...free(l).map((e) => [e, e])], { rerender: true })),
+        field('安全群組', sel(ctx, () => l.sg || '', (val) => { l.sg = val; }, [['', '（沒有）'], ...v.sgs.map((g) => [g.id, `${g.name}（${g.id}）`])])),
+        field('接聽器 (TCP)', inp(ctx, () => String(l.port || 80), (val) => { l.port = +val || 80; }, { ph: '443' })),
+        field('目標埠', inp(ctx, () => String(l.tgPort || 80), (val) => { l.tgPort = +val || 80; }, { ph: '80' }))),
+      h('div', { class: 'acl-h' }, h('span', { text: '目標群組' }), h('em', { text: s ? `ALB 在 ${s.name} 的位址：${fmtIp(lbIp(v, l))}` : '' })),
+      h('div', { class: 'toggles' }, v.instances.map((x) => toggle(ctx, () => (l.targets || []).includes(x.id), (on) => { l.targets = on ? [...new Set([...(l.targets || []), x.id])] : (l.targets || []).filter((t) => t !== x.id); }, `${x.name}（${x.ip}）`, { rerender: true }))),
+      ctx.live(() => {
+        const r = ((dev.rt.cloud || {}).lb || {})[l.id] || { healthy: [], why: {} };
+        return (l.targets || []).map((id) => { const x = v.instances.find((i) => i.id === id); return r.why[id] ? note('warn', `${x ? x.name : id}：不健康 — ${r.why[id]}`) : note('ok', `${x ? x.name : id}：健康`); });
+      }),
+      s && !isPublic(v, s) ? note('warn', `${s.name} 是私有子網路：對外的 ALB 要放在公有子網路（路由表有 0.0.0.0/0 → igw）。`) : null));
+  });
+  body.append(h('div', { class: 'addrow' }, button('建立負載平衡器', { ic: 'plus', kind: 'primary', small: true, onclick: () => { v.lbs.push({ id: awsId('alb'), name: 'web-alb', subnet: (v.subnets[0] || {}).id || '', eip: '', sg: '', port: 80, tgPort: 80, targets: [] }); ctx.commit(true); } })));
 }
 
 // ───────────────────────── VPN ─────────────────────────

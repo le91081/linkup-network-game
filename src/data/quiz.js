@@ -32,7 +32,7 @@ export const LEVEL_TOPIC = {
   l55: 'wireless', l56: 'wireless', l57: 'wireless',
   l58: 'auto', l59: 'auto', l60: 'auto', l61: 'auto', l62: 'auto',
   l63: 'routing', l64: 'routing', l65: 'ops', l66: 'routing', l67: 'switching', l68: 'vpn', l69: 'security', l71: 'services',
-  l70: 'auto', l72: 'routing', l73: 'auto', l74: 'security', l75: 'switching', l76: 'vpn', l77: 'routing', l78: 'routing', l79: 'routing', l80: 'routing', l81: 'routing', l82: 'routing', l83: 'security', l84: 'security', l85: 'switching', l86: 'security', l87: 'ipv6', l88: 'vpn', l89: 'vpn', l90: 'vpn', l91: 'vpn', l92: 'vpn', l93: 'ipv6', l94: 'ipv6', l95: 'routing', l96: 'routing', l97: 'ops', l98: 'switching', l99: 'ops', l100: 'ops', l101: 'vpn', l102: 'security', l103: 'switching', l104: 'wireless', l105: 'wireless', l106: 'wireless', l107: 'wireless', l108: 'wireless',
+  l70: 'auto', l72: 'routing', l73: 'auto', l74: 'security', l75: 'switching', l76: 'vpn', l77: 'routing', l78: 'routing', l79: 'routing', l80: 'routing', l81: 'routing', l82: 'routing', l83: 'security', l84: 'security', l85: 'switching', l86: 'security', l87: 'ipv6', l88: 'vpn', l89: 'vpn', l90: 'vpn', l91: 'vpn', l92: 'vpn', l93: 'ipv6', l94: 'ipv6', l95: 'routing', l96: 'routing', l97: 'ops', l98: 'switching', l99: 'ops', l100: 'ops', l101: 'vpn', l102: 'security', l103: 'switching', l104: 'wireless', l105: 'wireless', l106: 'wireless', l107: 'wireless', l108: 'wireless', l109: 'auto',
 };
 
 export const QUESTIONS = {
@@ -228,6 +228,7 @@ export const QUESTIONS = {
     { q: '兩台 AP 都放送 SSID「Corp」，但一台放進 VLAN 31、另一台放進 VLAN 32。筆電從一台漫遊到另一台時會怎樣？', a: ['沒有影響', '換了網段：IP 改變，進行中的連線（遠端桌面、通話）都會斷', '速度會變快', 'SSID 會消失'], c: 1, e: '漫遊要在同一個第二層網段裡才不會斷。用無線控制器時，所有 AP 的用戶端都從控制器放進同一個 VLAN，就沒有這個問題。', r: 'CCNA 1.11' },
   ],
   auto: [
+    { q: '雲端的應用程式負載平衡器 (ALB) 後面有兩台網站伺服器，ALB 卻一直回應 503。最可能的原因是？', a: ['ALB 沒有公用 IP', '目標的安全群組沒有允許 ALB 的健康檢查，兩台都被判定不健康', '網站伺服器沒有彈性 IP', 'DNS 還沒生效'], c: 1, e: 'ALB 只把流量分給通過健康檢查的目標，一台都不健康就回 503。健康檢查從 ALB 自己發出，目標的安全群組要允許它（來源用 ALB 的安全群組）；目標放在私有子網路、不需要公用 IP。', r: 'Network+ 1.3' },
     { q: 'REST API 中，建立一筆新資源通常使用哪一個 HTTP 方法？', a: ['GET', 'POST', 'DELETE', 'HEAD'], c: 1, e: 'CRUD 對應到 HTTP：Create = POST、Read = GET、Update = PUT / PATCH、Delete = DELETE。', r: 'CCNA 6.5' },
     { q: 'JSON 中，方括號 [ ] 代表什麼？', a: ['物件', '陣列', '字串', '註解'], c: 1, e: '大括號 { } 是物件（一組「鍵: 值」），方括號 [ ] 是陣列（有順序的清單）。', r: 'CCNA 6.7' },
     { q: 'Ansible 的特色是什麼？', a: ['必須在每台設備上安裝代理程式', '不需要代理程式，透過 SSH 連線並用 YAML 撰寫 Playbook', '只能管理 Windows 伺服器', '使用專屬的圖形介面，不能寫成檔案'], c: 1, e: 'Ansible 是 agentless 的，控制端透過 SSH（或 API）連到設備，工作內容用 YAML 寫成 Playbook。', r: 'CCNA 6.6' },

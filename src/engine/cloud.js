@@ -7,6 +7,7 @@
 //   ‧ NAT 閘道放在公有子網路，讓私有子網路的執行個體只能「由內往外」連線
 //   ‧ 安全群組 (SG) 掛在執行個體上，只有允許規則、有狀態：回應自動放行
 //   ‧ 網路 ACL 掛在子網路上，有編號、有拒絕規則、無狀態：回應封包（目的是用戶端的臨時連接埠）也要明確允許
+//   ‧ 應用程式負載平衡器 (ALB)：用戶端的連線在 ALB 結束，ALB 再連到健康的目標（健康檢查也要過目標的安全群組與網路 ACL）
 //   ‧ 虛擬私有閘道 (VGW) 與站對站 VPN：沿用 IPsec 的引擎（d.vpns），路由表要有往地端網段 → vgw 的路由（或開啟路由傳播）
 import { parseIp, parseCidr, netOf, fmtIp, maskOf } from './ip.js';
 
@@ -21,7 +22,7 @@ export function newVpc() {
     rts: [{ id: 'rtb-main', name: '主路由表', main: true, routes: [], prop: false }],
     nacls: [{ id: 'acl-default', name: '預設 ACL', def: true, in: [{ n: 100, act: 'allow', ...ALL }], out: [{ n: 100, act: 'allow', ...ALL }] }],
     sgs: [{ id: 'sg-default', name: 'default', in: [{ proto: 'all', port: '', src: 'sg-default' }], out: [{ proto: 'all', port: '', dst: '0.0.0.0/0' }] }],
-    natgws: [], instances: [], vgw: false,
+    natgws: [], instances: [], vgw: false, lbs: [],
   };
 }
 
@@ -68,11 +69,19 @@ function sgAllows(v, x, dir, pkt, peer, port) {
       if (!protoIn(r.proto, pkt)) continue;
       if (pkt.proto !== 'icmp' && !portIn(r.port, port)) continue;
       const who = dir === 'in' ? r.src : r.dst;
-      if (/^sg-/.test(who || '')) { const p = instOf(v, peer); if (p && (p.sgs || []).includes(who)) return true; continue; }
+      if (/^sg-/.test(who || '')) { const p = instOf(v, peer) || lbAt(v, peer); if (p && (p.sgs || []).includes(who)) return true; continue; }
       if (inCidr(peer, parseCidr(who || '0.0.0.0/0'))) return true;
     }
   }
   return false;
+}
+/** ALB 在 VPC 裡的位址（當作安全群組的來源比對用）：{ sgs } */
+const lbAt = (v, ip) => { const l = (v.lbs || []).find((x) => lbIp(v, x) === ip); return l ? { sgs: [l.sg] } : null; };
+/** ALB 的私有 IP：放在它的子網路裡（沒有指定就用 .250） */
+export function lbIp(v, l) {
+  if (parseIp(l.ip || '') != null) return parseIp(l.ip);
+  const s = v.subnets.find((x) => x.id === l.subnet), c = s && parseCidr(s.cidr);
+  return c ? (c.net + 250) >>> 0 : null;
 }
 const sgNames = (v, x) => (x.sgs || []).map((id) => (v.sgs.find((g) => g.id === id) || {}).name || id).join('、') || '（沒有掛任何安全群組）';
 const pdesc = (pkt, port) => (pkt.proto === 'icmp' ? 'ICMP' : `${pkt.proto.toUpperCase()} ${port}`);
@@ -121,9 +130,26 @@ export function prepCloud(state) {
       t.props ||= AWS_P1; t.dhs ||= AWS_DH; t.props2 ||= AWS_P1; t.pfsList ||= AWS_DH;
       t.off = !v.vgw; t.offWhy = 'VPC 沒有連接虛擬私有閘道 (VGW)';
     }
-    d.rt.cloud = { issues };
+    // ALB 的健康檢查：目標要在 TCP 目標埠上提供服務，安全群組與網路 ACL 要讓 ALB 連得進去
+    const lb = {};
+    for (const l of v.lbs || []) {
+      const r = (lb[l.id] = { healthy: [], why: {} }), ip = lbIp(v, l), ls = v.subnets.find((s) => s.id === l.subnet), port = +l.tgPort || 80;
+      for (const id of l.targets || []) {
+        const y = v.instances.find((x) => x.id === id);
+        const hp = { proto: 'tcp', dport: port, src: ip };
+        let why = '';
+        if (!y) why = '目標不存在';
+        else if (y.rtWhy) why = y.rtWhy;
+        else if (!ls) why = 'ALB 沒有指定子網路';
+        else if (!(y.services || []).some((s) => s.proto === 'tcp' && +s.port === port)) why = `${y.name} 沒有在 TCP ${port} 提供服務`;
+        else if (subnetOf(v, y) !== ls && naclCheck(naclOf(v, subnetOf(v, y)), 'in', hp, ip, port)) why = `子網路 ${subnetOf(v, y).name} 的網路 ACL 擋下 ALB（${fmtIp(ip)}）的健康檢查`;
+        else if (!sgAllows(v, y, 'in', hp, ip, port)) why = `${y.name} 的安全群組（${sgNames(v, y)}）沒有允許 ALB 的健康檢查（TCP ${port} 從 ALB 的安全群組或 ${fmtIp(ip)} 進來）`;
+        if (why) r.why[id] = why; else r.healthy.push(id);
+      }
+    }
+    d.rt.cloud = { issues, lb };
     if (!igw || !igw.rt.ip || !v.igw) continue;
-    const pubs = [...v.instances.map((x) => x.eip), ...v.natgws.map((n) => n.eip)].map((e) => parseIp(e || '')).filter((e) => e != null);
+    const pubs = [...v.instances.map((x) => x.eip), ...v.natgws.map((n) => n.eip), ...(v.lbs || []).map((l) => l.eip)].map((e) => parseIp(e || '')).filter((e) => e != null);
     for (const p of pubs) if (!igw.rt.vips.includes(p)) igw.rt.vips.push(p);
   }
 }
@@ -132,7 +158,7 @@ export function prepCloud(state) {
 export function cloudOwns(dev, ip) {
   const v = dev.vpc;
   if (!v) return false;
-  return !!instOf(v, ip) || v.instances.some((x) => x.rtWhy === '' && parseIp(x.eip || '') === ip) || v.natgws.some((n) => parseIp(n.eip || '') === ip);
+  return !!instOf(v, ip) || v.instances.some((x) => x.rtWhy === '' && parseIp(x.eip || '') === ip) || v.natgws.some((n) => parseIp(n.eip || '') === ip) || (v.lbs || []).some((l) => parseIp(l.eip || '') === ip);
 }
 
 /**
@@ -178,6 +204,19 @@ export function cloudStep(state, ctx, dev, inIf, pkt, H) {
       if (!y) return { drop: `${fmtIp(pkt.dst)} 沒有對應的執行個體` };
       if (!e) { log('nat', `網際網路閘道：EIP ${fmtIp(pkt.dst)} 換成 ${y.ip}`); pkt.dst = parseIp(y.ip); }
     } else {
+      // 給 ALB 的連線：在 ALB 結束（它是反向代理），再由它連到健康的目標
+      const l = (v.lbs || []).find((x) => parseIp(x.eip || '') === pkt.dst);
+      if (l) {
+        const port = pkt.dport;
+        if (pkt.proto !== 'tcp' || port !== (+l.port || 80)) return { drop: `ALB ${l.name} 只在 TCP ${+l.port || 80} 接受連線（${pdesc(pkt, port)} 沒有接聽器）` };
+        if (!sgAllows(v, { sgs: [l.sg] }, 'in', pkt, pkt.src, port)) return { drop: `ALB ${l.name} 的安全群組（${(v.sgs.find((g) => g.id === l.sg) || {}).name || l.sg || '沒有指定'}）沒有允許 ${pdesc(pkt, port)} 從 ${fmtIp(pkt.src)} 進來` };
+        const h = ((dev.rt.cloud || {}).lb || {})[l.id] || { healthy: [], why: {} };
+        if (!h.healthy.length) return { drop: `ALB ${l.name} 回應 HTTP 503 Service Unavailable：目標群組裡沒有健康的目標（${Object.entries(h.why).map(([id, w]) => w).join('；') || '目標群組是空的'}）` };
+        let k = 0; for (const c of String(pkt.src) + ':' + pkt.sport) k = (k * 31 + c.charCodeAt(0)) >>> 0;
+        const y2 = v.instances.find((x) => x.id === h.healthy[k % h.healthy.length]);
+        log('ok', `ALB ${l.name}：接受 ${pdesc(pkt, port)} 的連線，轉給健康的目標 ${y2.name}（${y2.ip}:${+l.tgPort || 80}）· 健康的目標 ${h.healthy.length} / ${(l.targets || []).length}`);
+        return { done: true };
+      }
       y = v.instances.find((x) => parseIp(x.eip || '') === pkt.dst);
       if (!y) {
         const n = v.natgws.find((x) => parseIp(x.eip || '') === pkt.dst);

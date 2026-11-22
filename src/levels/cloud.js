@@ -168,4 +168,69 @@ export const LEVELS12 = [
     },
     recap: ['NAT 閘道放在公有子網路，私有子網路的路由表把 0.0.0.0/0 指向它；外面連不進私有子網路。', '網路 ACL 無狀態：回應封包的目的是臨時連接埠 (1024 – 65535)，進出兩個方向都要允許。混合雲的 VPN：兩端參數要一致、雲端路由表要有往地端的路由、地端往 VPC 的流量不能被 NAT。'],
   },
+  // ════════════════════════ 16-3 ════════════════════════
+  {
+    id: 'l109', chapter: 16, title: '加了負載平衡器，網站反而打不開', subtitle: '應用程式負載平衡器 (ALB)、目標群組與健康檢查', tags: ['雲端', 'ALB', '負載平衡', '健康檢查', '安全群組'],
+    brief: '官網的流量越來越大，工程師把網站改成兩台 EC2（web-1、web-2，放在私有子網路），前面放一台應用程式負載平衡器 (ALB)，對外的位址是 https://54.199.20.12。切換之後網站整個打不開，ALB 回應「503 Service Unavailable」。網站伺服器沒有動過，安全群組也是從舊的 web-1 複製過來的。請讓網站恢復，兩台都要分到流量；網站伺服器不能直接對網際網路開放。',
+    given: [
+      ['VPC', '10.50.0.0/16 · public-a 10.50.1.0/24（ALB）· private-a 10.50.11.0/24、private-c 10.50.12.0/24'], ['web-alb', '彈性 IP 54.199.20.12 · 接聽 TCP 443 → 目標埠 443 · 安全群組 alb'],
+      ['web-1 / web-2', '10.50.11.10、10.50.12.10 · HTTPS 443 · 安全群組 web'], ['公司', '對外 IP 203.0.113.34'],
+    ],
+    learn: [
+      { t: '負載平衡器', d: '用戶端連到負載平衡器的位址，負載平衡器再把連線分給後面好幾台伺服器：流量分散，壞了一台也不影響。ALB 是第七層的反向代理：用戶端的連線在 ALB 結束，ALB 再自己連到目標。' },
+      { t: '健康檢查', d: 'ALB 定期連到每個目標的目標埠，連得上才算「健康」，只把流量分給健康的目標；一台都不健康就回 503。健康檢查的來源是 ALB 自己的位址，所以目標的安全群組要允許 ALB 進來。' },
+      { t: '用安全群組當來源', d: '目標的安全群組不必寫 ALB 的 IP（ALB 的 IP 會變），而是寫「來源 = ALB 的安全群組」：掛著那個安全群組的東西（ALB）都可以進來。網站伺服器放在私有子網路、沒有公用 IP，外面只能經過 ALB。' },
+    ],
+    setup() {
+      const W1 = { id: 'i-0b5e2d9a4c71f3820', name: 'web-1', subnet: 'subnet-0prv1a', ip: '10.50.11.10', eip: '', sgs: ['sg-0web'], type: 't3.small', services: [{ proto: 'tcp', port: 443, name: 'HTTPS' }] };
+      const W2 = { id: 'i-0e7c1a4f2b98d6053', name: 'web-2', subnet: 'subnet-0prv1c', ip: '10.50.12.10', eip: '', sgs: ['sg-0web'], type: 't3.small', services: [{ proto: 'tcp', port: 443, name: 'HTTPS' }] };
+      return makeState([
+        ...office(),
+        D('vpc', 'aws', {
+          name: 'AWS · 正式環境 VPC', pos: [7.5, -3],
+          init(d) {
+            Object.assign(d.ifaces[0], { ip: '54.199.20.2', mask: '255.255.255.192', gateway: '54.199.20.1' });
+            const v = d.vpc;
+            Object.assign(v, { id: 'vpc-0c4e8a1f27d9b3650', cidr: '10.50.0.0/16', eips: ['54.199.20.12'], igw: true });
+            v.rts[0].id = 'rtb-0main5e2a91c7d40';
+            v.rts.push({ id: 'rtb-0pub7c1e40a9b2d5', name: 'public', routes: [{ dst: '0.0.0.0/0', target: 'igw' }], prop: false });
+            v.subnets.push({ id: 'subnet-0pub1a', name: 'public-a', cidr: '10.50.1.0/24', az: 'ap-northeast-1a', rtb: 'rtb-0pub7c1e40a9b2d5' },
+              { id: 'subnet-0prv1a', name: 'private-a', cidr: '10.50.11.0/24', az: 'ap-northeast-1a' }, { id: 'subnet-0prv1c', name: 'private-c', cidr: '10.50.12.0/24', az: 'ap-northeast-1c' });
+            v.sgs.push({ id: 'sg-0alb', name: 'alb', in: [{ proto: 'tcp', port: '443', src: '0.0.0.0/0' }], out: [{ proto: 'all', port: '', dst: '0.0.0.0/0' }] },
+              { id: 'sg-0web', name: 'web', in: [{ proto: 'tcp', port: '443', src: OFFICE_PUB + '/32' }], out: [{ proto: 'all', port: '', dst: '0.0.0.0/0' }] });
+            v.instances.push(W1, W2);
+            v.lbs = [{ id: 'alb-0web3f81c2a7d', name: 'web-alb', subnet: 'subnet-0pub1a', eip: '54.199.20.12', sg: 'sg-0alb', port: 443, tgPort: 443, targets: [W1.id, W2.id] }];
+          },
+        }),
+      ], [...officeCables, ['inet:line2', 'aws:inet']]);
+    },
+    objectives: [
+      { type: 'tcp', from: 'pc', ip: '54.199.20.12', port: 443, label: '從公司打得開 https://54.199.20.12（經過 ALB）' },
+      {
+        type: 'check', label: 'web-1、web-2 都通過健康檢查（兩台都分得到流量）',
+        test(s) {
+          const v = dev(s, 'aws').vpc, r = ((dev(s, 'aws').rt.cloud || {}).lb || {})['alb-0web3f81c2a7d'] || { healthy: [], why: {} };
+          for (const x of v.instances) if (!r.healthy.includes(x.id)) return `${x.name} 不健康：${r.why[x.id] || '不在目標群組裡'}`;
+          return true;
+        },
+      },
+      {
+        type: 'check', label: '網站伺服器不直接對網際網路開放（沒有公用 IP、安全群組不開放 0.0.0.0/0）',
+        test(s) {
+          const v = dev(s, 'aws').vpc;
+          for (const x of v.instances) if (x.eip) return `${x.name} 有公用 IP ${x.eip}：網站伺服器只能經過 ALB`;
+          const web = v.sgs.find((g) => g.id === 'sg-0web');
+          if (web && web.in.some((r) => (r.src || '') === '0.0.0.0/0')) return '安全群組 web 對 0.0.0.0/0 開放：只要允許 ALB（來源用安全群組 alb）';
+          return true;
+        },
+      },
+    ],
+    hints: [
+      'EC2 主控台 →「負載平衡器」：兩個目標都不健康，原因寫著安全群組 web 沒有允許 ALB 的健康檢查。安全群組 web 只允許公司的 203.0.113.34（從舊的 web-1 複製來的）。',
+      '健康檢查是 ALB 自己（在 public-a 裡）連到目標的 TCP 443。「安全群組」→ web → 新增輸入規則：TCP 443，來源選安全群組 alb（sg-0alb）。',
+      '不要改成來源 0.0.0.0/0：網站伺服器應該只讓 ALB 進來。',
+    ],
+    solve(s) { dev(s, 'aws').vpc.sgs.find((g) => g.id === 'sg-0web').in.push({ proto: 'tcp', port: '443', src: 'sg-0alb' }); },
+    recap: ['ALB 只把流量分給通過健康檢查的目標；一台都不健康就回 503。', '健康檢查從 ALB 發出：目標的安全群組用「來源 = ALB 的安全群組」允許它，網站伺服器放在私有子網路、不對外開放。'],
+  },
 ];

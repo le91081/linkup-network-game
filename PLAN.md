@@ -47,7 +47,7 @@ README 說明「現在有什麼、怎麼玩」，這份文件說明「整體應�
 | 16. 工程品質 | 5 | 1 | 4 |
 | **合計** | **155** | **24** | **36** |
 
-另外：關卡 108 關（第 17 節）、證照條目涵蓋情形（第 18 節）、建議的實作順序（第 19 節）。
+另外：關卡 109 關（第 17 節）、證照條目涵蓋情形（第 18 節）、建議的實作順序（第 19 節）。
 
 ---
 
@@ -263,7 +263,7 @@ README 說明「現在有什麼、怎麼玩」，這份文件說明「整體應�
 | REST API / RESTCONF | ✅ | IOS XE 的 RESTCONF（介面、主機名稱、VLAN、靜態路由）、Basic 驗證、JSON / XML、狀態碼、自簽憑證；主機的 API 分頁與 curl |
 | 設定檔與批次部署 | ✅ | Ansible：inventory、YAML、network_cli、cisco.ios 資源模組、ios_config / ios_command、--check、冪等；沒有 roles、Vault、Terraform |
 | 控制器式網路 | ✅ | Catalyst Center：Token 驗證的北向 API、SNMP / SSH 輪詢的設備清單、AI 驅動的問題清單；只有讀取，沒有用 API 下發設定 |
-| 雲端 | ✅ | AWS 的 VPC：子網路與路由表、IGW 與彈性 IP、NAT 閘道、安全群組、網路 ACL、VGW 與站對站 VPN（路由傳播、下載設定檔）；只有一個 VPC |
+| 雲端 | ✅ | AWS 的 VPC：子網路與路由表、IGW 與彈性 IP、NAT 閘道、安全群組、網路 ACL、VGW 與站對站 VPN（路由傳播、下載設定檔）、應用程式負載平衡器（接聽器、目標群組、健康檢查要過目標的安全群組與網路 ACL、沒有健康的目標回 503 → 16-3）；只有一個 VPC |
 | 虛擬化 | 🟡 | VMware ESXi 主機：虛擬交換器、連接埠群組與 VLAN 標籤 (VST)、vmk0 管理介面、虛擬機器（虛擬網卡只能接主機的虛擬埠）、不送 DTP / BPDU；路由器的 VRF 見第 3 節；還沒有多個上行的 NIC teaming、vMotion |
 | 容器 (Docker) | ✅ | Linux 主機上的 Docker：預設的 bridge 網路（docker0、veth、172.17.0.0/16）、`-p [位址:]主機埠:容器埠` 發佈（埠對錯會被重設、只綁 127.0.0.1 別台連不到、同一個埠不能發佈兩次）、改連接埠要重建容器；`docker ps / run / stop / start / rm / port / logs / inspect / images / network ls`、`ip addr` 看得到 docker0 與 veth；主機的「Docker」分頁。沒有自訂網路、Compose、volume |
 
@@ -289,7 +289,7 @@ README 說明「現在有什麼、怎麼玩」，這份文件說明「整體應�
 
 | 功能 | 狀態 | 說明 |
 | --- | --- | --- |
-| 關卡 | ✅ | 17 章 108 關（清單見第 17 節） |
+| 關卡 | ✅ | 17 章 109 關（清單見第 17 節） |
 | 任務目標 | ✅ | ping、TCP、UDP、DHCP、設定檢查、故障演練、IPv6 ping、傳輸速率、遠端登入（SSH / Telnet 帳號密碼）、IP 電話註冊、通話品質 (MOS)、HTTPS（連得上之後還要通過憑證驗證）、路徑（一定要經過 / 不能經過某台設備）；TCP 的目標交握完還會送一個裝滿的資料區段（設了 DF），MTU 的問題才看得出來 |
 | 提示與星等 | ✅ | 每關 3 個提示，看一個少一顆星 |
 | 學習卡 | ✅ | 每關 2 到 4 張觀念說明 |
@@ -350,7 +350,7 @@ README 說明「現在有什麼、怎麼玩」，這份文件說明「整體應�
 
 ## 17. 關卡規劃
 
-### 現有的 108 關
+### 現有的 109 關
 
 | 章 | 關卡 |
 | --- | --- |
@@ -369,7 +369,7 @@ README 說明「現在有什麼、怎麼玩」，這份文件說明「整體應�
 | 13 進階路由 | 誰當 DR？、10G 和 1G 一樣快？、分公司自成一區、兩家 ISP 都要用、併購的工廠只會靜態路由（重分配）、備份走另一條線（PBR）、分公司的路由表太大了（stub）、工廠接了一條供應商專線（NSSA）、兩個出口，同一個 AS（iBGP）、共用服務放在全域的路由表（VRF 的 OSPF 與路由洩漏） |
 | 14 無線控制器與無線環境 | AP 找不到控制器、牆後面收不到、走到另一頭就斷線、控制器重開機，整棟的 Wi-Fi 斷了六分鐘（N+1）、分公司的專線一斷，Wi-Fi 也跟著斷（FlexConnect） |
 | 15 網路自動化 | 用 API 管理路由器、一次設定四台交換器、控制器說哪裡有問題 |
-| 16 雲端網路 | 把網站搬上雲端、私有子網路與混合雲 |
+| 16 雲端網路 | 把網站搬上雲端、私有子網路與混合雲、加了負載平衡器，網站反而打不開（ALB） |
 | 17 虛擬化 | 一台主機，三個網段、兩家公司，同一個網段（VRF）、容器跑起來了，網頁卻打不開 |
 
 ### 規劃中的關卡
@@ -379,7 +379,7 @@ README 說明「現在有什麼、怎麼玩」，這份文件說明「整體應�
 | 章 | 規劃的關卡 | 需要的功能 |
 | --- | --- | --- |
 | 補進第 15 章 | 用 Catalyst Center 的範本下發設定、NETCONF、用 Git 管理設定 | 第 12 節 |
-| 補進第 16 章 | 多個 VPC 的 peering 與 Transit Gateway、負載平衡器、Terraform | 第 12 節 |
+| 補進第 16 章 | 多個 VPC 的 peering 與 Transit Gateway、Terraform（負載平衡器已補上 16-3） | 第 12 節 |
 | 補進第 6 章 | NGFW 設定檔、SYN flood | 第 5 節 |
 | 補進第 7 章 | （GRE over IPsec、VTI、DMVPN、NAT-T、憑證驗證已補上 7-7 到 7-12） | 第 6 節 |
 | 補進第 9 章 | Prefix Delegation、FortiGate 的 IPv6 政策、NAT64 / DNS64 | 第 8 節 |
@@ -427,7 +427,7 @@ CCNA v2.0 預計在 2027 年 2 月取代 v1.1，改版後整張對照表要重�
 | 18（已完成） | BFD（OSPF、BGP）與 OSPF fast hello → 8-8；GLBP → 8-9；HSRP / VRRP 改用各自正確的虛擬 MAC。FortiGate HA、堆疊 / vPC、電力備援要先有兩台設備合成一台的模型，移到第 22 階段 | 第 9 節剩下的項目 |
 | 19（已完成） | 維運與語音補充：NetFlow 與 QoS 的 police（已完成 → 11-7）、OSPF / DHCP / crypto 的 `debug`（已完成）、NTP + Syslog 對時與 `service timestamps`（已完成 → 11-8）、PoE 預算與 Cisco AP 的 CDP / LLDP 電力協商（已完成 → 12-3）、IKEv2 的憑證驗證（PKI、時鐘不對讓憑證「尚未生效」→ 7-12）、802.1X 的 EAP-TLS（伺服器憑證、電腦憑證、用戶端的時鐘 → 6-13）、看不到接線的關卡模式與用 CDP / LLDP 畫拓撲（→ 11-9）、雙 WAN 的 QoS 與排程事件（已完成 → 12-4） → 第 11、12 章補充關卡 | 讓故障排除的工具與劇本更完整 |
 | 20（已完成） | 無線補充：頻道寬度與 DFS（已完成 → 5-4）、6 GHz（已完成 → 5-5）、控制器 N+1（已完成 → 14-4）、FlexConnect 分公司（已完成 → 14-5）、訪客入口 (Captive Portal → 5-6) | 第 7 節剩下的項目 |
-| 21 | 自動化與雲端補充：NETCONF、Catalyst Center 範本、用 Git 管理設定、VPC peering 與 Transit Gateway、負載平衡器、Terraform → 第 15、16 章補充關卡 | 第 12 節的延伸 |
+| 21（進行中） | 自動化與雲端補充：負載平衡器（已完成 → 16-3）；NETCONF、Catalyst Center 範本、用 Git 管理設定、VPC peering 與 Transit Gateway、Terraform → 第 15、16 章補充關卡 | 第 12 節的延伸 |
 | 22 | FortiGate HA（Active-Passive、連線同步）、堆疊 / vPC、電力備援；IPv6 的網際網路與 FortiGate 的 IPv6（DHCPv6-PD、IPv6 政策、NAT64 / DNS64）；實體層與其他：收發器不相容、breakout、Console 與帶外管理、STP 進階、VTP、EIGRP / RIP、多播、TACACS+、ZBF、NGFW、SD-WAN、其他設備與廠牌 | 剩下的引擎項目 |
 | 23 | 介面與體驗（第 15 節）、工程品質（第 16 節：CI、靜態檢查、存檔格式遷移、大型拓撲效能、部署） | 引擎穩定之後再整理介面與工程 |
 | 最後 | 遊戲系統（第 14 節）：成就、預算與採購、名詞表、帳號與雲端存檔、多人、關卡編輯器補齊（學習卡、已知資訊、設定檢查目標） | 依使用者的決定排在最後，等關卡與引擎都齊了再做 |

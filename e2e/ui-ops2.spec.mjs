@@ -181,3 +181,18 @@ test('訪客入口：沒有 DNS 就不跳登入頁面，加進認證前允許的
   await expect(page.locator('#panel')).toContainText('已經在訪客入口按過同意');
   expect(await scan(page, '#panel', '訪客入口（手機）')).toEqual([]);
 });
+
+test('負載平衡器：EC2 主控台的分頁顯示目標不健康的原因，安全群組允許 ALB 之後兩台都健康', async ({ page }) => {
+  await boot(page);
+  await open(page, 'l109');
+  await clickDevice(page, 'aws');
+  await page.locator('#panel .tab', { hasText: '負載平衡器' }).click();
+  const card = page.locator('#panel .card', { hasText: 'web-alb' });
+  await expect(card).toContainText('健康的目標 0 / 2');
+  await expect(card).toContainText('沒有允許 ALB 的健康檢查');
+  await page.evaluate(() => { window.linkup.state.devices.aws.vpc.sgs.find((g) => g.id === 'sg-0web').in.push({ proto: 'tcp', port: '443', src: 'sg-0alb' }); window.linkup.settleNow(); });
+  await clickDevice(page, 'aws');
+  await page.locator('#panel .tab', { hasText: '負載平衡器' }).click();
+  await expect(page.locator('#panel .card', { hasText: 'web-alb' })).toContainText('健康的目標 2 / 2');
+  expect(await scan(page, '#panel', '負載平衡器分頁')).toEqual([]);
+});
