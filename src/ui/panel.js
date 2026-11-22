@@ -9,6 +9,7 @@ import { powerTab } from './panel-power.js';
 import { consoleTab, remoteOnlyInfo, needsConsole } from './panel-console.js';
 import { hasPsuSlots } from '../engine/power.js';
 import { breakoutCard } from './panel-breakout.js';
+import { openAnnot } from './annot.js';
 import { ZONE, sdwanOn } from '../engine/sdwan.js';
 import * as CL from './panel-cloud.js';
 import * as W from './panel-wlc.js';
@@ -741,6 +742,7 @@ export function renderDevicePanel(app, root) {
           onclick: () => { saveStartup(dev); toast(`${dev.name}：已把 running-config 存成 startup-config`, 'ok'); ctx.commit(false); },
         }, icon('save', 15));
       }),
+      h('button', { class: 'mini annot' + ((app.state.notes || []).some((n) => n.at === dev.id) || (app.state.groups || []).some((g) => (g.devs || []).includes(dev.id)) ? ' on' : ''), type: 'button', title: '標註：註解與群組框', onclick: () => openAnnot(app, dev.id) }, icon('edit', 15)),
       !dev.locked && h('button', {
         class: 'mini power' + (isDown ? ' off' : ''), type: 'button', title: isDown ? '開機' : '關機 — 模擬這台設備故障，看看網路還通不通',
         onclick: () => app.togglePower(dev.id),

@@ -666,3 +666,42 @@ test('鍵盤快捷鍵：? 打開清單、] 選下一台設備、數字切分頁�
   await expect(page.locator('#toasts')).toContainText('音效：關');
   expect(await page.evaluate(() => window.linkup.store.sound)).toBe(false);
 });
+
+test('標註：設備面板的鉛筆按鈕寫註解、加入群組，場景上出現便利貼與群組框，Ctrl + Z 復原', async ({ page }) => {
+  await boot(page);
+  await open(page, 'l03');
+  const ids = await page.evaluate(() => Object.keys(window.linkup.state.devices).slice(0, 2));
+  for (const [k, id] of ids.entries()) {
+    await clickDevice(page, id);
+    await page.locator('#panel .mini.annot').click();
+    if (k === 0) await page.locator('#modal-root .annot-text').fill('機房 A 櫃 U12');
+    await page.locator('#modal-root .annot-group').fill('機房 A');
+    expect(await scan(page, '#modal-root', '標註視窗')).toEqual([]);
+    await page.locator('#modal-root .btn', { hasText: '儲存' }).click();
+    await expect(page.locator('#modal-root .backdrop')).toHaveCount(0);
+  }
+  await expect(page.locator('.note-label')).toHaveText('機房 A 櫃 U12');
+  await expect(page.locator('.group-label')).toHaveText('機房 A');
+  await expect(page.locator('#panel .mini.annot')).toHaveClass(/\bon\b/);
+  expect(await page.evaluate(() => window.linkup.state.groups[0].devs.length)).toBe(2);
+  await page.evaluate(() => document.activeElement && document.activeElement.blur());
+  await page.keyboard.press('Control+z');
+  expect(await page.evaluate(() => (window.linkup.state.groups || [{ devs: [] }])[0].devs.length)).toBe(1);
+});
+
+test('標註也畫在 2D 拓撲圖上：註解的便利貼與群組框', async ({ page }) => {
+  await boot(page);
+  await open(page, 'l03');
+  await page.evaluate(() => {
+    const app = window.linkup, ids = Object.keys(app.state.devices);
+    app.state.notes = [{ at: ids[0], text: '這台要換掉' }];
+    app.state.groups = [{ name: '一樓', devs: ids.slice(0, 2), color: 0x4fd8c4 }];
+    app.changed();
+    document.activeElement && document.activeElement.blur();
+  });
+  await page.keyboard.press('t');
+  await expect(page.locator('#topo2d .t2-note')).toContainText('這台要換掉');
+  await expect(page.locator('#topo2d .t2-group')).toContainText('一樓');
+  expect(await scan(page, '#topo2d', '2D 拓撲圖（標註）')).toEqual([]);
+  await page.keyboard.press('t');
+});

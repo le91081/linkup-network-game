@@ -165,6 +165,15 @@ export function renderTopo(app, svg, rect) {
       parts.push(`<g class="t2-vpntag"><rect x="${mx - 24}" y="${(a.y + b.y) / 4 + my / 2 - 9}" width="48" height="18" rx="9"/><text x="${mx}" y="${(a.y + b.y) / 4 + my / 2 + 4}">IPsec</text></g>`);
     }
   }
+  // 標註的群組框：同一群組的設備外面畫一個虛線框，左上角寫名稱
+  for (const gr of st.groups || []) {
+    const ms = (gr.devs || []).filter((id) => P.has(id));
+    if (!ms.length) continue;
+    let gx0 = Infinity, gx1 = -Infinity, gy0 = Infinity, gy1 = -Infinity;
+    for (const id of ms) { const q = P.get(id), bb = boxes.get(id); gx0 = Math.min(gx0, q.x - bb.w / 2); gx1 = Math.max(gx1, q.x + bb.w / 2); gy0 = Math.min(gy0, q.y - bb.h / 2); gy1 = Math.max(gy1, q.y + bb.h / 2); }
+    const gc = '#' + (gr.color || 0x6ea8ff).toString(16).padStart(6, '0');
+    parts.push(`<g class="t2-group"><rect x="${gx0 - 14}" y="${gy0 - 24}" width="${gx1 - gx0 + 28}" height="${gy1 - gy0 + 38}" rx="12" style="stroke:${gc}"/><text x="${gx0 - 8}" y="${gy0 - 30}" style="fill:${gc}">${esc(gr.name)}</text></g>`);
+  }
   // 設備
   for (const d of devs) {
     const p = P.get(d.id), b = boxes.get(d.id);
@@ -179,6 +188,14 @@ export function renderTopo(app, svg, rect) {
       + (b.compact ? '' : `<text class="t2-sub" x="18" y="32">${esc(off ? '關機中' : b.sub)}</text>`)
       + b.lines.map((l, n) => `<text class="t2-ip" x="18" y="${(b.compact ? 33 : 48) + n * 15}">${esc(l)}</text>`).join('')
       + `<title>${esc(`${d.name} — ${CATALOG[d.model].title}\n點一下開啟設定`)}</title></g>`);
+  }
+  // 標註的註解：貼在設備方塊的右上角（太長的截短，完整的內容放在提示裡）
+  for (const n of st.notes || []) {
+    const q = P.get(n.at), bb = boxes.get(n.at);
+    if (!q || !n.text) continue;
+    const t = n.text.length > 24 ? n.text.slice(0, 23) + '…' : n.text;
+    const w = tw(t, 11, 6.6) + 14;
+    parts.push(`<g class="t2-note" transform="translate(${q.x + bb.w / 2 - 12} ${q.y - bb.h / 2 - 20})"><rect width="${w}" height="18" rx="5"/><text x="7" y="12.5">${esc(t)}</text><title>${esc(n.text)}</title></g>`);
   }
   svg.innerHTML = `<g class="t2-world" transform="translate(${tx} ${ty}) scale(${s})">${parts.join('')}</g>`
     + `<text class="t2-hint" x="${rect.x + 12}" y="${rect.y + rect.h - 10}">滾輪縮放 · 拖曳平移 · 雙擊回到全圖 · 點設備開啟設定</text>`;

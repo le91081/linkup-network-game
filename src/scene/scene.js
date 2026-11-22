@@ -617,8 +617,42 @@ export class Scene3D {
     Object.assign(this.sun.shadow.camera, { left: -r, right: r, top: r, bottom: -r, near: 1, far: 70 });
     this.sun.shadow.camera.updateProjectionMatrix();
     this.cableSig = '';
+    this.annotSig = '';
     this.sync(state);
     if (!opts.keep || !this.devices.size) this.fit();
+  }
+
+  /** 標註：設備的註解（便利貼）與群組框（把同一群組的設備用虛線框起來，左上角寫名稱） */
+  rebuildAnnots(state) {
+    for (const n of this.notes || []) n.el.remove();
+    for (const f of this.frames || []) { this.scene.remove(f.line); f.line.geometry.dispose(); f.line.material.dispose(); f.el.remove(); }
+    this.notes = []; this.frames = [];
+    for (const n of state.notes || []) {
+      if (!n || !n.text || !this.devices.has(n.at)) continue;
+      const el = document.createElement('div');
+      el.className = 'note-label';
+      el.dataset.dev = n.at;
+      el.textContent = n.text;
+      this.labelLayer.append(el);
+      this.notes.push({ el, at: n.at });
+    }
+    for (const gr of state.groups || []) {
+      const gs = (gr.devs || []).map((id) => this.devices.get(id)).filter(Boolean);
+      if (!gs.length) continue;
+      let x0 = Infinity, x1 = -Infinity, z0 = Infinity, z1 = -Infinity;
+      for (const g of gs) { const u = g.userData; x0 = Math.min(x0, g.position.x - u.w / 2); x1 = Math.max(x1, g.position.x + u.w / 2); z0 = Math.min(z0, g.position.z - u.d / 2); z1 = Math.max(z1, g.position.z + u.d / 2); }
+      x0 -= 0.9; x1 += 0.9; z0 -= 0.9; z1 += 1.5; // 下面多留一點，設備的名稱標籤才在框裡
+      const pts = [[x0, z0], [x1, z0], [x1, z1], [x0, z1]].map(([x, z]) => new THREE.Vector3(x, 0.03, z));
+      const line = new THREE.LineLoop(new THREE.BufferGeometry().setFromPoints(pts), new THREE.LineDashedMaterial({ color: gr.color || 0x6ea8ff, dashSize: 0.35, gapSize: 0.22, transparent: true, opacity: 0.85 }));
+      line.computeLineDistances();
+      this.scene.add(line);
+      const el = document.createElement('div');
+      el.className = 'group-label';
+      el.textContent = gr.name;
+      el.style.color = '#' + (gr.color || 0x6ea8ff).toString(16).padStart(6, '0');
+      this.labelLayer.append(el);
+      this.frames.push({ line, el, corner: new THREE.Vector3(x0, 0.03, z0) });
+    }
   }
 
   buildBoard(x0, x1, z0, z1) {
@@ -757,6 +791,8 @@ export class Scene3D {
       Object.entries(state.rt.clients).map(([ap, l]) => [ap, l.map((c) => c.dev + '@' + (c.ap || ap))]),
     ]);
     if (wsig !== this.wifiSig) { this.wifiSig = wsig; this.rebuildWifi(state); }
+    const asig = JSON.stringify([state.notes || [], state.groups || [], (state.groups || []).length ? Object.values(state.devices).map((d) => d.pos) : 0]);
+    if (asig !== this.annotSig) { this.annotSig = asig; this.rebuildAnnots(state); }
     // 每個埠的燈號：有連線是綠色，被 STP 封鎖、Port-channel 暫停或還在等待是琥珀色，沒有連線不亮
     const led = {};
     for (const c of state.cables) {
@@ -994,6 +1030,19 @@ export class Scene3D {
       l.el.style.transform = `translate(-50%, 0) translate(${s.x.toFixed(1)}px, ${(s.y + (compact ? 3 : 6)).toFixed(1)}px)`;
       const z = String(Math.round(s.y));
       if (l.el.style.zIndex !== z) l.el.style.zIndex = z;
+    }
+    // 標註跟著設備走：註解貼在設備的右上方，群組名稱在框的左上角
+    for (const n of this.notes || []) {
+      const g = this.devices.get(n.at);
+      if (!g) continue;
+      const u = g.userData;
+      v.set(g.position.x + u.w / 2, u.h + 0.1, g.position.z - u.d / 2);
+      const s = this.toScreen(v);
+      n.el.style.transform = `translate(-12%, -100%) translate(${s.x.toFixed(1)}px, ${s.y.toFixed(1)}px)`;
+    }
+    for (const f of this.frames || []) {
+      const s = this.toScreen(f.corner);
+      f.el.style.transform = `translate(0, -100%) translate(${s.x.toFixed(1)}px, ${(s.y - 2).toFixed(1)}px)`;
     }
     for (let i = this.bubbles.length - 1; i >= 0; i--) {
       const b = this.bubbles[i];
