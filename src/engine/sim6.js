@@ -13,6 +13,7 @@
 import { parseIp6, fmtIp6, parseCidr6, net6, linkLocal, eui64, isLinkLocal } from './ip6.js';
 import { l2Explore } from './sim.js';
 import { computeOspf6 } from './ospf.js';
+import { raBlocked } from './l2sec.js';
 
 export const mode6 = (dev, i) => i.mode6 || (dev.kind === 'host' ? 'auto' : 'static');
 const owns6 = (i, ip) => !!i.rt.v6 && (i.rt.v6.ll === ip || i.rt.v6.addrs.some((a) => a.ip === ip));
@@ -86,15 +87,38 @@ export function acl6Check(d, name, pkt, quiet) {
 
 // ───────────────────────── 位址與路由表 ─────────────────────────
 
-/** 這個介面送出的 RA：誰送的、旗標、前綴 */
-function raOf(state, d, i) {
-  for (const e of l2Explore(state, d.id, i)) {
-    const r = e.iface, rd = state.devices[e.dev];
-    if (!(rd.routing && rd.v6routing && r.ra && r.rt.v6 && r.rt.v6.addrs.length)) continue;
-    const pfx = r.rt.v6.addrs.find((a) => a.bits === 64) || r.rt.v6.addrs[0];
-    return { dev: rd.id, iface: r, M: !!r.raM, O: !!r.raO, A: !r.raNoAuto, prefix: net6(pfx.ip, pfx.bits), bits: pfx.bits, ll: r.rt.v6.ll };
+/**
+ * RA 沿著 path 反方向走回來（從送 RA 的那一台到收的人）：路上有交換器在 RA 進來的那個埠掛了 RA Guard 的 host 政策，就被丟掉
+ */
+function raGuarded(state, path) {
+  for (const h of path) {
+    const sw = state.devices[h.from];
+    if (sw && sw.sw && h.fromPort && raBlocked(sw, h.fromPort)) return sw.name + ' 的 ' + h.fromPort;
   }
   return null;
+}
+/**
+ * 這個介面收到的 RA：合法的路由器送的，加上冒牌的（主機上的 i.rogueRa，例如私接的家用路由器、攻擊工具）。
+ * 主機會用每一個 RA 的前綴各產生一個 SLAAC 位址，預設閘道選 Router Preference 最高的（冒牌的通常設成 high）
+ */
+function raOf(state, d, i) {
+  const cands = [];
+  for (const e of l2Explore(state, d.id, i)) {
+    const r = e.iface, rd = state.devices[e.dev];
+    const guard = raGuarded(state, e.path);
+    if (rd.routing && rd.v6routing && r.ra && r.rt.v6 && r.rt.v6.addrs.length) {
+      const pfx = r.rt.v6.addrs.find((a) => a.bits === 64) || r.rt.v6.addrs[0];
+      cands.push({ dev: rd.id, iface: r, M: !!r.raM, O: !!r.raO, A: !r.raNoAuto, prefix: net6(pfx.ip, pfx.bits), bits: pfx.bits, ll: r.rt.v6.ll, prio: 'medium', guard });
+    } else if (r.rogueRa && r.rt.v6 && r.rt.v6.ll != null) {
+      const c = parseCidr6(r.rogueRa.prefix || '');
+      if (c) cands.push({ dev: rd.id, iface: r, M: false, O: false, A: true, prefix: net6(c.ip, c.bits), bits: c.bits, ll: r.rt.v6.ll, prio: r.rogueRa.prio || 'high', rogue: true, guard });
+    }
+  }
+  const ok = cands.filter((c) => !c.guard);
+  if (!ok.length) return null;
+  const rank = { high: 0, medium: 1, low: 2 };
+  const best = ok.slice().sort((a, b) => rank[a.prio] - rank[b.prio])[0];
+  return { ...best, all: ok, blocked: cands.filter((c) => c.guard) };
 }
 
 export function recompute6(state) {
@@ -124,10 +148,13 @@ export function recompute6(state) {
       if (mode6(d, i) !== 'auto' || v.ll == null) continue;
       const ra = raOf(state, d, i);
       if (!ra) { v.note = '沒有收到 Router Advertisement — 路由器要啟用 IPv6 路由，並在這個網段的介面上開啟 RA'; continue; }
-      v.ra = { dev: ra.dev, M: ra.M, O: ra.O, A: ra.A, prefix: ra.prefix, bits: ra.bits };
-      if (ra.A && ra.bits === 64) v.addrs.push({ ip: eui64(ra.prefix, i.rt.mac), bits: 64, src: 'slaac' });
+      v.ra = { dev: ra.dev, M: ra.M, O: ra.O, A: ra.A, prefix: ra.prefix, bits: ra.bits, rogue: !!ra.rogue, prio: ra.prio };
+      // 每一個收到的 RA 都產生一個 SLAAC 位址（同一張網卡同時有合法與冒牌的前綴）
+      for (const x of ra.all) if (x.A && x.bits === 64 && !v.addrs.some((a) => net6(a.ip, 64) === x.prefix)) v.addrs.push({ ip: eui64(x.prefix, i.rt.mac), bits: 64, src: 'slaac', ...(x.rogue ? { rogue: true } : {}) });
       v.gw = ra.ll;
       v.router = ra.dev;
+      v.routers = ra.all.map((x) => ({ dev: x.dev, ll: fmtIp6(x.ll), prio: x.prio, rogue: !!x.rogue }));
+      if (ra.blocked.length) v.raBlocked = ra.blocked.map((x) => ({ dev: x.dev, where: x.guard }));
     }
   }
   // 3. 直連與靜態路由（DHCPv6 的轉送要用到路由表，所以先算）

@@ -20,7 +20,7 @@ import { capwapTick, prepWifi, wlcVlans } from './sim/wifi.js';
 import { computeAuth } from './sim/auth.js';
 import { dnsList, hash, ifaceMac, isVlanSw, vrfOf } from './sim/core.js';
 import { flowsTick } from './sim/bandwidth.js';
-import { ifaceActive, isBridgePort, l2Explore, macAgeOf } from './sim/l2.js';
+import { ifaceActive, isBridgePort, l2Explore, macAgeOf, prepL2Attacks } from './sim/l2.js';
 import { prepDtp, prepLag, prepPhysical, prepStp, prepStpTimers, prepVoice } from './sim/phys.js';
 import { prepTunnels } from './sim/tunnels.js';
 import { sessionTtl } from './sim/forward.js';
@@ -183,6 +183,7 @@ function computePass(state, auth) {
       if (i) i.rt.vips.push(pub); // 讓這個介面替靜態 NAT 的公用 IP 回應 ARP
     }
   }
+  prepL2Attacks(state); // macof 把 MAC 位址表塞滿、狂送廣播佔掉整個 VLAN 的線路
   prepCloud(state); // 雲端：彈性 IP 掛到網際網路閘道上
   const old = state.leases || {};
   state.leases = {};

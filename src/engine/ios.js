@@ -1,7 +1,7 @@
 // IOS 風格的設定指令：把 configure terminal 之後輸入的指令套用到設備的設定物件上。
 // 不依賴瀏覽器，可以直接用 Node 測試。支援的範圍就是 show running-config 會印出來的那些指令，
 // 所以把一台設備的 running-config 整份貼到另一台同型號的設備上，會得到相同的設定。
-import { parseIp, fmtIp, parseMask, fmtMask, maskOf, netOf, bcastOf } from './ip.js';
+import { parseIp, fmtIp, parseMask, fmtMask, maskOf, netOf, bcastOf, parseVlanList } from './ip.js';
 import { parseCidr6, parseIp6, fmtIp6, net6, isLinkLocal } from './ip6.js';
 import { ICMP6_TYPES } from './sim6.js';
 import { newIface, cloneState, CATALOG, makeDevice, defaultPortMode } from './model.js';
@@ -97,7 +97,7 @@ const isSw = (d) => !!d.sw && d.sw.mode === 'vlan';
 export const ERR_RECOVERY_CAUSES = ['arp-inspection', 'bpduguard', 'channel-misconfig', 'dhcp-rate-limit', 'dtp-flap', 'gbic-invalid', 'inline-power', 'link-flap', 'loopback', 'mac-limit', 'pagp-flap', 'port-mode-failure', 'psecure-violation', 'security-violation', 'sfp-config-mismatch', 'storm-control', 'udld', 'vmps'];
 const TYPES = { gi: 'gigabitethernet', te: 'tengigabitethernet', fa: 'fastethernet', eth: 'ethernet' };
 const PROMPT = {
-  exec: '#', config: '(config)#', if: '(config-if)#', vlan: '(config-vlan)#', router: '(config-router)#', dhcp: '(dhcp-config)#',
+  exec: '#', config: '(config)#', if: '(config-if)#', vlan: '(config-vlan)#', raguard: '(config-ra-guard)#', router: '(config-router)#', dhcp: '(dhcp-config)#',
   line: '(config-line)#', acl: '(config-ext-nacl)#', stdacl: '(config-std-nacl)#', radius: '(config-radius-server)#',
   isakmp: '(config-isakmp)#', tset: '(cfg-crypto-trans)#', cmap: '(config-crypto-map)#',
   ikev2prop: '(config-ikev2-proposal)#', ikev2pol: '(config-ikev2-policy)#', ikev2kr: '(config-ikev2-keyring)#', ikev2peer: '(config-ikev2-keyring-peer)#', ikev2prof: '(config-ikev2-profile)#', track: '(config-track)#', vrfdef: '(config-vrf)#', vrfaf: '(config-vrf-af)#', ipvrf: '(config-vrf)#', archive: '(config-archive)#', archlog: '(config-archive-log-cfg)#', ipsla: '(config-ip-sla)#', slaecho: '(config-ip-sla-echo)#', bgp: '(config-router)#', rmap: '(config-route-map)#', qcmap: '(config-cmap)#', pmap: '(config-pmap)#', pmapc: '(config-pmap-c)#',
@@ -237,6 +237,9 @@ function tidy(d, k) {
   if (!Object.keys(o).length) delete d[k];
 }
 const isErr = (r) => typeof r === 'string' && r.startsWith('%');
+const macList = (x) => String(x || '').toLowerCase().split(/[,\s]+/).filter(Boolean);
+/** 0011.2233.4455、00:11:22:33:44:55、00-11-22-33-44-55 → 00:11:22:33:44:55；格式不對回傳 null */
+const normMac = (mac) => { const hex = String(mac).toLowerCase().replace(/[.:-]/g, ''); return /^[0-9a-f]{12}$/.test(hex) ? hex.match(/../g).join(':') : null; };
 const dotted = (s) => /^\d+\.\d+\.\d+\.\d+$/.test(s || '');
 const maskBits = (s) => (dotted(s) ? parseMask(s) : null);
 const wildBits = (s) => (dotted(s) && parseIp(s) != null ? parseMask(fmtIp(~parseIp(s) >>> 0)) : null);
@@ -804,26 +807,80 @@ export function iosSession(getDev, getState, who = null) {
     ['switchport', () => onL2((pc) => { if (pc.mode === 'routed') pc.mode = defaultPortMode(dev().model); })],
     ['switchport port-security', () => onL2((pc) => { (pc.ps ||= { on: false, macs: '', mode: 'shutdown' }).on = true; })],
     ['no switchport port-security', () => onL2((pc) => { if (pc.ps) pc.ps.on = false; })],
-    ['switchport port-security maximum <n>', () => onL2(() => {})],
-    ['switchport port-security mac-address sticky', () => onL2((pc, t) => {
-      const ps = (pc.ps ||= { on: false, macs: '', mode: 'shutdown' });
-      ps.macs = macsBehind(getState(), dev(), t.port.id).map((m) => m.mac).join(', ');
-    })],
+    ['switchport port-security maximum <n> [...]', ([n]) => {
+      if (!/^\d+$/.test(n) || +n < 1 || +n > 8192) return err('用法：switchport port-security maximum <1-8192>');
+      return onL2((pc, t) => {
+        const ps = (pc.ps ||= { on: false, macs: '', mode: 'shutdown' });
+        const have = [...macList(ps.macs), ...macList(ps.stickyMacs)].length;
+        if (+n < have) return err(`% ${t.name}：已經設定了 ${have} 個安全位址，maximum 不能比它小（先 no switchport port-security mac-address …）`);
+        if (+n === 1) delete ps.max; else ps.max = +n;
+        return undefined;
+      });
+    }],
+    ['no switchport port-security maximum [...]', () => onL2((pc) => { if (pc.ps) delete pc.ps.max; })],
+    // sticky：之後動態學到的安全位址自動寫進 running-config（存檔之後重開機還在）
+    ['switchport port-security mac-address sticky', () => onL2((pc) => { (pc.ps ||= { on: false, macs: '', mode: 'shutdown' }).sticky = true; })],
+    ['no switchport port-security mac-address sticky', () => onL2((pc) => { if (pc.ps) { delete pc.ps.sticky; delete pc.ps.stickyMacs; } })],
+    ['switchport port-security mac-address sticky <mac>', ([mac]) => {
+      const m = normMac(mac);
+      if (!m) return err('MAC 位址的格式：0011.2233.4455 或 00:11:22:33:44:55');
+      return onL2((pc) => { const ps = (pc.ps ||= { on: false, macs: '', mode: 'shutdown' }); const l = macList(ps.stickyMacs); if (!l.includes(m)) l.push(m); ps.stickyMacs = l.join(', '); });
+    }],
     ['switchport port-security mac-address <mac>', ([mac]) => {
-      const hex = mac.toLowerCase().replace(/[.:-]/g, '');
-      if (!/^[0-9a-f]{12}$/.test(hex)) return err('MAC 位址的格式：0011.2233.4455 或 00:11:22:33:44:55');
-      const m = hex.match(/../g).join(':');
+      const m = normMac(mac);
+      if (!m) return err('MAC 位址的格式：0011.2233.4455 或 00:11:22:33:44:55');
       return onL2((pc) => {
         const ps = (pc.ps ||= { on: false, macs: '', mode: 'shutdown' });
-        const list = String(ps.macs || '').toLowerCase().split(/[,\s]+/).filter(Boolean);
+        const list = macList(ps.macs);
         if (!list.includes(m)) list.push(m);
         ps.macs = list.join(', ');
       });
     }],
+    ['no switchport port-security mac-address <mac>', ([mac]) => {
+      const m = normMac(mac);
+      return onL2((pc) => { if (!pc.ps) return; pc.ps.macs = macList(pc.ps.macs).filter((x) => x !== m).join(', '); pc.ps.stickyMacs = macList(pc.ps.stickyMacs).filter((x) => x !== m).join(', '); });
+    }],
     ['switchport port-security violation <mode>', ([m]) => {
       const mode = ['restrict', 'shutdown', 'protect'].find((x) => x.startsWith(m.toLowerCase()));
-      return mode ? onL2((pc) => { (pc.ps ||= { on: false, macs: '', mode: 'shutdown' }).mode = mode === 'protect' ? 'restrict' : mode; }) : err('模式必須是 restrict、shutdown 或 protect');
+      return mode ? onL2((pc) => { (pc.ps ||= { on: false, macs: '', mode: 'shutdown' }).mode = mode; }) : err('模式必須是 protect、restrict 或 shutdown');
     }],
+    ['no switchport port-security violation [...]', () => onL2((pc) => { if (pc.ps) pc.ps.mode = 'shutdown'; })],
+    // ── Storm Control：broadcast level 是連接埠頻寬的百分比
+    ['storm-control broadcast level <pct> [...]', ([p]) => (/^\d+(\.\d+)?$/.test(p) && +p <= 100 ? onL2((pc) => { (pc.storm ||= {}).bcast = +(+p).toFixed(2); }) : err('用法：storm-control broadcast level <0.00-100.00>（連接埠頻寬的百分比）'))],
+    ['no storm-control broadcast [...]', () => onL2((pc) => { if (pc.storm) { delete pc.storm.bcast; if (!Object.keys(pc.storm).length) delete pc.storm; } })],
+    ['storm-control action <a>', ([a]) => { const v = ['shutdown', 'trap'].find((x) => x.startsWith(a.toLowerCase())); return v ? onL2((pc) => { (pc.storm ||= {}).action = v; }) : err('用法：storm-control action shutdown | trap'); }],
+    ['no storm-control action [...]', () => onL2((pc) => { if (pc.storm) { delete pc.storm.action; if (!Object.keys(pc.storm).length) delete pc.storm; } })],
+    ['storm-control <...>', () => err('這個模擬的 storm-control 只有 broadcast level 與 action（multicast、unicast 沒有模擬）')],
+    // ── Protected port（PVLAN edge）：同一台交換器的 protected 埠彼此不通
+    // SVI 的 private-vlan mapping：secondary VLAN 的主機也能用這個 SVI 當閘道
+    ['private-vlan mapping <...>', ([list]) => {
+      if (!pvlanOk()) return err('% Private VLANs are not supported on this platform');
+      const v = parseVlanList(String(list).replace(/^add\s+/i, ''));
+      if (!v) return err('用法：private-vlan mapping <secondary 清單>（在 interface vlan <primary> 底下）');
+      return each((t) => (t.iface && t.iface.bind.t === 'svi' ? void (t.iface.pvMap = v) : err(`${t.name} 不是 VLAN 介面：private-vlan mapping 要在 interface vlan <primary> 底下`)));
+    }],
+    ['no private-vlan mapping [...]', () => each((t) => { if (t.iface) delete t.iface.pvMap; })],
+    ['switchport protected', () => onL2((pc) => { pc.protected = true; })],
+    ['no switchport protected', () => onL2((pc) => { delete pc.protected; })],
+    // ── Private VLAN（Catalyst 9300、Nexus）
+    ['switchport mode private-vlan <m>', ([m]) => {
+      if (!pvlanOk()) return err('% Private VLANs are not supported on this platform（Catalyst 2960 只有 switchport protected）');
+      const v = ['host', 'promiscuous'].find((x) => x.startsWith(m.toLowerCase()));
+      return v ? onL2((pc) => { pc.mode = v === 'host' ? 'pvlan-host' : 'pvlan-promisc'; }) : err('用法：switchport mode private-vlan host | promiscuous');
+    }],
+    ['switchport private-vlan host-association <p> <s>', ([p, sec]) => {
+      if (!pvlanOk()) return err('% Private VLANs are not supported on this platform');
+      return /^\d+$/.test(p) && /^\d+$/.test(sec) ? onL2((pc) => { pc.pvHost = { primary: +p, secondary: +sec }; }) : err('用法：switchport private-vlan host-association <primary> <secondary>');
+    }],
+    ['switchport private-vlan mapping <p> <...>', ([p, list]) => {
+      if (!pvlanOk()) return err('% Private VLANs are not supported on this platform');
+      const v = parseVlanList(String(list).replace(/^add\s+/i, ''));
+      return /^\d+$/.test(p) && v ? onL2((pc) => { pc.pvMap = { primary: +p, secondaries: v }; }) : err('用法：switchport private-vlan mapping <primary> <secondary 清單>');
+    }],
+    ['no switchport private-vlan [...]', () => onL2((pc) => { delete pc.pvHost; delete pc.pvMap; })],
+    // ── RA Guard
+    ['ipv6 nd raguard attach-policy <name>', ([n]) => { if (!(dev().sw.raPolicies || {})[n]) return err(`% Policy ${n} not found（先用 ipv6 nd raguard policy ${n} 建立）`); return onL2((pc) => { pc.raGuard = n; }); }],
+    ['no ipv6 nd raguard [...]', () => onL2((pc) => { delete pc.raGuard; })],
     ['spanning-tree portfast [...]', ([opt]) => onL2((pc) => { pc.portfast = !(opt || '').toLowerCase().startsWith('dis'); })],
     ['no spanning-tree portfast', () => onL2((pc) => { delete pc.portfast; })],
     ['spanning-tree bpduguard <x>', ([x]) => onL2((pc) => { pc.bpduguard = 'enable'.startsWith(x.toLowerCase()); })],
@@ -944,6 +1001,7 @@ export function iosSession(getDev, getState, who = null) {
 
   // ── 全域設定模式 ──
   const needSw = () => (isSw(dev()) ? null : err('這個指令只適用於交換器'));
+  const pvlanOk = () => isCat9300(dev()) || isNexus(dev());
   const needRouting = () => (dev().routing ? null : err('這台是 L2 交換器，沒有路由功能（要讓它能被遠端管理請用 ip default-gateway）'));
   const enter = (mode, cur) => { S.mode = mode; S.cur = cur; };
   // router ospf 模式：目前在設定哪一個程序（全域的放在設備上，router ospf <pid> vrf <名稱> 的放在 d.ospfVrf）
@@ -1081,6 +1139,36 @@ export function iosSession(getDev, getState, who = null) {
       for (const p of Object.values(sw.ports)) { if (p.vlan === +id) p.vlan = 1; if (p.native === +id) p.native = 1; }
       return undefined;
     }],
+    ['mac address-table static <mac> vlan <v> <...>', ([mac, v, rest]) => {
+      const e0 = needSw(); if (e0) return e0;
+      const m = normMac(mac);
+      if (!m) return err('MAC 位址的格式：0011.2233.4455');
+      if (!/^\d+$/.test(v) || !dev().sw.vlans.some((x) => x.id === +v)) return err(`% VLAN ${v} 不存在`);
+      const t = rest.trim().split(/\s+/);
+      let e;
+      if (/^drop$/i.test(t[0])) e = { mac: m, vlan: +v, drop: true };
+      else if (/^interface$/i.test(t[0]) || /^int/i.test(t[0])) {
+        const r = resolveIf(dev(), t.slice(1).join(''));
+        if (isErr(r) || !r.port) return err('用法：mac address-table static <MAC> vlan <VLAN> interface <介面> | drop');
+        e = { mac: m, vlan: +v, port: r.port.id };
+      } else return err('用法：mac address-table static <MAC> vlan <VLAN> interface <介面> | drop');
+      const sw = dev().sw;
+      sw.staticMacs = (sw.staticMacs || []).filter((x) => !(x.mac === m && +x.vlan === +v));
+      sw.staticMacs.push(e);
+      return undefined;
+    }],
+    ['no mac address-table static <mac> [...]', ([mac, rest]) => {
+      const m = normMac(mac), v = (String(rest || '').match(/vlan\s+(\d+)/i) || [])[1];
+      const sw = dev().sw; if (!sw) return err('這個指令只適用於交換器');
+      const n = (sw.staticMacs || []).length;
+      sw.staticMacs = (sw.staticMacs || []).filter((x) => !(x.mac === m && (!v || +x.vlan === +v)));
+      if (!sw.staticMacs.length) delete sw.staticMacs;
+      return (sw.staticMacs || []).length < n ? undefined : err('沒有這一筆靜態 MAC');
+    }],
+    ['vlan dot1q tag native', () => { const e0 = needSw(); if (e0) return e0; dev().sw.tagNative = true; return undefined; }],
+    ['no vlan dot1q tag native', () => { if (dev().sw) delete dev().sw.tagNative; }],
+    ['ipv6 nd raguard policy <name>', ([n]) => { const e0 = needSw(); if (e0) return e0; ((dev().sw.raPolicies ||= {})[n] ||= { role: 'host' }); enter('raguard', n); return undefined; }],
+    ['no ipv6 nd raguard policy <name>', ([n]) => { const sw = dev().sw; if (!sw || !(sw.raPolicies || {})[n]) return err(`% Policy ${n} not found`); delete sw.raPolicies[n]; for (const pc of Object.values(sw.ports)) if (pc.raGuard === n) delete pc.raGuard; return undefined; }],
     ['ip routing', () => needRouting() || undefined],
     ['ipv6 unicast-routing', () => { if (dev().kind !== 'router') return err('這個模擬只有路由器支援 IPv6 路由'); dev().v6routing = true; return undefined; }],
     ['no ipv6 unicast-routing', () => { dev().v6routing = false; }],
@@ -1936,7 +2024,30 @@ export function iosSession(getDev, getState, who = null) {
 
   const SUB = {
     if: IF,
-    vlan: [['name <...>', ([name]) => { S.cur.name = name; }]],
+    vlan: [
+      ['name <...>', ([name]) => { S.cur.name = name; }],
+      ['private-vlan <t>', ([t]) => {
+        if (!pvlanOk()) return err('% Private VLANs are not supported on this platform（Catalyst 2960 只有 switchport protected）');
+        const v = ['primary', 'isolated', 'community'].find((x) => x.startsWith(t.toLowerCase()));
+        if (!v) return err('用法：private-vlan primary | isolated | community');
+        if (S.cur.id === 1) return err('% VLAN 1 不能當成 private VLAN');
+        S.cur.pvlan = v;
+        if (v !== 'primary') delete S.cur.assoc;
+        return undefined;
+      }],
+      ['private-vlan association <...>', ([list]) => {
+        if (S.cur.pvlan !== 'primary') return err('% 只有 primary VLAN 可以設定 association（先 private-vlan primary）');
+        const add = /^add\s+/i.test(list), rm = /^remove\s+/i.test(list), v = parseVlanList(list.replace(/^(add|remove)\s+/i, ''));
+        if (!v) return err('用法：private-vlan association <secondary 清單>');
+        S.cur.assoc = rm ? (S.cur.assoc || []).filter((x) => !v.includes(x)) : add ? [...new Set([...(S.cur.assoc || []), ...v])] : v;
+        return undefined;
+      }],
+      ['no private-vlan [...]', () => { delete S.cur.pvlan; delete S.cur.assoc; }],
+    ],
+    raguard: [
+      ['device-role <r>', ([r]) => { const v = ['host', 'router'].find((x) => x.startsWith(r.toLowerCase())); return v ? void (dev().sw.raPolicies[S.cur].role = v) : err('用法：device-role host | router'); }],
+      ['no device-role [...]', () => { dev().sw.raPolicies[S.cur].role = 'host'; }],
+    ],
     router: [
       ['network <ip> <wild> area <a>', ([ip, wild, a]) => {
         const net = parseIp(ip), bits = wildBits(wild);
@@ -3146,7 +3257,9 @@ export function runningConfig(state, dev) {
   }
   if (isSw(dev)) {
     const sw = dev.sw;
-    for (const v of sw.vlans.slice().sort((a, b) => a.id - b.id)) if (v.id !== 1) o.push(`vlan ${v.id}`, ` name ${v.name.replace(/\s+/g, '_')}`);
+    for (const v of sw.vlans.slice().sort((a, b) => a.id - b.id)) if (v.id !== 1) o.push(`vlan ${v.id}`, ...(v.pvlan ? [` private-vlan ${v.pvlan}`] : []), ...(v.pvlan === 'primary' && (v.assoc || []).length ? [` private-vlan association ${v.assoc.join(',')}`] : []), ` name ${v.name.replace(/\s+/g, '_')}`);
+    if (sw.tagNative) o.push('!', 'vlan dot1q tag native');
+    for (const [n, p] of Object.entries(sw.raPolicies || {})) o.push('!', `ipv6 nd raguard policy ${n}`, ` device-role ${p.role || 'host'}`);
     // 和真的 Catalyst 一樣，errdisable recovery 印在 spanning-tree 前面
     const er = sw.errRec;
     if (er && ((er.causes || []).length || er.interval)) {
@@ -3155,6 +3268,7 @@ export function runningConfig(state, dev) {
     }
     if (isCat2960(dev) && +sw.jumbo) o.push('!', `system mtu jumbo ${+sw.jumbo}`);
     if (isCat9300(dev) && +sw.sysMtu) o.push('!', `system mtu ${+sw.sysMtu}`);
+    if ((sw.staticMacs || []).length) o.push('!', ...sw.staticMacs.map((e) => `mac address-table static ${dotMac(e.mac)} vlan ${e.vlan} ${e.drop ? 'drop' : 'interface ' + longIf((dev.ports.find((p) => p.id === e.port) || { label: e.port }).label)}`));
     o.push('!', 'spanning-tree mode rapid-pvst');
     const stp = sw.stp || {};
     if (stp.on === false) o.push('no spanning-tree vlan 1-4094');
@@ -3346,7 +3460,7 @@ export function runningConfig(state, dev) {
     if (pc && isSw(dev)) {
       const phy = [pc.speed && pc.speed !== 'auto' ? ` speed ${pc.speed}` : null, pc.duplex && pc.duplex !== 'auto' ? ` duplex ${pc.duplex}` : null].filter(Boolean);
       const nd = portNd(dev, p.id), ndl = [nd.cdp === false ? ' no cdp enable' : null, nd.tx === false ? ' no lldp transmit' : null, nd.rx === false ? ' no lldp receive' : null].filter(Boolean);
-      const def = pc.mode === defaultPortMode(dev.model) && pc.vlan === 1 && pc.native === 1 && (!pc.allowed || pc.allowed === 'all') && !pc.voice && !pc.noneg && !pc.qosTrust && !pc.trustDevice && !pc.poe && !ndl.length && !pc.shut && !peer && !pc.trust && !(+pc.lag > 0) && !(pc.ps && pc.ps.on) && !pc.bpduguard && !pc.rootguard && !pc.dot1x && !phy.length && pc.portfast == null && !pc.desc && !pc.mtu;
+      const def = pc.mode === defaultPortMode(dev.model) && pc.vlan === 1 && pc.native === 1 && (!pc.allowed || pc.allowed === 'all') && !pc.voice && !pc.noneg && !pc.qosTrust && !pc.trustDevice && !pc.poe && !ndl.length && !pc.shut && !peer && !pc.trust && !(+pc.lag > 0) && !(pc.ps && pc.ps.on) && !pc.storm && !pc.protected && !pc.raGuard && !pc.pvHost && !pc.pvMap && !/^pvlan/.test(pc.mode) && !pc.bpduguard && !pc.rootguard && !pc.dot1x && !phy.length && pc.portfast == null && !pc.desc && !pc.mtu;
       if (def) continue;
       o.push(`interface ${longIf(p.label)}`, ...desc, ...phy, ...(+pc.mtu ? [` mtu ${+pc.mtu}`] : []));
       if (pc.mode === 'routed') {
@@ -3357,7 +3471,10 @@ export function runningConfig(state, dev) {
         if (pc.vlan !== 1) o.push(` switchport access vlan ${pc.vlan}`);
         if (pc.native !== 1) o.push(` switchport trunk native vlan ${pc.native}`);
         if (pc.allowed && pc.allowed !== 'all') o.push(` switchport trunk allowed vlan ${pc.allowed}`);
-        if (pc.mode !== defaultPortMode(dev.model) || (pc.mode === 'access' && !DTP_OK(dev))) o.push(` switchport mode ${pc.mode.replace('-', ' ')}`);
+        if (pc.mode === 'pvlan-host') o.push(...(pc.pvHost ? [` switchport private-vlan host-association ${pc.pvHost.primary} ${pc.pvHost.secondary}`] : []), ' switchport mode private-vlan host');
+        else if (pc.mode === 'pvlan-promisc') o.push(...(pc.pvMap ? [` switchport private-vlan mapping ${pc.pvMap.primary} ${(pc.pvMap.secondaries || []).join(',')}`] : []), ' switchport mode private-vlan promiscuous');
+        else if (pc.mode !== defaultPortMode(dev.model) || (pc.mode === 'access' && !DTP_OK(dev))) o.push(` switchport mode ${pc.mode.replace('-', ' ')}`);
+        if (pc.protected) o.push(' switchport protected');
         if (pc.noneg) o.push(' switchport nonegotiate');
         if (pc.voice) o.push(` switchport voice vlan ${pc.voice}`);
         if (pc.autoQos) o.push(` auto qos voip ${pc.autoQos}`);
@@ -3371,10 +3488,17 @@ export function runningConfig(state, dev) {
       if (pc.mode !== 'routed') o.push(...ndl);
       if (+pc.lag > 0) o.push(` channel-group ${+pc.lag} mode ${pc.lagMode || 'active'}`);
       if (pc.ps && pc.ps.on) {
+        // 和真的 IOS 一樣：預設的 maximum 1、violation shutdown 不印出來；sticky 學到的位址會出現在這裡
         o.push(' switchport port-security');
-        for (const mac of String(pc.ps.macs || '').split(/[,\s]+/).filter(Boolean)) o.push(` switchport port-security mac-address ${dotMac(mac)}`);
-        o.push(` switchport port-security violation ${pc.ps.mode || 'restrict'}`);
+        if (+pc.ps.max > 1) o.push(` switchport port-security maximum ${+pc.ps.max}`);
+        if (pc.ps.mode === 'restrict' || pc.ps.mode === 'protect') o.push(` switchport port-security violation ${pc.ps.mode}`);
+        if (pc.ps.sticky) o.push(' switchport port-security mac-address sticky');
+        for (const mac of macList(pc.ps.stickyMacs)) o.push(` switchport port-security mac-address sticky ${dotMac(mac)}`);
+        for (const mac of macList(pc.ps.macs)) o.push(` switchport port-security mac-address ${dotMac(mac)}`);
       }
+      if (pc.storm && pc.storm.bcast != null) o.push(` storm-control broadcast level ${(+pc.storm.bcast).toFixed(2)}`);
+      if (pc.storm && pc.storm.action) o.push(` storm-control action ${pc.storm.action}`);
+      if (pc.raGuard) o.push(` ipv6 nd raguard attach-policy ${pc.raGuard}`);
       if (pc.trust) o.push(' ip dhcp snooping trust', ...(dev.sw.dai && dev.sw.dai.on ? [' ip arp inspection trust'] : []));
       if (pc.bpduguard) o.push(' spanning-tree bpduguard enable');
       if (pc.rootguard) o.push(' spanning-tree guard root');
@@ -3396,7 +3520,7 @@ export function runningConfig(state, dev) {
   }
   for (const i of dev.ifaces.filter((x) => x.bind.t === 'svi')) {
     if (!i.ip && dev.kind === 'mswitch') continue;
-    o.push(`interface Vlan${i.bind.vlan}`, ...(i.desc ? [` description ${i.desc}`] : []), ...l3lines(i), ' no shutdown', '!');
+    o.push(`interface Vlan${i.bind.vlan}`, ...(i.desc ? [` description ${i.desc}`] : []), ...l3lines(i), ...((i.pvMap || []).length ? [` private-vlan mapping ${i.pvMap.join(',')}`] : []), ' no shutdown', '!');
   }
   if (dev.kind === 'mswitch') {
     const mg = dev.ifaces.find((x) => x.id === 'mgmt');

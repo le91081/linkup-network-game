@@ -399,13 +399,16 @@ export function routerId(d) {
 }
 
 function snapshot(state, d) {
-  const s = { port: {}, errN: {}, nbr: {}, nbr6: {}, norid6: false, vrrp: {}, tun: {}, dup: {}, dupIp: {}, pool: [], auth: {} };
+  const s = { port: {}, errN: {}, nbr: {}, nbr6: {}, norid6: false, vrrp: {}, tun: {}, dup: {}, dupIp: {}, pool: [], auth: {}, psv: {}, stormF: {} };
   const shutIf = (pid) => d.ifaces.some((i) => i.shut && i.bind.t === 'port' && i.bind.port === pid);
   for (const p of d.ports) {
     const pc = d.sw && d.sw.ports[p.id], err = d.rt.err && d.rt.err[p.id];
     const ed = state.dyn.errdis && state.dyn.errdis[d.id + ':' + p.id];
     if (ed) s.errN[p.id] = ed.n || 1; // 第幾次被關：recovery 打開之後馬上又被關，前後的狀態一樣，要靠這個看出來
-    s.port[p.id] = (pc && pc.shut) || shutIf(p.id) ? 'admin' : err === 'root' ? 'rootinc' : err === 'bpdu' ? 'bpdu' : err ? 'psec' : state.rt.links[d.id + ':' + p.id] ? 'up' : 'down';
+    s.port[p.id] = (pc && pc.shut) || shutIf(p.id) ? 'admin' : err === 'root' ? 'rootinc' : err === 'bpdu' ? 'bpdu' : err === 'storm' ? 'storm' : err ? 'psec' : state.rt.links[d.id + ':' + p.id] ? 'up' : 'down';
+    // Port Security 的 restrict：每次有新的違規 MAC 記一筆
+    const pr = state.dyn.psec && state.dyn.psec[d.id + ':' + p.id];
+    if (pr && pr.viol && pc && pc.ps && pc.ps.on && pc.ps.mode === 'restrict') s.psv[p.id] = pr.last;
     const li = state.rt.links[d.id + ':' + p.id] && linkInfo(state, d.id, p.id);
     if (li && li.mismatch) s.dup[p.id] = li.duplex + '|' + li.peerDuplex;
     const a = pc && pc.dot1x && state.rt.auth && state.rt.auth.dot1x[d.id + ':' + p.id];
@@ -423,6 +426,7 @@ function snapshot(state, d) {
     if (i.rt.conflict) s.dupIp[i.id] = i.rt.ip;
   }
   for (const t of d.rt.tunnels || []) if (t.cfg) s.tun[t.name] = { up: !!t.up && !t.stale, peer: t.peerIp };
+  for (const x of state.rt.storms || []) if (x.lim && x.lim.dev === d.id) s.stormF[x.lim.port] = true;
   for (const [k, v] of Object.entries(state.rt.dhcpConflict || {})) if (k.startsWith(d.id + '/')) s.pool.push(...v);
   return s;
 }
@@ -462,7 +466,7 @@ function diffDevice(state, d, a, b) {
     const all = macsOn(pid), m = all.find((x) => !ok.includes(x)) || all[0];
     return m ? dotMac(m) : 'unknown';
   };
-  const ERR_TXT = { bpdu: 'bpduguard', psec: 'psecure-violation' };
+  const ERR_TXT = { bpdu: 'bpduguard', psec: 'psecure-violation', storm: 'storm-control' };
   for (const [pid, now] of Object.entries(b.port)) {
     let was = a.port[pid];
     const L = longIf(label(pid)), S = label(pid);
@@ -492,9 +496,17 @@ function diffDevice(state, d, a, b) {
       ev(4, 'PM-4-ERR_DISABLE', `psecure-violation error detected on ${S}, putting ${S} in err-disable state`);
       ev(2, 'PORT_SECURITY-2-PSECURE_VIOLATION', `Security violation occurred, caused by MAC address ${badMac(pid)} on port ${L}.`);
       if (wasUp) linkMsg(pid, false);
+    } else if (now === 'storm') {
+      ev(3, 'STORM_CONTROL-3-SHUTDOWN', `A packet storm was detected on ${S}. The interface has been disabled.`);
+      ev(4, 'PM-4-ERR_DISABLE', `storm-control error detected on ${S}, putting ${S} in err-disable state`);
+      if (wasUp) linkMsg(pid, false);
     } else if (wasUp) linkMsg(pid, false);
     else if (was === 'admin') ev(3, 'LINK-3-UPDOWN', `Interface ${L}, changed state to down`); // no shutdown，但線還沒接
   }
+  // Port Security 的 restrict、storm-control 的過濾
+  const dot = (m) => m.replace(/:/g, '').replace(/(.{4})(?=.)/g, '$1.');
+  for (const [pid, mac] of Object.entries(b.psv || {})) if ((a.psv || {})[pid] !== mac) ev(2, 'PORT_SECURITY-2-PSECURE_VIOLATION', `Security violation occurred, caused by MAC address ${mac === 'macof' ? '00ff.1a2b.3c4d' : dot(mac)} on port ${longIf(label(pid))}.`);
+  for (const pid of Object.keys(b.stormF || {})) if (!(a.stormF || {})[pid]) ev(3, 'STORM_CONTROL-3-FILTERED', `A packet storm was detected on ${label(pid)}. A packet filter action has been applied on the interface.`);
   // OSPF 鄰居
   for (const [k, n] of Object.entries(b.nbr)) {
     if (!a.nbr[k]) ev(5, 'OSPF-5-ADJCHG', `Process ${n.pid || 1}, Nbr ${fmtIp(n.rid)} on ${longIf(ifLabel(k.split('|')[1]))} from LOADING to FULL, Loading Done`);

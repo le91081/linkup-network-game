@@ -14,6 +14,7 @@ import { ikeVer, errdisRows, ERR_CAUSES, vrfOf, pbrHits } from '../engine/sim.js
 import { ERR_RECOVERY_CAUSES } from '../engine/ios.js';
 import { fhrpProto, fhrpGroup, trackUp, trackText, trackUsers, slaKey, SLA_FREQ } from '../engine/track.js';
 import { archiveFiles, nextArchiveName, cfgDiff, ARCH_MAX_DEFAULT } from '../engine/archive.js';
+import { psMax, psMode, psConfigured, camSize, stormLimit, camFull } from '../engine/l2sec.js';
 import { iosClock, deviceTime, ntpInfo, logRows, clearLog, syslogStats, uptimeOf, routerId, longIf, SEVERITY, NTP_POLL, vtyRows, idleLimit } from '../engine/ops.js';
 import { quietLeft } from '../engine/remote.js';
 import { counters, clearCounters, clearedAt, spanDest, debugOf, setDebug, consoleRows } from '../engine/wire.js';
@@ -227,9 +228,57 @@ const SHOW = {
     const rows = macRows(st, d);
     const o = ['          Mac Address Table', '-------------------------------------------', '', pad('Vlan', 8) + pad('Mac Address', 18) + pad('Type', 12) + 'Ports', pad('----', 8) + pad('-----------', 18) + pad('--------', 12) + '-----'];
     for (const r of rows) o.push(pad(String(r.vlan).padStart(4), 8) + pad(dotMac(r.mac), 18) + pad(r.type, 12) + r.label);
-    o.push(`Total Mac Addresses for this criterion: ${rows.length}`);
-    if (!rows.length) o.push(`（表是空的。交換器要收到訊框才會學到來源 MAC：讓電腦 ping 一下，項目就會出現；${macAgeOf(d)} 秒沒有再看到就會過期）`);
+    const bg = rows.bogus;
+    if (bg) {
+      for (const m of bg.sample) o.push(pad(String(bg.vlan).padStart(4), 8) + pad(dotMac(m), 18) + pad('DYNAMIC', 12) + bg.label);
+      o.push(`（… 另外還有 ${(bg.n - bg.sample.length).toLocaleString('en')} 筆，全部學在 ${bg.label}：來源 MAC 都是亂造的，有人在跑 MAC flooding 的工具（macof）。表的容量 ${camSize(d).toLocaleString('en')} 筆已經滿了，新的 MAC 學不進來，目的地不在表裡的訊框只能往整個 VLAN 泛洪）`);
+    }
+    o.push(`Total Mac Addresses for this criterion: ${rows.length + (bg ? bg.n : 0)}`);
+    if (!rows.length && !bg) o.push(`（表是空的。交換器要收到訊框才會學到來源 MAC：讓電腦 ping 一下，項目就會出現；${macAgeOf(d)} 秒沒有再看到就會過期）`);
     return o;
+  },
+  'show mac address-table count': (st, d) => {
+    if (!isSw(d)) return ['% 這個指令只適用於交換器'];
+    const rows = macRows(st, d), bg = rows.bogus, by = {};
+    for (const r of rows) { const b = (by[r.vlan] ||= { dyn: 0, st: 0 }); if (r.type === 'STATIC') b.st++; else b.dyn++; }
+    if (bg) (by[bg.vlan] ||= { dyn: 0, st: 0 }).dyn += bg.n;
+    const total = rows.length + (bg ? bg.n : 0), o = [];
+    for (const v of Object.keys(by).sort((a, b) => a - b)) o.push(`Mac Entries for Vlan ${v}:`, '---------------------------', `Dynamic Address Count  : ${by[v].dyn}`, `Static  Address Count  : ${by[v].st}`, `Total Mac Addresses    : ${by[v].dyn + by[v].st}`, '');
+    o.push(`Total Mac Address Space Available: ${Math.max(0, camSize(d) - total)}`);
+    if (bg) o.push('', `（表滿了：${bg.label} 後面的設備送出大量來源 MAC 都不一樣的訊框。Port Security 限制那個埠最多幾個 MAC 就擋得住；亂造的項目要等 ${macAgeOf(d)} 秒老化，或 clear mac address-table dynamic）`);
+    return o;
+  },
+  'show mac address-table static': (st, d) => {
+    if (!isSw(d)) return ['% 這個指令只適用於交換器'];
+    const rows = macRows(st, d).filter((r) => r.type === 'STATIC');
+    return ['          Mac Address Table', '-------------------------------------------', '', pad('Vlan', 8) + pad('Mac Address', 18) + pad('Type', 12) + 'Ports', pad('----', 8) + pad('-----------', 18) + pad('--------', 12) + '-----',
+      ...rows.map((r) => pad(String(r.vlan).padStart(4), 8) + pad(dotMac(r.mac), 18) + pad(r.type, 12) + r.label), `Total Mac Addresses for this criterion: ${rows.length}`];
+  },
+  'show storm-control': (st, d) => stormLines(st, d, null),
+  'show storm-control broadcast': (st, d) => stormLines(st, d, null),
+  'show vlan private-vlan': (st, d) => {
+    if (!isSw(d)) return ['% 這個指令只適用於交換器'];
+    const pri = d.sw.vlans.filter((v) => v.pvlan === 'primary'), o = [pad('Primary', 8) + pad('Secondary', 10) + pad('Type', 18) + 'Ports', pad('-------', 8) + pad('---------', 10) + pad('-----------------', 18) + '------------------------------------------'];
+    for (const p of pri) {
+      const promisc = d.ports.filter((x) => d.sw.ports[x.id].mode === 'pvlan-promisc' && +(d.sw.ports[x.id].pvMap || {}).primary === p.id).map((x) => x.label);
+      for (const sid of p.assoc || []) {
+        const sv = d.sw.vlans.find((v) => v.id === sid);
+        const hosts = d.ports.filter((x) => d.sw.ports[x.id].mode === 'pvlan-host' && +(d.sw.ports[x.id].pvHost || {}).secondary === sid).map((x) => x.label);
+        const ord = (l) => d.ports.findIndex((x) => x.label === l);
+        o.push(pad(p.id, 8) + pad(sid, 10) + pad(sv ? sv.pvlan || 'non-operational' : 'non-operational', 18) + [...promisc, ...hosts].sort((a, b) => ord(a) - ord(b)).join(', '));
+      }
+      if (!(p.assoc || []).length) o.push(pad(p.id, 8) + pad('', 10) + pad('', 18) + promisc.join(', '));
+    }
+    const lone = d.sw.vlans.filter((v) => v.pvlan && v.pvlan !== 'primary' && !pri.some((p) => (p.assoc || []).includes(v.id)));
+    for (const v of lone) o.push(pad('none', 8) + pad(v.id, 10) + pad(v.pvlan, 18) + '（還沒有和任何 primary VLAN 關聯：primary 底下要 private-vlan association）');
+    return pri.length || lone.length ? o : ['（沒有設定任何 Private VLAN）'];
+  },
+  'show ipv6 nd raguard policy': (st, d) => {
+    if (!isSw(d)) return ['% 這個指令只適用於交換器'];
+    const all = Object.entries(d.sw.raPolicies || {});
+    if (!all.length) return ['（沒有任何 RA Guard 政策）'];
+    return all.flatMap(([n, p]) => [`RA guard policy ${n} configuration:`, `  device-role ${p.role || 'host'}`, 'Policy ' + n + ' is applied on the following targets:', pad('Target', 18) + pad('Type', 6) + pad('Policy', 16) + pad('Feature', 12) + 'Target range',
+      ...d.ports.filter((x) => d.sw.ports[x.id].raGuard === n).map((x) => pad(x.label, 18) + pad('PORT', 6) + pad(n, 16) + pad('RA guard', 12) + 'vlan all'), '']);
   },
   'show mac address-table aging-time': (st, d) => (isSw(d) ? [`Global Aging Time:  ${macAgeOf(d)}`] : ['% 這個指令只適用於交換器']),
   'show spanning-tree': (st, d) => {
@@ -270,11 +319,16 @@ const SHOW = {
     if (!isSw(d)) return ['% 這個指令只適用於交換器'];
     const ps = d.ports.filter((p) => d.sw.ports[p.id].ps && d.sw.ports[p.id].ps.on);
     if (!ps.length) return ['沒有任何連接埠啟用 Port Security'];
-    return [pad('Secure Port', 14) + pad('MaxSecureAddr', 15) + pad('CurrentAddr', 13) + 'Security Action',
+    const ACT = { shutdown: 'Shutdown', restrict: 'Restrict', protect: 'Protect' };
+    return [pad('Secure Port', 12) + pad('MaxSecureAddr', 15) + pad('CurrentAddr', 13) + pad('SecurityViolation', 19) + 'Security Action', pad('', 12) + pad('(Count)', 15) + pad('(Count)', 13) + '(Count)',
+      '---------------------------------------------------------------------------',
       ...ps.map((p) => {
-        const c = d.sw.ports[p.id].ps, n = String(c.macs || '').split(/[,\s]+/).filter(Boolean).length;
-        return pad(p.label, 14) + pad(Math.max(1, n), 15) + pad(n, 13) + (c.mode === 'shutdown' ? 'Shutdown' : 'Restrict') + (d.rt.err[p.id] ? '   (err-disabled)' : '');
-      })];
+        const c = d.sw.ports[p.id].ps, r = (d.rt.psec || {})[p.id], rec = (st.dyn.psec || {})[d.id + ':' + p.id] || { viol: 0 };
+        const cur = r ? r.allowed.size : psConfigured(c).length;
+        return pad(p.label, 12) + pad(psMax(c), 15) + pad(cur, 13) + pad(rec.viol || 0, 19) + ACT[psMode(c)] + (d.rt.err[p.id] === true ? '   (err-disabled)' : '');
+      }), '---------------------------------------------------------------------------',
+      `Total Addresses in System (excluding one mac per port)     : ${Math.max(0, ps.reduce((n, p) => n + ((d.rt.psec || {})[p.id] ? d.rt.psec[p.id].allowed.size : 0), 0) - ps.length)}`,
+      `Max Addresses limit in System (excluding one mac per port) : ${camSize(d) >= 8192 ? 4096 : 1024}`];
   },
   'show crypto isakmp sa': (st, d) => {
     const o = ['IPv4 Crypto ISAKMP SA', pad('dst', 16) + pad('src', 16) + pad('state', 15) + pad('conn-id', 8) + 'status'];
@@ -846,20 +900,56 @@ function lldpDetail(st, d) {
   o.push(`Total entries displayed: ${neighbors(st, d, 'lldp').length}`);
   return o;
 }
+/** show port-security interface <埠> */
+function psecIfLines(st, d, p) {
+  const pc = d.sw.ports[p.id], c = pc.ps;
+  if (!c) return ['Port Security              : Disabled', 'Port Status                : Secure-down', 'Violation Mode             : Shutdown', 'Maximum MAC Addresses      : 1', 'Total MAC Addresses        : 0'];
+  const r = (d.rt.psec || {})[p.id], rec = (st.dyn.psec || {})[d.id + ':' + p.id] || { viol: 0, dyn: [] };
+  const err = d.rt.err[p.id] === true, cfg = psConfigured(c);
+  const status = !c.on ? 'Secure-down' : err ? 'Secure-shutdown' : st.rt.links[d.id + ':' + p.id] ? 'Secure-up' : 'Secure-down';
+  const total = r ? r.allowed.size : cfg.length;
+  const last = rec.last ? (rec.last === 'macof' ? '（macof 亂造的 MAC）' : rec.last.replace(/:/g, '').replace(/(.{4})(?=.)/g, '$1.')) : '0000.0000.0000';
+  return [`Port Security              : ${c.on ? 'Enabled' : 'Disabled'}`, `Port Status                : ${status}`, `Violation Mode             : ${({ shutdown: 'Shutdown', restrict: 'Restrict', protect: 'Protect' })[psMode(c)]}`,
+    'Aging Time                 : 0 mins', 'Aging Type                 : Absolute', 'SecureStatic Address Aging : Disabled',
+    `Maximum MAC Addresses      : ${psMax(c)}`, `Total MAC Addresses        : ${total}`, `Configured MAC Addresses   : ${String(c.macs || '').split(/[,\s]+/).filter(Boolean).length}`, `Sticky MAC Addresses       : ${String(c.stickyMacs || '').split(/[,\s]+/).filter(Boolean).length}`,
+    `Last Source Address:Vlan   : ${last}:${pc.vlan}`, `Security Violation Count   : ${rec.viol || 0}`,
+    ...(r && r.bad.length && psMode(c) !== 'shutdown' ? [`（違規的訊框被丟掉了：${psMode(c) === 'protect' ? 'protect 不記紀錄也不計次數' : 'restrict 會記一筆 syslog、違規次數加一'}，埠本身維持 up）`] : []),
+    ...(err ? ['（埠因為違規被關閉 (err-disabled)：排除原因之後 shutdown 再 no shutdown，或設定 errdisable recovery cause psecure-violation）'] : [])];
+}
+/** show storm-control [介面] */
+function stormLines(st, d, only) {
+  if (!isSw(d)) return ['% 這個指令只適用於交換器'];
+  const list = d.ports.filter((p) => (only ? p === only : d.sw.ports[p.id].storm));
+  if (!list.length) return ['（沒有任何連接埠設定 storm-control）'];
+  const o = [pad('Interface', 11) + pad('Filter State', 15) + pad('Upper', 13) + pad('Lower', 13) + 'Current', pad('---------', 11) + pad('-------------', 15) + pad('-----------', 13) + pad('-----------', 13) + '----------'];
+  for (const p of list) {
+    const pc = d.sw.ports[p.id], li = st.rt.links[d.id + ':' + p.id] && linkInfo(st, d.id, p.id), speed = (li && li.speed) || 1000;
+    const lim = stormLimit(pc, speed);
+    // 從這個埠進來的廣播：看狂送廣播的設備在不在這個埠後面
+    const k = (st.rt.links[d.id + ':' + p.id] || {}).cable + '>' + d.id, cur = ((st.rt.bcast || {})[k] || 0) / speed * 100;
+    const state = d.rt.err[p.id] === 'storm' ? 'Link Down' : !li ? 'Link Down' : lim != null && cur > +pc.storm.bcast ? 'Blocking' : 'Forwarding';
+    const pct = (x) => (x == null ? '100.00%' : (+x).toFixed(2) + '%');
+    o.push(pad(p.label, 11) + pad(state, 15) + pad(pct(pc.storm && pc.storm.bcast), 13) + pad(pct(pc.storm && pc.storm.bcast), 13) + pct(Math.min(100, cur)));
+  }
+  return o;
+}
 /** show interfaces <埠> switchport */
 function switchportLines(st, d, p) {
   const pc = d.sw.ports[p.id], t = (d.rt.dtp || {})[p.id] || { oper: 'down' };
   const vname = (v) => { const x = d.sw.vlans.find((y) => y.id === v); return x ? x.name.replace(/\s+/g, '_') : 'Inactive'; };
-  const adm = pc.mode === 'dynamic-auto' ? 'dynamic auto' : pc.mode === 'dynamic-desirable' ? 'dynamic desirable' : pc.mode === 'trunk' ? 'trunk' : 'static access';
-  const oper = t.oper === 'trunk' ? 'trunk' : t.oper === 'down' ? 'down' : 'static access';
+  const pvl = pc.mode === 'pvlan-host' ? 'private-vlan host' : pc.mode === 'pvlan-promisc' ? 'private-vlan promiscuous' : null;
+  const adm = pvl || (pc.mode === 'dynamic-auto' ? 'dynamic auto' : pc.mode === 'dynamic-desirable' ? 'dynamic desirable' : pc.mode === 'trunk' ? 'trunk' : 'static access');
+  const oper = t.oper === 'down' ? 'down' : pvl || (t.oper === 'trunk' ? 'trunk' : 'static access');
   const neg = dtpSpeaker(d) && pc.mode !== 'access' && !pc.noneg;
   return [`Name: ${p.label}`, 'Switchport: Enabled', `Administrative Mode: ${adm}`, `Operational Mode: ${oper}`, 'Administrative Trunking Encapsulation: dot1q',
     `Operational Trunking Encapsulation: ${t.oper === 'trunk' ? 'dot1q' : 'native'}`, `Negotiation of Trunking: ${neg ? 'On' : 'Off'}`,
     `Access Mode VLAN: ${pc.vlan} (${pc.vlan === 1 ? 'default' : vname(pc.vlan)})`, `Trunking Native Mode VLAN: ${pc.native} (${pc.native === 1 ? 'default' : vname(pc.native)})`,
-    'Administrative Native VLAN tagging: enabled', `Voice VLAN: ${pc.voice ? `${pc.voice} (${vname(pc.voice)})` : 'none'}`,
-    'Administrative private-vlan host-association: none', 'Administrative private-vlan mapping: none', 'Operational private-vlan: none',
+    `Administrative Native VLAN tagging: ${d.sw.tagNative ? 'enabled' : 'disabled'}`, `Voice VLAN: ${pc.voice ? `${pc.voice} (${vname(pc.voice)})` : 'none'}`,
+    `Administrative private-vlan host-association: ${pc.pvHost ? `${pc.pvHost.primary} (${vname(pc.pvHost.primary)}) ${pc.pvHost.secondary} (${vname(pc.pvHost.secondary)})` : 'none'}`,
+    `Administrative private-vlan mapping: ${pc.pvMap ? `${pc.pvMap.primary} (${vname(pc.pvMap.primary)}) ${(pc.pvMap.secondaries || []).join(',')}` : 'none'}`,
+    `Operational private-vlan: ${pc.mode === 'pvlan-host' && pc.pvHost ? `${pc.pvHost.primary} (${vname(pc.pvHost.primary)}) ${pc.pvHost.secondary} (${vname(pc.pvHost.secondary)})` : pc.mode === 'pvlan-promisc' && pc.pvMap ? `${pc.pvMap.primary} (${vname(pc.pvMap.primary)}) ${(pc.pvMap.secondaries || []).join(',')}` : 'none'}`,
     `Trunking VLANs Enabled: ${pc.allowed === 'all' || !pc.allowed ? 'ALL' : pc.allowed}`, 'Pruning VLANs Enabled: 2-1001', 'Capture Mode Disabled', 'Capture VLANs Allowed: ALL', '',
-    'Protected: false', 'Unknown unicast blocked: disabled', 'Unknown multicast blocked: disabled', 'Appliance trust: none',
+    `Protected: ${pc.protected ? 'true' : 'false'}`, 'Unknown unicast blocked: disabled', 'Unknown multicast blocked: disabled', 'Appliance trust: none',
     ...(t.why ? [`（DTP：${t.why}）`] : []), ...(pc.noneg ? ['（nonegotiate：這個埠不送 DTP，對面的 dynamic 埠不會因為它而變成 Trunk）'] : [])];
 }
 
@@ -1598,6 +1688,53 @@ function showOrPing(app, devId, line, print) {
       if (!rows.length) print(user ? `（${user} 沒有任何設定變更紀錄）` : '（還沒有任何設定變更紀錄）', 'hint');
       return true;
     }
+  }
+  // show port-security interface <埠>、show port-security address
+  if (tok[0].length >= 2 && 'show'.startsWith(tok[0]) && tok[1] === 'port-security' && tok[2]) {
+    if (!isSw(d)) { print('% 這個指令只適用於交換器', 'warn'); return true; }
+    if (tok[2].length >= 2 && 'address'.startsWith(tok[2])) {
+      print('               Secure Mac Address Table', 'pre');
+      print('-----------------------------------------------------------------------------', 'pre');
+      print(pad('Vlan', 8) + pad('Mac Address', 17) + pad('Type', 26) + pad('Ports', 10) + 'Remaining Age', 'pre');
+      let n = 0;
+      for (const p of d.ports) {
+        const c = d.sw.ports[p.id].ps;
+        if (!c || !c.on) continue;
+        const v = d.sw.ports[p.id].vlan, rec = (st.dyn.psec || {})[d.id + ':' + p.id] || { dyn: [] };
+        const rows = [...String(c.macs || '').split(/[,\s]+/).filter(Boolean).map((m) => [m, 'SecureConfigured']), ...String(c.stickyMacs || '').split(/[,\s]+/).filter(Boolean).map((m) => [m, 'SecureSticky']), ...rec.dyn.map((m) => [m, 'SecureDynamic'])];
+        for (const [m, t] of rows) { print(pad(String(v).padStart(4), 8) + pad(dotMac(m), 17) + pad(t, 26) + pad(p.label, 10) + '-', 'pre'); n++; }
+      }
+      print('-----------------------------------------------------------------------------', 'pre');
+      print(`Total Addresses in System (excluding one mac per port)     : ${Math.max(0, n - 1)}`, 'pre');
+      return true;
+    }
+    if (tok[2].length >= 3 && 'interface'.startsWith(tok[2]) && tok[3]) {
+      const p = portByName(d, tok.slice(3).join(''));
+      if (!p) { print(`% 找不到介面「${tok.slice(3).join(' ')}」`, 'warn'); return true; }
+      psecIfLines(st, d, p).forEach((l) => print(l, l.startsWith('（') ? 'hint' : 'pre'));
+      return true;
+    }
+  }
+  // show storm-control <埠>
+  if (tok[0].length >= 2 && 'show'.startsWith(tok[0]) && tok[1] && tok[1].length >= 5 && 'storm-control'.startsWith(tok[1]) && tok[2] && !'broadcast'.startsWith(tok[2])) {
+    const p = portByName(d, tok.slice(2).join(''));
+    if (!p) { print(`% 找不到介面「${tok.slice(2).join(' ')}」`, 'warn'); return true; }
+    stormLines(st, d, p).forEach((l) => print(l, l.startsWith('（') ? 'hint' : 'pre'));
+    return true;
+  }
+  // show mac address-table interface <埠>
+  if (tok[0].length >= 2 && 'show'.startsWith(tok[0]) && tok[1] === 'mac' && tok[2] && 'address-table'.startsWith(tok[2]) && tok[3] && tok[3].length >= 3 && 'interface'.startsWith(tok[3]) && tok[4]) {
+    if (!isSw(d)) { print('% 這個指令只適用於交換器', 'warn'); return true; }
+    const p = portByName(d, tok.slice(4).join(''));
+    if (!p) { print(`% 找不到介面「${tok.slice(4).join(' ')}」`, 'warn'); return true; }
+    const all = macRows(st, d), rows = all.filter((r) => r.port === p.id), bg = all.bogus && all.bogus.port === p.id ? all.bogus : null;
+    print('          Mac Address Table', 'pre');
+    print('-------------------------------------------', 'pre');
+    print(pad('Vlan', 8) + pad('Mac Address', 18) + pad('Type', 12) + 'Ports', 'pre');
+    for (const r of rows) print(pad(String(r.vlan).padStart(4), 8) + pad(dotMac(r.mac), 18) + pad(r.type, 12) + r.label, 'pre');
+    if (bg) { for (const m of bg.sample) print(pad(String(bg.vlan).padStart(4), 8) + pad(dotMac(m), 18) + pad('DYNAMIC', 12) + bg.label, 'pre'); print(`（… 另外還有 ${(bg.n - bg.sample.length).toLocaleString('en')} 筆亂造的 MAC 都學在這個埠）`, 'hint'); }
+    print(`Total Mac Addresses for this criterion: ${rows.length + (bg ? bg.n : 0)}`, 'pre');
+    return true;
   }
   // show interfaces [名稱]、show monitor session <n>
   if (tok[0].length >= 2 && 'show'.startsWith(tok[0]) && tok[1] && tok[1].length >= 3 && 'interfaces'.startsWith(tok[1]) && tok.length >= 4 && tok[tok.length - 1].length >= 2 && 'switchport'.startsWith(tok[tok.length - 1])) {

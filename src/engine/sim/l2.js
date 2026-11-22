@@ -3,6 +3,8 @@
 import { parseIp, parseVlanList } from '../ip.js';
 import { spanDest } from '../wire.js';
 import { DROP, bridgeKey, isTrunk, isVlanSw, macList, phoneEgress, phoneIngress } from './core.js';
+import { staticMac, camFull, camSize, bogusMacs, stormLimit } from '../l2sec.js';
+import { linkInfo } from '../model.js';
 
 // ───────────────────────────── L2 ─────────────────────────────
 
@@ -20,7 +22,13 @@ export function vlanAllowed(pc, v) {
   return l == null || l.includes(v);
 }
 export const vlanExists = (dev, v) => dev.sw.vlans.some((x) => x.id === v);
-export const psAllowed = (pc, mac) => macList(pc.ps.macs).includes(mac);
+export const psAllowed = (pc, mac) => macList(pc.ps.macs).includes(mac) || macList(pc.ps.stickyMacs).includes(mac);
+/** 這個 MAC 能不能從這個埠進來：Port Security 的安全位址（執行期算好的，包括動態學到的） */
+const psOk = (dev, pid, pc, mac) => { const r = dev.rt.psec && dev.rt.psec[pid]; return r ? r.allowed.has(mac) : psAllowed(pc, mac); };
+/** Private VLAN：VLAN 的種類（primary / isolated / community），不是就回傳 null */
+export const pvType = (dev, v) => { const x = dev.sw && dev.sw.vlans.find((y) => y.id === +v); return (x && x.pvlan) || null; };
+/** secondary VLAN 屬於哪一個 primary */
+export const pvPrimaryOf = (dev, sec) => { const p = dev.sw.vlans.find((y) => y.pvlan === 'primary' && (y.assoc || []).includes(+sec)); return p ? p.id : null; };
 
 function portUsable(d, pid) {
   if (d.sw.ports[pid].shut || (d.rt.err && d.rt.err[pid])) return false;
@@ -41,19 +49,30 @@ function ingressKey(dev, pid, tag, mac, notes) {
   if (!portUsable(dev, pid)) return DROP;
   if (sw.mode === 'phone') return phoneIngress(dev, pid, tag);
   if (sw.mode !== 'vlan') return tag == null ? 'u' : tag;
-  if (pc.ps && pc.ps.on && mac && !psAllowed(pc, mac)) { notes.ps = `${dev.name} 的 ${pid}`; return DROP; }
+  if (pc.ps && pc.ps.on && mac && !psOk(dev, pid, pc, mac)) { notes.ps = `${dev.name} 的 ${pid}`; return DROP; }
   let v;
-  if (isTrunk(dev, pid)) {
+  if (pc.mode === 'pvlan-host' || pc.mode === 'pvlan-promisc') {
+    // Private VLAN：host 埠進來的算在 secondary VLAN，promiscuous 埠進來的算在 primary VLAN
+    if (tag != null && tag !== 0) return DROP;
+    const h = pc.pvHost || {}, m = pc.pvMap || {};
+    v = pc.mode === 'pvlan-host' ? +h.secondary : +m.primary;
+    if (pc.mode === 'pvlan-host' && (pvPrimaryOf(dev, v) !== +h.primary || !pvType(dev, v))) return DROP;
+    if (pc.mode === 'pvlan-promisc' && pvType(dev, v) !== 'primary') return DROP;
+  } else if (isTrunk(dev, pid)) {
     v = tag == null ? pc.native : tag;
     if (!vlanAllowed(pc, v)) return DROP;
   } else if (tag != null && tag !== 0) {
-    // Access 埠只收不帶標籤的訊框；設了 Voice VLAN 的埠另外收帶著語音 VLAN 標籤的訊框（IP 電話送的）
-    if (!pc.voice || tag !== pc.voice) return DROP;
-    v = pc.voice;
+    // Access 埠只收不帶標籤的訊框；設了 Voice VLAN 的埠另外收帶著語音 VLAN 標籤的訊框（IP 電話送的）。
+    // 標籤剛好是這個埠的 Access VLAN 的訊框，Catalyst 也照收（雙重標籤攻擊就是利用這一點：外層的標籤被拿掉，裡面那層留著）
+    if (tag === pc.vlan) v = pc.vlan;
+    else if (!pc.voice || tag !== pc.voice) return DROP;
+    else v = pc.voice;
   } else {
     v = pc.vlan; // 不帶標籤，或只帶優先權的 802.1p 標籤 (VLAN 0)
   }
   if (!vlanExists(dev, v) || stpBlocked(dev, pid, v)) return DROP;
+  // mac address-table static … drop：這個 MAC 送來的訊框直接丟掉
+  if (mac) { const st = staticMac(dev, v, mac); if (st && st.drop) { notes.drop ||= `${dev.name}（mac address-table static ${mac} vlan ${v} drop）`; return DROP; } }
   return v;
 }
 
@@ -64,9 +83,21 @@ function egressTag(dev, pid, key) {
   if (sw.mode === 'phone') return phoneEgress(dev, pid, key);
   if (sw.mode !== 'vlan') return key === 'u' ? null : key;
   if (stpBlocked(dev, pid, key)) return DROP;
+  if (pc.mode === 'pvlan-host') {
+    // host 埠收得到：primary VLAN（從 promiscuous 埠或 SVI 來的）、自己的 community；isolated 的彼此收不到
+    const h = pc.pvHost || {};
+    if (+key === +h.primary && pvPrimaryOf(dev, h.secondary) === +h.primary) return null;
+    if (+key === +h.secondary && pvType(dev, key) === 'community') return null;
+    return DROP;
+  }
+  if (pc.mode === 'pvlan-promisc') {
+    const m = pc.pvMap || {};
+    return +key === +m.primary || (m.secondaries || []).map(Number).includes(+key) ? null : DROP;
+  }
   if (isTrunk(dev, pid)) {
     if (!vlanAllowed(pc, key)) return DROP;
-    return key === pc.native ? null : key;
+    // vlan dot1q tag native：連 Native VLAN 的訊框也加上標籤送出去
+    return key === pc.native && !dev.sw.tagNative ? null : key;
   }
   if (pc.voice && key === pc.voice && key !== pc.vlan) return key; // 語音 VLAN 帶著標籤送給電話
   return pc.vlan === key ? null : DROP;
@@ -78,44 +109,58 @@ export const wifiHop = (from, to) => ({ wifi: true, cable: null, from, to, fromP
  * 從某個 L3 介面出發，找出同一個廣播網域內所有可到達的 L3 介面。
  * 回傳陣列 [{ dev, iface, path }]；另外帶有 .storm（偵測到迴圈）與 .ps（被 Port Security 擋下）兩個屬性。
  */
-export function l2Explore(state, devId, iface) {
+export function l2Explore(state, devId, iface, opts = {}) {
   const rt = state.rt, links = rt.links;
   const out = [];
   const seen = new Set();
   const queue = [];
   const dev = state.devices[devId];
   if (!ifaceActive(dev, iface) || rt.off[devId] || (state.down || {})[devId]) return out;
-  const mac = iface.rt && iface.rt.mac;
+  // opts.mac：用別的來源 MAC 送（macof 亂造的 MAC）；opts.trace：記下走過的交換器 (out.sws) 與每一段線路 (out.links)
+  const mac = opts.mac || (iface.rt && iface.rt.mac);
+  if (opts.trace) { out.sws = []; out.links = []; }
 
-  const emit = (d, pid, tag, path) => {
+  // inner：雙重標籤的訊框裡面那一層標籤（外層被拿掉之後才看得到）
+  const emit = (d, pid, tag, path, inner) => {
     const l = links[d.id + ':' + pid];
-    if (l) queue.push({ from: d.id, fromPort: pid, to: l.dev, toPort: l.port, cable: l.cable, tag, path });
+    if (l) queue.push({ from: d.id, fromPort: pid, to: l.dev, toPort: l.port, cable: l.cable, tag, path, inner });
   };
-  const flood = (d, key, exceptPort, path, viaWifi) => {
-    const k = d.id + '|' + key;
+  const flood = (d, key, exceptPort, path, viaWifi, inner) => {
+    const k = d.id + '|' + key + (inner != null ? '|' + inner : '');
     if (seen.has(k)) { out.storm = d.id; return; } // 同一個網段被走到第二次 = 有迴圈
     seen.add(k);
-    for (const i of d.ifaces) {
-      if (i === iface) continue;
-      if ((i.bind.t === 'svi' && d.sw.mode === 'vlan' && i.bind.vlan === key) || (i.bind.t === 'bridge' && key === bridgeKey(d))) {
-        out.push({ dev: d.id, iface: i, path });
+    if (out.sws) out.sws.push({ dev: d.id, key, port: exceptPort });
+    // switchport protected：從 protected 埠進來的訊框，不會送往同一台交換器的其他 protected 埠
+    const prot = exceptPort && d.sw.ports[exceptPort] && d.sw.ports[exceptPort].protected;
+    if (inner == null) {
+      for (const i of d.ifaces) {
+        if (i === iface) continue;
+        const pvSvi = i.bind.t === 'svi' && d.sw.mode === 'vlan' && (i.pvMap || []).map(Number).includes(+key) && pvPrimaryOf(d, key) === i.bind.vlan;
+        if ((i.bind.t === 'svi' && d.sw.mode === 'vlan' && i.bind.vlan === key) || pvSvi || (i.bind.t === 'bridge' && key === bridgeKey(d))) {
+          out.push({ dev: d.id, iface: i, path });
+        }
       }
-    }
-    for (const c of rt.clients[d.id] || []) {
-      if (c.key !== key || c.iface === iface) continue;
-      if (viaWifi && (viaWifi.isolate || c.isolate)) continue; // 用戶端隔離
-      out.push({ dev: c.dev, iface: c.iface, path: [...path, ...(c.back || [wifiHop(d.id, c.dev)])] });
+      for (const c of rt.clients[d.id] || []) {
+        if (c.key !== key || c.iface === iface) continue;
+        if (viaWifi && (viaWifi.isolate || c.isolate)) continue; // 用戶端隔離
+        out.push({ dev: c.dev, iface: c.iface, path: [...path, ...(c.back || [wifiHop(d.id, c.dev)])] });
+      }
     }
     for (const pid of Object.keys(d.sw.ports)) {
       if (pid === exceptPort || !isBridgePort(d, pid)) continue;
+      if (prot && d.sw.ports[pid].protected) continue;
       if (d.rt.wait && d.rt.wait[pid] > 0 && links[d.id + ':' + pid]) { out.stp ||= { dev: d.id, pid, left: d.rt.wait[pid] }; continue; }
       const t = egressTag(d, pid, key);
-      if (t !== DROP) emit(d, pid, t, path);
+      if (t === DROP) continue;
+      // 雙重標籤：交換器送出去時只處理外層（Native VLAN 不加標籤），裡面那層原封不動，對面看到的就是裡面那層
+      if (inner != null && t == null) emit(d, pid, inner, path);
+      else emit(d, pid, t, path, inner);
     }
   };
 
   const b = iface.bind;
   if (b.t === 'port') emit(dev, b.port, null, []);
+  else if (b.t === 'sub' && b.outer != null) emit(dev, b.port, b.outer, [], b.vlan); // 攻擊工具：外層 b.outer、裡面 b.vlan
   else if (b.t === 'sub') emit(dev, b.port, b.vlan, []);
   else if (b.t === 'svi') flood(dev, b.vlan, null, []);
   else if (b.t === 'bridge') flood(dev, bridgeKey(dev), null, []);
@@ -127,15 +172,17 @@ export function l2Explore(state, devId, iface) {
   while (queue.length) {
     const q = queue.shift();
     const d = state.devices[q.to];
-    const path = [...q.path, { cable: q.cable, from: q.from, fromPort: q.fromPort, to: q.to, toPort: q.toPort, tag: q.tag }];
+    const path = [...q.path, { cable: q.cable, from: q.from, fromPort: q.fromPort, to: q.to, toPort: q.toPort, tag: q.tag, ...(q.inner != null ? { inner: q.inner } : {}) }];
+    if (out.links) out.links.push({ cable: q.cable, from: q.from, fromPort: q.fromPort, to: q.to, toPort: q.toPort });
     if (isBridgePort(d, q.toPort)) {
       const key = ingressKey(d, q.toPort, q.tag, mac, out);
-      if (key !== DROP) flood(d, key, q.toPort, path);
-    } else {
+      if (key !== DROP) flood(d, key, q.toPort, path, null, q.inner);
+    } else if (q.inner == null) {
+      // 還帶著兩層標籤的訊框，路由器與主機都不認得
       const i = d.ifaces.find((x) =>
         q.tag == null
           ? x.bind.t === 'port' && x.bind.port === q.toPort
-          : x.bind.t === 'sub' && x.bind.port === q.toPort && x.bind.vlan === q.tag,
+          : x.bind.t === 'sub' && x.bind.port === q.toPort && x.bind.vlan === q.tag && x.bind.outer == null,
       );
       if (i && i !== iface) out.push({ dev: d.id, iface: i, path });
     }
@@ -179,10 +226,16 @@ export const learns = (d) => !!d && !!d.sw && d.sw.mode !== 'hub'; // Hub 不看
 
 function macLearn(state, d, key, mac, port) {
   if (!learns(d) || !mac) return;
-  (state.dyn.mac[d.id] ||= {})[key + '|' + mac] = { port, t: state.clock };
+  if (d.sw && d.sw.mode === 'vlan' && staticMac(d, key === 'u' ? 1 : key, mac)) return; // 靜態的項目不會被動態學習蓋掉（MAC 偽造也搬不走它）
+  const tbl = (state.dyn.mac[d.id] ||= {}), k = key + '|' + mac;
+  // 表被 MAC flooding 塞滿了：已經在表裡的照樣更新時間，新的 MAC 學不進來
+  if (!tbl[k] && camFull(state, d, macAgeOf(d))) return;
+  tbl[k] = { port, t: state.clock };
 }
 
 export function macKnown(state, d, key, mac) {
+  const st = d.sw && d.sw.mode === 'vlan' && staticMac(d, key === 'u' ? 1 : key, mac);
+  if (st) return st.drop ? null : { port: st.port, t: state.clock, static: true };
   const e = (state.dyn.mac[d.id] || {})[key + '|' + mac];
   return e && state.clock - e.t < macAgeOf(d) ? e : null;
 }
@@ -227,8 +280,13 @@ export function macRows(state, d) {
   if (isVlanSw(d)) {
     for (const [pid, pc] of Object.entries(d.sw.ports)) {
       if (!pc.ps || !pc.ps.on) continue;
-      for (const m of macList(pc.ps.macs)) rows.push({ vlan: isTrunk(d, pid) ? pc.native : pc.vlan, mac: m, port: pid, label: label(pid), type: 'STATIC' });
+      const v = isTrunk(d, pid) ? pc.native : pc.vlan;
+      for (const m of macList(pc.ps.macs)) rows.push({ vlan: v, mac: m, port: pid, label: label(pid), type: 'STATIC' });
+      for (const m of macList(pc.ps.stickyMacs)) rows.push({ vlan: v, mac: m, port: pid, label: label(pid), type: 'STATIC', sticky: true });
+      // 動態學到的安全位址也顯示成 STATIC（和 IOS 一樣）
+      for (const m of (((state.dyn && state.dyn.psec) || {})[d.id + ':' + pid] || { dyn: [] }).dyn) if (!rows.some((r) => r.mac === m && r.vlan === v)) rows.push({ vlan: v, mac: m, port: pid, label: label(pid), type: 'STATIC', secure: true });
     }
+    for (const e of d.sw.staticMacs || []) rows.push({ vlan: +e.vlan, mac: e.mac, port: e.drop ? 'drop' : e.port, label: e.drop ? 'Drop' : label(e.port), type: 'STATIC' });
   }
   const age = macAgeOf(d);
   for (const [k, e] of Object.entries((state.dyn && state.dyn.mac && state.dyn.mac[d.id]) || {})) {
@@ -236,10 +294,17 @@ export function macRows(state, d) {
     if (old >= age || rows.some((r) => r.mac === mac && r.vlan === vlan(key))) continue;
     rows.push({ vlan: vlan(key), mac, port: e.port, label: label(e.port), type: 'DYNAMIC', age: Math.floor(old), left: Math.ceil(age - old) });
   }
-  return rows.sort((a, b) => a.vlan - b.vlan || a.label.localeCompare(b.label, 'en', { numeric: true }) || a.mac.localeCompare(b.mac));
+  rows.sort((a, b) => a.vlan - b.vlan || a.label.localeCompare(b.label, 'en', { numeric: true }) || a.mac.localeCompare(b.mac));
+  // MAC flooding：表的其他空間全是攻擊工具亂造的位址，學在攻擊者的那個埠
+  const full = learns(d) ? camFull(state, d, age) : null;
+  if (full) {
+    const n = Math.max(0, camSize(d) - rows.length);
+    rows.bogus = { n, port: full.port, label: label(full.port), vlan: vlan(full.key), sample: bogusMacs(d.id + full.by, 6) };
+  }
+  return rows;
 }
 /** clear mac address-table dynamic */
-export function clearMac(state, d) { if (state.dyn && state.dyn.mac) delete state.dyn.mac[d.id]; }
+export function clearMac(state, d) { if (state.dyn && state.dyn.mac) delete state.dyn.mac[d.id]; if (state.dyn && state.dyn.cam) delete state.dyn.cam[d.id]; }
 
 // ── ARP 快取 ──
 /** ARP 項目多久沒用到就會被清掉：個人電腦大約兩分鐘，防火牆五分鐘，路由器與交換器四小時 */
@@ -251,3 +316,47 @@ export const arpRows = (state, dev) => Object.entries((state.dyn && state.dyn.ar
   .map(([ip, e]) => ({ ip: +ip, mac: e.mac, age: Math.floor(state.clock - e.t), left: Math.ceil(arpTtl(dev) - (state.clock - e.t)) }));
 /** arp -d / clear arp-cache */
 export function clearArp(state, dev) { if (state.dyn) delete state.dyn.arp[dev.id]; }
+
+// ── 攻擊工具與壞掉的網卡 ──
+/**
+ * macof：每秒送出幾千個來源 MAC 都不一樣的訊框。走得到的每一台交換器都把它們學進表裡，表一滿，新的 MAC 就學不進來，
+ * 目的地不在表裡的訊框只能往整個 VLAN 泛洪（攻擊者因此收到別人的流量）。Port Security 會在第一個埠就把它們擋掉。
+ * 狂送廣播（中毒的電腦、壞掉的網卡）：整個 VLAN 的每一段線路都被這些廣播佔掉；storm-control 會在進來的埠把超過門檻的丟掉。
+ * 要在 STP、Wi-Fi 與介面的連線狀態算好之後才算（要知道訊框走得到哪裡）
+ */
+export function prepL2Attacks(state) {
+  const rt = state.rt, now = state.clock, down = state.down || {};
+  const cam = (state.dyn.cam ||= {});
+  rt.bcast = {}; rt.storms = [];
+  for (const d of Object.values(state.devices)) {
+    if (down[d.id] || rt.off[d.id]) { delete cam[d.id]; continue; } // 關機：整張表都沒了
+    if (!d.macFlood && !(+d.bcastFlood > 0)) continue;
+    const iface = d.ifaces.find((x) => x.bind.t === 'port' && rt.links[d.id + ':' + x.bind.port]);
+    if (!iface) continue;
+    if (d.macFlood) {
+      const e = l2Explore(state, d.id, iface, { mac: 'macof', trace: true });
+      for (const w of e.sws) { const x = state.devices[w.dev]; if (learns(x)) cam[x.id] = { t: now, by: d.id, port: w.port, key: w.key }; }
+    }
+    if (+d.bcastFlood > 0) {
+      const li = linkInfo(state, d.id, iface.bind.port), rate = Math.min(+d.bcastFlood, (li && li.speed) || 1000);
+      const e = l2Explore(state, d.id, iface, { trace: true });
+      // 依走到的順序：每一台交換器送出去的量 = 進來的量，進來的埠有 storm-control 的話先砍到門檻
+      const at = { [d.id]: rate };
+      let lim = null;
+      for (const h of e.links) {
+        const inc = at[h.from] ?? 0;
+        if (inc <= 0) continue;
+        rt.bcast[h.cable + '>' + h.to] = (rt.bcast[h.cable + '>' + h.to] || 0) + inc;
+        let r = inc;
+        const x = state.devices[h.to], pc = x.sw && x.sw.ports && x.sw.ports[h.toPort];
+        if (pc && pc.storm) {
+          const sp = (linkInfo(state, x.id, h.toPort) || {}).speed || 1000, L = stormLimit(pc, sp);
+          if (L != null && L < r) { r = L; if (lim == null) lim = { dev: x.id, port: h.toPort, mbps: L }; }
+        }
+        at[h.to] = Math.max(at[h.to] || 0, r);
+      }
+      rt.storms.push({ dev: d.id, rate, lim });
+    }
+  }
+  for (const k of Object.keys(cam)) if (!state.devices[k] || now - cam[k].t >= macAgeOf(state.devices[k])) delete cam[k];
+}

@@ -4,7 +4,8 @@ import { CABLES, CATALOG, DTP_MODELS, POE_CLASS_W, cableDist, cableKind, linkInf
 import { cdpOn, lldpRxOn, lldpTxOn, speaksCdp } from '../disc.js';
 import { spanDest } from '../wire.js';
 import { cmp, isTrunk, isVlanSw, macOf } from './core.js';
-import { isBridgePort, macsBehind, psAllowed, vlanAllowed, vlanExists } from './l2.js';
+import { isBridgePort, macsBehind, vlanAllowed, vlanExists } from './l2.js';
+import { psecEval, psecForget, stormLimit } from '../l2sec.js';
 
 // ───────────────────── 供電、連線、LACP、STP、Wi-Fi ─────────────────────
 
@@ -73,7 +74,7 @@ export function prepPhysical(state) {
   // ── err-disabled ──
   // 違規一發生埠就被關掉，而且會一直維持：就算原因排除了（拔掉那台設備、改了設定）也不會自己恢復，
   // 要 shutdown 再 no shutdown；或是設定了 errdisable recovery，計時器到了交換器自己試著打開（原因還在就馬上又被關掉）。
-  // 設備關機、重新開機也會清掉。state.dyn.errdis = { '設備:埠': { cause: 'psec' | 'bpdu', at, n（第幾次被關） } }
+  // 設備關機、重新開機也會清掉。state.dyn.errdis = { '設備:埠': { cause: 'psec' | 'bpdu' | 'storm', at, n（第幾次被關） } }
   const ED = (state.dyn.errdis ||= {}), now = state.clock, retry = {};
   const cutPort = (d, pid, l, why) => {
     delete rt.links[d.id + ':' + pid];
@@ -81,25 +82,52 @@ export function prepPhysical(state) {
     rt.cable[l.cable] = 'down';
     rt.why[l.cable] = why;
   };
-  const psecBad = (d, pid) => {
+  // Port Security：每個埠算出安全位址與違規。restrict / protect 在 l2 的 ingress 丟掉違規的訊框，shutdown 把整個埠關掉。
+  // dry：只看原因還在不在（已經 err-disabled 的埠不會再學新的安全位址）
+  const alive = (x) => x && !down[x.id] && !rt.off[x.id];
+  const psecRun = (d, pid, dry) => {
     const pc = d.sw.ports[pid];
-    return !!(rt.links[d.id + ':' + pid] && pc.ps && pc.ps.on && pc.ps.mode === 'shutdown') && macsBehind(state, d, pid).some((m) => !psAllowed(pc, m.mac));
+    if (!pc.ps || !pc.ps.on) return null;
+    if (!rt.links[d.id + ':' + pid]) { if (!dry) psecForget(state, d, pid); return null; }
+    const seen = macsBehind(state, d, pid);
+    const fl = seen.find((m) => { const x = state.devices[m.dev]; return alive(x) && x.macFlood; });
+    const flood = fl ? { mac: 'macof', dev: fl.dev } : null;
+    if (dry) {
+      const r = psecEval({ dyn: { psec: { [d.id + ':' + pid]: JSON.parse(JSON.stringify((state.dyn.psec || {})[d.id + ':' + pid] || { dyn: [], viol: 0 })) } } }, { ...d, sw: { ...d.sw, ports: { ...d.sw.ports, [pid]: { ...pc, ps: { ...pc.ps } } } } }, pid, seen, flood, now);
+      return r;
+    }
+    const r = psecEval(state, d, pid, seen, flood, now);
+    (d.rt.psec ||= {})[pid] = r;
+    return r;
   };
+  const psecBad = (d, pid, dry) => { const r = psecRun(d, pid, dry); return !!r && r.mode === 'shutdown' && r.bad.length > 0; };
+  // Storm Control：這個埠後面有人狂送廣播，超過門檻；action shutdown 才會把埠關掉（其他的只是丟掉超過的部分）
+  const stormSrc = (d, pid) => {
+    const pc = d.sw.ports[pid];
+    if (!pc.storm || !rt.links[d.id + ':' + pid]) return null;
+    const li = linkInfo(state, d.id, pid), speed = (li && li.speed) || 1000, lim = stormLimit(pc, speed);
+    if (lim == null) return null;
+    const src = macsBehind(state, d, pid).map((m) => state.devices[m.dev]).find((x) => alive(x) && +x.bcastFlood > 0);
+    if (!src) return null;
+    const rate = Math.min(+src.bcastFlood, speed);
+    return rate > lim ? { src, rate, lim, speed } : null;
+  };
+  const stormBad = (d, pid) => { const pc = d.sw.ports[pid]; return !!(pc.storm && pc.storm.action === 'shutdown' && stormSrc(d, pid)); };
   const bpduBad = (d, pid) => {
     const pc = d.sw.ports[pid], l = rt.links[d.id + ':' + pid];
     if (!l || !pc.bpduguard) return false;
     const x = state.devices[l.dev];
     return isVlanSw(x) && !(x.sw.stp && x.sw.stp.on === false) && isBridgePort(x, l.port);
   };
-  const what = (c) => (c === 'bpdu' ? 'BPDU Guard 收到 BPDU' : 'Port Security 違規');
-  const markErr = (d, pid, cause) => { d.rt.err[pid] = cause === 'bpdu' ? 'bpdu' : true; };
+  const what = (c) => (c === 'bpdu' ? 'BPDU Guard 收到 BPDU' : c === 'storm' ? 'Storm Control 偵測到廣播風暴' : 'Port Security 違規');
+  const markErr = (d, pid, cause) => { d.rt.err[pid] = cause === 'bpdu' ? 'bpdu' : cause === 'storm' ? 'storm' : true; };
   for (const [key, e] of Object.entries(ED)) {
     const k = key.indexOf(':'), d = state.devices[key.slice(0, k)], pid = key.slice(k + 1);
     if (!d || !isVlanSw(d) || !d.sw.ports[pid] || down[d.id] || shut(d, pid)) { delete ED[key]; continue; }
     const secs = errRecoverSecs(d, e.cause);
     // 計時器到了：埠重新打開，下面照常檢查，原因還在就再關一次
     if (secs && now >= e.at + secs - 1e-9) { retry[key] = e.n || 1; delete ED[key]; continue; }
-    const still = e.cause === 'bpdu' ? bpduBad(d, pid) : psecBad(d, pid);
+    const still = e.cause === 'bpdu' ? bpduBad(d, pid) : e.cause === 'storm' ? stormBad(d, pid) : psecBad(d, pid, true);
     markErr(d, pid, e.cause);
     const l = rt.links[key];
     if (l) {
@@ -115,12 +143,25 @@ export function prepPhysical(state) {
     markErr(d, pid, cause);
     cutPort(d, pid, l, why + '。排除原因之後要 shutdown 再 no shutdown 才會恢復' + (errRecoverSecs(d, cause) ? '（或等 errdisable recovery 的計時器）' : ''));
   };
-  // Port Security 的 shutdown 模式：發現不認識的 MAC 就把整個埠關掉
+  // Port Security：算出每個埠的安全位址；shutdown 模式發現超過 maximum 的 MAC 就把整個埠關掉
   for (const d of Object.values(state.devices)) {
     if (!isVlanSw(d)) continue;
     for (const pid of Object.keys(d.sw.ports)) {
-      if (ED[d.id + ':' + pid] || !psecBad(d, pid)) continue;
-      errOn(d, pid, 'psec', `${d.name} 的 ${pid} 因為 Port Security 違規而被關閉 (err-disabled)`);
+      if (ED[d.id + ':' + pid]) continue;
+      const r = psecRun(d, pid, false);
+      if (r && r.mode === 'shutdown' && r.bad.length) {
+        const b = r.bad[0];
+        errOn(d, pid, 'psec', `${d.name} 的 ${pid} 因為 Port Security 違規而被關閉 (err-disabled)：${b.flood ? `${(state.devices[b.dev] || {}).name || '後面的設備'} 在狂送來源 MAC 都不一樣的訊框 (MAC flooding)` : `看到第 ${r.max + 1} 個 MAC ${b.mac}（最多只允許 ${r.max} 個）`}`);
+      }
+    }
+  }
+  // Storm Control 的 shutdown：廣播超過門檻就把埠關掉（err-disabled，原因是 storm-control）
+  for (const d of Object.values(state.devices)) {
+    if (!isVlanSw(d)) continue;
+    for (const pid of Object.keys(d.sw.ports)) {
+      if (ED[d.id + ':' + pid] || !stormBad(d, pid)) continue;
+      const x = stormSrc(d, pid);
+      errOn(d, pid, 'storm', `${d.name} 的 ${pid} 收到的廣播超過 storm-control 的門檻（${x.src.name} 每秒送出約 ${Math.round(x.rate)} Mbps 的廣播，門檻 ${+d.sw.ports[pid].storm.bcast}%），連接埠被關閉 (err-disabled)`);
     }
   }
   // Root Guard：啟用的埠只能是 Designated。如果從這個埠收到「根橋在對面」的 BPDU（superior BPDU），
@@ -209,7 +250,7 @@ export function prepPhysical(state) {
 }
 
 /** errdisable recovery 認得的原因（IOS 的名稱） */
-export const ERR_CAUSES = { psec: 'psecure-violation', bpdu: 'bpduguard' };
+export const ERR_CAUSES = { psec: 'psecure-violation', bpdu: 'bpduguard', storm: 'storm-control' };
 export const ERR_RECOVERY_DEFAULT = 300;
 /** 這個原因有設定 errdisable recovery 的話，回傳計時器的秒數；沒有設定回傳 0 */
 export function errRecoverSecs(d, cause) {

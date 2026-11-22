@@ -2,7 +2,7 @@
 // （從 sim.js 拆出來的一部分；其他程式一律從 engine/sim.js 引入，不直接引入這裡）
 import { callsTick } from '../voice.js';
 import { classify, egressOf, markAlong } from '../qos.js';
-import { countBytes } from '../wire.js';
+import { countBytes, countBcast } from '../wire.js';
 import { linkInfo } from '../model.js';
 import { parseIp } from '../ip.js';
 import { transact } from './transact.js';
@@ -24,6 +24,9 @@ export function linkCap(state, h, eff = 0.94) {
   if (li.mismatch) c = { mbps: Math.min(li.speed * 0.01, 2), note: `${li.speed} Mbps，但兩端的雙工不一致 (duplex mismatch)`, loss: 35, retr: 1800 };
   else if (li.half) c = { mbps: li.speed * 0.4, note: `${li.speed} Mbps 半雙工，會發生碰撞`, loss: 3, retr: 60 };
   else c = { mbps: li.speed * eff, note: `${li.speed >= 1000 ? li.speed / 1000 + ' Gbps' : li.speed + ' Mbps'} 全雙工`, loss: 0, retr: 0 };
+  // 這段線路被廣播佔掉了（狂送廣播的設備）：TCP 只拿得到剩下的
+  const bc = ((state.rt && state.rt.bcast) || {})[h.cable + '>' + h.to] || 0;
+  if (bc > 0.5) c = { ...c, mbps: Math.max(1, c.mbps - bc), note: `${c.note}，但其中約 ${Math.round(Math.min(bc, c.mbps))} Mbps 被廣播封包佔掉`, loss: Math.max(c.loss, bc >= c.mbps * 0.8 ? 8 : 1), retr: Math.max(c.retr, bc >= c.mbps * 0.8 ? 300 : 20) };
   // 整形 (shape)：自己把送出去的速率壓在設定值以下
   const eg = egressOf(state, h);
   if (eg && eg.shape != null && eg.shape * 0.95 < c.mbps) c = { ...c, mbps: eg.shape * 0.95, note: `${c.note}，整形 (shape) 到 ${eg.shape} Mbps` };
@@ -97,6 +100,13 @@ export function flowsTick(state) {
     });
     f.rt = { mbps: Math.round(x.rate * 10) / 10, where, full: x.rate < x.want - 0.5 };
     if (dt > 0) for (const h of hops) countBytes(state, h, (x.rate * 1e6 * dt) / 8);
+  }
+  // 狂送的廣播：算進每一段線路的計數器（broadcasts）
+  if (dt > 0) for (const [k, mbps] of Object.entries(state.rt.bcast || {})) {
+    const cut = k.lastIndexOf('>'), cable = k.slice(0, cut), to = k.slice(cut + 1), c = state.cables.find((x) => x.id === cable);
+    if (!c) continue;
+    const [A, B] = c.a.dev === to ? [c.b, c.a] : [c.a, c.b];
+    countBcast(state, { cable, from: A.dev, fromPort: A.port, to: B.dev, toPort: B.port }, (mbps * 1e6 * dt) / 8);
   }
   // 進行中的通話：每個方向一條固定速率的語音流量，品質看沿路每個出口佇列的狀況
   callsTick(state, Q, dt);

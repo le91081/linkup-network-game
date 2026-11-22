@@ -251,6 +251,12 @@ export function countBytes(state, h, bytes) {
   countFrame(state, h.to, h.toPort, h.from, h.fromPort, { dmac: '' }, Math.ceil(pk / 2), Math.ceil(pk / 2) * 66, true);
 }
 
+/** 狂送廣播的設備：只算計數器，單一方向 */
+export function countBcast(state, h, bytes) {
+  if (!h.cable || bytes <= 0) return;
+  countFrame(state, h.from, h.fromPort, h.to, h.toPort, { dmac: BCAST }, Math.max(1, Math.round(bytes / 64)), bytes, true);
+}
+
 /** iperf3 之類的大量資料：只算計數器（不逐一擷取） */
 export function onBulk(state, hops, mbps, secs, retr) {
   const seen = new Set();
