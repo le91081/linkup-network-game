@@ -99,7 +99,7 @@ const TYPES = { gi: 'gigabitethernet', te: 'tengigabitethernet', fa: 'fastethern
 const PROMPT = {
   exec: '#', config: '(config)#', if: '(config-if)#', vlan: '(config-vlan)#', raguard: '(config-ra-guard)#', router: '(config-router)#', dhcp: '(dhcp-config)#',
   line: '(config-line)#', acl: '(config-ext-nacl)#', stdacl: '(config-std-nacl)#', radius: '(config-radius-server)#',
-  isakmp: '(config-isakmp)#', tset: '(cfg-crypto-trans)#', cmap: '(config-crypto-map)#', ipsecprof: '(ipsec-profile)#',
+  isakmp: '(config-isakmp)#', tset: '(cfg-crypto-trans)#', cmap: '(config-crypto-map)#', ipsecprof: '(ipsec-profile)#', flowrec: '(config-flow-record)#', flowexp: '(config-flow-exporter)#', flowmon: '(config-flow-monitor)#',
   ikev2prop: '(config-ikev2-proposal)#', ikev2pol: '(config-ikev2-policy)#', ikev2kr: '(config-ikev2-keyring)#', ikev2peer: '(config-ikev2-keyring-peer)#', ikev2prof: '(config-ikev2-profile)#', track: '(config-track)#', vrfdef: '(config-vrf)#', vrfaf: '(config-vrf-af)#', ipvrf: '(config-vrf)#', archive: '(config-archive)#', archlog: '(config-archive-log-cfg)#', ipsla: '(config-ip-sla)#', slaecho: '(config-ip-sla-echo)#', bgp: '(config-router)#', rmap: '(config-route-map)#', qcmap: '(config-cmap)#', pmap: '(config-pmap)#', pmapc: '(config-pmap-c)#',
 };
 const SERVICE_PORT = { www: 80, http: 80, https: 443, domain: 53, dns: 53, ssh: 22, telnet: 23, ftp: 21, smtp: 25, ntp: 123, snmp: 161, snmptrap: 162, tftp: 69, bgp: 179, syslog: 514, isakmp: 500, bootps: 67, bootpc: 68, 'non500-isakmp': 4500 };
@@ -517,6 +517,8 @@ export function iosSession(getDev, getState, who = null) {
     if (!i[key]) i[key] = [];
   };
 
+  const nfOf = () => (dev().nf ||= {});
+  const tidyNf = () => { const n = dev().nf; if (!n) return; for (const k of Object.keys(n)) { const v = n[k]; if (v == null || (Array.isArray(v) && !v.length) || (typeof v === 'object' && !Array.isArray(v) && !Object.keys(v).length)) delete n[k]; } if (!Object.keys(n).length) delete dev().nf; };
   // ── Tunnel 介面（GRE、mGRE、IPsec VTI）與 DMVPN 的 NHRP ──
   const onTun = (fn) => each((t) => (t.iface && isTun(t.iface) ? fn(t.iface, t) : err(`${t.name} 不是 Tunnel 介面`)));
   const nhrpOf = (i) => (i.nhrp ||= {});
@@ -829,6 +831,19 @@ export function iosSession(getDev, getState, who = null) {
       return undefined;
     })],
     ...TUN_IF,
+    // NetFlow：傳統的 ip flow ingress / egress，或 Flexible NetFlow 的 ip flow monitor <名稱> input | output
+    ['ip flow ingress', () => onL3((i) => { const n = nfOf(); n.ingress = [...new Set([...(n.ingress || []), i.id])]; })],
+    ['no ip flow ingress', () => onL3((i) => { const n = nfOf(); n.ingress = (n.ingress || []).filter((x) => x !== i.id); tidyNf(); })],
+    ['ip flow egress', () => onL3((i) => { const n = nfOf(); n.egress = [...new Set([...(n.egress || []), i.id])]; })],
+    ['no ip flow egress', () => onL3((i) => { const n = nfOf(); n.egress = (n.egress || []).filter((x) => x !== i.id); tidyNf(); })],
+    ['ip flow monitor <m> <dir>', ([m, dir]) => {
+      const d = dev();
+      if (!((d.nf || {}).monitors || {})[m]) return err(`% Flow Monitor: ${m} does not exist（先用 flow monitor ${m} 建立）`);
+      const w = /^in/i.test(dir) ? 'in' : /^out/i.test(dir) ? 'out' : null;
+      if (!w) return err('用法：ip flow monitor <名稱> input | output');
+      return onL3((i) => { ((nfOf().ifMon ||= {})[i.id] ||= {})[w] = m; });
+    }],
+    ['no ip flow monitor <m> <dir>', ([, dir]) => onL3((i) => { const n = nfOf(), x = (n.ifMon || {})[i.id]; if (x) { delete x[/^in/i.test(dir) ? 'in' : 'out']; if (!Object.keys(x).length) delete n.ifMon[i.id]; } tidyNf(); })],
     ['crypto map <name>', ([name]) => onL3((i) => { i.cmap = name; })],
     ['no crypto map [...]', () => onL3((i) => { i.cmap = ''; })],
     ['shutdown', () => each((t) => { if (t.pc) t.pc.shut = true; else if ((t.port || t.loop || t.tunnel) && t.iface) t.iface.shut = true; })],
@@ -2090,6 +2105,26 @@ export function iosSession(getDev, getState, who = null) {
       if (d.tsets) delete d.tsets[name];
       return undefined;
     }],
+    ['ip flow-export destination <ip> <port> [...]', ([ip, port]) => {
+      if (dev().kind !== 'router') return err('這個模擬只有路由器支援 NetFlow');
+      if (parseIp(ip) == null || !(+port >= 1 && +port <= 65535)) return err('用法：ip flow-export destination <收集器的 IP> <UDP 埠（常用 2055、9996）>');
+      const n = nfOf(); n.export = { ...(n.export || {}), ip, port: +port };
+      return undefined;
+    }],
+    ['no ip flow-export destination [...]', () => { const n = nfOf(); if (n.export) delete n.export.ip, delete n.export.port; tidyNf(); }],
+    ['ip flow-export version <v> [...]', ([v]) => (['5', '9'].includes(v) ? (nfOf().export = { ...(nfOf().export || {}), ver: +v }, undefined) : err('用法：ip flow-export version 5 | 9'))],
+    ['ip flow-export source <...>', ([x]) => { const i = ifByName(x); if (isErr(i)) return i; nfOf().export = { ...(nfOf().export || {}), src: i.id }; return undefined; }],
+    ['flow record <name>', ([n]) => { if (dev().kind !== 'router') return err('這個模擬只有路由器支援 NetFlow'); (nfOf().records ||= {})[n] ||= { lines: [] }; enter('flowrec', n); return undefined; }],
+    ['no flow record <name>', ([n]) => { const r = (dev().nf || {}).records; if (r) delete r[n]; tidyNf(); }],
+    ['flow exporter <name>', ([n]) => { if (dev().kind !== 'router') return err('這個模擬只有路由器支援 NetFlow'); (nfOf().exporters ||= {})[n] ||= { port: 9995 }; enter('flowexp', n); return undefined; }],
+    ['no flow exporter <name>', ([n]) => { const x = (dev().nf || {}).exporters; if (x) delete x[n]; tidyNf(); }],
+    ['flow monitor <name>', ([n]) => { if (dev().kind !== 'router') return err('這個模擬只有路由器支援 NetFlow'); (nfOf().monitors ||= {})[n] ||= {}; enter('flowmon', n); return undefined; }],
+    ['no flow monitor <name>', ([n]) => {
+      const d = dev();
+      if (Object.values((d.nf || {}).ifMon || {}).some((x) => x.in === n || x.out === n)) return err(`% Flow Monitor: ${n} is in use（先在介面上 no ip flow monitor ${n} input）`);
+      const x = (d.nf || {}).monitors; if (x) delete x[n]; tidyNf();
+      return undefined;
+    }],
     ['crypto ipsec profile <name>', ([n]) => {
       const d = dev();
       if (!d.vpns || d.kind !== 'router') return err('這台設備不支援 IPsec VPN');
@@ -2565,6 +2600,31 @@ export function iosSession(getDev, getState, who = null) {
       if (ts) { if (/^transport$/i.test(m)) ts.mode = 'transport'; else delete ts.mode; }
       return undefined;
     }]],
+    flowrec: [
+      ['match <...>', ([x]) => { const r = dev().nf.records[S.cur]; r.lines = [...new Set([...r.lines, 'match ' + x.toLowerCase()])]; }],
+      ['collect <...>', ([x]) => { const r = dev().nf.records[S.cur]; r.lines = [...new Set([...r.lines, 'collect ' + x.toLowerCase()])]; }],
+      ['description <...>', ([x]) => { dev().nf.records[S.cur].desc = x; }],
+    ],
+    flowexp: [
+      ['destination <ip>', ([ip]) => (parseIp(ip) == null ? err('用法：destination <收集器的 IP>') : (dev().nf.exporters[S.cur].ip = ip, undefined))],
+      ['transport udp <port>', ([p]) => (+p >= 1 && +p <= 65535 ? (dev().nf.exporters[S.cur].port = +p, undefined) : err('用法：transport udp <埠>'))],
+      ['source <...>', ([x]) => { const i = ifByName(x); if (isErr(i)) return i; dev().nf.exporters[S.cur].src = i.id; return undefined; }],
+      ['export-protocol <...>', () => undefined],
+      ['description <...>', ([x]) => { dev().nf.exporters[S.cur].desc = x; }],
+    ],
+    flowmon: [
+      ['record <...>', ([x]) => {
+        const name = x.trim();
+        if (!/^netflow /i.test(name) && !(dev().nf.records || {})[name]) return err(`% Flow Record: ${name} does not exist（或用預先定義的 record netflow ipv4 original-input）`);
+        dev().nf.monitors[S.cur].record = name;
+        return undefined;
+      }],
+      ['exporter <name>', ([n]) => { if (!(dev().nf.exporters || {})[n]) return err(`% Flow Exporter: ${n} does not exist`); dev().nf.monitors[S.cur].exporter = n; return undefined; }],
+      ['no exporter [...]', () => { delete dev().nf.monitors[S.cur].exporter; }],
+      ['cache timeout active <n>', ([n]) => { dev().nf.monitors[S.cur].active = +n; }],
+      ['cache timeout inactive <n>', ([n]) => { dev().nf.monitors[S.cur].inactive = +n; }],
+      ['description <...>', ([x]) => { dev().nf.monitors[S.cur].desc = x; }],
+    ],
     ipsecprof: [
       ['set transform-set <name>', ([n]) => {
         if (!(dev().tsets || {})[n]) return err(`ERROR: transform set with tag ${n} does not exist.（先用 crypto ipsec transform-set 定義）`);
@@ -2868,6 +2928,10 @@ export function iosSession(getDev, getState, who = null) {
       ['police cir <bps> [...]', ([b]) => (+b >= 8000 ? pmSet((c) => { c.police = { bps: +b }; }) : err('用法：police cir <bps>，例如 police cir 1000000'))],
       ['police <bps> [...]', ([b]) => (+b >= 8000 ? pmSet((c) => { c.police = { bps: +b }; }) : err('用法：police <bps>'))],
       ['no police [...]', () => pmSet((c) => { delete c.police; })],
+      // running-config 在 police 底下印出 conform-action / exceed-action：貼回去時照單全收（這個模擬固定是 transmit / drop）
+      ['conform-action <...>', () => undefined],
+      ['exceed-action <...>', () => undefined],
+      ['violate-action <...>', () => undefined],
       ['shape average <bps> [...]', ([b]) => (+b >= 8000 ? pmSet((c) => { c.shape = { bps: +b }; }) : err('用法：shape average <bps>，例如 shape average 20000000'))],
       ['no shape [...]', () => pmSet((c) => { delete c.shape; })],
       ['service-policy <name>', ([n]) => { const d = dev(); if (!(d.policyMaps || {})[n]) return err(`policy map ${n} not configured`); if (n === S.cur.pm) return err('政策不能套用自己'); return pmSet((c) => { c.child = n; }); }],
@@ -3628,6 +3692,9 @@ export function runningConfig(state, dev) {
     if (i.acl6In) l.push(` ipv6 traffic-filter ${i.acl6In} in`);
     if (i.acl6Out) l.push(` ipv6 traffic-filter ${i.acl6Out} out`);
     if (i.cmap || cmIf.has(i)) l.push(` crypto map ${i.cmap || cmIf.get(i)}`);
+    if (((dev.nf || {}).ingress || []).includes(i.id)) l.push(' ip flow ingress');
+    if (((dev.nf || {}).egress || []).includes(i.id)) l.push(' ip flow egress');
+    { const m = ((dev.nf || {}).ifMon || {})[i.id]; if (m && m.in) l.push(` ip flow monitor ${m.in} input`); if (m && m.out) l.push(` ip flow monitor ${m.out} output`); }
     if (i.qosIn) l.push(` service-policy input ${i.qosIn}`);
     if (i.qosOut) l.push(` service-policy output ${i.qosOut}`);
     return l.filter(Boolean);
@@ -3637,6 +3704,12 @@ export function runningConfig(state, dev) {
     else o.push(`vrf definition ${n}`, ...(v.desc ? [` description ${v.desc}`] : []), ...(v.rd ? [` rd ${v.rd}`] : []), ...(v.af4 ? [' !', ' address-family ipv4', ' exit-address-family'] : []), '!');
   }
   o.push(...archiveLines(dev));
+  {
+    const N = dev.nf || {}, ifl = (id) => { const x = dev.ifaces.find((y) => y.id === id); return x ? longIf(x.label) : id; };
+    for (const [n, r] of Object.entries(N.records || {})) o.push(`flow record ${n}`, ...(r.desc ? [` description ${r.desc}`] : []), ...r.lines.map((x) => ' ' + x), '!');
+    for (const [n, e] of Object.entries(N.exporters || {})) o.push(`flow exporter ${n}`, ...(e.desc ? [` description ${e.desc}`] : []), ...(e.ip ? [` destination ${e.ip}`] : []), ...(e.src ? [` source ${ifl(e.src)}`] : []), ...(e.port ? [` transport udp ${e.port}`] : []), '!');
+    for (const [n, m] of Object.entries(N.monitors || {})) o.push(`flow monitor ${n}`, ...(m.desc ? [` description ${m.desc}`] : []), ...(m.exporter ? [` exporter ${m.exporter}`] : []), ...(m.active ? [` cache timeout active ${m.active}`] : []), ...(m.inactive ? [` cache timeout inactive ${m.inactive}`] : []), ...(m.record ? [` record ${m.record}`] : []), '!');
+  }
   for (const [n, t] of Object.entries(dev.track || {})) {
     const ti = t.type === 'iface' && dev.ifaces.find((x) => x.id === t.iface);
     o.push(t.type === 'sla' ? `track ${n} ip sla ${t.sla} reachability` : `track ${n} interface ${longIf(ti ? ti.label : t.iface)} line-protocol`, '!');
@@ -3797,6 +3870,7 @@ export function runningConfig(state, dev) {
     if (!r.dst || (!r.via && !oi)) continue; // 沒有下一站的只有「ip route … Tunnel0」
     o.push(`ip route ${r.vrf ? 'vrf ' + r.vrf + ' ' : ''}${r.dst} ${parseMask(r.mask || '') != null ? fmtMask(parseMask(r.mask)) : r.mask} ${oi ? longIf(oi.label) + (r.via ? ' ' : '') : ''}${r.via || ''}${r.global ? ' global' : ''}${+r.ad > 1 ? ' ' + r.ad : ''}${r.track != null && r.track !== '' ? ' track ' + r.track : ''}`);
   }
+  { const X = (dev.nf || {}).export; if (X && X.ver) o.push(`ip flow-export version ${X.ver}`); if (X && X.src) { const x = dev.ifaces.find((y) => y.id === X.src); o.push(`ip flow-export source ${x ? longIf(x.label) : X.src}`); } if (X && X.ip) o.push(`ip flow-export destination ${X.ip} ${X.port}`); }
   if (dev.localPolicy) o.push(`ip local policy route-map ${dev.localPolicy}`);
   for (const [n, op] of Object.entries(dev.sla || {})) {
     const si = op.src && dev.ifaces.find((x) => x.id === op.src);

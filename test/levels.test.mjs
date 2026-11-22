@@ -1691,6 +1691,7 @@ console.log('\nIPv6：DHCPv6 的旗標、OSPFv3、IPv6 ACL 與鄰居探索');
   const { parseIp6 } = await import('../src/engine/ip6.js');
   const { transact6 } = await import('../src/engine/sim6.js');
   const { logRows } = await import('../src/engine/ops.js');
+  const { makeState, makeDevice } = await import('../src/engine/model.js');
   const ok = (cond, title) => (cond ? console.log('  ✔ ' + title) : fail(title));
   const sessions = new WeakMap();
   const sessOf = (s, id) => { const m = sessions.get(s) || new Map(); sessions.set(s, m); if (!m.has(id)) m.set(id, iosSession(() => s.devices[id], () => s)); return m.get(id); };
@@ -3240,6 +3241,129 @@ console.log('\nGLBP：AVG、AVF、虛擬 MAC 與接手');
   ok(/ glbp 1 ip 10\.10\.0\.1\n glbp 1 priority 110\n glbp 1 preempt/.test(runningConfig(s, s.devices.r1).join('\n')), 'running-config：glbp 1 ip、priority、preempt');
   const lb = cli(s, 'r1')('configure terminal', 'interface Gi0/0/1', 'glbp 1 load-balancing host-dependent', 'end');
   ok(!/%/.test(lb) && / glbp 1 load-balancing host-dependent/.test(runningConfig(s, s.devices.r1).join('\n')), 'glbp 1 load-balancing host-dependent');
+}
+
+console.log('\ndebug ip ospf 與 debug crypto');
+{
+  const sim = await import('../src/engine/sim.js');
+  const { iosSession } = await import('../src/engine/ios.js');
+  const { iosRun } = await import('../src/ui/cli.js');
+  const { logRows } = await import('../src/engine/ops.js');
+  const { makeState, makeDevice } = await import('../src/engine/model.js');
+  const ok = (cond, title) => (cond ? console.log('  ✔ ' + title) : fail(title));
+  const cli = (s, id) => { const S = iosSession(() => s.devices[id], () => s); return (...lines) => { const out = []; for (const l of lines) { const r = iosRun({ state: s, showTrace() {}, refreshLive() {} }, id, S, l, (x) => out.push(x)); if (r.changed) settle(s); } return out.join('\n'); }; };
+  const logs = (s, id, from = 0) => logRows(s, s.devices[id]).filter((r) => r.n > from).map((r) => r.line).join('\n');
+  const last = (s, id) => { const r = logRows(s, s.devices[id]); return r.length ? r[r.length - 1].n : 0; };
+  const two = () => {
+    const s = makeState([makeDevice('isr4331', 'r1', { name: 'R1' }), makeDevice('isr4331', 'r2', { name: 'R2' })], [['r1:Gi0/0/0', 'r2:Gi0/0/0']]);
+    settle(s);
+    for (const n of [1, 2]) cli(s, 'r' + n)('configure terminal', 'interface lo0', `ip address ${n}.${n}.${n}.${n} 255.255.255.255`, 'interface gi0/0/0', `ip address 10.0.0.${n} 255.255.255.0`, 'no shutdown',
+      'router ospf 1', 'network 10.0.0.0 0.0.0.255 area 0', 'end');
+    settle(s);
+    return s;
+  };
+  const s = two(), R1 = cli(s, 'r1'), R2 = cli(s, 'r2');
+  ok(/OSPF hello debugging is on/.test(R1('debug ip ospf hello')) && /OSPF adjacency debugging is on/.test(R1('debug ip ospf adj')) && /OSPF:\n  OSPF adjacency debugging is on\n  OSPF hello debugging is on/.test(R1('show debugging')),
+    'debug ip ospf hello / adj：show debugging 列在 OSPF 底下');
+  sim.advance(s, 20);
+  ok(!/OSPF-1/.test(logs(s, 'r1')), '鄰居是 FULL：debug 不會一直印');
+  let n0 = last(s, 'r1');
+  R2('configure terminal', 'interface gi0/0/0', 'ip ospf hello-interval 5', 'end');
+  sim.advance(s, 10);
+  ok(/OSPF-1 HELLO Gi0\/0\/0: Rcv hello from 2\.2\.2\.2 area 0 10\.0\.0\.2/.test(logs(s, 'r1', n0)) && /Mismatched hello parameters from 10\.0\.0\.2/.test(logs(s, 'r1', n0)) && /Dead R 20 C 40, Hello R 5 C 10 Mask R 255\.255\.255\.0 C 255\.255\.255\.0/.test(logs(s, 'r1', n0)),
+    'Hello 計時器不一致：Mismatched hello parameters，Dead R 20 C 40, Hello R 5 C 10');
+  R2('configure terminal', 'interface gi0/0/0', 'no ip ospf hello-interval', 'router ospf 1', 'no network 10.0.0.0 0.0.0.255 area 0', 'network 10.0.0.0 0.0.0.255 area 1', 'end');
+  n0 = last(s, 'r1'); sim.advance(s, 10);
+  ok(/OSPF-1 ADJ   Gi0\/0\/0: Rcv pkt from 10\.0\.0\.2, area 0\.0\.0\.0, mismatched area 0\.0\.0\.1 in the header/.test(logs(s, 'r1', n0)), '區域不一致：mismatched area 0.0.0.1 in the header');
+  R2('configure terminal', 'router ospf 1', 'no network 10.0.0.0 0.0.0.255 area 1', 'network 10.0.0.0 0.0.0.255 area 0', 'exit', 'interface gi0/0/0', 'ip ospf authentication message-digest', 'ip ospf message-digest-key 1 md5 K3y!', 'end');
+  n0 = last(s, 'r1'); sim.advance(s, 10);
+  ok(/Rcv pkt from 10\.0\.0\.2 : Mismatched Authentication type\. Input packet specified type 2, we use type 0/.test(logs(s, 'r1', n0)), '驗證方式不一致：Input packet specified type 2, we use type 0');
+  R1('configure terminal', 'interface gi0/0/0', 'ip ospf authentication message-digest', 'ip ospf message-digest-key 1 md5 Other', 'end');
+  n0 = last(s, 'r1'); sim.advance(s, 10);
+  ok(/Mismatched Authentication Key - Message Digest Key 1/.test(logs(s, 'r1', n0)), '金鑰不一致：Mismatched Authentication Key - Message Digest Key 1');
+  R1('configure terminal', 'interface gi0/0/0', 'no ip ospf authentication', 'no ip ospf message-digest-key 1', 'end');
+  R2('configure terminal', 'interface gi0/0/0', 'no ip ospf authentication', 'no ip ospf message-digest-key 1', 'ip mtu 1400', 'end');
+  settle(s);
+  R2('debug ip ospf adj');
+  const n2 = last(s, 'r2'); n0 = last(s, 'r1'); sim.advance(s, 6); sim.advance(s, 6);
+  ok(/Rcv DBD from 1\.1\.1\.1 seq 0x[0-9A-F]+ opt 0x52 flag 0x7 len 32  mtu 1500 state EXSTART/.test(logs(s, 'r2', n2)) && /Nbr 1\.1\.1\.1 has larger interface MTU/.test(logs(s, 'r2', n2)) && /Retransmitting DBD to 1\.1\.1\.1 \[2\]/.test(logs(s, 'r2', n2)) && !/larger interface MTU/.test(logs(s, 'r1', n0)),
+    'MTU 不一致：MTU 小的一端說 Nbr has larger interface MTU，DBD 一直重送');
+  ok(/All possible debugging has been turned off/.test(R1('undebug all')) && /沒有開啟任何 debug/.test(R1('show debugging')), 'undebug all：全部關掉');
+  n0 = last(s, 'r1'); sim.advance(s, 20);
+  ok(!/OSPF-1/.test(logs(s, 'r1', n0)), '關掉之後就不再印了');
+  // Router ID 重複：不用 debug 也會記一筆
+  R2('configure terminal', 'interface gi0/0/0', 'no ip mtu', 'router ospf 1', 'router-id 1.1.1.1', 'end', 'clear ip ospf process', 'yes');
+  sim.advance(s, 5);
+  ok(/%OSPF-4-DUP_RTRID_NBR: OSPF detected duplicate router-id 1\.1\.1\.1 from 10\.0\.0\.2 on interface GigabitEthernet0\/0\/0/.test(logs(s, 'r1')), 'Router ID 重複：%OSPF-4-DUP_RTRID_NBR（不用開 debug）');
+
+  // IKE：GRE over IPsec，兩端的金鑰不同
+  const g = makeState([makeDevice('isr4331', 'r1', { name: 'R1' }), makeDevice('isr4331', 'r2', { name: 'R2' })], [['r1:Gi0/0/0', 'r2:Gi0/0/0']]);
+  settle(g);
+  const crypto = (key) => ['crypto isakmp policy 10', 'encryption aes 256', 'hash sha256', 'authentication pre-share', 'group 14', 'exit', `crypto isakmp key ${key} address 0.0.0.0`,
+    'crypto ipsec transform-set TS esp-aes 256 esp-sha256-hmac', 'mode transport', 'exit', 'crypto ipsec profile PROT', 'set transform-set TS', 'exit'];
+  for (const n of [1, 2]) cli(g, 'r' + n)('configure terminal', ...crypto(n === 1 ? 'Same!26' : 'Diff!26'), 'interface gi0/0/0', `ip address 10.0.0.${n} 255.255.255.252`, 'no shutdown', 'exit',
+    'interface Tunnel0', `ip address 10.255.0.${n} 255.255.255.252`, 'tunnel source Gi0/0/0', `tunnel destination 10.0.0.${3 - n}`, 'tunnel protection ipsec profile PROT', 'end');
+  settle(g);
+  const G1 = cli(g, 'r1');
+  ok(/Crypto ISAKMP debugging is on/.test(G1('debug crypto isakmp')) && /Crypto IPSEC debugging is on/.test(G1('debug crypto ipsec')) && /Cryptographic Subsystem:\n  Crypto ISAKMP debugging is on\n  Crypto IPSEC debugging is on/.test(G1('show debugging')), 'debug crypto isakmp / ipsec');
+  n0 = last(g, 'r1'); sim.advance(g, 10);
+  ok(/%CRYPTO-4-IKMP_BAD_MESSAGE: IKE message from 10\.0\.0\.2 failed its sanity check or is malformed/.test(logs(g, 'r1', n0)) && /retransmitting phase 1 MM_KEY_EXCH/.test(logs(g, 'r1', n0)), 'PSK 不一致：IKMP_BAD_MESSAGE、MM_KEY_EXCH 一直重送');
+  cli(g, 'r2')('configure terminal', 'no crypto isakmp key Diff!26 address 0.0.0.0', 'end');
+  n0 = last(g, 'r1'); sim.advance(g, 10);
+  const lr2 = cli(g, 'r2'); lr2('debug crypto isakmp'); sim.advance(g, 10);
+  ok(/ISAKMP:\(0\):No pre-shared key with 10\.0\.0\.1!/.test(logs(g, 'r2')), '對端沒有金鑰：No pre-shared key with 10.0.0.1!');
+  cli(g, 'r2')('configure terminal', 'crypto isakmp key Same!26 address 0.0.0.0', 'crypto ipsec transform-set TS esp-aes esp-sha-hmac', 'mode transport', 'end');
+  n0 = last(g, 'r1'); sim.advance(g, 10);
+  ok(/IPSec policy invalidated proposal with error 256/.test(logs(g, 'r1', n0)) && /IPSEC\(ipsec_process_proposal\): transform proposal not supported/.test(logs(g, 'r1', n0)), '第二階段提案不一致：IPSec policy invalidated proposal with error 256');
+
+  // DHCP 伺服器
+  const h = makeState([makeDevice('isr4331', 'r1', { name: 'R1' }), makeDevice('pc', 'pc1', { name: 'PC1' })], [['r1:Gi0/0/1', 'pc1:eth0']]);
+  h.devices.pc1.ifaces[0].mode = 'dhcp';
+  settle(h);
+  const H = cli(h, 'r1');
+  ok(/DHCP server:\n  DHCP server packet debugging is on\n  DHCP server event debugging is on/.test(H('debug ip dhcp server packet', 'debug ip dhcp server events', 'show debugging')), 'debug ip dhcp server packet / events');
+  H('configure terminal', 'interface Gi0/0/1', 'ip address 192.168.1.1 255.255.255.0', 'no shutdown', 'exit', 'ip dhcp pool LAN', 'network 192.168.1.0 255.255.255.0', 'default-router 192.168.1.1', 'end');
+  sim.advance(h, 5);
+  const dl = logs(h, 'r1');
+  ok(/DHCPD: DHCPDISCOVER received from client 01[0-9a-f]{2}\.[0-9a-f]{4}\.[0-9a-f]{4}\.[0-9a-f]{2} on interface GigabitEthernet0\/0\/1\./.test(dl) && /DHCPD: assigned IP address 192\.168\.1\.2 to client/.test(dl) && /Sending DHCPOFFER[\s\S]*DHCPREQUEST received[\s\S]*Sending DHCPACK to client \S+ \(192\.168\.1\.2\)/.test(dl),
+    'PC 要到位址：DISCOVER、assigned、OFFER、REQUEST、ACK');
+  n0 = last(h, 'r1'); sim.advance(h, 43300);
+  ok(/DHCPREQUEST received/.test(logs(h, 'r1', n0)) && /unicasting BOOTREPLY/.test(logs(h, 'r1', n0)) && !/DHCPDISCOVER/.test(logs(h, 'r1', n0)), '租約過了一半：只有 REQUEST / ACK（unicast），沒有 DISCOVER');
+}
+
+console.log('\nNetFlow 與 QoS 的 police');
+{
+  const sim = await import('../src/engine/sim.js');
+  const { iosSession, runningConfig } = await import('../src/engine/ios.js');
+  const { iosRun } = await import('../src/ui/cli.js');
+  const { nfTop, nfRows } = await import('../src/engine/netflow.js');
+  const ok = (cond, title) => (cond ? console.log('  ✔ ' + title) : fail(title));
+  const cli = (s, id) => { const S = iosSession(() => s.devices[id], () => s); return (...lines) => { const out = []; for (const l of lines) { const r = iosRun({ state: s, showTrace() {}, refreshLive() {} }, id, S, l, (x) => out.push(x)); if (r.changed) settle(s); } return out.join('\n'); }; };
+  const lv = LEVELS.find((x) => x.id === 'l97');
+  const s = lv.setup(); settle(s); sim.advance(s, 30);
+  const sync = () => s.flows.find((f) => f.id === 'sync').rt.mbps;
+  ok(sync() > 30 && !nfTop(s, s.devices.nms).length, `PC-3 的同步吃掉了大部分的專線（${sync()} Mbps），網管伺服器還沒有 NetFlow`);
+  const B = cli(s, 'br');
+  B('configure terminal', 'interface Gi0/0/1', 'ip flow ingress', 'exit', 'ip flow-export version 9', 'ip flow-export destination 10.10.0.50 2055', 'end');
+  sim.advance(s, 30);
+  const rows = nfRows(s, s.devices.br);
+  ok(rows.length >= 2 && rows[0].src === parseIp('10.20.0.33') && /Gi0\/0\/1\s+10\.20\.0\.33\s+Gi0\/0\/0\s+10\.10\.0\.30\s+06 [0-9A-F]{4} 01BB/.test(B('show ip cache flow')), 'ip flow ingress：show ip cache flow 最大的一筆是 10.20.0.33 → 10.10.0.30:443（01BB）');
+  const top = nfTop(s, s.devices.nms);
+  ok(top.length && top[0].src === parseIp('10.20.0.33'), '匯出到網管伺服器（UDP 2055）：Top Talkers 第一名是 PC-3');
+  B('configure terminal', 'ip access-list extended SYNC', 'permit ip host 10.20.0.33 any', 'exit', 'class-map match-all SYNC', 'match access-group name SYNC', 'exit',
+    'policy-map LIMIT-SYNC', 'class SYNC', 'police cir 10000000', 'exit', 'exit', 'interface Gi0/0/1', 'service-policy input LIMIT-SYNC', 'end');
+  sim.advance(s, 10);
+  const f = s.flows.find((x) => x.id === 'sync');
+  ok(f.rt.mbps > 9 && f.rt.mbps <= 10.01 && f.rt.policed && /police/.test(f.rt.where), `service-policy input 的 police cir 10000000：同步被限在 ${f.rt.mbps} Mbps`);
+  // Flexible NetFlow
+  const s2 = lv.setup(); settle(s2);
+  const C = cli(s2, 'br');
+  const out = C('configure terminal', 'flow exporter NMS', 'destination 10.10.0.50', 'transport udp 2055', 'exit', 'flow monitor WAN', 'record netflow ipv4 original-input', 'exporter NMS', 'exit', 'interface Gi0/0/1', 'ip flow monitor WAN input', 'end');
+  sim.advance(s2, 30);
+  ok(!/%/.test(out) && /10\.20\.0\.33\s+10\.10\.0\.30\s+\d+\s+443\s+Gi0\/0\/1/.test(C('show flow monitor WAN cache')) && nfTop(s2, s2.devices.nms).length, 'Flexible NetFlow：flow exporter + flow monitor + ip flow monitor WAN input，show flow monitor WAN cache、收集器都收得到');
+  const rc = runningConfig(s2, s2.devices.br).join('\n');
+  ok(/flow exporter NMS\n destination 10\.10\.0\.50\n transport udp 2055/.test(rc) && /flow monitor WAN\n exporter NMS\n record netflow ipv4 original-input/.test(rc) && / ip flow monitor WAN input/.test(rc), 'running-config：flow exporter、flow monitor、ip flow monitor … input');
+  ok(/% Flow Monitor: NOPE does not exist/.test(C('configure terminal', 'interface Gi0/0/1', 'ip flow monitor NOPE input', 'end')), '介面上套用不存在的 flow monitor：IOS 拒絕');
 }
 
 // ── 題庫與證照對照表的資料檢查 ──

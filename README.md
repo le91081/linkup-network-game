@@ -75,7 +75,7 @@ npm run build    # 輸出到 dist/
 - **評分**：過關時依實際作答時間（畫面在前景、沒有開對話框才算；標準時間是 3 分鐘加上每個目標 1.5 分鐘）、看了幾個提示、跑了幾次完整測試給 S / A / B / C 與分數，關卡選單上顯示最佳等級。設定變更的次數只列出來參考。
 - **關卡編輯器**：自由模式的「關卡設計」可以寫關卡名稱、任務說明、提示，指定哪些設備鎖定（玩家看得到、不能設定），然後試玩、存成自訂關卡、或匯出成關卡檔分享；關卡選單的「自訂關卡」可以遊玩、匯出、刪除與匯入。
 
-## 關卡（17 章 96 關）
+## 關卡（17 章 97 關）
 
 | 章節 | 關卡數 | 主題 |
 | --- | --- | --- |
@@ -89,7 +89,7 @@ npm run build    # 輸出到 dist/
 | 8 高可用與進階路由 | 9 | STP、EtherChannel、VRRP / HSRP、DHCP Relay、OSPF Cost、VLSM；HSRP 追蹤上行介面（preempt 預設是關的，兩台都要開）；主線在業者那一端斷掉、介面燈號還亮著，OSPF 要等 40 秒的 Dead timer，用 BFD（或 fast hello）兩秒內切到備援；兩台閘道只有 HSRP 的 Active 在做事，改成 GLBP 讓兩台一起轉送（AVG 輪流發虛擬 MAC、AVF 壞掉時其他台接手） |
 | 9 IPv6 | 8 | Link-local、SLAAC、IPv6 靜態路由、雙協定；RA 的 M / O / A 旗標與 DHCPv6（stateless / stateful，DHCPv6 不給閘道）、OSPFv3（link-local 鄰居、純 IPv6 路由器的 Router ID）、IPv6 ACL 與隱含的 ND 允許規則；冒牌的 Router Advertisement 搶走預設閘道（主機多一個位址、IPv6 變黑洞），RA Guard 的 device-role host；內部網站加了 AAAA 之後雙協定的電腦 ping 名稱逾時、瀏覽器靠 Happy Eyeballs 改用 IPv4 才打得開（AAAA 寫錯、伺服器少了 IPv6 閘道，`nslookup -type=aaaa`、`ping -4 / -6`）；IPv6 過不了 VPN：`tunnel mode ipsec ipv4` 的 VTI 只載 IPv4，改成 GRE over IPsec，OSPFv3 在 Tunnel 上建鄰居 |
 | 10 故障排除 | 9 | 網路已經設定好但被改壞了：IP 衝突與 DHCP 保留、Trunk / VLAN / shutdown、閘道 / 回程路由 / NAT / ACL / DNS、ping 會通但傳檔很慢（速率寫死、duplex mismatch、舊 Hub）；OSPF 鄰居起不來（MD5 金鑰、被動介面、network 敘述）；流量繞經實驗室的交換器（根橋位置與 Root Guard）；VPN 通了資料卻過不去（NAT 例外、加密的 ACL 要涵蓋新網段）；DNS 改了卻還連到舊的（TTL 與用戶端快取、nslookup 不看快取、`ipconfig /flushdns`）；整層樓都慢了：一台電腦狂送廣播（從介面的 broadcasts 計數器找出是誰），用 Storm Control 擋下 |
-| 11 維運與管理 | 6 | 是誰動了設定（設定封存、差異比對、變更紀錄、只拿掉有問題的那一行、停用帳號）；從 TFTP 還原設定（合併與整份取代的差別）、韌體升級（flash 空間、MD5、`boot system`、TFTP 與 FTP 的速度）、讓原廠交換器能用 SSH（主機名稱、網域、RSA 金鑰、`login local`）、用 SNMPv3 找出滿載的線路（線對斷掉自動降到 100 Mbps）；HTTPS 憑證錯誤（過期、新網址不在 SAN 裡、沒有加入網域的筆電不信任公司的 CA、時鐘回到兩年前變成「尚未生效」） |
+| 11 維運與管理 | 7 | 是誰動了設定（設定封存、差異比對、變更紀錄、只拿掉有問題的那一行、停用帳號）；從 TFTP 還原設定（合併與整份取代的差別）、韌體升級（flash 空間、MD5、`boot system`、TFTP 與 FTP 的速度）、讓原廠交換器能用 SSH（主機名稱、網域、RSA 金鑰、`login local`）、用 SNMPv3 找出滿載的線路（線對斷掉自動降到 100 Mbps）；HTTPS 憑證錯誤（過期、新網址不在 SAN 裡、沒有加入網域的筆電不信任公司的 CA、時鐘回到兩年前變成「尚未生效」）；專線被塞滿：SNMP 只看得出哪條線滿了，用 NetFlow（`ip flow ingress` 或 Flexible NetFlow）找出流量大戶，再用 QoS 的 `police` 替它限速 |
 | 12 語音與 QoS | 2 | IP 電話：PoE、語音 VLAN、CDP 與 LLDP-MED、DHCP option 150、CUCM 註冊；線路塞車時用 QoS 保住通話：信任邊界、LLQ、配合營運商合約頻寬的整形 |
 | 13 進階路由 | 10 | OSPF 的 DR / BDR 選舉（不搶位、`clear ip ospf process`）、Router ID 與 Loopback、passive-interface；參考頻寬與 cost、等價多路徑 (ECMP)；多區域 OSPF、ABR 與 `area range` 彙總；用 eBGP 同時接兩家 ISP：local-preference 決定出去走哪家、AS-path prepend 影響進來走哪家、prefix-list 避免變成轉運站；把靜態路由重分配進 OSPF（ASBR、O E2、用 prefix-list + route-map 只送工廠的網段）；政策路由讓 NAS 的備份改走寬頻（ACL + route-map set ip next-hop，套在進來的介面上）；分公司的路由表太大：stub 與 totally stubby（新路由器照範本設了 `area 10 stub`、ABR 沒設，Hello 的選項位元不同，鄰居起不來）；工廠在 stub 區域裡重分配供應商的網段白做：改成 NSSA（O N2、ABR 轉成 Type-5、`no-summary` 補回預設路由）；兩台邊界路由器的 iBGP（`update-source`、`next-hop-self`、中間的 Core 沒有 BGP 是黑洞，要全網狀或 route reflector，ISP 的線斷了繞網際網路回來）；機房的 VRF 各跑自己的 OSPF 程序，共用服務靠兩個方向的靜態路由洩漏（`… global`、出口介面在另一個 VRF），只洩漏需要的網段 |
 | 14 無線控制器與無線環境 | 3 | 輕量型 AP 與無線控制器（CAPWAP、DHCP option 43、Local 模式的流量經控制器放進 VLAN、RRM 自動分頻道）、牆面衰減與訊號熱力圖、漫遊（同一個 VLAN、sticky client 與 802.11k/v/r） |
@@ -116,7 +116,7 @@ npm run build    # 輸出到 dist/
 
 沒有關卡的條目（安全計畫）是觀念題，題庫裡有對應的題目。
 條目編號依公開的考試大綱，標題是中文摘要。CCNA v2.0 預計在 2027 年 2 月取代 v1.1，改版後需要重新對照。
-題庫（182 題觀念題加上隨機產生的子網路計算題）是自行編寫的練習題，不是實際試題。
+題庫（184 題觀念題加上隨機產生的子網路計算題）是自行編寫的練習題，不是實際試題。
 
 ## CLI 設定指令
 
@@ -170,12 +170,13 @@ npm run build    # 輸出到 dist/
 - **IP 電話**：`switchport voice vlan <ID>`、`power inline auto | never`、`show power inline`；DHCP 位址池裡的 `option 150 ip <TFTP 伺服器>`。
 - **QoS**：`class-map [match-any | match-all]`（`match dscp`、`match access-group name`、`match protocol rtp | sip`、`match cos`、`match any`）、`policy-map` → `class` →（`priority percent | <kbps>`、`bandwidth percent | remaining percent | <kbps>`、`fair-queue`、`queue-limit`、`set dscp`、`police cir`、`shape average`、`service-policy <子政策>`）、介面上的 `service-policy input | output`；Catalyst 2960 的 `mls qos`、`mls qos trust dscp | cos | device cisco-phone`、`mls qos map cos-dscp`、`auto qos voip cisco-phone | trust`；`show policy-map [interface <介面>]`、`show class-map`、`show mls qos [interface <埠> | maps cos-dscp]`。
 - **HSRP / VRRP / GLBP 與追蹤**：`standby` 是 HSRP、`vrrp` 是 VRRP、`glbp` 是 GLBP，群組號碼與 preempt 的預設值和真的設備一樣（VRRP 會搶、HSRP 與 GLBP 不會）；虛擬 MAC 各自不同（HSRP 0000.0c07.acXX、VRRP 0000.5e00.01XX、GLBP 每台 AVF 一個 0007.b400.XXYY）；`show glbp [brief]`；`track <n> interface <介面> line-protocol`、`track <n> ip sla <操作> reachability`、`ip route … track <n>`；`show standby [brief]`、`show vrrp brief`、`show track`、`show ip sla statistics | configuration`。
+- **NetFlow**：傳統的 `ip flow ingress | egress`、`ip flow-export destination <IP> <埠>`、`ip flow-export version 9`、`ip flow-export source`；Flexible NetFlow 的 `flow record`（match / collect）、`flow exporter`（destination、transport udp、source）、`flow monitor`（record，可以用內建的 `netflow ipv4 original-input`；exporter；cache timeout）與介面的 `ip flow monitor <名稱> input | output`；`show ip cache flow`、`show flow monitor <名稱> cache`、`show flow exporter`、`show ip flow export`。網管伺服器的「網管」分頁可以當 NetFlow 收集器，列出流量大戶。
 - **BFD**：介面上 `bfd interval <毫秒> min_rx <毫秒> multiplier <n>`，`router ospf` 底下 `bfd all-interfaces`（或介面上 `ip ospf bfd`）、BGP 的 `neighbor … fall-over bfd`；`show bfd neighbors [details]`。
 - **設定封存與變更紀錄**：`archive config`、`show archive`、`show archive config differences [檔案 [檔案]]`（不加參數是 startup 對 running）、`show archive log config all | user <帳號>`、`configure replace flash:<檔案> [list] [force]`。
 - **err-disabled**：BPDU Guard 與 Port Security 關掉的埠會一直維持到 `shutdown` → `no shutdown` 或 `errdisable recovery`；`show interfaces status err-disabled`、`show errdisable recovery`。
 - **主機的 DNS**：`nslookup <名稱>`（直接問伺服器，不看本機快取；顯示 CNAME 的 Aliases 與「未經授權的回答」；有 AAAA 時列成 Addresses）、`nslookup -type=aaaa <名稱>`、`nslookup -type=mx <網域>`、`nslookup <IP>`（PTR 反查）、`ipconfig /displaydns`、`ipconfig /flushdns`；ping、瀏覽器、curl 用的是本機的 DNS 快取（依 TTL 到期）。DNS 伺服器的「DNS」分頁可以編輯 A / AAAA / CNAME / MX / PTR 記錄與 TTL。
 - **帳號**：可以有多個本機帳號（`username` / `no username`），SSH、RESTCONF 都可以用；變更紀錄記的是登入的那個帳號。
-- **排除故障**：`traceroute`、`show interfaces [介面]`、`show interfaces counters errors`、`clear counters`、`debug ip packet`、`debug ip icmp`、`undebug all`、`show debugging`、`show ip protocols`、`show ip ospf interface brief`。
+- **排除故障**：`traceroute`、`show interfaces [介面]`、`show interfaces counters errors`、`clear counters`、`debug ip packet`、`debug ip icmp`、`debug ip ospf adj | hello`、`debug ip dhcp server packet | events`、`debug crypto isakmp | ikev2 | ipsec`、`undebug all`、`show debugging`、`show ip protocols`、`show ip ospf interface brief`。
 
 ### FortiGate（FortiOS）
 
@@ -289,6 +290,9 @@ npm run build    # 輸出到 dist/
 | 封包擷取 | 電腦的網路卡收送的訊框。接在交換器上只看得到廣播與給自己的；接在 Hub 上，或交換器用 SPAN 把別的埠鏡像過來，才看得到別人的流量。Telnet 的帳號密碼在這裡是明文，SSH 只看得到加密的封包 |
 | SPAN | 把來源埠進出的訊框複製到目的埠。目的埠只送出複製的訊框，接在上面的設備不能再用它上網（和真的交換器一樣） |
 | `debug ip packet` / `debug ip icmp` | 只看得到給路由器自己、它自己送出的、以及它丟掉的封包；經過它轉送的封包由 CEF 處理，不會出現（真的路由器也是這樣） |
+| `debug ip ospf adj` / `hello` | 鄰居建不起來時，每個 Hello 間隔印一次原因，格式和 IOS 15 一樣：`Mismatched hello parameters`（Dead / Hello / Mask 的 R 收到的、C 自己設定的）、`mismatched area … in the header`、`Mismatched Authentication type` / `Key`、Stub 選項位元、MTU 不一致時 `Nbr … has larger interface MTU` 與 DBD 重送。Router ID 重複不用開 debug，本來就會記 `%OSPF-4-DUP_RTRID_NBR` |
+| `debug ip dhcp server packet` / `events` | 路由器發出租約時的 DISCOVER、OFFER、REQUEST、ACK（用戶端識別碼是 01 加上 MAC），續約只有 REQUEST / ACK 而且是 unicast |
+| `debug crypto isakmp` / `ikev2` / `ipsec` | 通道建不起來的原因：對端沒回應時的 `retransmitting phase 1 MM_NO_STATE`、`No pre-shared key with …!`、金鑰不一致的 `IKMP_BAD_MESSAGE`、`phase 1 SA policy not acceptable!`、IKEv2 的 `NOTIFY(AUTHENTICATION_FAILED)` / `NO_PROPOSAL_CHOSEN` / `TS_UNACCEPTABLE`、第二階段的 `IPSec policy invalidated proposal with error 256`（加密提案）與 `32`（proxy ID）。IKEv1 看 isakmp、IKEv2 看 ikev2 |
 | FortiGate 的 sniffer 與 debug flow | 封包從哪個介面進來、從哪個介面出去；在防火牆裡被哪一條政策放行或拒絕、有沒有 NAT |
 
 ## 頻寬與傳輸速率
@@ -337,6 +341,7 @@ npm run build    # 輸出到 dist/
 - **漫遊**：用戶端在目前的訊號還有 -75 dBm 以上時不會自己換基地台 (sticky client)；SSID 開了 802.11k/v，基地台會在別台好 8 dB 以上時建議它換過去。兩台基地台把同一個 SSID 放進不同的 VLAN，換基地台就換網段、IP 跟著變。任務裡有「拿著筆電走過去」的測試。
 - **RA 的旗標與 DHCPv6**：前綴的 A 旗標允許 SLAAC、M 旗標要主機向 DHCPv6 要位址、O 旗標只要 DNS；M 與 A 同時開著，Windows 會兩種位址各拿一個。DHCPv6 從來不給預設閘道，閘道一定來自 RA；Windows 收不到任何 RA 時還是會試 stateful DHCPv6，結果有位址卻出不了網段。路由器上 `show ipv6 dhcp binding` 查得到每台電腦的 DUID 與位址，電腦上 `ipconfig` 看得到 DUID 與 IAID。
 - **OSPFv3**：直接在介面上啟用；鄰居用 link-local 位址認識彼此（兩端的全域前綴不一樣也能 FULL），路由的下一站也是 FE80:: 位址。Router ID 仍然是 32 位元：路由器上沒有任何 IPv4 位址時程序起不來（`%OSPFv3-4-NORTRID`），要手動設定。
+- **NetFlow 與 police**：有開 NetFlow 的路由器把經過的背景流量（來源、目的、埠、進出介面、位元組）記進快取，15 秒沒有新封包就拿掉；匯出要真的送得到收集器的 UDP 埠。policy-map 的 `police cir <bps>` 會真的限制那一類流量（進來的 `service-policy input` 或出去的 `output`）：超過的丟掉，TCP 自己慢下來，背景流量的速率與瓶頸說明都看得到。
 - **BFD 與 fast hello**：兩台路由器中間隔著交換器時，對面斷掉這一端的介面還是 up，OSPF 要等 Dead timer（40 秒）、BGP 要等 hold time（180 秒）。兩端都開 BFD、路由協定也指定用它，一秒內就把鄰居拿掉（偵測時間 = interval × multiplier，引擎的時鐘以秒為單位，最快算 1 秒）；只有一端開 BFD 時 session 起不來。`ip ospf dead-interval minimal hello-multiplier <n>` 讓 Dead timer 變成 1 秒。
 - **GLBP**：AVG（優先權最高、和 HSRP 一樣選）回答虛擬 IP 的 ARP，依 round-robin 把不同 AVF 的虛擬 MAC 交給來問的主機（host-dependent 固定同一個）；每台 AVF 轉送送到自己虛擬 MAC 的封包。AVF 失聯時，它的虛擬 MAC 在 holdtime（10 秒）內沒有人轉送，之後由其他 AVF 接手，主機的 ARP 快取不用改。
 - **AAAA 與雙協定**：有全域 IPv6 位址的電腦依 RFC 6724 優先用 AAAA；`ping` 不會改用 IPv4（AAAA 寫錯或 IPv6 不通就逾時），瀏覽器與 `curl` 用 Happy Eyeballs，IPv6 沒有回應就改用 IPv4（會通，但慢一點）。只有 IPv4 的電腦根本不問 AAAA。AAAA 也會進 DNS 快取（`ipconfig /displaydns` 的記錄類型 28）。
@@ -355,7 +360,7 @@ npm run build    # 輸出到 dist/
 - MAC 位址表會學習、過期與泛洪，但實際的轉送路徑仍然由拓撲算出，所以不會出現「表裡的項目指到錯的埠」這種狀況。
 - 只有 SSH / Telnet 是長時間保持的連線；ping、curl、iperf3 建立之後就結束了。
 - 封包擷取記錄的是模擬裡真的跑過的訊框（測試、終端機指令、檔案傳輸、SNMP、背景的 BPDU、CDP、LLDP 與 DTP）；持續傳輸的背景流量、OSPF Hello、VRRP 通告只算進計數器，不會出現在擷取畫面上。檔案傳輸只記下開頭幾個封包，不會把 70 萬個 TFTP 區塊一個一個列出來。
-- FortiGate 的 sniffer 與 debug flow 是在背景執行，輸入任何指令就會停止（相當於 Ctrl-C）。IOS 的 `debug` 只做了 `ip packet` 與 `ip icmp`。
+- FortiGate 的 sniffer 與 debug flow 是在背景執行，輸入任何指令就會停止（相當於 Ctrl-C）。IOS 的 `debug` 做了 `ip packet`、`ip icmp`、`ip ospf adj / hello`、`ip dhcp server packet / events`、`crypto isakmp / ikev2 / ipsec`；OSPF 與 crypto 的 debug 只印「卡住的原因」與協商的關鍵步驟，不會把正常運作時的每一個 Hello、每一個 IKE 封包都列出來。
 - 全域的 OSPF 程序固定是 `ospf 1`，每個 VRF 再各有一個程序；沒有虛擬連結 (virtual link)、Type-4 ASBR summary 的顯示與 NSSA 的 P-bit 選項；OSPFv3 沒有 stub / NSSA；`show ip ospf database` 是依計算結果整理的摘要，不是逐筆 LSA 的洪泛。
 - BGP 只跑在全域的路由表（沒有 `address-family ipv4 vrf`、MP-BGP 與 route-target），community 只有 standard（沒有 expanded 與 extended），沒有 confederation、cluster-id、peer-group、BGP 的 `network` 對 IGP 路由沿用原本的下一站；網際網路的核心簡化成一個 AS 64999，ISP 對客戶路由的偏好簡化成 local-preference 200。
 - NTP 只有一台伺服器、沒有驗證；設備的時鐘不會慢慢漂移（沒對時的誤差是固定的）。
@@ -385,7 +390,7 @@ npm run build    # 輸出到 dist/
 
 完整的功能規劃（每個領域已完成、部分完成、尚未開始的項目，以及建議的實作順序）在 [PLAN.md](PLAN.md)。以下是最接近的幾項：
 
-1. 維運與語音補充（PLAN 的第 19 階段：IKEv2 / 802.1X 的憑證驗證、NTP + Syslog 對時、用 CDP / LLDP 畫拓撲、PoE 預算、NetFlow）；FortiGate HA、堆疊 / vPC；IKEv2 的憑證驗證、OSPF point-to-multipoint、FortiGate 的 IPsec 介面模式與 IPv6 政策、DHCPv6 Prefix Delegation、NAT64 / DNS64、TACACS+。
+1. 維運與語音補充（PLAN 的第 19 階段：IKEv2 / 802.1X 的憑證驗證、NTP + Syslog 對時、用 CDP / LLDP 畫拓撲、PoE 預算）；FortiGate HA、堆疊 / vPC；IKEv2 的憑證驗證、OSPF point-to-multipoint、FortiGate 的 IPsec 介面模式與 IPv6 政策、DHCPv6 Prefix Delegation、NAT64 / DNS64、TACACS+。
 2. BGP 的 VRF 與 MP-BGP route-target、自由模式畫牆、訪客入口 (Captive Portal)。
 3. 802.1X 與 IPsec 的憑證驗證（EAP-TLS、RSA 簽章）、中繼憑證鏈與撤銷檢查。
 4. NTP 與 Syslog 的維運關卡（引擎已經有了，還沒有獨立的關卡）。
@@ -408,6 +413,7 @@ src/engine/   模擬引擎（不依賴瀏覽器，可直接用 Node 測試）
   qos.js          QoS：標記與信任邊界、class-map / policy-map 的分類、出口佇列、整形與營運商的管制
   voice.js        IP 電話的開機與註冊、CUCM、通話品質（E-model / MOS）
   wire.js         線路上的訊框：介面計數器、封包擷取、SPAN、IOS debug、FortiGate sniffer 與 debug flow
+  debug.js        IOS 的 debug ip ospf、debug ip dhcp server、debug crypto isakmp / ikev2 / ipsec 的輸出
   sim.js          對外的入口：重新計算 (recompute)、模擬時鐘（advance / settle / pendingOf），並匯出 sim/ 底下各模組公開的函式。
                   其他程式一律 import sim.js，不直接 import sim/ 裡面的檔案
   sim/core.js       共用的小工具：VRF、MAC、雜湊、時間格式、連線紀錄與命中次數
@@ -437,7 +443,7 @@ src/engine/   模擬引擎（不依賴瀏覽器，可直接用 Node 測試）
   web.js          網站與 HTTPS 憑證：信任的 CA、有效期間（用戶端的時鐘）、SAN 與萬用字元
   dns.js          DNS 伺服器的記錄、TTL 與用戶端快取
   sim6.js         IPv6：SLAAC 與 DHCPv6（RA 的 M / O / A 旗標、relay、binding）、鄰居探索、靜態路由與 OSPFv3、IPv6 ACL、ICMPv6 / TCP / UDP
-src/levels/   關卡定義：設備、初始設定、任務目標、提示、參考解法（trouble.js 是故障排除章，maint.js 是維運章，voip.js 是語音與 QoS 章，routing.js 是進階路由章，ipv6.js 是 IPv6 章的補充，vpn2.js 是多站台 VPN，wireless.js 是無線控制器章，auto.js 是自動化章，cloud.js 是雲端章，virtual.js 是虛擬化章（vSwitch、VRF、容器），tls.js 是 HTTPS 憑證，mtu.js 是 Jumbo Frame 與 PMTUD，redist.js 是路由重分配與政策路由，routing2.js 是 OSPF 的 stub / NSSA、iBGP、VRF 裡的 OSPF 與路由洩漏，tunnels.js 是 GRE、GRE over IPsec、VTI、DMVPN 與 NAT-T，ipv6b.js 是 AAAA 與雙協定、IPv6 經過 VPN，ha.js 是 BFD 與 GLBP，l2sec.js 是第二層的攻擊與防護（MAC flooding、雙重標籤、Storm Control、Private VLAN、RA Guard），resil.js / audit.js / trouble2.js 是各章的補充關卡）
+src/levels/   關卡定義：設備、初始設定、任務目標、提示、參考解法（trouble.js 是故障排除章，maint.js 是維運章，voip.js 是語音與 QoS 章，routing.js 是進階路由章，ipv6.js 是 IPv6 章的補充，vpn2.js 是多站台 VPN，wireless.js 是無線控制器章，auto.js 是自動化章，cloud.js 是雲端章，virtual.js 是虛擬化章（vSwitch、VRF、容器），tls.js 是 HTTPS 憑證，mtu.js 是 Jumbo Frame 與 PMTUD，redist.js 是路由重分配與政策路由，routing2.js 是 OSPF 的 stub / NSSA、iBGP、VRF 裡的 OSPF 與路由洩漏，tunnels.js 是 GRE、GRE over IPsec、VTI、DMVPN 與 NAT-T，ipv6b.js 是 AAAA 與雙協定、IPv6 經過 VPN，ha.js 是 BFD 與 GLBP，ops2.js 是 NetFlow 與 police，l2sec.js 是第二層的攻擊與防護（MAC flooding、雙重標籤、Storm Control、Private VLAN、RA Guard），resil.js / audit.js / trouble2.js 是各章的補充關卡）
 src/data/     題庫與證照對照表
 src/scene/    three.js 場景、設備模型、網路線、無線涵蓋範圍與封包動畫
 src/ui/       設定面板、終端機、CLI、任務面板、測驗、模擬考、故障演練、評分、自由模式與關卡編輯器、對話框

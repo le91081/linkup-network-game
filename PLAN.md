@@ -39,15 +39,15 @@ README 說明「現在有什麼、怎麼玩」，這份文件說明「整體應�
 | 8. IPv6 | 5 | 3 | 0 |
 | 9. 高可用 | 8 | 0 | 3 |
 | 10. 時間、效能與流量 | 8 | 2 | 1 |
-| 11. 設備管理與維運 | 12 | 4 | 2 |
+| 11. 設備管理與維運 | 14 | 2 | 2 |
 | 12. 自動化、雲端與虛擬化 | 5 | 1 | 0 |
 | 13. 設備型錄 | 10 | 2 | 1 |
 | 14. 遊戲系統 | 16 | 1 | 5 |
 | 15. 介面與體驗 | 6 | 1 | 7 |
 | 16. 工程品質 | 5 | 1 | 4 |
-| **合計** | **149** | **27** | **39** |
+| **合計** | **151** | **25** | **39** |
 
-另外：關卡 96 關（第 17 節）、證照條目涵蓋情形（第 18 節）、建議的實作順序（第 19 節）。
+另外：關卡 97 關（第 17 節）、證照條目涵蓋情形（第 18 節）、建議的實作順序（第 19 節）。
 
 ---
 
@@ -248,11 +248,11 @@ README 說明「現在有什麼、怎麼玩」，這份文件說明「整體應�
 | 封包擷取 | 🟡 | 主機上的 Wireshark：顯示篩選、逐層標頭；FortiGate 的 `diagnose sniffer packet`；還不能匯出 pcap，沒有 IOS 的 `monitor capture` |
 | FortiGate 的 debug flow | ✅ | `diagnose debug flow`：收到封包、找路由、符合哪一條政策、SNAT / DNAT、進 VPN、沒有符合的連線 |
 | 遠端登入 | ✅ | 主機 `ssh` / `telnet` 進 IOS 與 FortiGate 的命令列；金鑰指紋、密碼錯誤次數、閒置登出、`terminal monitor`；RSA 金鑰的產生與重建、vty 的 `login` / `login local` / 線路密碼 |
-| IOS 的診斷指令 | 🟡 | 已有 `traceroute`、`debug ip packet` / `debug ip icmp`、`show interfaces`、`show ip protocols`、`show ip ospf interface brief`；其他 `debug`（OSPF、DHCP、crypto）還沒有 |
+| IOS 的診斷指令 | ✅ | `traceroute`、`show interfaces`、`show ip protocols`、`show ip ospf interface brief`；`debug ip packet` / `icmp`、`debug ip ospf adj` / `hello`（區域、計時器、遮罩、驗證、MTU 的 IOS 15 訊息）、`debug ip dhcp server packet` / `events`（DORA、續約）、`debug crypto isakmp` / `ikev2` / `ipsec`（重送、金鑰、提案、proxy ID）；Router ID 重複記 `%OSPF-4-DUP_RTRID_NBR` |
 | 設定備份與還原 | ✅ | `copy running-config tftp:` / `ftp:`、`copy tftp: running-config`（合併）與 `startup-config`（取代）；FortiGate 的 `execute backup` / `restore config` |
 | 韌體與開機 | ✅ | flash / bootflash 的檔案與空間、`verify /md5`、`boot system`、開機時跳過不存在 / 損毀 / 平台不符的映像檔、ROMMON；FortiGate 的 `execute restore image` 與升級路徑 |
 | 設定管理進階 | 🟡 | `archive`（path、maximum、write-memory 自動封存）、`show archive`、`show archive config differences`（Contextual Config Diffs）、`configure replace`（list、force）、`archive log config`（誰、從哪條線、打了什麼；notify syslog、hidekeys）；還沒有 `time-period` 的定時封存與 IOS XE install 模式 |
-| 監控 | 🟡 | Syslog 伺服器、SNMP 網管（輪詢、使用率、Trap）；還沒有 NetFlow |
+| 監控 | ✅ | Syslog 伺服器、SNMP 網管（輪詢、使用率、Trap）；NetFlow（傳統與 Flexible NetFlow、快取、匯出到收集器、Top Talkers → 11-7） |
 | 其他廠牌的 CLI | ⬜ | Junos、Aruba、MikroTik、Linux (`ip` / `nmcli`) |
 | 文件產出 | ⬜ | 拓撲圖匯出成圖片、IP 規劃表 |
 
@@ -289,11 +289,11 @@ README 說明「現在有什麼、怎麼玩」，這份文件說明「整體應�
 
 | 功能 | 狀態 | 說明 |
 | --- | --- | --- |
-| 關卡 | ✅ | 17 章 96 關（清單見第 17 節） |
+| 關卡 | ✅ | 17 章 97 關（清單見第 17 節） |
 | 任務目標 | ✅ | ping、TCP、UDP、DHCP、設定檢查、故障演練、IPv6 ping、傳輸速率、遠端登入（SSH / Telnet 帳號密碼）、IP 電話註冊、通話品質 (MOS)、HTTPS（連得上之後還要通過憑證驗證）、路徑（一定要經過 / 不能經過某台設備）；TCP 的目標交握完還會送一個裝滿的資料區段（設了 DF），MTU 的問題才看得出來 |
 | 提示與星等 | ✅ | 每關 3 個提示，看一個少一顆星 |
 | 學習卡 | ✅ | 每關 2 到 4 張觀念說明 |
-| 題庫 | ✅ | 182 題觀念題、隨機產生的子網路計算題、過關後的小考 |
+| 題庫 | ✅ | 184 題觀念題、隨機產生的子網路計算題、過關後的小考 |
 | 證照地圖 | ✅ | 三種考試的條目與關卡對照、完成進度 |
 | 故障排除章 | ✅ | 網路已經設定好但被改壞，要自己找出原因 |
 | 自由模式 | ✅ | 自己擺設備、接線、設定；可以存目標、匯出與匯入 |
@@ -350,7 +350,7 @@ README 說明「現在有什麼、怎麼玩」，這份文件說明「整體應�
 
 ## 17. 關卡規劃
 
-### 現有的 96 關
+### 現有的 97 關
 
 | 章 | 關卡 |
 | --- | --- |
@@ -428,7 +428,7 @@ CCNA v2.0 預計在 2027 年 2 月取代 v1.1，改版後整張對照表要重�
 | 16（已完成） | GRE 與 recursive routing、GRE over IPsec、IOS VTI、DMVPN（phase 2 / 3）、NAT-T → 7-7 到 7-11；命名 ACL 的序號照 IOS 保留、ACL 可以寫 esp / gre。IKEv2 的憑證驗證移到第 19 階段 | 第 6 節最大的缺口，也是 CCNA 5.5 / Network+ 的常考題 |
 | 17（已完成） | AAAA 與雙協定（RFC 6724、Happy Eyeballs）、IPv6 經過 IPv4 的 Tunnel（GRE、6in4）與 IPv6 over VPN → 9-7、9-8。DHCPv6 Prefix Delegation、FortiGate 的 IPv6 政策、NAT64 / DNS64 要先有 IPv6 的網際網路與防火牆，移到第 22 階段 | 第 8 節剩下的項目 |
 | 18（已完成） | BFD（OSPF、BGP）與 OSPF fast hello → 8-8；GLBP → 8-9；HSRP / VRRP 改用各自正確的虛擬 MAC。FortiGate HA、堆疊 / vPC、電力備援要先有兩台設備合成一台的模型，移到第 22 階段 | 第 9 節剩下的項目 |
-| 19 | 維運與語音補充：IKEv2 / 802.1X 的憑證驗證（PKI、時鐘不對讓憑證「尚未生效」）、NTP + Syslog 對時關卡、用 CDP / LLDP 畫拓撲、PoE 預算、雙 WAN 的 QoS、NetFlow、其他 `debug`、排程事件 → 第 11、12 章補充關卡 | 讓故障排除的工具與劇本更完整 |
+| 19（進行中） | 維運與語音補充：NetFlow 與 QoS 的 police（已完成 → 11-7）、OSPF / DHCP / crypto 的 `debug`（已完成）；IKEv2 / 802.1X 的憑證驗證（PKI、時鐘不對讓憑證「尚未生效」）、NTP + Syslog 對時關卡、用 CDP / LLDP 畫拓撲、PoE 預算、雙 WAN 的 QoS、排程事件 → 第 11、12 章補充關卡 | 讓故障排除的工具與劇本更完整 |
 | 20 | 無線補充：頻道寬度、6 GHz 與 DFS、訪客入口 (Captive Portal)、FlexConnect 分公司、控制器 N+1 → 第 14 章補充關卡 | 第 7 節剩下的項目 |
 | 21 | 自動化與雲端補充：NETCONF、Catalyst Center 範本、用 Git 管理設定、VPC peering 與 Transit Gateway、負載平衡器、Terraform → 第 15、16 章補充關卡 | 第 12 節的延伸 |
 | 22 | FortiGate HA（Active-Passive、連線同步）、堆疊 / vPC、電力備援；IPv6 的網際網路與 FortiGate 的 IPv6（DHCPv6-PD、IPv6 政策、NAT64 / DNS64）；實體層與其他：收發器不相容、breakout、Console 與帶外管理、STP 進階、VTP、EIGRP / RIP、多播、TACACS+、ZBF、NGFW、SD-WAN、其他設備與廠牌 | 剩下的引擎項目 |

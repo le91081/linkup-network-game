@@ -32,7 +32,7 @@ export const LEVEL_TOPIC = {
   l55: 'wireless', l56: 'wireless', l57: 'wireless',
   l58: 'auto', l59: 'auto', l60: 'auto', l61: 'auto', l62: 'auto',
   l63: 'routing', l64: 'routing', l65: 'ops', l66: 'routing', l67: 'switching', l68: 'vpn', l69: 'security', l71: 'services',
-  l70: 'auto', l72: 'routing', l73: 'auto', l74: 'security', l75: 'switching', l76: 'vpn', l77: 'routing', l78: 'routing', l79: 'routing', l80: 'routing', l81: 'routing', l82: 'routing', l83: 'security', l84: 'security', l85: 'switching', l86: 'security', l87: 'ipv6', l88: 'vpn', l89: 'vpn', l90: 'vpn', l91: 'vpn', l92: 'vpn', l93: 'ipv6', l94: 'ipv6', l95: 'routing', l96: 'routing',
+  l70: 'auto', l72: 'routing', l73: 'auto', l74: 'security', l75: 'switching', l76: 'vpn', l77: 'routing', l78: 'routing', l79: 'routing', l80: 'routing', l81: 'routing', l82: 'routing', l83: 'security', l84: 'security', l85: 'switching', l86: 'security', l87: 'ipv6', l88: 'vpn', l89: 'vpn', l90: 'vpn', l91: 'vpn', l92: 'vpn', l93: 'ipv6', l94: 'ipv6', l95: 'routing', l96: 'routing', l97: 'ops',
 };
 
 export const QUESTIONS = {
@@ -158,6 +158,8 @@ export const QUESTIONS = {
     { q: '雙協定 (dual stack) 的意思是什麼？', a: ['同一個介面同時執行 IPv4 與 IPv6', '把 IPv6 封包包在 IPv4 裡傳送', '用 NAT 在兩種位址之間轉換', '一台設備裝兩張網路卡'], c: 0, e: '雙協定讓兩種協定並存、各走各的。把 IPv6 包進 IPv4 是通道 (tunneling)，位址轉換則是 NAT64。', r: 'Network+ 1.8' },
   ],
   ops: [
+    { q: 'SNMP 顯示專線一直是滿的，要找出「是哪一台、往哪裡」在用頻寬，最適合的工具是？', a: ['Syslog', 'NetFlow', 'CDP', 'NTP'], c: 1, e: 'SNMP 只有介面的計數器（收送了多少位元組）；NetFlow 記下每一條流量的來源、目的、協定、埠與位元組數，匯出到收集器就能排出流量大戶。', r: 'Network+ 3.2' },
+    { q: '在 IOS 上用 police cir 10000000 管制某一類流量，超過的部分會怎樣？', a: ['排隊等一下再送', '直接丟掉（TCP 會自己降速）', '改標 DSCP 0 後照送', '送到另一條線路'], c: 1, e: 'police 預設 conform 送出、exceed 丟掉；shape 才是把多的排進佇列延後送。管制常放在進來的介面（service-policy input），整形放在出去的介面。', r: 'CCNA 4.7' },
     { q: 'AAA 的三個 A 分別代表什麼？', a: ['Access、Address、Audit', 'Authentication、Authorization、Accounting', 'Account、Admin、Alert', 'Authentication、Availability、Access'], c: 1, e: '驗證（你是誰）、授權（你可以做什麼）、紀錄（你做了什麼）。', r: 'CCNA 5.8' },
     { q: '802.1X 架構中，交換器或無線基地台扮演什麼角色？', a: ['Supplicant', 'Authenticator', 'Authentication Server', 'Certificate Authority'], c: 1, e: '用戶端是 Supplicant，交換器或基地台是 Authenticator，負責把驗證訊息轉給後端的 Authentication Server（通常是 RADIUS）。', r: 'CCNA 5.8' },
     { q: 'RADIUS 與 TACACS+ 的差別，哪一個說法正確？', a: ['RADIUS 使用 TCP，TACACS+ 使用 UDP', 'TACACS+ 會加密整個封包內容，RADIUS 只加密密碼', 'RADIUS 只能用在 Cisco 設備', '兩者完全相同'], c: 1, e: 'TACACS+ 使用 TCP 49，加密整個內容，而且把驗證、授權、紀錄分開處理；RADIUS 使用 UDP 1812 / 1813，只加密密碼欄位。', r: 'CCNA 5.8' },

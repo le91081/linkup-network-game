@@ -145,9 +145,12 @@ export function acquire(state, old, d, i) {
     i.rt.tftp = dnsList(s.dhcp.tftp); // option 150：IP 電話去哪裡下載設定檔
     i.rt.wlc = dnsList(s.dhcp.wlc); // option 43：Cisco 的 AP 去哪裡找無線控制器
     const lk = sd.id + '/' + s.id, ck = d.id + '/' + i.id;
+    const h0 = (state.dyn.hold[lk] || {})[ck], renew = !!h0 && h0.ip === ip;
     rememberLease(state, d, i, lk, touchLease(state, lk, ck, ip));
     // 這一刻真的有 DHCP 封包在走（新的租約或續約）：沿路的交換器學到用戶端與伺服器的 MAC
     if (state.dyn.hold[lk][ck].t0 === state.clock && !state.dyn.boot) {
+      // debug ip dhcp server packet / events 要用（DORA 或續約的 REQUEST / ACK）
+      (state.rt.dhcpEv ||= []).push({ srv: sd.id, sif: s.id, cli: d.id, cif: i.id, ip, renew, mac: i.rt.mac });
       for (const x of eps) learnPath(state, x.path, i.rt.mac);
       learnPath(state, reversed(e.path), s.rt.mac);
     }

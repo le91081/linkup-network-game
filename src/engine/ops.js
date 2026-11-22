@@ -11,6 +11,7 @@ import { linkInfo, CATALOG } from './model.js';
 import { ensureFlash, bootPick, isCiscoOs, IMAGES } from './files.js';
 import { nmsTick, queueTrap, flushTraps } from './snmp.js';
 import { discTick, heardVia } from './disc.js';
+import { debugTick } from './debug.js';
 
 export const SIM_EPOCH = Date.UTC(2026, 0, 5, 1, 0, 0); // 模擬世界開始的那一刻：2026-01-05 09:00（UTC+8）
 const FACTORY = Date.UTC(1993, 2, 1, 0, 0, 0); // 沒有硬體時鐘的 IOS 交換器，每次開機都從這一刻算起
@@ -310,7 +311,7 @@ export const bootTime = (d) => BOOT_TIME[d.model] ?? 30;
 /** 記憶體裡的東西全部消失：ARP、MAC 位址表、連線表、VPN 的 SA、紀錄緩衝區、登入的連線；連接埠要重新走一次 STP */
 function wipe(state, d) {
   const dyn = state.dyn, c = (dyn.clk[d.id] ||= {});
-  for (const k of ['arp', 'mac', 'ct', 'log', 'vty', 'login', 'ifc', 'dbg', 'sniff', 'dflow', 'con', 'cap', 'rid', 'nb', 'ndTx']) if (dyn[k]) delete dyn[k][d.id];
+  for (const k of ['arp', 'mac', 'ct', 'log', 'vty', 'login', 'ifc', 'dbg', 'dbgSeen', 'sniff', 'dflow', 'con', 'cap', 'rid', 'nb', 'ndTx']) if (dyn[k]) delete dyn[k][d.id];
   for (const k of Object.keys(dyn.sa || {})) if (k.startsWith(d.id + '/')) delete dyn.sa[k];
   for (const cb of state.cables) {
     if (cb.a.dev !== d.id && cb.b.dev !== d.id) continue;
@@ -629,6 +630,7 @@ export function opsAfter(state) {
     dyn.ev[d.id] = snap;
   }
   for (const id of Object.keys(dyn.ev)) if (!state.devices[id]) delete dyn.ev[id];
+  debugTick(state);
   pruneVty(state);
   nmsTick(state);
   flushSyslog(state);

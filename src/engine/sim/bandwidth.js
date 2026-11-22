@@ -1,7 +1,9 @@
 // 頻寬：每段線路跑得到多快、背景流量的分配、傳輸速率
 // （從 sim.js 拆出來的一部分；其他程式一律從 engine/sim.js 引入，不直接引入這裡）
 import { callsTick } from '../voice.js';
-import { classify, egressOf, markAlong } from '../qos.js';
+import { classify, egressOf, markAlong, policyOf } from '../qos.js';
+import { nfAccount } from '../netflow.js';
+import { findOwner } from './forward.js';
 import { countBytes, countBcast } from '../wire.js';
 import { linkInfo } from '../model.js';
 import { parseIp } from '../ip.js';
@@ -63,22 +65,39 @@ export function flowsTick(state) {
     const once = new Set();
     const hops = res.hops.filter((h) => !h.wave && !h.reply && h.proto !== 'arp' && h.cable && !h.wifi && !once.has(dirKey(h)) && once.add(dirKey(h)));
     const caps = hops.map((h) => linkCap(state, h));
-    items.push({ f, hops: hops.filter((h, n) => caps[n]), caps: caps.filter(Boolean), want: Math.max(0, +f.mbps || 0), rate: 0, ip, res });
+    // 管制 (police)：進來的介面的 service-policy input、出去的介面的 service-policy output，這條流量所屬的 class 有 police 的話，
+    // 那個 class 的總量不能超過 police 的速率（多的直接丟掉，TCP 就慢下來）
+    const cons = [];
+    const p0 = { proto: 'tcp', kind: 'tcp', src: res.srcIp, dst: ip, dport: +f.port || 5201, dscp: +f.dscp || 0 };
+    for (const h of hops) {
+      const to = state.devices[h.to];
+      const ii = to && to.routing && to.ifaces.find((y) => y.qosIn && ((y.bind.t === 'port' && y.bind.port === h.toPort) || (y.bind.t === 'sub' && y.bind.port === h.toPort && y.bind.vlan === h.tag)));
+      const pi = ii && policyOf(to, ii.qosIn), ci = pi && classify(to, pi, p0);
+      if (ci && ci.police) cons.push({ key: `pin|${to.id}|${ii.id}|${ci.cls}`, mbps: ci.police.bps / 1e6, where: `${to.name} 的 ${ii.label} 進來時被管制（service-policy input ${ii.qosIn}，class ${ci.cls} police ${ci.police.bps} bps）` });
+      const eg = egressOf(state, h);
+      const co = eg && eg.policy && classify(eg.dev, eg.policy, p0);
+      if (co && co.police) cons.push({ key: `pout|${eg.dev.id}|${eg.iface.id}|${co.cls}`, mbps: co.police.bps / 1e6, where: `${eg.dev.name} 的 ${eg.iface.label} 出去時被管制（class ${co.cls} police ${co.police.bps} bps）` });
+    }
+    items.push({ f, hops: hops.filter((h, n) => caps[n]), caps: caps.filter(Boolean), cons, want: Math.max(0, +f.mbps || 0), rate: 0, ip, res, src: res.srcIp, sport: res.sport ?? 0, dport: +f.port || 5201 });
   }
   // 2. max-min 公平分配（近似 TCP）：所有流量一起慢慢加速，某一段線路滿了，經過它的流量就停在那裡；
   //    想要的量比較少的，拿到想要的就停。剩下的頻寬繼續分給其他還能加速的流量
   const cap = {}, used = {};
-  for (const x of items) x.hops.forEach((h, n) => { cap[dirKey(h)] = x.caps[n].mbps; });
+  for (const x of items) {
+    x.hops.forEach((h, n) => { cap[dirKey(h)] = x.caps[n].mbps; });
+    for (const c of x.cons) cap[c.key] = c.mbps;
+    x.keys = [...x.hops.map(dirKey), ...x.cons.map((c) => c.key)];
+  }
   let active = items.filter((x) => x.want > 0 && x.hops.length);
   for (let round = 0; active.length && round < 64; round++) {
     const cnt = {};
-    for (const x of active) for (const h of x.hops) cnt[dirKey(h)] = (cnt[dirKey(h)] || 0) + 1;
+    for (const x of active) for (const k of x.keys) cnt[k] = (cnt[k] || 0) + 1;
     let inc = Infinity;
     for (const [k, n] of Object.entries(cnt)) inc = Math.min(inc, (cap[k] - (used[k] || 0)) / n);
     for (const x of active) inc = Math.min(inc, x.want - x.rate);
     inc = Math.max(0, inc);
-    for (const x of active) { x.rate += inc; for (const h of x.hops) used[dirKey(h)] = (used[dirKey(h)] || 0) + inc; }
-    active = active.filter((x) => x.rate < x.want - 1e-6 && x.hops.every((h) => cap[dirKey(h)] - used[dirKey(h)] > 1e-6));
+    for (const x of active) { x.rate += inc; for (const k of x.keys) used[k] = (used[k] || 0) + inc; }
+    active = active.filter((x) => x.rate < x.want - 1e-6 && x.keys.every((k) => cap[k] - used[k] > 1e-6));
   }
   // 3. 記下每一段的負載、每個出口佇列看到的量（給 QoS 與通話品質用）
   for (const x of items) {
@@ -98,8 +117,23 @@ export function flowsTick(state) {
       // 瓶頸：這條流量經過、已經被塞滿的那一段（有好幾段就挑最窄的）
       if (cap[k] - (used[k] || 0) <= 1e-6 && c.mbps < worst) { worst = c.mbps; where = `${state.devices[h.from].name} ↔ ${state.devices[h.to].name}（${c.note}${(count[k] || 0) > 1 || items.filter((y) => y.hops.some((g) => dirKey(g) === k)).length > 1 ? `，和其他 ${items.filter((y) => y !== x && y.hops.some((g) => dirKey(g) === k)).length} 條流量平分` : ''}）`; }
     });
-    f.rt = { mbps: Math.round(x.rate * 10) / 10, where, full: x.rate < x.want - 0.5 };
+    const pol = x.cons.find((c) => cap[c.key] - (used[c.key] || 0) <= 1e-6);
+    if (pol) where = pol.where;
+    f.rt = { mbps: Math.round(x.rate * 10) / 10, where, full: x.rate < x.want - 0.5, ...(pol ? { policed: true } : {}) };
     if (dt > 0) for (const h of hops) countBytes(state, h, (x.rate * 1e6 * dt) / 8);
+  }
+  // NetFlow：有開 NetFlow 的路由器記下每條流量；匯出到收集器（UDP 送得到才算）
+  if (dt > 0 && items.length) {
+    const reach = {};
+    nfAccount(state, items, dt, (d, ex) => {
+      const k = d.id + '>' + ex.ip + ':' + ex.port;
+      if (reach[k] == null) {
+        const dst = parseIp(ex.ip), owner = dst != null ? findOwner(state, dst) : null;
+        const r = owner ? transact(state, d.id, { proto: 'udp', dst, dport: +ex.port || 2055, quiet: true }) : { ok: false };
+        reach[k] = r.ok && owner && (owner.services || []).some((s) => s.proto === 'udp' && s.port === (+ex.port || 2055)) ? owner.id : false;
+      }
+      return reach[k] || null;
+    });
   }
   // 狂送的廣播：算進每一段線路的計數器（broadcasts）
   if (dt > 0) for (const [k, mbps] of Object.entries(state.rt.bcast || {})) {

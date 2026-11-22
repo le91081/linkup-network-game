@@ -5,6 +5,7 @@ import { fmtIp, parseIp } from '../engine/ip.js';
 import { fmtDur } from '../engine/sim.js';
 import { isTftp, isFtp, fmtBytes, isCiscoOs } from '../engine/files.js';
 import { nmsOf, pollOne } from '../engine/snmp.js';
+import { nfTop } from '../engine/netflow.js';
 import { genKey, vtyMode, hostKey } from '../engine/remote.js';
 
 const SERVER_MODELS = new Set(['tower', 'rack1u', 'nas']);
@@ -136,6 +137,21 @@ export function nmsTab(ctx, body) {
         ifs.some(([, i]) => !i.util) && note('muted', '使用率要等第二次輪詢才算得出來。'));
     });
   }));
+  // NetFlow 收集器：開著 UDP 2055（或其他埠）就收得到路由器匯出的流量紀錄
+  const nfPort = (dev.services || []).find((x) => x.proto === 'udp' && /NetFlow/.test(x.name || ''));
+  body.append(h('div', { class: 'card' }, cardHead('NetFlow（流量大戶）'),
+    h('div', { class: 'toggles' }, toggle(ctx, () => !!nfPort, (on) => {
+      dev.services = (dev.services || []).filter((x) => !(x.proto === 'udp' && /NetFlow/.test(x.name || '')));
+      if (on) dev.services.push({ proto: 'udp', port: 2055, name: 'NetFlow 收集器' });
+    }, '當 NetFlow 收集器（接收 UDP 2055）', { rerender: true })),
+    ctx.live(() => {
+      const top = nfTop(state, dev);
+      if (!top.length) return note('muted', nfPort ? `還沒有收到 NetFlow。路由器要在流量進來的介面收集（ip flow ingress 或 ip flow monitor … input），再匯出到這台的 UDP ${nfPort.port}（ip flow-export destination 或 flow exporter）。` : '打開上面的開關，這台就會接收路由器匯出的 NetFlow。');
+      const sum = top.reduce((a, r) => a + r.bytes, 0) || 1;
+      return top.slice(0, 10).map((r) => h('div', { class: 'line' }, h('b', { class: 'mono', text: fmtIp(r.src) }),
+        h('span', { class: 'mono', text: `${fmtBytes(r.bytes)}（${Math.round((r.bytes / sum) * 100)}%）` }),
+        h('span', { class: 'muted', style: { marginLeft: 'auto' }, text: `→ ${[...r.dsts].slice(0, 2).join('、')}${r.dsts.size > 2 ? ' …' : ''}` })));
+    })));
   body.append(h('div', { class: 'card' }, cardHead('收到的 Trap'), ctx.live(() => {
     const tr = nmsOf(state, dev.id).traps;
     if (!tr.length) return note('muted', '還沒有收到任何 Trap。設備要設定 Trap 的接收端（snmp-server host）並開啟 snmp-server enable traps，發生事件時才會主動通知。');

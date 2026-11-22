@@ -18,6 +18,7 @@ import { psMax, psMode, psConfigured, camSize, stormLimit, camFull } from '../en
 import { iosClock, deviceTime, ntpInfo, logRows, clearLog, syslogStats, uptimeOf, routerId, longIf, SEVERITY, NTP_POLL, vtyRows, idleLimit } from '../engine/ops.js';
 import { quietLeft } from '../engine/remote.js';
 import { counters, clearCounters, clearedAt, spanDest, debugOf, setDebug, consoleRows } from '../engine/wire.js';
+import { DEBUG_KINDS } from '../engine/debug.js';
 import { ensureFlash, IMAGES, PLATFORM, fsName, flashUsed } from '../engine/files.js';
 import { hostKey, vtyMode } from '../engine/remote.js';
 import { snmpStats } from '../engine/snmp.js';
@@ -29,6 +30,7 @@ import { CATALOG, MEDIA, peerOf, portOf, linkInfo, phyConfig } from '../engine/m
 import { iosSession, runningConfig, startupConfig, hostName as host, aclName, aclLine, aclSeqs } from '../engine/ios.js';
 import { ipMtu, l2Mtu, jumboNow, isCat2960, isCat9300, isNexus } from '../engine/mtu.js';
 import { tunByName, tunnelDetail, dmvpnLines, nhrpLines, nhsLines, ipsecProfileLines, cryptoSessionLines, transformSetLines, bfdLines } from './cli-tun.js';
+import { cacheFlowLines, flowMonitorLines, flowExporterLines } from './cli-flow.js';
 
 const pad = (s, n) => String(s).padEnd(n);
 const isTunIf = (i) => i.bind && i.bind.t === 'gre';
@@ -356,6 +358,9 @@ const SHOW = {
     if (o.length === 3) o.push('', '（沒有任何 IKEv2 SA' + (list.length ? '：' + list.map(({ t }) => `${t.name} — ${t.why || '尚未建立'}`).join('；') : '：crypto map 要 set ikev2-profile 才會用 IKEv2') + '）');
     return o;
   },
+  'show ip cache flow': (st, d) => cacheFlowLines(st, d),
+  'show flow exporter': (st, d) => flowExporterLines(st, d),
+  'show ip flow export': (st, d) => flowExporterLines(st, d),
   'show bfd neighbors': (st, d) => bfdLines(st, d, false),
   'show bfd neighbors details': (st, d) => bfdLines(st, d, true),
   'show dmvpn': (st, d) => dmvpnLines(st, d),
@@ -512,8 +517,9 @@ const SHOW = {
   'show debugging': (st, d) => {
     const x = debugOf(st, d.id);
     if (!x) return ['（目前沒有開啟任何 debug）'];
-    return ['IP:', ...(x.packet ? ['  IP packet debugging is on'] : []), ...(x.icmp ? ['  ICMP packet debugging is on'] : []),
-      '', '（debug 的輸出會出現在 console 上，也會進紀錄緩衝區 (show logging)。用 SSH 登入的話，要先輸入 terminal monitor 才看得到）'];
+    const grp = (title, keys) => (keys.some((k) => x[k]) ? [title, ...keys.filter((k) => x[k]).map((k) => `  ${DEBUG_KINDS[k]} on`)] : []);
+    return [...grp('IP:', ['packet', 'icmp']), ...grp('OSPF:', ['ospfAdj', 'ospfHello']), ...grp('DHCP server:', ['dhcpPkt', 'dhcpEv']),...grp('Cryptographic Subsystem:', ['isakmp', 'ipsec']), ...grp('IKEv2:', ['ikev2']),
+      '','（debug 的輸出會出現在 console 上，也會進紀錄緩衝區 (show logging)。用 SSH 登入的話，要先輸入 terminal monitor 才看得到）'];
   },
   'show ip protocols': (st, d) => protocolLines(st, d, ''),
   'show ip ospf interface brief': (st, d) => {
@@ -1684,13 +1690,24 @@ function showOrPing(app, devId, line, print) {
   const isUndebug = (tok[0].length >= 1 && 'undebug'.startsWith(tok[0]) && tok[0] !== 'u' ? true : tok[0] === 'u' || tok[0] === 'un') || (tok[0] === 'no' && (tok[1] || '').length >= 2 && 'debug'.startsWith(tok[1]));
   if (isUndebug || (tok[0].length >= 3 && 'debug'.startsWith(tok[0]))) {
     const rest = tok.slice(isUndebug && tok[0] === 'no' ? 2 : 1);
-    const what = rest[0] === 'all' ? 'all' : rest[0] === 'ip' && (rest[1] || '').startsWith('pa') ? 'packet' : rest[0] === 'ip' && (rest[1] || '').startsWith('ic') ? 'icmp' : null;
-    if (!what) { print('% 這個模擬支援：debug ip packet、debug ip icmp、undebug all', 'warn'); return true; }
-    if (what === 'all' && !isUndebug) { print('% debug all 會把設備塞爆，真的設備上請不要這樣做。這個模擬只支援 debug ip packet、debug ip icmp', 'warn'); return true; }
+    const pre = (x, full, n = 2) => !!x && x.length >= n && full.startsWith(x);
+    const [a0, a1, a2] = rest;
+    const what = a0 === 'all' ? 'all'
+      : a0 === 'ip' && pre(a1, 'packet') ? 'packet' : a0 === 'ip' && pre(a1, 'icmp') ? 'icmp'
+      : a0 === 'ip' && pre(a1, 'ospf') && pre(a2, 'adjacency', 1) ? 'ospfAdj' : a0 === 'ip' && pre(a1, 'ospf') && pre(a2, 'hello', 1) ? 'ospfHello'
+      : a0 === 'ip' && pre(a1, 'dhcp') && pre(a2, 'server', 1) && pre(rest[3], 'packet', 1) ? 'dhcpPkt' : a0 === 'ip' && pre(a1, 'dhcp') && pre(a2, 'server', 1) && pre(rest[3], 'events', 1) ? 'dhcpEv'
+      : pre(a0, 'crypto') && pre(a1, 'isakmp', 1) ? 'isakmp' : pre(a0, 'crypto') && pre(a1, 'ipsec', 2) ? 'ipsec' : pre(a0, 'crypto') && pre(a1, 'ikev2', 2) ? 'ikev2' : null;
+    const SUPPORTED = 'debug ip packet、debug ip icmp、debug ip ospf adj、debug ip ospf hello、debug ip dhcp server packet、debug ip dhcp server events、debug crypto isakmp、debug crypto ikev2、debug crypto ipsec、undebug all';
+    if (!what) { print(`% 這個模擬支援：${SUPPORTED}`, 'warn'); return true; }
+    if (what === 'all' && !isUndebug) { print(`% debug all 會把設備塞爆，真的設備上請不要這樣做。這個模擬支援：${SUPPORTED}`, 'warn'); return true; }
+    const had = { ...(debugOf(st, d.id) || {}) };
     setDebug(st, d.id, what, !isUndebug);
     if (what === 'all') print('All possible debugging has been turned off');
-    else print(`${what === 'packet' ? 'IP packet' : 'ICMP packet'} debugging is ${isUndebug ? 'off' : 'on'}`);
+    else print(`${DEBUG_KINDS[what]} ${isUndebug ? 'off' : 'on'}`);
     if (!isUndebug && what === 'packet') print('（只看得到給這台路由器自己、或它自己送出的封包，以及它丟掉的封包；經過它轉送的封包由 CEF 處理，不會出現在這裡）', 'hint');
+    if (!isUndebug && (what === 'ospfAdj' || what === 'ospfHello') && !had.ospfAdj && !had.ospfHello) print('（鄰居建不起來的話，每個 Hello 間隔就會印出原因：區域、計時器、遮罩、驗證、MTU。讓時間前進就看得到；建好的鄰居不會一直印）', 'hint');
+    if (!isUndebug && (what === 'dhcpPkt' || what === 'dhcpEv') && !had.dhcpPkt && !had.dhcpEv) print('（這台路由器發出或續約租約的時候會印出 DISCOVER / OFFER / REQUEST / ACK。用戶端 ipconfig /renew 或重新接線就看得到）', 'hint');
+    if (!isUndebug && ['isakmp', 'ikev2', 'ipsec'].includes(what) && !had.isakmp && !had.ikev2 && !had.ipsec) print('（通道協商的過程與失敗的原因會印在這裡。IKEv1 看 debug crypto isakmp，IKEv2 看 debug crypto ikev2，第二階段看 debug crypto ipsec）', 'hint');
     return true;
   }
   // show archive config differences [A [B]]、show archive log config all | user <名稱>
@@ -1771,6 +1788,11 @@ function showOrPing(app, devId, line, print) {
     for (const r of rows) print(pad(String(r.vlan).padStart(4), 8) + pad(dotMac(r.mac), 18) + pad(r.type, 12) + r.label, 'pre');
     if (bg) { for (const m of bg.sample) print(pad(String(bg.vlan).padStart(4), 8) + pad(dotMac(m), 18) + pad('DYNAMIC', 12) + bg.label, 'pre'); print(`（… 另外還有 ${(bg.n - bg.sample.length).toLocaleString('en')} 筆亂造的 MAC 都學在這個埠）`, 'hint'); }
     print(`Total Mac Addresses for this criterion: ${rows.length + (bg ? bg.n : 0)}`, 'pre');
+    return true;
+  }
+  // show flow monitor <名稱> cache：Flexible NetFlow 的快取
+  if (tok[0].length >= 2 && 'show'.startsWith(tok[0]) && tok[1] === 'flow' && (tok[2] || '').length >= 3 && 'monitor'.startsWith(tok[2]) && tok[3] && (!tok[4] || 'cache'.startsWith(tok[4]))) {
+    flowMonitorLines(st, d, line.trim().split(/\s+/)[3]).forEach((l) => print(l, l.startsWith('（') ? 'hint' : 'pre')); // 名稱分大小寫
     return true;
   }
   // show running-config interface <名稱>：只印那一個介面的設定（名稱可以縮寫：tu0、gi0/0/1、lo0）

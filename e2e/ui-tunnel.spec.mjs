@@ -113,3 +113,35 @@ test('高可用：GLBP 的 AVF 狀態與 show glbp brief、OSPF 的 BFD 開關�
   await expect(page.locator('#panel .term-out')).toContainText(/10\.255\.9\.2\s+1\/1\s+Up\s+Up/);
   expect(await scan(page, '#panel', 'CLI')).toEqual([]);
 });
+
+test('NetFlow：路由器開 ip flow ingress、網管伺服器的 NetFlow 卡片列出流量大戶、show ip cache flow', async ({ page }) => {
+  await boot(page);
+  await open(page, 'l97');
+  await clickDevice(page, 'br');
+  await page.locator('#panel .tab', { hasText: 'CLI' }).click();
+  await typeCmd(page, 'enable', 'configure terminal', 'interface Gi0/0/1', 'ip flow ingress', 'exit', 'ip flow-export version 9', 'ip flow-export destination 10.10.0.50 2055', 'end');
+  await page.evaluate(() => window.linkup.tick(20));
+  await typeCmd(page, 'show ip cache flow');
+  await expect(page.locator('#panel .term-out')).toContainText(/10\.20\.0\.33\s+Gi0\/0\/0\s+10\.10\.0\.30/);
+  await clickDevice(page, 'nms');
+  await page.locator('#panel .tab', { hasText: '網管' }).click();
+  const card = page.locator('#panel .card', { hasText: 'NetFlow（流量大戶）' });
+  await expect(card).toContainText('10.20.0.33');
+  expect(await scan(page, '#panel', '網管分頁（NetFlow）')).toEqual([]);
+});
+
+test('debug：debug crypto isakmp / ipsec 在 CLI 上印出第二階段提案不一致，undebug all 關掉', async ({ page }) => {
+  await boot(page);
+  await open(page, 'l90');
+  await clickDevice(page, 'hq');
+  await page.locator('#panel .tab', { hasText: 'CLI' }).click();
+  await typeCmd(page, 'enable', 'debug crypto isakmp', 'debug crypto ipsec', 'show debugging');
+  const out = page.locator('#panel .term-out');
+  await expect(out).toContainText('Cryptographic Subsystem:');
+  await page.evaluate(() => window.linkup.tick(10));
+  await expect(out).toContainText('IPSec policy invalidated proposal with error 256');
+  await expect(out).toContainText('IPSEC(ipsec_process_proposal): transform proposal not supported');
+  await typeCmd(page, 'undebug all');
+  await expect(out).toContainText('All possible debugging has been turned off');
+  expect(await scan(page, '#panel', 'CLI（debug）')).toEqual([]);
+});

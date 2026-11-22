@@ -345,7 +345,7 @@ function computeOspfAf(state, af) {
     for (const i of d.ifaces) {
       if (!running(d, i)) continue;
       const area = af.area(d.dev, i), cost = af.cost(state, d.dev, i);
-      O(d).ifs[i.id] = { area, cost, type: af.netType(i), passive: af.passive(d.dev, i), prio: af.prio(i), hello: af.hello(i), dead: af.dead(i), state: 'DOWN', nbrs: 0, full: 0, why: [] };
+      O(d).ifs[i.id] = { area, cost, type: af.netType(i), passive: af.passive(d.dev, i), prio: af.prio(i), hello: af.hello(i), dead: af.dead(i), state: 'DOWN', nbrs: 0, full: 0, why: [], bad: [] };
       stubs[d.id].push(...af.stubs(d.dev, i, cost, area));
       if (af.passive(d.dev, i)) { O(d).ifs[i.id].state = isLoopback(i) ? 'LOOP' : 'PASSIVE'; continue; }
       for (const e of l2Explore(state, d.dev.id, i, { family: af.ns === '6' ? 6 : 4 })) {
@@ -444,7 +444,13 @@ function computeOspfAf(state, af) {
     for (const [s, o] of [[a, b], [b, a]]) {
       const inf = O(s.d).ifs[s.i.id];
       inf.nbrs++;
-      if (p.why) inf.why.push(`${o.d.name}：${p.why}`);
+      if (p.why) {
+        inf.why.push(`${o.d.name}：${p.why}`);
+        // debug ip ospf adj / hello 要用的細節：兩端的參數（R = 收到的，C = 自己設定的）
+        const ai = af.area(s.d.dev, s.i), aj = af.area(o.d.dev, o.i);
+        inf.bad.push({ first: s === a, dev: o.d.dev.id, ip: af.addr(o.i), rid: rid[o.d.id], why: p.why, area: ai, oArea: aj, hello: af.hello(s.i), oHello: af.hello(o.i), dead: af.dead(s.i), oDead: af.dead(o.i),
+          bits: s.i.rt.bits, oBits: o.i.rt.bits, ...(af.ns ? {} : { auth: authOf(s.d.dev, s.i, ai).t, oAuth: authOf(o.d.dev, o.i, aj).t, keyId: (s.i.ospfKey || {}).id }) });
+      }
     }
     if (p.why) continue;
     let rec = adjT[p.k];
