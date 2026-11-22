@@ -395,3 +395,37 @@ test('FortiGate IPv6：政策加上 IPv6 位址、dmz 用委派的前綴，辦�
   await typeCmd(page, 'ping 2606:2800:220:1:248:1893:25c8:1946');
   await expect(page.locator('#panel .term-out')).toContainText('回覆自 2606:2800:220:1:248:1893:25c8:1946');
 });
+
+test('NAT64 / DNS64：DNS 伺服器開 DNS64、R1 設 NAT64，IPv6-only 的筆電查到合成的位址並 ping 得到', async ({ page }) => {
+  await boot(page);
+  await open(page, 'l120');
+  await clickDevice(page, 'dns');
+  await page.locator('#panel .tab', { hasText: 'DNS' }).click();
+  const card = page.locator('#panel .card', { hasText: '轉送與 DNS64' });
+  await expect(card.locator('label.switch input')).toBeChecked();
+  const pfx = card.locator('label.field', { hasText: 'DNS64 前綴' }).locator('input');
+  await pfx.fill('64:ff9b::/64'); await pfx.press('Enter');
+  await expect(page.locator('#panel .card', { hasText: '轉送與 DNS64' }).locator('.note.warn')).toContainText('不是 /96');
+  const pfx2 = page.locator('#panel .card', { hasText: '轉送與 DNS64' }).locator('label.field', { hasText: 'DNS64 前綴' }).locator('input');
+  await pfx2.fill('64:ff9b::/96'); await pfx2.press('Enter');
+  await expect(page.locator('#panel .card', { hasText: '轉送與 DNS64' }).locator('.note.warn')).toHaveCount(0);
+  expect(await scan(page, '#panel', 'DNS 伺服器的 DNS 分頁（DNS64）')).toEqual([]);
+  await clickDevice(page, 'r1');
+  await page.locator('#panel .tab', { hasText: 'CLI' }).click();
+  await typeCmd(page, 'enable', 'configure terminal', 'ipv6 access-list NAT64-SRC', 'permit ipv6 2001:db8:a00:1::/64 any', 'exit', 'nat64 prefix stateful 64:ff9b::/96',
+    'nat64 v6v4 list NAT64-SRC interface gi0/0/0 overload', 'interface gi0/0/1', 'nat64 enable', 'exit', 'interface gi0/0/0', 'nat64 enable', 'end');
+  await clickDevice(page, 'pc1');
+  await page.locator('#panel .tab', { hasText: '終端機' }).click();
+  await typeCmd(page, 'nslookup www.example.com');
+  const out = page.locator('#panel .term-out');
+  await expect(out).toContainText('64:ff9b::5db8:d822');
+  await expect(out).toContainText('2001:db8:a00:2::53');
+  await typeCmd(page, 'ping 64:ff9b::5db8:d822');
+  await expect(out).toContainText('回覆自 64:ff9b::5db8:d822');
+  await clickDevice(page, 'r1');
+  await page.locator('#panel .tab', { hasText: 'CLI' }).click();
+  await typeCmd(page, 'show nat64 translations');
+  await expect(page.locator('#panel .term-out')).toContainText('Total number of translations: 1');
+  await expect(page.locator('#panel .term-out')).toContainText('[64:ff9b::5db8:d822]');
+  expect(await scan(page, '#panel', 'R1 的 CLI（show nat64 translations）')).toEqual([]);
+});

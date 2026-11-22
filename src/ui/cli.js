@@ -25,7 +25,7 @@ import { snmpStats } from '../engine/snmp.js';
 import { portByName } from '../engine/ios.js';
 import { isIos } from '../engine/ios.js';
 import { fmtMask } from '../engine/ip.js';
-import { route6Rows } from '../engine/sim6.js';
+import { route6Rows, nat64Rows, nat64Stats, clearNat64 } from '../engine/sim6.js';
 import { CATALOG, MEDIA, peerOf, portOf, linkInfo, phyConfig, fiberLink } from '../engine/model.js';
 import { xcvrAt, xcvrSerial, MEDIA_TYPE } from '../engine/optics.js';
 import { PLATFORM as PID_OF } from '../engine/dnac.js';
@@ -517,6 +517,29 @@ const SHOW = {
   },
   'show ip nat translations': (st, d) => natTable(st, d, false),
   'show ip nat translations verbose': (st, d) => natTable(st, d, true),
+  'show nat64 translations': (st, d) => {
+    const rows = nat64Rows(st, d);
+    if (!(d.nat64 && d.nat64.prefix)) return ['（這台沒有設定 NAT64：nat64 prefix stateful <前綴>/96）'];
+    const W = 22, o = [pad('Proto', 7) + pad('Original IPv4', W) + 'Translated IPv4', pad('', 7) + pad('Translated IPv6', W) + 'Original IPv6', '-'.repeat(76), ''];
+    for (const e of rows) {
+      const dp = e.proto === 'icmp' ? e.nport : e.dport;
+      o.push(pad(e.proto, 7) + pad(`${fmtIp(e.v4dst)}:${dp}`, W) + `[${fmtIp6(e.v6dst)}]:${e.proto === 'icmp' ? e.sport : e.dport}`);
+      o.push(pad('', 7) + pad(`${fmtIp(e.v4src)}:${e.nport}`, W) + `[${fmtIp6(e.v6src)}]:${e.sport}`, '');
+    }
+    o.push(`Total number of translations: ${rows.length}`);
+    if (!rows.length) o.push('（目前沒有轉換：從 IPv6 那一側連到 NAT64 前綴裡的位址才會建立。閒置太久會被移除：ICMP 60 秒、UDP 5 分鐘）');
+    return o;
+  },
+  'show nat64 statistics': (st, d) => {
+    if (!(d.nat64 && d.nat64.prefix)) return ['（這台沒有設定 NAT64：nat64 prefix stateful <前綴>/96）'];
+    const x = nat64Stats(st, d), rows = nat64Rows(st, d), ifs = d.ifaces.filter((i) => i.nat64);
+    return ['NAT64 Statistics', '', `Total active translations: ${rows.length} (0 static, ${rows.length} dynamic; ${rows.filter((e) => e.proto !== 'icmp').length} extended)`,
+      `Sessions found: ${x.found}`, `Sessions created: ${x.created}`, `Expired translations: ${Math.max(0, x.created - rows.length)}`, 'Global Stats:',
+      '   Packets translated (IPv4 -> IPv6)', '      Stateless: 0', `      Stateful: ${x.v4v6}`, '   Packets translated (IPv6 -> IPv4)', '      Stateless: 0', `      Stateful: ${x.v6v4}`, '',
+      'Interface Statistics', ...(ifs.length ? ifs.flatMap((i) => [`   ${longIf(i.label)} (IPv4 ${i.rt.ip != null ? 'configured' : 'not configured'}, IPv6 ${i.rt.v6 && i.rt.v6.addrs.length ? 'configured' : 'not configured'}):`, '      NAT64 enabled']) : ['   （沒有任何介面 nat64 enable）']),
+      '', `Dynamic Mapping Statistics`, ...(d.nat64.list ? [`   v6v4`, `      access-list ${d.nat64.list} interface ${d.nat64.out ? longIf((d.ifaces.find((i) => i.id === d.nat64.out) || {}).label || d.nat64.out) : '-'} overload`] : ['   （還沒有 nat64 v6v4 list … overload）']),
+      'Prefix Statistics', `   Stateful Prefix: ${d.nat64.prefix}`];
+  },
   'show ip nat statistics': (st, d) => {
     const dyn = sessionRows(st, d).filter((e) => e.nSrc !== e.src || e.nDst !== e.dst).length;
     const stat = (d.staticNat || []).filter((n) => n.pub && n.priv).length + (d.portForwards || []).filter((f) => f.port && f.toIp && !f.off).length;
@@ -2017,6 +2040,7 @@ function showOrPing(app, devId, line, print) {
     if (rest.startsWith('arp')) clearArp(st, d);
     else if (/^mac/.test(rest)) clearMac(st, d);
     else if (/^ip nat tr/.test(rest)) clearSessions(st, d);
+    else if (/^nat64 tr/.test(rest)) clearNat64(st, d);
     else if (/^log/.test(rest)) clearLog(st, d);
     else if (/^cou/.test(rest)) {
       // clear counters [介面]

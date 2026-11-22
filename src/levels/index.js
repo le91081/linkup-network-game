@@ -41,6 +41,7 @@ import { LEVELS36 } from './aaa.js';
 import { LEVELS37 } from './sdwan.js';
 import { LEVELS38 } from './ipv6pd.js';
 import { LEVELS39 } from './ipv6fg.js';
+import { LEVELS40 } from './nat64.js';
 
 export const CHAPTERS = [
   { id: 1, title: '家用網路', desc: '從第一條網路線開始，讓家裡的設備互通並連上網際網路。' },
@@ -654,7 +655,7 @@ export const LEVELS = [
 ];
 
 CHAPTERS.push(...CHAPTERS2, ...CHAPTERS3, ...CHAPTERS4, ...CHAPTERS5, ...CHAPTERS6, ...CHAPTERS7, ...CHAPTERS8, ...CHAPTERS9, ...CHAPTERS10, ...CHAPTERS11);
-LEVELS.push(...LEVELS2, ...LEVELS3, ...LEVELS4, ...LEVELS5, ...LEVELS6, ...LEVELS7, ...LEVELS8, ...LEVELS9, ...LEVELS10, ...LEVELS11, ...LEVELS12, ...LEVELS13, ...LEVELS14, ...LEVELS15, ...LEVELS16, ...LEVELS17, ...LEVELS18, ...LEVELS19, ...LEVELS20, ...LEVELS21, ...LEVELS22, ...LEVELS23, ...LEVELS24, ...LEVELS25, ...LEVELS26, ...LEVELS27, ...LEVELS28, ...LEVELS29, ...LEVELS30, ...LEVELS31, ...LEVELS32, ...LEVELS33, ...LEVELS34, ...LEVELS35, ...LEVELS36, ...LEVELS37, ...LEVELS38, ...LEVELS39);
+LEVELS.push(...LEVELS2, ...LEVELS3, ...LEVELS4, ...LEVELS5, ...LEVELS6, ...LEVELS7, ...LEVELS8, ...LEVELS9, ...LEVELS10, ...LEVELS11, ...LEVELS12, ...LEVELS13, ...LEVELS14, ...LEVELS15, ...LEVELS16, ...LEVELS17, ...LEVELS18, ...LEVELS19, ...LEVELS20, ...LEVELS21, ...LEVELS22, ...LEVELS23, ...LEVELS24, ...LEVELS25, ...LEVELS26, ...LEVELS27, ...LEVELS28, ...LEVELS29, ...LEVELS30, ...LEVELS31, ...LEVELS32, ...LEVELS33, ...LEVELS34, ...LEVELS35, ...LEVELS36, ...LEVELS37, ...LEVELS38, ...LEVELS39, ...LEVELS40);
 LEVELS.sort((a, b) => a.chapter - b.chapter); // 穩定排序：補充關卡排到所屬章節的最後
 
 // 關卡裡的設備都由「前任管理員」設好了一些東西（portfast default、SSH、SNMP），見 util.js 的 levelDefaults

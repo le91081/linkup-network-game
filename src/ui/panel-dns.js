@@ -1,6 +1,6 @@
 // DNS 伺服器的記錄（A / CNAME / MX / PTR 與 TTL）
 import { h, button } from './dom.js';
-import { inp, sel, note, cardHead, del, isNum } from './form.js';
+import { inp, sel, toggle, field, note, cardHead, del, isNum, isCidr6 } from './form.js';
 import { DNS_TYPES, DNS_TTL, zoneRecords } from '../engine/dns.js';
 
 const HINT = {
@@ -28,5 +28,12 @@ export function dnsTab(ctx, body) {
       inp(ctx, () => String(r.ttl ?? DNS_TTL), (v) => { r.ttl = +v || DNS_TTL; }, { ph: String(DNS_TTL), check: isNum(0, 2147483647) }),
       del(() => { z.records.splice(n, 1); ctx.commit(true); }))),
     h('div', { class: 'addrow' }, button('新增記錄', { ic: 'plus', small: true, onclick: () => { z.records.push({ name: '', type: 'A', value: '', ttl: DNS_TTL }); ctx.commit(true); } }))));
+  // 遞迴查詢與 DNS64：自己的記錄裡沒有的名稱，轉送給這台設定的 DNS（例如 8.8.8.8）
+  const is96 = (v) => isCidr6(v) && v.endsWith('/96');
+  body.append(h('div', { class: 'card' }, cardHead('轉送與 DNS64'),
+    toggle(ctx, () => dev.dnsForward, (v) => { if (v) dev.dnsForward = true; else delete dev.dnsForward; }, '轉送查不到的名稱 (forwarder)', { title: '記錄裡沒有的名稱，改問這台電腦設定的 DNS 伺服器，再把答案回給用戶端' }),
+    field('DNS64 前綴', inp(ctx, () => dev.dns64 || '', (v) => { if (v) dev.dns64 = v; else delete dev.dns64; }, { ph: '64:ff9b::/96（空白＝不使用）', check: is96, rerender: true }),
+      '名稱只有 A 記錄時，用「前綴 + IPv4 位址」合成 AAAA 給 IPv6-only 的用戶端；前綴要和路由器上的 NAT64 一樣，長度 /96'),
+    dev.dns64 && !is96(dev.dns64) ? note('warn', `${dev.dns64} 不是 /96 的 IPv6 前綴，DNS64 不會合成位址`) : null));
   body.append(note('muted', '用戶端查到之後會照 TTL 記在快取裡（ipconfig /displaydns 看得到），到期之前不會再來問。nslookup 例外：它直接問伺服器，所以「nslookup 已經是新的，瀏覽器卻還連到舊的」通常就是快取還沒到期，ipconfig /flushdns 可以立刻清掉。'));
 }

@@ -14,7 +14,7 @@ import { parseIp6, fmtIp6, parseCidr6, net6, linkLocal, eui64, isLinkLocal } fro
 import { l2Explore } from './sim.js';
 import { computeOspf6 } from './ospf.js';
 import { raBlocked } from './l2sec.js';
-import { forward, isTun, tunMode, GRE_OVERHEAD, svcMatch } from './sim.js';
+import { forward, isTun, tunMode, GRE_OVERHEAD, svcMatch, transact } from './sim.js';
 import { fmtIp } from './ip.js';
 import { zoneHas } from './sdwan.js';
 
@@ -371,6 +371,7 @@ function deliver6(dev, pkt) {
   const h = inetHost6(dev, pkt.dst);
   if (h) return (h.services || []).some((s) => s.proto === pkt.proto && s.port === pkt.dport) ? '' : `${h.name} 沒有在 ${pkt.proto.toUpperCase()}/${pkt.dport} 提供服務（連線被拒絕）`;
   if (pkt.proto === 'udp' && pkt.dport === 547 && dev.ifaces.some((i) => i.dhcp6)) return '';
+  if (pkt.proto === 'udp' && pkt.dport === 53 && (dev.dnsZone || dev.dnsRecords || dev.dnsProxy)) return ''; // DNS 伺服器也用 IPv6 回答
   if (pkt.proto === 'tcp' && pkt.dport === 5201 && dev.kind === 'host') return '';
   if ((dev.services || []).some((s) => s.proto === pkt.proto && s.port === pkt.dport)) return '';
   if (pkt.proto === 'tcp' && dev.mgmt && ((pkt.dport === 22 && dev.mgmt.ssh) || (pkt.dport === 23 && dev.mgmt.telnet))) return '';
@@ -394,6 +395,14 @@ function forward6(state, ctx, startId, pkt) {
       if (x) return drop(`${dev.name} 的 ${inIf.label} 進方向的 IPv6 ACL「${inIf.acl6In}」拒絕了這個封包：${x.text}`);
     }
     if (isLocal6(dev, pkt.dst)) return { ok: true, dev: dev.id, rxIf: inIf };
+    // NAT64：目的地在 NAT64 的前綴裡（例如 64:ff9b::/96），從啟用 nat64 的介面進來 → 交給 transact6 換成 IPv4
+    if (inIf && !pkt.reply && dev.nat64 && dev.nat64.prefix) {
+      const c = parseCidr6(dev.nat64.prefix);
+      if (c && net6(pkt.dst, c.bits) === net6(c.ip, c.bits)) {
+        if (inIf.nat64) return { ok: true, dev: dev.id, rxIf: inIf, nat64: true };
+        if (!lookup6(dev, pkt.dst, pkt.src)) return drop(`${dev.name} 的 ${inIf.label} 沒有 nat64 enable：目的地在 NAT64 的前綴 ${dev.nat64.prefix} 裡，但這個介面進來的封包不會做 NAT64`);
+      }
+    }
     if (inIf) {
       if (!dev.routing) return drop(`${dev.name} 收到不是給自己的 IPv6 封包，它不是路由器所以直接丟棄`);
       if (!dev.v6routing && dev.kind !== 'internet' && dev.kind !== 'firewall') return drop(`${dev.name} 沒有啟用 IPv6 路由 (ipv6 unicast-routing)，不會轉送 IPv6 封包`);
@@ -506,6 +515,7 @@ export function transact6(state, fromId, dst, spec = {}) {
   ctx.log.push({ dev: fromId, kind: 'tx', text: '送出 ' + desc6(req) });
   const a = forward6(state, ctx, fromId, req);
   if (!a.ok) return done({ ok: false, reason: a.reason, failDev: a.dev, phase: 'request' });
+  if (a.nat64) return done(nat64Trip(state, ctx, state.devices[a.dev], req, sport, from, fromId));
   const target = state.devices[a.dev];
   const refuse = deliver6(target, req);
   if (refuse) { ctx.log.push({ dev: a.dev, kind: 'drop', text: refuse }); return done({ ok: false, reason: refuse, failDev: a.dev, phase: 'request', responder: a.dev, rxIf: a.rxIf }); }
@@ -516,6 +526,58 @@ export function transact6(state, fromId, dst, spec = {}) {
   ctx.log.push({ dev: fromId, kind: 'ok', text: proto === 'tcp' ? 'TCP 連線建立完成' : '收到回應，連線成功' });
   return done({ ok: true, responder: a.dev, rxIf: a.rxIf });
 }
+
+/**
+ * NAT64（stateful）：路由器把 IPv6 封包換成 IPv4（目的地是前綴後面的 32 位元、來源是外面介面的位址），
+ * 用 IPv4 走完一趟，再把回應換回 IPv6 送給原來的電腦
+ */
+function nat64Trip(state, ctx, r, req, sport, from, fromId) {
+  const n = r.nat64, fail = (reason, phase = 'request') => { ctx.log.push({ dev: r.id, kind: 'drop', text: reason }); return { ok: false, reason, failDev: r.id, phase }; };
+  const out = r.ifaces.find((x) => x.id === n.out);
+  if (!n.list || !out) return fail(`${r.name} 有 NAT64 的前綴，但還沒有指定轉換的方式：nat64 v6v4 list <IPv6 ACL> interface <外面的介面> overload`);
+  if (!out.nat64) return fail(`${r.name} 的 ${out.label} 沒有 nat64 enable：NAT64 的兩邊（IPv6 那一側與 IPv4 那一側）都要啟用`);
+  if (out.rt.ip == null) return fail(`${r.name} 的 ${out.label} 沒有 IPv4 位址，NAT64 換不出來源位址`);
+  if (!(r.acl6 || {})[n.list]) return fail(`NAT64 用的 IPv6 ACL「${n.list}」不存在`);
+  const x = acl6Check(r, n.list, req, true);
+  if (x) return fail(`${fmtIp6(req.src)} 不在 NAT64 的來源清單「${n.list}」允許的範圍裡（${x.text}）`);
+  const v4 = Number(req.dst & 0xffffffffn) >>> 0;
+  ctx.log.push({ dev: r.id, kind: 'nat', text: `NAT64：${fmtIp6(req.src)} → ${fmtIp6(req.dst)} 換成 IPv4 ${fmtIp(out.rt.ip)} → ${fmtIp(v4)}（前綴 ${n.prefix} 後面的 32 位元就是 IPv4 位址）` });
+  const r4 = transact(state, r.id, { proto: req.proto, dst: v4, dport: req.dport, srcIp: out.rt.ip, quiet: ctx.quiet });
+  ctx.log.push(...r4.log); ctx.hops.push(...r4.hops);
+  if (!r4.ok) return { ok: false, reason: `NAT64 之後的 IPv4 連線失敗：${r4.reason}`, failDev: r4.failDev, phase: 'request' };
+  ctx.log.push({ dev: r.id, kind: 'nat', text: `NAT64：IPv4 的回應換回 IPv6，送回 ${fmtIp6(from)}` });
+  const rep = { src: req.dst, dst: from, hl: 64, reply: true, proto: req.proto, sport: req.dport, dport: sport };
+  const b = forward6(state, ctx, r.id, rep);
+  if (!b.ok) return { ok: false, reason: '回程失敗：' + b.reason, failDev: b.dev, phase: 'reply' };
+  ctx.log.push({ dev: fromId, kind: 'ok', text: req.proto === 'tcp' ? 'TCP 連線建立完成（經過 NAT64）' : '收到回應，連線成功（經過 NAT64）' });
+  if (!ctx.quiet) nat64Track(state, r, { proto: req.proto, v6src: from, sport, v6dst: req.dst, dport: req.dport, v4src: out.rt.ip, v4dst: v4 });
+  return { ok: true, responder: r4.responder, nat64: r.id };
+}
+
+// ── NAT64 的轉換表（show nat64 translations）：和 IOS 的 ip nat translation 一樣有閒置逾時 ──
+const N64_TTL = { tcp: 86400, udp: 300, icmp: 60 };
+function nat64Track(state, r, e) {
+  const tbl = ((state.dyn.nat64 ||= {})[r.id] ||= []);
+  const same = tbl.find((x) => x.proto === e.proto && x.v6src === e.v6src && x.sport === e.sport && x.v6dst === e.v6dst && x.dport === e.dport);
+  const st = ((state.dyn.nat64st ||= {})[r.id] ||= { created: 0, found: 0, v6v4: 0, v4v6: 0 });
+  const pkts = e.proto === 'tcp' ? 3 : 1;
+  st.v6v4 += pkts; st.v4v6 += pkts;
+  if (same) { same.t = state.clock; st.found++; return; }
+  st.created++;
+  // overload：來源都換成外面介面的位址，用不同的埠號分開（ICMP 用識別碼）
+  const nport = 1024 + (st.created - 1) % 64000;
+  tbl.push({ ...e, v6src: e.v6src.toString(), v6dst: e.v6dst.toString(), nport, t0: state.clock, t: state.clock });
+  if (tbl.length > 200) tbl.shift();
+}
+/** NAT64 轉換表目前的內容（過期的不算），最新的在前面 */
+export function nat64Rows(state, dev) {
+  const now = state.clock;
+  return (((state.dyn && state.dyn.nat64) || {})[dev.id] || [])
+    .map((e) => { const ttl = N64_TTL[e.proto] || 60; return { ...e, v6src: BigInt(e.v6src), v6dst: BigInt(e.v6dst), ttl, left: Math.ceil(ttl - (now - e.t)) }; })
+    .filter((e) => e.left > 0).reverse();
+}
+export const nat64Stats = (state, dev) => (((state.dyn && state.dyn.nat64st) || {})[dev.id]) || { created: 0, found: 0, v6v4: 0, v4v6: 0 };
+export function clearNat64(state, dev) { if (state.dyn && state.dyn.nat64) delete state.dyn.nat64[dev.id]; }
 
 /** 設備第一個全域 IPv6 位址（沒有就回傳 null）。DHCPv6 拿到的優先於 SLAAC（Windows 也會優先用它） */
 export function globalIp6(dev) {

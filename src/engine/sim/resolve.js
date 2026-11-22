@@ -2,13 +2,18 @@
 // （從 sim.js 拆出來的一部分；其他程式一律從 engine/sim.js 引入，不直接引入這裡）
 import { INET_TTL, cacheGet, cachePut, isDnsServer, serverAnswer } from '../dns.js';
 import { fmtIp, parseIp } from '../ip.js';
-import { fmtIp6, parseIp6 } from '../ip6.js';
+import { fmtIp6, parseIp6, parseCidr6, net6 } from '../ip6.js';
 import { transact6 } from '../sim6.js';
 import { noRouteReason } from './forward.js';
 import { transact } from './transact.js';
 
 function devDns(dev) {
   for (const i of dev.ifaces) if (i.rt.dns && i.rt.dns.length && i.rt.link) return i.rt.dns;
+  return [];
+}
+/** IPv6 的 DNS 伺服器（DHCPv6 給的）：只有 IPv6 的電腦就用它 */
+function devDns6(dev) {
+  for (const i of dev.ifaces) if (i.rt.v6 && i.rt.v6.dns && i.rt.v6.dns.length && i.rt.link) return i.rt.v6.dns;
   return [];
 }
 
@@ -35,18 +40,18 @@ export function resolveName(state, devId, name, depth = 0, opts = {}) {
     log.push({ dev: devId, kind: 'dns', text: `${name} 的 ${six ? 'AAAA' : 'A'} 在 DNS 快取裡：${show(hit)}（還有 ${Math.ceil(hit.exp - state.clock)} 秒才到期，不會向伺服器查詢）` });
     return { ok: true, ip: hit.ip, ...(six ? { ip6: hit.ip6 } : {}), cached: true, alias: hit.alias, log, hops };
   }
-  const servers = devDns(dev);
-  if (!servers.length) {
+  const servers = devDns(dev), servers6 = servers.length ? [] : devDns6(dev);
+  if (!servers.length && !servers6.length) {
     const up = dev.ifaces.some((i) => i.rt.ip != null && i.rt.link && i.rt.src !== 'apipa');
     return fail(up ? `${dev.name} 沒有設定 DNS 伺服器，無法把 ${name} 轉成 IP 位址` : noRouteReason(state, dev, 0));
   }
-  const server = servers[0];
-  log.push({ dev: devId, kind: 'dns', text: `向 DNS 伺服器 ${fmtIp(server)} 查詢 ${name}${six ? ' 的 AAAA（IPv6 位址）' : ''}` });
-  const r = transact(state, devId, { proto: 'udp', dst: server, dport: 53 });
+  const server = servers[0] ?? servers6[0], v6t = !servers.length;
+  log.push({ dev: devId, kind: 'dns', text: `向 DNS 伺服器 ${v6t ? fmtIp6(server) : fmtIp(server)} 查詢 ${name}${six ? ' 的 AAAA（IPv6 位址）' : ''}${v6t ? '（用 IPv6 查詢）' : ''}` });
+  const r = v6t ? transact6(state, devId, server, { proto: 'udp', dport: 53 }) : transact(state, devId, { proto: 'udp', dst: server, dport: 53 });
   log.push(...r.log); hops.push(...r.hops);
   if (!r.ok) return { ok: false, reason: `DNS 查詢失敗：${r.reason}`, failDev: r.failDev, log, hops };
   const sd = state.devices[r.responder];
-  let ip = null, ip6 = null, ttl = INET_TTL, alias = null, auth = false, canonical = name, nodata = false;
+  let ip = null, ip6 = null, ttl = INET_TTL, alias = null, auth = false, canonical = name, nodata = false, fwdNodata = false;
   if (sd.kind === 'internet') { if (six) ip6 = parseIp6((sd.inet.dns6 || {})[name] || ''); else ip = parseIp(sd.inet.dns[name] || ''); nodata = six && !!sd.inet.dns[name]; }
   else if (sd.dnsProxy) {
     log.push({ dev: sd.id, kind: 'dns', text: `${sd.name} 代為向上游 DNS 查詢` });
@@ -60,7 +65,38 @@ export function resolveName(state, devId, name, depth = 0, opts = {}) {
       ip = a.ip ?? null; ip6 = a.ip6 ?? null; ttl = a.ttl; auth = true;
       canonical = a.final;
       if (a.chain.length) { alias = a.chain[0]; log.push({ dev: sd.id, kind: 'dns', text: `${a.chain.join(' → ')} 是 ${a.final} 的別名 (CNAME)` }); }
-    } else if (six) nodata = !!a.nodata || !serverAnswer(sd, name).nx;
+    } else {
+      // 自己的區域裡沒有：開了轉送 (forwarder) 的話，用伺服器自己的 DNS 設定往上游查
+      if (sd.dnsForward && serverAnswer(sd, name).nx) {
+        log.push({ dev: sd.id, kind: 'dns', text: `${sd.name} 的區域裡沒有 ${name}，轉送給上游的 DNS 伺服器查詢` });
+        const up = resolveName(state, sd.id, name, depth + 1, six ? { type: 'AAAA', nocache: true } : { nocache: true });
+        log.push(...up.log); hops.push(...up.hops);
+        if (up.ok) { ip = up.ip ?? null; ip6 = up.ip6 ?? null; } else if (!six) return fail(up.reason, up.failDev);
+        else {
+          // 上游說「名稱存在，但沒有 AAAA」：照實回給用戶端（DNS64 也許還能用 A 記錄合成）
+          fwdNodata = !!up.nodata;
+          const last = log[log.length - 1];
+          if (last && last.kind === 'drop') last.kind = 'dns';
+        }
+      }
+      if (six && ip6 == null) nodata = !!a.nodata || !serverAnswer(sd, name).nx || fwdNodata;
+    }
+    // DNS64：名稱只有 IPv4（A）的話，用 NAT64 的前綴 + IPv4 位址合成一個 AAAA
+    if (six && ip6 == null && sd.dns64) {
+      const c = parseCidr6(sd.dns64);
+      const a4 = serverAnswer(sd, name, 'A');
+      let v4 = a4.nx ? null : a4.ip;
+      if (v4 == null && sd.dnsForward) {
+        const upA = resolveName(state, sd.id, name, depth + 1, { nocache: true });
+        log.push(...upA.log); hops.push(...upA.hops);
+        if (upA.ok) v4 = upA.ip;
+      }
+      if (c && c.bits === 96 && v4 != null) {
+        ip6 = net6(c.ip, c.bits) | BigInt(v4 >>> 0);
+        nodata = false;
+        log.push({ dev: sd.id, kind: 'dns', text: `DNS64：${name} 沒有 AAAA，用 A 記錄 ${fmtIp(v4)} 合成 ${fmtIp6(ip6)}（前綴 ${sd.dns64}）` });
+      }
+    }
   }
   if (six ? ip6 == null : ip == null) {
     if (six) { const r = fail(`DNS 伺服器回覆：${name} 沒有 IPv6 位址（${nodata ? '名稱存在，但沒有 AAAA 記錄' : '找不到這個名稱'}）`, sd.id); r.nodata = nodata; return r; }

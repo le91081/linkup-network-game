@@ -4016,6 +4016,57 @@ console.log('\nFortiGate 的 IPv6（前綴委派與 IPv6 政策）');
   ok(/edit "dmz"[^]*?config ipv6\n {12}set ip6-mode delegated\n {12}set ip6-upstream-interface "wan1"\n {12}set ip6-subnet ::2:0:0:0:1\/64\n {12}set ip6-send-adv enable\n {8}end/.test(txt) && /set srcaddr6 "all"/.test(txt), 'show：介面的 config ipv6 與政策的 srcaddr6');
 }
 
+console.log('\nNAT64 與 DNS64（IPv6-only 的網段）');
+{
+  const { iosSession, runningConfig } = await import('../src/engine/ios.js');
+  const { transact6, globalIp6, nat64Rows } = await import('../src/engine/sim6.js');
+  const { parseIp6, fmtIp6 } = await import('../src/engine/ip6.js');
+  const sim = await import('../src/engine/sim.js');
+  const ok = (cond, title) => (cond ? console.log('  ✔ ' + title) : fail(title));
+  const { fmtIp } = await import('../src/engine/ip.js');
+  const lv = LEVELS.find((x) => x.id === 'l120');
+  const s = lv.setup(); settle(s);
+  const SYN = parseIp6('64:ff9b::5db8:d822');
+  const q = (name, type) => sim.resolveName(s, 'pc1', name, 0, { nocache: true, ...(type ? { type } : {}) });
+  const logText = (r) => r.log.map((l) => l.text).join('\n');
+  ok(s.devices.pc1.ifaces[0].rt.ip == null && fmtIp6(globalIp6(s.devices.pc1)).startsWith('2001:db8:a00:1:'), '新大樓筆電只有 IPv6（SLAAC），DNS 伺服器由 DHCPv6 告知');
+  const a = q('www.example.com');
+  ok(a.ok && fmtIp(a.ip) === '93.184.216.34' && /用 IPv6 查詢/.test(logText(a)) && /轉送給上游/.test(logText(a)), '沒有 IPv4 DNS 時用 IPv6 問 DNS 伺服器；伺服器把查不到的名稱轉送給 8.8.8.8');
+  const a6 = q('www.example.com', 'AAAA');
+  ok(!a6.ok && /名稱存在，但沒有 AAAA 記錄/.test(a6.reason), '只有 A 記錄：AAAA 查不到，轉送回來的 NODATA 照實回報');
+  s.devices.dns.dns64 = '64:ff9b::/64'; settle(s);
+  ok(!q('www.example.com', 'AAAA').ok, 'DNS64 的前綴不是 /96：不合成');
+  s.devices.dns.dns64 = '64:ff9b::/96'; settle(s);
+  const b6 = q('www.example.com', 'AAAA');
+  ok(b6.ok && b6.ip6 === SYN && /DNS64：www\.example\.com 沒有 AAAA，用 A 記錄 93\.184\.216\.34 合成 64:ff9b::5db8:d822/.test(logText(b6)) && !b6.log.some((l) => l.kind === 'drop'), 'DNS64：用前綴 + IPv4 位址合成 AAAA（過程中上游的 NODATA 不算失敗）');
+  const i6 = q('intranet.corp.example', 'AAAA');
+  ok(i6.ok && fmtIp6(i6.ip6) === '2001:db8:a00:2::80', '有真的 AAAA 的名稱不合成');
+  const r0 = transact6(s, 'pc1', SYN, { quiet: true });
+  ok(!r0.ok && /沒有通往 64:ff9b::5db8:d822 的路由/.test(r0.reason), '路由器沒有 NAT64：找不到路由');
+  const R = iosSession(() => s.devices.r1, () => s);
+  const cli = (lines) => { const o = []; for (const l of lines) o.push(...R.exec(l).out); settle(s); return o.join('\n'); };
+  ok(/前綴要是 \/96/.test(cli(['configure terminal', 'nat64 prefix stateful 64:ff9b::/64'])), 'nat64 prefix stateful 要 /96');
+  cli(['nat64 prefix stateful 64:ff9b::/96']);
+  ok(/Gi0\/0\/1 沒有 nat64 enable/.test(transact6(s, 'pc1', SYN, { quiet: true }).reason), '進來的介面沒有 nat64 enable：說明不會做 NAT64');
+  cli(['interface gi0/0/1', 'nat64 enable', 'exit']);
+  ok(/還沒有指定轉換的方式/.test(transact6(s, 'pc1', SYN, { quiet: true }).reason), '沒有 nat64 v6v4 list：說明要怎麼設');
+  cli(['nat64 v6v4 list NAT64-SRC interface gi0/0/0 overload']);
+  ok(/Gi0\/0\/0 沒有 nat64 enable/.test(transact6(s, 'pc1', SYN, { quiet: true }).reason), 'IPv4 那一側也要 nat64 enable');
+  cli(['interface gi0/0/0', 'nat64 enable', 'exit']);
+  ok(/IPv6 ACL「NAT64-SRC」不存在/.test(transact6(s, 'pc1', SYN, { quiet: true }).reason), 'ACL 不存在');
+  cli(['ipv6 access-list NAT64-SRC', 'permit ipv6 2001:db8:a00:2::/64 any', 'exit']);
+  ok(/不在 NAT64 的來源清單「NAT64-SRC」/.test(transact6(s, 'pc1', SYN, { quiet: true }).reason), '來源不在 ACL 允許的範圍：不轉換');
+  cli(['no ipv6 access-list NAT64-SRC', 'ipv6 access-list NAT64-SRC', 'permit ipv6 2001:db8:a00:1::/64 any', 'end']);
+  const t = transact6(s, 'pc1', SYN, { proto: 'tcp', dport: 443 });
+  ok(t.ok && /NAT64：.* 換成 IPv4 203\.0\.113\.34 → 93\.184\.216\.34/.test(logText(t)) && /IPv4 的回應換回 IPv6/.test(logText(t)) && t.log.every((l) => l.dev), 'NAT64：IPv6 換成 IPv4 送出，回應換回 IPv6');
+  ok(sim.evaluate(s, lv.objectives).every((r) => r.pass), '關卡的目標全部達成（新大樓維持 IPv6-only）');
+  const rows = nat64Rows(s, s.devices.r1);
+  const tcp = rows.filter((e) => e.proto === 'tcp');
+  ok(tcp.length === 1 && tcp[0].nport === 1024 && fmtIp(tcp[0].v4dst) === '93.184.216.34' && rows.some((e) => e.proto === 'icmp' && e.nport !== 1024), 'NAT64 的轉換表記下這條連線（overload 換埠號）');
+  const rc = [].concat(runningConfig(s, s.devices.r1)).join('\n');
+  ok(/^nat64 prefix stateful 64:FF9B::\/96$/m.test(rc) && /^nat64 v6v4 list NAT64-SRC interface GigabitEthernet0\/0\/0 overload$/m.test(rc) && (rc.match(/^ nat64 enable$/gm) || []).length === 2, 'running-config：nat64 prefix、v6v4 list 與兩個介面的 nat64 enable');
+}
+
 console.log('\nNetFlow 與 QoS 的 police');
 {
   const sim = await import('../src/engine/sim.js');

@@ -807,6 +807,8 @@ export function iosSession(getDev, getState, who = null) {
     })],
     // DHCPv6 Prefix Delegation 的用戶端：向 ISP 要一段前綴，存成一般前綴
     ['ipv6 dhcp client pd <name> [...]', ([name]) => onL3((i) => { i.pd6 = name; })],
+    ['nat64 enable', () => onL3((i) => { i.nat64 = true; })],
+    ['no nat64 enable', () => onL3((i) => { delete i.nat64; })],
     ['no ipv6 dhcp client pd [...]', () => onL3((i) => { delete i.pd6; })],
     ['ipv6 enable', () => onL3(() => {})],
     ['no ipv6 enable', () => onL3(() => {})],
@@ -2066,6 +2068,18 @@ export function iosSession(getDev, getState, who = null) {
     ['no service unsupported-transceiver', () => { delete dev().unsupportedXcvr; }],
     ['service <...>', () => undefined],
     // ── AAA ──
+    // ── NAT64（stateful）──
+    ['nat64 prefix stateful <pfx>', ([p]) => { const c = parseCidr6(p); if (!c || c.bits !== 96) return err('用法：nat64 prefix stateful 64:ff9b::/96（前綴要是 /96）'); (dev().nat64 ||= {}).prefix = p.toLowerCase(); return undefined; }],
+    ['nat64 v6v4 list <acl> interface <...>', ([acl, rest]) => {
+      const t = rest.trim().split(/\s+/), ov = t[t.length - 1].toLowerCase() === 'overload';
+      if (!ov) return err('用法：nat64 v6v4 list <IPv6 ACL> interface <外面的介面> overload');
+      const r = resolveIf(dev(), t.slice(0, -1).join(''));
+      if (isErr(r)) return r;
+      if (!r.iface) return err('要指定有 IPv4 位址的介面');
+      Object.assign((dev().nat64 ||= {}), { list: acl, out: r.iface.id });
+      return undefined;
+    }],
+    ['no nat64 [...]', () => { delete dev().nat64; }],
     ['aaa new-model', () => { (dev().aaa ||= {}).on = true; }],
     ['no aaa new-model', () => { if (dev().aaa) dev().aaa.on = false; }],
     ['aaa authentication login <name> <...>', ([name, rest]) => {
@@ -4019,6 +4033,7 @@ export function runningConfig(state, dev) {
     if (i.raO) l.push(' ipv6 nd other-config-flag');
     if ((i.ip6 || i.gp6) && !i.ra) l.push(' ipv6 nd ra suppress all');
     if (i.pd6) l.push(` ipv6 dhcp client pd ${i.pd6}`);
+    if (i.nat64) l.push(' nat64 enable');
     if (i.dhcp6) l.push(` ipv6 dhcp server ${i.dhcp6}`);
     if (i.relay6) l.push(` ipv6 dhcp relay destination ${i.relay6.toUpperCase()}`);
     if (i.ospf6Cost) l.push(` ipv6 ospf cost ${i.ospf6Cost}`);
@@ -4296,6 +4311,7 @@ export function runningConfig(state, dev) {
       if ((e.set.defNh || []).length) o.push(` set ip default next-hop ${e.set.defNh.join(' ')}`);
     }
   }
+  if (dev.nat64 && dev.nat64.prefix) { o.push('!', `nat64 prefix stateful ${dev.nat64.prefix.toUpperCase()}`); const oi = dev.ifaces.find((x) => x.id === dev.nat64.out); if (dev.nat64.list && oi) o.push(`nat64 v6v4 list ${dev.nat64.list} interface ${longIf(oi.label)} overload`); }
   if (dev.aaa && dev.aaa.src) { const i = dev.ifaces.find((x) => x.id === dev.aaa.src); if (i) o.push('!', `ip tacacs source-interface ${i.label}`); }
   for (const t of dev.tacacs || []) o.push('!', `tacacs server ${t.name}`, ...(t.ip ? [` address ipv4 ${t.ip}`] : []), ...(t.key ? [` key 7 ${hex(t.key)}`] : []));
   if (dev.radius && dev.radius.ip) o.push('!', 'radius server AAA', ` address ipv4 ${dev.radius.ip} auth-port 1812 acct-port 1813`, ` key 7 ${hex(dev.radius.secret || '')}`);

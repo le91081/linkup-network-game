@@ -524,7 +524,7 @@ export function buildTerminal(ctx, body) {
       const srvLine = (r) => {
         const sd = r.server && st().devices[r.server];
         print(`伺服器:  ${sd ? sd.name.replace(/\s+/g, '-') : 'UnKnown'}`);
-        print(`Address:  ${r.serverIp != null ? fmtIp(r.serverIp) : '—'}`);
+        print(`Address:  ${r.serverIp == null ? '—' : typeof r.serverIp === 'bigint' ? fmtIp6(r.serverIp) : fmtIp(r.serverIp)}`);
         print('');
       };
       if (!target) print('用法：nslookup <網域>、nslookup -type=mx <網域>、nslookup <IP>', 'warn');
