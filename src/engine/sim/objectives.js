@@ -22,6 +22,7 @@ import { transact, flowSend } from './transact.js';
  *  { type:'dhcp', dev, subnet? }
  *  { type:'check', test(state) → true | '原因' }
  *  { type:'failover', down?:[devId], cut?:[[devId, portId]], test:{...} }
+ *    feed:['A'] 某一路電斷了（設備的電源供應器接在哪一路，見 engine/power.js）
  *    keep:{ from, ip, port } 取代 test：故障之前先建立 TCP 連線，故障之後在同一條連線上繼續送資料（連線表要跟著換手）
  */
 export function runObjective(state, o) {
@@ -146,6 +147,11 @@ export function runObjective(state, o) {
       const c = s2.cables.find((x) => (x.a.dev === dv && x.a.port === pid) || (x.b.dev === dv && x.b.port === pid));
       if (c) s2.cut[c.id] = true;
       what.push(`${state.devices[dv].name} 的 ${pid} 斷線`);
+    }
+    // 某一路電斷了（A 路 / B 路）：只接在那一路的設備關機
+    if ((o.feed || []).length) {
+      s2.feeds = { ...(state.feeds || {}), ...Object.fromEntries(o.feed.map((f) => [f, false])) };
+      what.push(...o.feed.map((f) => `${f} 路斷電`));
     }
     for (const id of o.ispFail || []) {
       s2.devices[id].inet = { ...s2.devices[id].inet, fault: true };

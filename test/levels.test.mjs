@@ -276,7 +276,8 @@ console.log('\nCLI 設定指令');
       // RSA 金鑰、韌體與 flash 不在設定檔裡：當作同一台設備換回原本的設定
       // SNMPv3 的使用者也一樣：IOS 不會把它寫進 running-config
       if (d.mgmt && s2.devices[d.id].mgmt) { s2.devices[d.id].mgmt.sshKey = d.mgmt.sshKey; if (d.mgmt.snmpUser) s2.devices[d.id].mgmt.snmpUser = { ...d.mgmt.snmpUser }; }
-      for (const k of ['fw', 'flash']) if (d[k]) s2.devices[d.id][k] = JSON.parse(JSON.stringify(d[k]));
+      // 電源供應器是硬體（裝了幾個、插在哪一路），也不在設定檔裡
+      for (const k of ['fw', 'flash', 'psu']) if (d[k]) s2.devices[d.id][k] = JSON.parse(JSON.stringify(d[k]));
       recompute(s2);
       const errs = type(s2, d.id, ['configure terminal', ...want, 'end']);
       recompute(s2);
@@ -1892,6 +1893,7 @@ console.log('\nFortiGate CLI');
       const want = fortiConfig(s, d);
       const s2 = cloneState(s);
       s2.devices[d.id] = makeDevice(d.model, d.id, { name: d.name, pos: d.pos });
+      if (d.psu) s2.devices[d.id].psu = JSON.parse(JSON.stringify(d.psu)); // 電源供應器是硬體，不在設定檔裡
       recompute(s2);
       // 原廠預設的介面已經開放了一些管理存取；先清掉，才算一台「空白」的設備
       const clear = ['config system interface', ...s2.devices[d.id].ifaces.flatMap((i) => [`edit "${i.id}"`, 'unset allowaccess', 'next']), 'end'];
@@ -4240,6 +4242,35 @@ console.log('\nFortiGate 的網頁過濾與 SSL 檢查');
     && /set utm-status enable\n\s+set ssl-ssh-profile "certificate-inspection"\n\s+set webfilter-profile "corp-wf"/.test(t), 'show：config webfilter profile 印在政策前面，政策有 utm-status / ssl-ssh-profile / webfilter-profile');
   cli(['config firewall policy', 'edit 1', 'unset utm-status', 'next', 'end']);
   ok(!s.devices.fg.policies[0].utm && !s.devices.fg.policies[0].wf && !run(2).pass, 'unset utm-status：安全設定檔不再作用');
+}
+
+console.log('\n電力備援（A / B 兩路與雙電源）');
+{
+  const { envPowerLines, psuState } = await import('../src/engine/power.js');
+  const { makeDevice } = await import('../src/engine/model.js');
+  const sim = await import('../src/engine/sim.js');
+  const ok = (cond, title) => (cond ? console.log('  ✔ ' + title) : fail(title));
+  const lv = LEVELS.find((x) => x.id === 'l125');
+  const s = lv.setup(); settle(s);
+  const web = () => sim.transact(s, 'srv1', { proto: 'tcp', dst: parseIp('93.184.216.34'), dport: 443, quiet: true });
+  ok(web().ok && !s.rt.off.core, '兩路都有電：一切正常');
+  s.feeds = { A: false }; settle(s);
+  const r = web();
+  ok(s.rt.off.core && s.rt.off.fg && !s.rt.off.srv1 && s.rt.off.srv2 && !r.ok && /核心交換器 沒有電：它的電源供應器都接在 A 路/.test(r.reason), 'A 路斷電：核心、防火牆（兩個 PSU 都在 A 路）與資料庫伺服器（PSU 2 沒接）關機，說明是哪一路');
+  ok(Object.values(s.rt.why).some((w) => /沒有電/.test(w)), '斷線的原因寫出是哪台沒電');
+  s.feeds = {}; settle(s);
+  ok(/1B  Not Present/.test(envPowerLines(s, s.devices.core).join('\n')) && /1A  PWR-C1-715WAC/.test(envPowerLines(s, s.devices.core).join('\n')), 'show environment power：Catalyst 9300 的 PSU 2 沒有安裝');
+  s.devices.core.psu[1] = { on: true, feed: 'B' };
+  s.devices.fg.psu[1].feed = 'B';
+  s.devices.srv2.psu[1].feed = 'B';
+  s.feeds = { A: false }; settle(s);
+  ok(!s.rt.off.core && !s.rt.off.fg && !s.rt.off.srv2 && web().ok && /No Input Power/.test(envPowerLines(s, s.devices.core).join('\n')), '改接之後 A 路斷電：大家都靠 B 路撐著，show environment power 顯示 PSU 1 沒有輸入電源');
+  ok(psuState(s, s.devices.fg).map((x) => x.ok).join() === 'false,true', 'PSU 狀態：A 路的那一個沒電、B 路的那一個正常');
+  s.feeds = {}; settle(s);
+  ok(lv.objectives.every((o) => (o.type === 'check' ? o.test(s) : sim.runObjective(s, o).pass) === true), '五個目標都通過');
+  const n9 = makeDevice('n93180', 'nx', { name: 'NX' });
+  n9.psu = [{ on: true, feed: 'A' }, { on: true, feed: 'B' }]; n9.rt = {};
+  ok(/NXA-PAC-650W-PE[\s\S]*PS-Redundant/.test(envPowerLines({ feeds: {} }, n9).join('\n')), 'Nexus 的 show environment power 格式');
 }
 
 console.log('\nNetFlow 與 QoS 的 police');

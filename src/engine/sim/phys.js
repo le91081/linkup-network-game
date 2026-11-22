@@ -60,6 +60,7 @@ export function prepPhysical(state) {
       const adm = shut(A, c.a.port) ? [A, c.a.port] : shut(B, c.b.port) ? [B, c.b.port] : null;
       if (cut[c.id]) rt.why[c.id] = (state.cutWhy || {})[c.id] || '線路斷了';
       else if (dead) rt.why[c.id] = `${dead.name} 已經關機`;
+      else if ([A, B].some((x) => (rt.offWhy || {})[x.id])) rt.why[c.id] = rt.offWhy[[A, B].find((x) => (rt.offWhy || {})[x.id]).id];
       else if (adm) rt.why[c.id] = `${adm[0].name} 的 ${(adm[0].ports.find((p) => p.id === adm[1]) || {}).label || adm[1]} 被停用 (shutdown)`;
       continue;
     }

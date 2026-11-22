@@ -373,7 +373,7 @@ export function forward(state, ctx, startId, pkt) {
   if ((state.down || {})[dev.id]) return drop(`${dev.name} 已經關機`);
   if (state.rt.rommon && state.rt.rommon[dev.id]) return drop(`${dev.name} 停在 ROMMON，沒有開機成功：${state.rt.rommon[dev.id]}`);
   if (state.rt.booting && state.rt.booting[dev.id] > 0) return drop(`${dev.name} 還在開機中（還要 ${Math.ceil(state.rt.booting[dev.id])} 秒）`);
-  if (state.rt.off[dev.id]) return drop(`${dev.name} 沒有電 — 它需要接在有 PoE 供電的連接埠上`);
+  if (state.rt.off[dev.id]) return drop((state.rt.offWhy || {})[dev.id] || `${dev.name} 沒有電 — 它需要接在有 PoE 供電的連接埠上`);
   for (let n = 0; n < 48; n++) {
     let established = false, dnat = null;
     const o = { src: pkt.src, sport: pkt.sport, dst: pkt.dst, dport: pkt.dport };

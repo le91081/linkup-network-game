@@ -27,6 +27,7 @@ import { sessionTtl } from './sim/forward.js';
 import { scriptTick } from './script.js';
 import { prepHa, haIdle, haMacs } from './ha.js';
 import { prepVtp } from './vtp.js';
+import { prepPower } from './power.js';
 export { portalPending, portalAccept } from './portal.js';
 import { transact } from './sim/transact.js';
 setCdpCheck((d, pid, x, xp) => cdpOn(d, pid) && cdpOn(x, xp));
@@ -152,6 +153,7 @@ function computePass(state, auth) {
       i.rt = { ip: null, bits: 0, gw: null, dns: [], src: null, note: '', active: ifaceActive(d, i), link: true, mac: ifaceMac(d, i), vips: [], assoc: null };
     }
   }
+  prepPower(state); // 電源供應器全部沒電的設備：當作關機
   prepPhysical(state);
   prepDtp(state);
   prepVtp(state); // VTP：Trunk 協商好之後，同一個網域的交換器同步 VLAN 資料庫

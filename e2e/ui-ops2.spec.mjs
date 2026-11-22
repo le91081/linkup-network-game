@@ -537,3 +537,19 @@ test('網頁過濾：安全設定檔分頁建立設定檔、政策啟用並選 c
   await typeCmd(page, 'curl https://www.example.com');
   await expect(out).toContainText('HTTP/1.1 200 OK');
 });
+
+test('電力備援：show environment power 看到 PSU 2 沒裝；電源分頁裝上 PSU 2、接 B 路之後變成兩路備援', async ({ page }) => {
+  await boot(page);
+  await open(page, 'l125');
+  await clickDevice(page, 'core');
+  await page.locator('#panel .tab', { hasText: 'CLI' }).click();
+  await typeCmd(page, 'show environment power');
+  await expect(page.locator('#panel .term-out')).toContainText('1B  Not Present');
+  await page.locator('#panel .tab', { hasText: '電源' }).click();
+  await expect(page.locator('#panel .card.power .note.warn')).toContainText('只有一個電源供應器在供電');
+  await page.locator('#panel .psu-row').nth(1).locator('label.switch').click();
+  await page.locator('#panel .psu-row').nth(1).locator('.seg button', { hasText: 'B 路' }).click();
+  await expect(page.locator('#panel .card.power')).toContainText('A / B 兩路備援');
+  await expect(page.locator('#panel .card.power .note.warn')).toHaveCount(0);
+  expect(await scan(page, '#panel', '核心交換器的電源分頁')).toEqual([]);
+});

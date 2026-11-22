@@ -28,6 +28,7 @@ import { fmtMask } from '../engine/ip.js';
 import { route6Rows, nat64Rows, nat64Stats, clearNat64 } from '../engine/sim6.js';
 import { vtpCapable, vtpOf, vtpStatusLines } from '../engine/vtp.js';
 import { zbfActive } from '../engine/zbf.js';
+import { envPowerLines } from '../engine/power.js';
 import { CATALOG, MEDIA, peerOf, portOf, linkInfo, phyConfig, fiberLink } from '../engine/model.js';
 import { xcvrAt, xcvrSerial, MEDIA_TYPE } from '../engine/optics.js';
 import { PLATFORM as PID_OF } from '../engine/dnac.js';
@@ -230,6 +231,8 @@ const SHOW = {
     }
     return o;
   },
+  'show environment power': (st, d) => envPowerLines(st, d),
+  'show environment': (st, d) => envPowerLines(st, d),
   'show zone security': (st, d) => {
     if (d.kind !== 'router') return ['% 這個指令只適用於路由器'];
     const z = d.zbf || { zones: {} };

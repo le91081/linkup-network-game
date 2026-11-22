@@ -5,6 +5,8 @@ import { haTab } from './panel-ha.js';
 import { vtpCard } from './panel-vtp.js';
 import { vtpOf } from '../engine/vtp.js';
 import { utmTab, policyUtmFields } from './panel-utm.js';
+import { powerTab } from './panel-power.js';
+import { hasPsuSlots } from '../engine/power.js';
 import { ZONE, sdwanOn } from '../engine/sdwan.js';
 import * as CL from './panel-cloud.js';
 import * as W from './panel-wlc.js';
@@ -639,6 +641,8 @@ const T = {
 
 function tabsFor(dev) {
   const t = baseTabs(dev);
+  // 有兩個電源槽的設備（核心交換器、資料中心交換器、防火牆、機架伺服器）：電源分頁
+  if (!dev.locked && hasPsuSlots(dev)) t.push(['power', '電源', powerTab]);
   // Cisco 的網路設備多一個唯讀的 IOS 風格 CLI
   if (!dev.locked && CATALOG[dev.model].vendor === 'Cisco' && ['router', 'mswitch', 'l3switch', 'wlc'].includes(dev.kind)) t.push(['cli', 'CLI', buildCli]);
   return t;
