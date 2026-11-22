@@ -4273,6 +4273,33 @@ console.log('\n電力備援（A / B 兩路與雙電源）');
   ok(/NXA-PAC-650W-PE[\s\S]*PS-Redundant/.test(envPowerLines({ feeds: {} }, n9).join('\n')), 'Nexus 的 show environment power 格式');
 }
 
+console.log('\nConsole 線與 access-class');
+{
+  const { iosSession, iosDirty, runningConfig } = await import('../src/engine/ios.js');
+  const sim = await import('../src/engine/sim.js');
+  const ok = (cond, title) => (cond ? console.log('  ✔ ' + title) : fail(title));
+  const lv = LEVELS.find((x) => x.id === 'l126');
+  const s = lv.setup(); settle(s);
+  const sw = s.devices.sw1;
+  const cli = (lines) => { const S = iosSession(() => s.devices.sw1, () => s); const o = []; for (const l of lines) o.push(...S.exec(l).out); settle(s); return o.join('\n'); };
+  const login = (from) => sim.runObjective(s, { type: 'login', from, ip: '10.1.98.11', proto: 'ssh', user: 'netadmin', pass: 'Core-Admin#26' });
+  ok(sw.remoteOnly && !iosDirty(s, sw) && /不在 SW-1 允許管理的位址範圍內/.test(login('ops').reason), '一開始：ACL 打錯，網管工作站也 SSH 不進去；設定已經存檔');
+  ok(/這個 ACL 裡沒有 permit/.test(cli(['configure terminal', 'ip access-list standard VTY-ONLY', 'no permit host 10.1.98.99', 'end'])), 'no permit：ACL 裡沒有的項目');
+  cli(['configure terminal', 'ip access-list standard VTY-ONLY', 'no permit host 10.1.89.60', 'end']);
+  ok(sw.mgmt.allow === '' && login('emp').ok, '空的 ACL 和不存在一樣：全部放行（連一般員工都進得去）');
+  cli(['configure terminal', 'ip access-list standard VTY-ONLY', 'permit host 10.1.98.60', 'end']);
+  ok(login('ops').ok && !login('emp').ok, 'access-class 依名稱參照：補上 permit 之後立刻生效（網管進得去、員工不行）');
+  cli(['configure terminal', 'no ip access-list standard VTY-ONLY', 'ip access-list standard VTY-ONLY', 'permit host 10.1.98.60', 'end']);
+  ok(login('ops').ok && !login('emp').ok, 'ACL 整個刪掉再建：access-class 跟著新的 ACL');
+  ok(iosDirty(s, sw), '改完還沒存檔：running-config 和 startup-config 不一樣');
+  cli(['write memory']);
+  ok(lv.objectives.every((o) => (o.type === 'check' ? o.test(s) === true : sim.runObjective(s, o).pass)), '存檔之後三個目標都通過');
+  cli(['configure terminal', 'line vty 0 4', 'no access-class VTY-ONLY in', 'end']);
+  ok(!sw.mgmt.aclName && login('emp').ok, 'no access-class：不再限制');
+  cli(['configure terminal', 'ip access-list standard VTY-ONLY', 'permit host 10.1.98.61', 'end']);
+  ok(login('emp').ok && !/access-class/.test(runningConfig(s, sw).join('\n')), '沒有 access-class 時改 ACL 不會又套回 vty');
+}
+
 console.log('\nNetFlow 與 QoS 的 police');
 {
   const sim = await import('../src/engine/sim.js');

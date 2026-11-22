@@ -2795,7 +2795,7 @@ export function iosSession(getDev, getState, who = null) {
         if (list) d.mgmt.allow = list.join(', ');
         return undefined;
       }],
-      ['no access-class [...]', () => { dev().mgmt.allow = ''; }],
+      ['no access-class [...]', () => { dev().mgmt.allow = ''; delete dev().mgmt.aclName; }],
       // login local：用 username 建的帳號；login：只問線路密碼；no login：不驗證（非常危險）
       ['login authentication <name>', ([name]) => {
         const m = dev().mgmt;
@@ -2858,6 +2858,18 @@ export function iosSession(getDev, getState, who = null) {
       }],
     ],
     stdacl: [
+      ['no permit <...>', ([rest]) => {
+        const t = rest.split(/\s+/);
+        const ip = (t[0] || '').toLowerCase() === 'host' ? t[1] : t[0];
+        const bits = (t[0] || '').toLowerCase() === 'host' || !t[1] ? 32 : wildBits(t[1]);
+        if (parseIp(ip || '') == null || bits == null) return err('用法：no permit host <IP> 或 no permit <網段> <萬用遮罩>');
+        const cidr = bits === 32 ? ip : `${fmtIp(netOf(parseIp(ip), bits))}/${bits}`;
+        const d = dev(), list = (d.stdAcls || {})[S.cur] || [];
+        if (!list.includes(cidr)) return err(`這個 ACL 裡沒有 permit ${rest}`);
+        d.stdAcls[S.cur] = list.filter((x) => x !== cidr);
+        if (d.mgmt && d.mgmt.aclName === S.cur) d.mgmt.allow = d.stdAcls[S.cur].join(', '); // 空的 ACL 和不存在一樣：全部放行
+        return undefined;
+      }],
       ['<...>', ([line]) => {
         const t = line.split(/\s+/);
         let n = /^\d+$/.test(t[0]) ? 1 : 0;
@@ -2872,7 +2884,7 @@ export function iosSession(getDev, getState, who = null) {
         if (!cidr) return err('用法：permit <網段> <萬用遮罩>，例如 permit 10.0.99.0 0.0.0.255');
         const d = dev(), list = ((d.stdAcls ||= {})[S.cur] ||= []);
         if (!list.includes(cidr)) list.push(cidr);
-        if (d.mgmt && d.mgmt.allow && (d.mgmt.aclName || 'MGMT') === S.cur) d.mgmt.allow = list.join(', ');
+        if (d.mgmt && (d.mgmt.aclName ? d.mgmt.aclName === S.cur : d.mgmt.allow && S.cur === 'MGMT')) d.mgmt.allow = list.join(', ');
         return undefined;
       }],
     ],

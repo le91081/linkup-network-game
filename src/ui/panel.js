@@ -6,6 +6,7 @@ import { vtpCard } from './panel-vtp.js';
 import { vtpOf } from '../engine/vtp.js';
 import { utmTab, policyUtmFields } from './panel-utm.js';
 import { powerTab } from './panel-power.js';
+import { consoleTab, remoteOnlyInfo, needsConsole } from './panel-console.js';
 import { hasPsuSlots } from '../engine/power.js';
 import { ZONE, sdwanOn } from '../engine/sdwan.js';
 import * as CL from './panel-cloud.js';
@@ -639,8 +640,12 @@ const T = {
   vpn: ['vpn', 'VPN', X.vpnTab], ifs: ['if', '介面', rtIfaces], nat: ['nat', 'NAT / 轉發', forwardsTab],
 };
 
-function tabsFor(dev) {
+function tabsFor(dev, state) {
+  // 在機房裡、只能遠端管理的設備：沒有設定分頁（用 SSH 或 Console 線）
+  if (dev.remoteOnly) return [['info', '設備資訊', remoteOnlyInfo]];
   const t = baseTabs(dev);
+  // 場景裡有只能遠端管理的設備時，筆電多一個 Console 分頁（接 Console 線）
+  if (/^laptop/.test(dev.model) && state && needsConsole(state)) t.push(['con', 'Console', consoleTab]);
   // 有兩個電源槽的設備（核心交換器、資料中心交換器、防火牆、機架伺服器）：電源分頁
   if (!dev.locked && hasPsuSlots(dev)) t.push(['power', '電源', powerTab]);
   // Cisco 的網路設備多一個唯讀的 IOS 風格 CLI
@@ -684,7 +689,7 @@ export function renderDevicePanel(app, root) {
   app.refreshers = [];
   if (!dev) return false;
   const m = CATALOG[dev.model];
-  const tabs = tabsFor(dev);
+  const tabs = tabsFor(dev, app.state);
   let cur = app.panelTab[dev.id];
   if (!tabs.some((t) => t[0] === cur)) cur = tabs[0][0];
   const viewKey = dev.id + ':' + cur;

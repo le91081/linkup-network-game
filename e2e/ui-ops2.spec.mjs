@@ -553,3 +553,24 @@ test('電力備援：show environment power 看到 PSU 2 沒裝；電源分頁�
   await expect(page.locator('#panel .card.power .note.warn')).toHaveCount(0);
   expect(await scan(page, '#panel', '核心交換器的電源分頁')).toEqual([]);
 });
+
+test('Console 線：機房的交換器沒有設定分頁；工程筆電接 Console 線，速率不對是亂碼，9600 就能修好 ACL 並存檔', async ({ page }) => {
+  await boot(page);
+  await open(page, 'l126');
+  await clickDevice(page, 'sw1');
+  await expect(page.locator('#panel .tab', { hasText: 'CLI' })).toHaveCount(0);
+  await expect(page.locator('#panel')).toContainText('在機房的機櫃裡');
+  await clickDevice(page, 'tech');
+  await page.locator('#panel .tab', { hasText: 'Console' }).click();
+  await page.locator('#panel .btn', { hasText: '接上 Console 線' }).click();
+  await page.locator('#panel .card.console-cfg select').selectOption('115200');
+  await expect(page.locator('#panel .note.warn')).toContainText('速率不對');
+  await page.locator('#panel .card.console-cfg select').selectOption('9600');
+  await typeCmd(page, 'configure terminal', 'ip access-list standard VTY-ONLY', 'no permit host 10.1.89.60', 'permit host 10.1.98.60', 'end', 'write memory');
+  await expect(page.locator('#panel .term-out')).toContainText('[OK]');
+  expect(await scan(page, '#panel', '工程筆電的 Console 分頁')).toEqual([]);
+  await clickDevice(page, 'ops');
+  await page.locator('#panel .tab', { hasText: '終端機' }).click();
+  await typeCmd(page, 'ssh netadmin@10.1.98.11');
+  await expect(page.locator('#panel .term-out')).toContainText(/password:|\(yes\/no/);
+});
