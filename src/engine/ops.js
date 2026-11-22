@@ -412,6 +412,10 @@ function snapshot(state, d) {
     if (a && state.rt.links[d.id + ':' + p.id]) s.auth[p.id] = a.ok ? 'ok' : 'fail';
   }
   for (const n of d.rt.nbrs || []) if (n.state === 'full' || n.state === 'dying') s.nbr[n.dev + '|' + n.iface] = { st: n.state, rid: routerId(state.devices[n.dev]) ?? n.ip };
+  // VRF 裡的 OSPF 程序（介面各自不同，鍵不會和全域的撞在一起）
+  for (const [v, c] of Object.entries(d.ospfVrf || {})) {
+    for (const n of d.rt['nbrs@' + v] || []) if (n.state === 'full' || n.state === 'dying') s.nbr[n.dev + '|' + n.iface] = { st: n.state, rid: n.rid ?? n.ip, pid: +c.pid || 1 };
+  }
   for (const n of d.rt.nbrs6 || []) if (n.state === 'full' || n.state === 'dying') s.nbr6[n.dev + '|' + n.iface] = { st: n.state, rid: n.rid };
   s.norid6 = !!(d.rt.ospf6 && d.rt.ospf6.norid);
   for (const i of d.ifaces) {
@@ -493,10 +497,10 @@ function diffDevice(state, d, a, b) {
   }
   // OSPF 鄰居
   for (const [k, n] of Object.entries(b.nbr)) {
-    if (!a.nbr[k]) ev(5, 'OSPF-5-ADJCHG', `Process 1, Nbr ${fmtIp(n.rid)} on ${longIf(ifLabel(k.split('|')[1]))} from LOADING to FULL, Loading Done`);
+    if (!a.nbr[k]) ev(5, 'OSPF-5-ADJCHG', `Process ${n.pid || 1}, Nbr ${fmtIp(n.rid)} on ${longIf(ifLabel(k.split('|')[1]))} from LOADING to FULL, Loading Done`);
   }
   for (const [k, n] of Object.entries(a.nbr)) {
-    if (!b.nbr[k]) ev(5, 'OSPF-5-ADJCHG', `Process 1, Nbr ${fmtIp(n.rid)} on ${longIf(ifLabel(k.split('|')[1]))} from FULL to DOWN, Neighbor Down: ${n.st === 'dying' ? 'Dead timer expired' : 'Interface down or detached'}`);
+    if (!b.nbr[k]) ev(5, 'OSPF-5-ADJCHG', `Process ${n.pid || 1}, Nbr ${fmtIp(n.rid)} on ${longIf(ifLabel(k.split('|')[1]))} from FULL to DOWN, Neighbor Down: ${n.st === 'dying' ? 'Dead timer expired' : 'Interface down or detached'}`);
   }
   // OSPFv3 鄰居（舊的快照可能沒有 nbr6）
   for (const [k, n] of Object.entries(b.nbr6 || {})) {

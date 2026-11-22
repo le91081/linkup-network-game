@@ -70,13 +70,16 @@ export const SEED = { static: 20, connected: 20, bgp: 1 };
  * 重分配進 OSPF 的外部路由（這台是 ASBR）：[{ net, bits, metric, type: 1 | 2, tag, src }]
  * ospfOn(d, i)：這個介面有沒有跑 OSPF（跑 OSPF 的直連網段本來就在區域裡，不用再當成外部路由）
  */
-export function ospfExternals(d, ospfOn) {
+export function ospfExternals(d, ospfOn, vrf = '') {
   const out = [];
-  for (const rd of d.ospfRedist || []) {
-    const pick = (r) => (rd.src === 'static' ? r.type === 'S' : rd.src === 'connected' ? r.type === 'C' && !(r.iface && ospfOn(d, r.iface)) : rd.src === 'bgp' ? r.type === 'B' : false);
+  const c = vrf ? (d.ospfVrf || {})[vrf] : d;
+  // redistribute bgp：預設只有 eBGP 學到的路，iBGP 的路不會被重分配進 IGP（要 bgp redistribute-internal）
+  const bgpOk = (r) => r.type === 'B' && (!r.ibgp || !!(d.bgp && d.bgp.redistInternal));
+  for (const rd of (c && c.ospfRedist) || []) {
+    const pick = (r) => (rd.src === 'static' ? r.type === 'S' : rd.src === 'connected' ? r.type === 'C' && !(r.iface && ospfOn(d, r.iface)) : rd.src === 'bgp' ? bgpOk(r) : false);
     for (const r of (d.rt && d.rt.routes) || []) {
       // 預設路由不會跟著 redistribute 出去：要用 default-information originate
-      if (r.bad || r.vrf || r.bits === 0 || !pick(r) || out.some((x) => x.net === r.net && x.bits === r.bits)) continue;
+      if (r.bad || (r.vrf || '') !== vrf || r.bits === 0 || !pick(r) || out.some((x) => x.net === r.net && x.bits === r.bits)) continue;
       const e = { net: r.net, bits: r.bits, metric: rd.metric != null ? +rd.metric : SEED[rd.src], type: +rd.type === 1 ? 1 : 2, tag: +rd.tag || 0, src: rd.src };
       if (rd.rm) {
         const s = rmRoute(d, rd.rm, e);

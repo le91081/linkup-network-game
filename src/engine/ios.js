@@ -7,7 +7,7 @@ import { ICMP6_TYPES } from './sim6.js';
 import { newIface, cloneState, CATALOG, makeDevice, defaultPortMode } from './model.js';
 import { cdpCfg, lldpCfg, portNd, setPortNd, speaksCdp, clearNeighbors, CDP_TIMER, CDP_HOLD, LLDP_TIMER, LLDP_HOLD } from './disc.js';
 import { parseDscp, dscpName, COS_DSCP_DEFAULT } from './qos.js';
-import { clearOspfProcess, ospfArea } from './ospf.js';
+import { clearOspfProcess, clearOspfAll, ospfArea, ospfProc, ospfKeys, ospfProcs } from './ospf.js';
 import { transfer, configFile, ensureFlash, flashFree, flashPath, fsName, IMAGES, PLATFORM, PLATFORM_NAME, imageFile, fmtBytes } from './files.js';
 import { macsBehind, recompute, ospfOn, ikeVer } from './sim.js';
 import { logEvent, markReboot, setClock, deviceTime, SEVERITY, bootTime, longIf, localUsers } from './ops.js';
@@ -226,7 +226,8 @@ function syncVpnAcl(d, name) {
   for (const t of d.vpns || []) if (t.acl === name) { t.local = uniq('src'); t.remote = uniq('dst'); }
 }
 
-const err = (s) => '% ' + s;
+// 訊息本身已經是 IOS 的「% …」格式時不再多加一個 %
+const err = (s) => (String(s).startsWith('%') ? String(s) : '% ' + s);
 const DTP_OK = (d) => defaultPortMode(d.model) !== 'access';
 function tidy(d, k) {
   const o = d[k];
@@ -547,7 +548,16 @@ export function iosSession(getDev, getState, who = null) {
     ['no ip helper-address [...]', () => onL3((i) => { i.helper = ''; })],
     ['ip ospf cost <n>', ([n]) => (+n >= 1 && +n <= 65535 ? onL3((i) => { i.ospfCost = String(+n); }) : err('cost 必須是 1 – 65535'))],
     ['no ip ospf cost', () => onL3((i) => { i.ospfCost = ''; })],
-    ['ip ospf <pid> area <a>', ([, a]) => (/^\d+$/.test(a) ? onL3((i) => { i.ospf = true; i.ospfArea = +a; }) : err('區域請寫數字，例如 area 0'))],
+    ['ip ospf <pid> area <a>', ([pid, a]) => (/^\d+$/.test(a) ? onL3((i) => {
+      // 介面在 VRF 裡：程序要是那個 VRF 的（router ospf <pid> vrf <名稱>）；全域的介面不能用 VRF 的程序
+      const d = dev(), mine = i.vrf ? (d.ospfVrf || {})[i.vrf] : null;
+      const owner = Object.entries(d.ospfVrf || {}).find(([, c]) => +c.pid === +pid);
+      if (i.vrf && !mine) return err(`% ${i.label} 在 VRF ${i.vrf} 裡：先用 router ospf <程序> vrf ${i.vrf} 建立這個 VRF 的 OSPF 程序`);
+      if (i.vrf && +mine.pid !== +pid) return err(`% ${i.label} 在 VRF ${i.vrf} 裡，那個 VRF 的 OSPF 程序是 ${mine.pid}，不是 ${pid}`);
+      if (!i.vrf && owner) return err(`% OSPF 程序 ${pid} 屬於 VRF ${owner[0]}，${i.label} 在全域的路由表`);
+      i.ospf = true; i.ospfArea = +a;
+      return undefined;
+    }) : err('區域請寫數字，例如 area 0'))],
     ['no ip ospf <pid> area <a>', () => onL3((i) => { i.ospf = false; delete i.ospfArea; })],
     ['ip ospf priority <n>', ([n]) => (+n >= 0 && +n <= 255 && /^\d+$/.test(n) ? onL3((i) => { if (+n === 1) delete i.ospfPrio; else i.ospfPrio = +n; }) : err('priority 的範圍是 0 – 255（0 表示永遠不當 DR / BDR）'))],
     ['no ip ospf priority [...]', () => onL3((i) => { delete i.ospfPrio; })],
@@ -933,24 +943,63 @@ export function iosSession(getDev, getState, who = null) {
   const needSw = () => (isSw(dev()) ? null : err('這個指令只適用於交換器'));
   const needRouting = () => (dev().routing ? null : err('這台是 L2 交換器，沒有路由功能（要讓它能被遠端管理請用 ip default-gateway）'));
   const enter = (mode, cur) => { S.mode = mode; S.cur = cur; };
+  // router ospf 模式：目前在設定哪一個程序（全域的放在設備上，router ospf <pid> vrf <名稱> 的放在 d.ospfVrf）
+  const ocVrf = () => (S.cur && S.cur.vrf) || '';
+  const oc = () => ospfProc(dev(), ocVrf()) || dev();
+  const areaOf = (a) => ((oc().ospfAreas ||= {})[+a] ||= {});
+  const tidyArea = (a) => { const c = oc(); if (c.ospfAreas && c.ospfAreas[a] && !Object.keys(c.ospfAreas[a]).length) delete c.ospfAreas[a]; if (c.ospfAreas && !Object.keys(c.ospfAreas).length) delete c.ospfAreas; };
   const ifByName = (name) => { const t = resolveIf(dev(), name); return isErr(t) ? t : t.iface || err(`${t.name} 不是第三層介面`); };
   const addUnique = (list, item) => { if (!list.some((x) => same(x, item))) list.push(item); };
 
-  /** ip route 後面的參數：管理距離、name、track、permanent。回傳 { ad, track } 或錯誤 */
-  const routeCmd = (net, mask, via, rest) => {
-    if (parseIp(net) == null || maskBits(mask) == null) return err('用法：ip route [vrf <名稱>] <目的網段> <遮罩> <下一站 IP> [管理距離] [track <物件>]');
-    if (parseIp(via) == null) return err('下一站必須是 IP 位址（這個模擬不支援只寫出口介面）');
+  /**
+   * ip route 後面的參數：[出口介面] <下一站> [global] [管理距離] [name …] [track …] [permanent]。
+   * 回傳 { via, outIf, global, ad, track } 或錯誤。vrf：這條路由放進哪個 VRF（global 只能和 vrf 一起用）
+   */
+  const ROUTE_USAGE = '用法：ip route [vrf <名稱>] <目的網段> <遮罩> [出口介面] <下一站 IP> [global] [管理距離] [track <物件>]';
+  const routeCmd = (net, mask, via, rest, vrf = '') => {
+    if (parseIp(net) == null || maskBits(mask) == null) return err(ROUTE_USAGE);
     const w = String(rest || '').split(/\s+/).filter(Boolean);
-    let ad = '', track = null;
+    let outIf = null;
+    if (parseIp(via) == null) {
+      // 先寫出口介面、再寫下一站：出口介面可以在別的 VRF（VRF 之間的路由洩漏）。「GigabitEthernet 0/0/1」中間有空白也可以
+      if (w[0] && /^\d+\/[\d/.]+$|^\d+$/.test(w[0]) && parseIp(w[0]) == null && !/\d$/.test(via)) via += w.shift();
+      const i = ifByName(via);
+      if (isErr(i)) return err(`${ROUTE_USAGE}（「${via}」不是 IP 位址，也不是這台的介面）`);
+      if (parseIp(w[0] || '') == null) return err(`% 寫了出口介面 ${i.label}，後面還要接下一站的 IP（乙太網路介面只寫出口介面要靠 Proxy ARP，這個模擬不支援）`);
+      outIf = i.id; via = w.shift();
+    }
+    let ad = '', track = null, global = false;
     for (let k = 0; k < w.length; k++) {
       if (/^\d+$/.test(w[k]) && !ad) ad = w[k];
+      else if (/^global$/i.test(w[k])) global = true;
       else if (/^track$/i.test(w[k]) && /^\d+$/.test(w[k + 1] || '')) track = +w[++k];
       else if (/^name$/i.test(w[k]) && w[k + 1]) k++;
       else if (/^permanent$/i.test(w[k])) continue;
-      else return err('用法：ip route [vrf <名稱>] <目的網段> <遮罩> <下一站 IP> [管理距離] [track <物件>]');
+      else return err(ROUTE_USAGE);
     }
+    if (global && !vrf) return err('% global 只能用在 ip route vrf <名稱> …：表示下一站要到全域的路由表找');
+    if (global && outIf) return err('% 寫了出口介面就不用再加 global（出口介面本身決定下一站在哪個路由表）');
     if (ad && !(+ad >= 1 && +ad <= 255)) return err('管理距離必須是 1 – 255');
-    return { ad, track };
+    return { via, outIf, global, ad, track };
+  };
+  /** 同一條靜態路由（目的網段、遮罩、下一站、出口介面都一樣）：重打一次只更新管理距離與 track */
+  const sameRoute = (x, v, net, mask, r) => (x.vrf || '') === v && x.dst === net && parseMask(x.mask || '') === maskBits(mask) && x.via === r.via && (x.outIf || null) === (r.outIf || null) && !!x.global === !!r.global;
+  const putRoute = (v, net, mask, r) => {
+    const d = dev(), cur = d.routes.find((x) => sameRoute(x, v, net, mask, r));
+    const e = cur || { dst: net, mask, via: r.via, ...(v ? { vrf: v } : {}) };
+    if (r.outIf) e.outIf = r.outIf; else delete e.outIf;
+    if (r.global) e.global = true; else delete e.global;
+    e.ad = r.ad || '';
+    if (r.track != null) e.track = r.track; else delete e.track;
+    if (!cur) d.routes.push(e);
+  };
+  /** no ip route … 後面的 [出口介面] [下一站]：沒寫下一站就刪掉這個網段所有的靜態路由 */
+  const routeHit = (v, net, mask, rest) => {
+    const w = String(rest || '').split(/\s+/).filter(Boolean);
+    let outIf = null;
+    if (w[0] && parseIp(w[0]) == null) { const i = ifByName(w[0]); if (!isErr(i)) { outIf = i.id; w.shift(); } }
+    const via = w[0] && parseIp(w[0]) != null ? w[0] : null;
+    return (x) => (x.vrf || '') === v && x.dst === net && parseMask(x.mask || '') === maskBits(mask) && (!via || x.via === via) && (!outIf || x.outIf === outIf);
   };
   const CONFIG = [
     ['hostname <name>', ([name]) => { dev().name = name; }],
@@ -1069,31 +1118,22 @@ export function iosSession(getDev, getState, who = null) {
     ['ip route vrf <v> <net> <mask> <via> [...]', ([v, net, mask, via, rest]) => {
       const e0 = needRouting(); if (e0) return e0;
       if (!(dev().vrfs || {})[v]) return err(`% VRF ${v} not configured.`);
-      const r = routeCmd(net, mask, via, rest);
+      const r = routeCmd(net, mask, via, rest, v);
       if (isErr(r)) return r;
-      const d = dev(), cur = d.routes.find((x) => (x.vrf || '') === v && x.dst === net && parseMask(x.mask || '') === maskBits(mask) && x.via === via);
-      const e = cur || { dst: net, mask, via, vrf: v };
-      e.ad = r.ad || '';
-      if (r.track != null) e.track = r.track; else delete e.track;
-      if (!cur) d.routes.push(e);
+      putRoute(v, net, mask, r);
       return undefined;
     }],
-    ['no ip route vrf <v> <net> <mask> [...]', ([v, net, mask, via]) => {
-      const d = dev(), n = d.routes.length;
-      d.routes = d.routes.filter((x) => !((x.vrf || '') === v && x.dst === net && parseMask(x.mask || '') === maskBits(mask) && (!via || x.via === via)));
+    ['no ip route vrf <v> <net> <mask> [...]', ([v, net, mask, rest]) => {
+      const d = dev(), n = d.routes.length, hit = routeHit(v, net, mask, rest);
+      d.routes = d.routes.filter((x) => !hit(x));
       return d.routes.length < n ? undefined : err('路由表裡沒有這一筆靜態路由');
     }],
     ['ip route <net> <mask> <via> [...]', ([net, mask, via, rest]) => {
       const e = needRouting(); if (e) return e;
-      // 後面可以接：管理距離、name <名稱>、track <物件編號>、permanent
+      // 後面可以接：管理距離、name <名稱>、track <物件編號>、permanent；下一站前面可以先寫出口介面
       const rc = routeCmd(net, mask, via, rest);
       if (isErr(rc)) return rc;
-      const { ad, track } = rc;
-      const d = dev(), cur = d.routes.find((r) => !r.vrf && r.dst === net && parseMask(r.mask || '') === maskBits(mask) && r.via === via);
-      const r = cur || { dst: net, mask, via };
-      r.ad = ad || '';
-      if (track != null) r.track = track; else delete r.track;
-      if (!cur) d.routes.push(r);
+      putRoute('', net, mask, rc);
       return undefined;
     }],
     ['vrf definition <v>', ([v]) => {
@@ -1123,9 +1163,10 @@ export function iosSession(getDev, getState, who = null) {
       if (!Object.keys(d.vrfs).length) delete d.vrfs;
       return n.length ? `% IPv4 addresses from all interfaces in VRF ${v} have been removed` : undefined;
     }]),
-    ['no ip route <net> <mask> [...]', ([net, mask, via]) => {
+    ['no ip route <net> <mask> [...]', ([net, mask, rest]) => {
       const d = dev(), n = d.routes.length;
-      const hit = (r) => !r.vrf && r.dst === net && parseMask(r.mask || '') === maskBits(mask) && (!via || r.via === via);
+      const hit = routeHit('', net, mask, rest);
+      const via = (String(rest || '').split(/\s+/).find((x) => parseIp(x) != null)) || null;
       d.routes = d.routes.filter((r) => !hit(r));
       let gw = false;
       if (parseIp(net) === 0 && maskBits(mask) === 0) for (const i of d.ifaces) if (i.gateway && (!via || i.gateway === via)) { i.gateway = ''; gw = true; }
@@ -1206,8 +1247,44 @@ export function iosSession(getDev, getState, who = null) {
       return undefined;
     }],
     ['no route-map <name> [...]', ([name]) => { const d = dev(); if (!(d.routeMaps || {})[name]) return err(`route-map ${name} 不存在`); delete d.routeMaps[name]; return undefined; }],
-    ['router ospf <pid>', () => { if (!('ospfDefault' in dev())) return err('這台設備不支援 OSPF'); enter('router', null); return undefined; }],
-    ['no router ospf <pid>', () => { const d = dev(); for (const i of d.ifaces) i.ospf = false; d.ospfDefault = false; d.ospfNets = []; }],
+    // router ospf <pid> vrf <名稱>：這個 VRF 自己的 OSPF 程序（只涵蓋這個 VRF 的介面，路由裝進這個 VRF 的路由表）
+    ['router ospf <pid> vrf <v>', ([pid, v]) => {
+      const d = dev();
+      if (!('ospfDefault' in d)) return err('這台設備不支援 OSPF');
+      if (!/^\d+$/.test(pid) || !(+pid >= 1 && +pid <= 65535)) return err('程序編號的範圍是 1 – 65535');
+      if (!(d.vrfs || {})[v]) return err(`% VRF ${v} not configured.（先用 vrf definition ${v} 建立）`);
+      if (+pid === 1) return err('% OSPF: 程序 1 是全域路由表的 OSPF 程序：每個 VRF 要用自己的程序編號，例如 router ospf 2 vrf ' + v);
+      const other = Object.entries(d.ospfVrf || {}).find(([n, c]) => n !== v && +c.pid === +pid);
+      if (other) return err(`% OSPF: process ${pid} is already in use by VRF ${other[0]}`);
+      const cur = (d.ospfVrf || {})[v];
+      if (cur && +cur.pid !== +pid) return err(`% VRF ${v} 已經有 OSPF 程序 ${cur.pid} 了（一個 VRF 只跑一個 OSPF 程序；要換編號先 no router ospf ${cur.pid}）`);
+      ((d.ospfVrf ||= {})[v] ||= { pid: +pid, ospfNets: [] });
+      enter('router', { vrf: v });
+      return undefined;
+    }],
+    ['router ospf <pid>', ([pid]) => {
+      const d = dev();
+      if (!('ospfDefault' in d)) return err('這台設備不支援 OSPF');
+      // 已經是某個 VRF 的程序：不用再寫 vrf 就能回到它
+      const inVrf = Object.entries(d.ospfVrf || {}).find(([, c]) => +c.pid === +pid);
+      enter('router', inVrf ? { vrf: inVrf[0] } : null);
+      return undefined;
+    }],
+    ['no router ospf <pid> [...]', ([pid]) => {
+      const d = dev();
+      const inVrf = Object.entries(d.ospfVrf || {}).find(([, c]) => +c.pid === +pid);
+      if (inVrf) {
+        const [v] = inVrf;
+        for (const i of d.ifaces) if (i.vrf === v) { i.ospf = false; delete i.ospfArea; }
+        delete d.ospfVrf[v];
+        if (!Object.keys(d.ospfVrf).length) delete d.ospfVrf;
+        return undefined;
+      }
+      for (const i of d.ifaces) if (!i.vrf) i.ospf = false;
+      d.ospfDefault = false; d.ospfNets = [];
+      for (const k of ['ospfRedist', 'ospfRid', 'ospfAreas', 'ospfRanges', 'ospfAreaAuth', 'ospfPassive', 'ospfPassiveDefault', 'ospfNoPassive', 'ospfRefBw', 'ospfMaxPaths']) delete d[k];
+      return undefined;
+    }],
     ['ip dhcp excluded-address <a> [...]', ([a, b]) => {
       const x = parseIp(a), y = b ? parseIp(b) : x;
       if (x == null || y == null || y < x) return err('用法：ip dhcp excluded-address <起始 IP> [結束 IP]');
@@ -1845,71 +1922,138 @@ export function iosSession(getDev, getState, who = null) {
       ['network <ip> <wild> area <a>', ([ip, wild, a]) => {
         const net = parseIp(ip), bits = wildBits(wild);
         if (net == null || bits == null) return err('用法：network <網段> <萬用遮罩> area 0，例如 network 10.0.0.0 0.0.0.255 area 0');
-        const d = dev(), area = +(a || 0);
+        const d = dev(), c = oc(), area = +(a || 0);
         if (!/^\d+$/.test(String(a))) return err('區域請寫數字，例如 area 0（這個模擬不支援 0.0.0.1 這種寫法）');
         const stmt = { net: netOf(net, bits), bits, area };
-        d.ospfNets = (d.ospfNets || []).filter((n) => !(n.net === stmt.net && n.bits === stmt.bits));
-        d.ospfNets.push(stmt);
+        c.ospfNets = (c.ospfNets || []).filter((n) => !(n.net === stmt.net && n.bits === stmt.bits));
+        c.ospfNets.push(stmt);
+        const v = ocVrf();
         const hit = d.ifaces.filter((i) => {
           const n = staticNet(i), a = n ? n.ip : i.rt && i.rt.ip;
-          return a != null && netOf(a, bits) === stmt.net;
+          return (i.vrf || '') === v && a != null && netOf(a, bits) === stmt.net;
         });
-        return hit.length ? `OSPF 已在 ${hit.map((i) => i.label).join('、')} 啟用` : '（目前還沒有介面的 IP 落在這個範圍內；之後設定了符合的 IP，那個介面就會自動加入 OSPF）';
+        return hit.length ? `OSPF 已在 ${hit.map((i) => i.label).join('、')} 啟用` : `（目前還沒有${v ? ` VRF ${v} 的` : ''}介面的 IP 落在這個範圍內；之後設定了符合的 IP，那個介面就會自動加入 OSPF）`;
       }],
       ['no network <ip> <wild> area <a>', ([ip, wild]) => {
         const net = parseIp(ip), bits = wildBits(wild);
         if (net == null || bits == null) return err('用法：no network <網段> <萬用遮罩> area 0');
-        const d = dev(), n0 = netOf(net, bits);
-        const had = (d.ospfNets || []).length;
-        d.ospfNets = (d.ospfNets || []).filter((n) => !(n.net === n0 && n.bits === bits));
+        const d = dev(), c = oc(), n0 = netOf(net, bits), v = ocVrf();
+        const had = (c.ospfNets || []).length;
+        c.ospfNets = (c.ospfNets || []).filter((n) => !(n.net === n0 && n.bits === bits));
         let off = 0;
-        for (const i of d.ifaces) { const n = staticNet(i); if (i.ospf && n && netOf(n.ip, bits) === n0) { i.ospf = false; off++; } }
-        return d.ospfNets.length < had || off ? undefined : err('沒有這一條 network 敘述');
+        for (const i of d.ifaces) { const n = staticNet(i); if ((i.vrf || '') === v && i.ospf && n && netOf(n.ip, bits) === n0) { i.ospf = false; off++; } }
+        return c.ospfNets.length < had || off ? undefined : err('沒有這一條 network 敘述');
       }],
-      ['default-information originate [...]', () => { dev().ospfDefault = true; }],
-      ['no default-information originate', () => { dev().ospfDefault = false; }],
+      ['default-information originate [...]', () => { oc().ospfDefault = true; }],
+      ['no default-information originate', () => { oc().ospfDefault = false; }],
       ['redistribute <src> [...]', ([src, rest]) => {
         const o = redistArgs(src, rest, 'ospf');
         if (isErr(o)) return o;
-        upsertRedist((dev().ospfRedist ||= []), o);
+        upsertRedist((oc().ospfRedist ||= []), o);
         const miss = o.rm && !(dev().routeMaps || {})[o.rm];
         return miss ? `（route-map ${o.rm} 還不存在：在它建立之前，什麼路都不會被重分配）` : undefined;
       }],
       ['no redistribute <src> [...]', ([src]) => {
-        const d = dev(), n = (d.ospfRedist || []).length;
-        d.ospfRedist = (d.ospfRedist || []).filter((x) => !x.src.startsWith(String(src).toLowerCase()));
-        if (!d.ospfRedist.length) delete d.ospfRedist;
-        return (d.ospfRedist || []).length < n ? undefined : err('沒有這一條 redistribute');
+        const c = oc(), n = (c.ospfRedist || []).length;
+        c.ospfRedist = (c.ospfRedist || []).filter((x) => !x.src.startsWith(String(src).toLowerCase()));
+        if (!c.ospfRedist.length) delete c.ospfRedist;
+        return (c.ospfRedist || []).length < n ? undefined : err('沒有這一條 redistribute');
       }],
       ['router-id <id>', ([id]) => {
         if (parseIp(id) == null) return err('用法：router-id <A.B.C.D>');
-        const d = dev(), cur = ((getState().dyn || {}).rid || {})[d.id];
-        d.ospfRid = id;
+        const d = dev(), cur = ((getState().dyn || {})['rid' + ospfKeys(ocVrf()).ns] || {})[d.id];
+        oc().ospfRid = id;
         // 程序已經在跑了：新的 Router ID 要重新啟動程序才會生效
         return cur && cur.rid !== parseIp(id) ? '% OSPF: Reload or use "clear ip ospf process" command, for this to take effect' : undefined;
       }],
-      ['passive-interface default', () => { const d = dev(); d.ospfPassiveDefault = true; d.ospfNoPassive = []; }],
-      ['no passive-interface default', () => { const d = dev(); delete d.ospfPassiveDefault; delete d.ospfNoPassive; }],
-      ['passive-interface <...>', ([t]) => { const i = ifByName(t); if (isErr(i)) return i; const d = dev(); if (d.ospfPassiveDefault) d.ospfNoPassive = (d.ospfNoPassive || []).filter((x) => x !== i.id); else if (!(d.ospfPassive ||= []).includes(i.id)) d.ospfPassive.push(i.id); return undefined; }],
-      ['no passive-interface <...>', ([t]) => { const i = ifByName(t); if (isErr(i)) return i; const d = dev(); if (d.ospfPassiveDefault) { if (!(d.ospfNoPassive ||= []).includes(i.id)) d.ospfNoPassive.push(i.id); } else d.ospfPassive = (d.ospfPassive || []).filter((x) => x !== i.id); return undefined; }],
-      ['auto-cost reference-bandwidth <n>', ([n]) => (+n >= 1 && +n <= 4294967 ? void (dev().ospfRefBw = +n === 100 ? undefined : +n) || '% OSPF: Reference bandwidth is changed.\n        Please ensure reference bandwidth is consistent across all routers.' : err('reference-bandwidth 的單位是 Mbps，範圍 1 – 4294967'))],
-      ['no auto-cost reference-bandwidth [...]', () => { delete dev().ospfRefBw; }],
-      ['maximum-paths <n>', ([n]) => (+n >= 1 && +n <= 32 ? void (dev().ospfMaxPaths = +n === 4 ? undefined : +n) : err('maximum-paths 的範圍是 1 – 32'))],
-      ['no maximum-paths [...]', () => { delete dev().ospfMaxPaths; }],
+      ['passive-interface default', () => { const c = oc(); c.ospfPassiveDefault = true; c.ospfNoPassive = []; }],
+      ['no passive-interface default', () => { const c = oc(); delete c.ospfPassiveDefault; delete c.ospfNoPassive; }],
+      ['passive-interface <...>', ([t]) => { const i = ifByName(t); if (isErr(i)) return i; const c = oc(); if (c.ospfPassiveDefault) c.ospfNoPassive = (c.ospfNoPassive || []).filter((x) => x !== i.id); else if (!(c.ospfPassive ||= []).includes(i.id)) c.ospfPassive.push(i.id); return undefined; }],
+      ['no passive-interface <...>', ([t]) => { const i = ifByName(t); if (isErr(i)) return i; const c = oc(); if (c.ospfPassiveDefault) { if (!(c.ospfNoPassive ||= []).includes(i.id)) c.ospfNoPassive.push(i.id); } else c.ospfPassive = (c.ospfPassive || []).filter((x) => x !== i.id); return undefined; }],
+      ['auto-cost reference-bandwidth <n>', ([n]) => (+n >= 1 && +n <= 4294967 ? void (oc().ospfRefBw = +n === 100 ? undefined : +n) || '% OSPF: Reference bandwidth is changed.\n        Please ensure reference bandwidth is consistent across all routers.' : err('reference-bandwidth 的單位是 Mbps，範圍 1 – 4294967'))],
+      ['no auto-cost reference-bandwidth [...]', () => { delete oc().ospfRefBw; }],
+      ['maximum-paths <n>', ([n]) => (+n >= 1 && +n <= 32 ? void (oc().ospfMaxPaths = +n === 4 ? undefined : +n) : err('maximum-paths 的範圍是 1 – 32'))],
+      ['no maximum-paths [...]', () => { delete oc().ospfMaxPaths; }],
       ['area <a> range <ip> <mask> [...]', ([a, ip, mask]) => {
         const n = parseIp(ip), bits = maskBits(mask);
         if (!/^\d+$/.test(a) || n == null || bits == null) return err('用法：area 1 range 10.1.0.0 255.255.0.0');
-        const d = dev();
-        d.ospfRanges = (d.ospfRanges || []).filter((r) => !(+r.area === +a && r.net === netOf(n, bits) && r.bits === bits));
-        d.ospfRanges.push({ area: +a, net: netOf(n, bits), bits });
+        const c = oc();
+        c.ospfRanges = (c.ospfRanges || []).filter((r) => !(+r.area === +a && r.net === netOf(n, bits) && r.bits === bits));
+        c.ospfRanges.push({ area: +a, net: netOf(n, bits), bits });
         return undefined;
       }],
-      ['no area <a> range <ip> <mask> [...]', ([a, ip, mask]) => { const n = parseIp(ip), bits = maskBits(mask); const d = dev(); d.ospfRanges = (d.ospfRanges || []).filter((r) => !(+r.area === +a && r.net === netOf(n, bits) && r.bits === bits)); }],
-      ['area <a> authentication message-digest', ([a]) => { (dev().ospfAreaAuth ||= {})[+a] = 'md5'; }],
-      ['area <a> authentication', ([a]) => { (dev().ospfAreaAuth ||= {})[+a] = 'plain'; }],
-      ['no area <a> authentication [...]', ([a]) => { const d = dev(); if (d.ospfAreaAuth) delete d.ospfAreaAuth[+a]; }],
+      ['no area <a> range <ip> <mask> [...]', ([a, ip, mask]) => { const n = parseIp(ip), bits = maskBits(mask); const c = oc(); c.ospfRanges = (c.ospfRanges || []).filter((r) => !(+r.area === +a && r.net === netOf(n, bits) && r.bits === bits)); }],
+      ['area <a> authentication message-digest', ([a]) => { (oc().ospfAreaAuth ||= {})[+a] = 'md5'; }],
+      ['area <a> authentication', ([a]) => { (oc().ospfAreaAuth ||= {})[+a] = 'plain'; }],
+      ['no area <a> authentication [...]', ([a]) => { const c = oc(); if (c.ospfAreaAuth) delete c.ospfAreaAuth[+a]; }],
+      // ── 區域的種類：stub / totally stubby / NSSA / totally NSSA ──
+      ['area <a> stub [...]', ([a, rest]) => {
+        if (!/^\d+$/.test(a)) return err('用法：area 1 stub [no-summary]');
+        if (+a === 0) return err('% OSPF: Backbone can not be configured as stub area');
+        const w = String(rest || '').trim().toLowerCase();
+        if (w && !'no-summary'.startsWith(w)) return err('用法：area <區域> stub [no-summary]');
+        const ar = areaOf(a);
+        if (ar.nssa) return err(`% OSPF: Area ${+a} is configured as NSSA already（先 no area ${+a} nssa）`);
+        ar.stub = true;
+        if (w) ar.noSum = true;
+        return undefined;
+      }],
+      ['no area <a> stub [...]', ([a, rest]) => {
+        const ar = ((oc().ospfAreas || {})[+a]);
+        if (!ar || !ar.stub) return err(`area ${a} 不是 stub 區域`);
+        // no area 1 stub no-summary：只拿掉 no-summary，還是 stub
+        if (String(rest || '').trim()) delete ar.noSum; else { delete ar.stub; delete ar.noSum; }
+        tidyArea(+a);
+        return undefined;
+      }],
+      ['area <a> nssa [...]', ([a, rest]) => {
+        if (!/^\d+$/.test(a)) return err('用法：area 1 nssa [no-summary] [default-information-originate] [no-redistribution]');
+        if (+a === 0) return err('% OSPF: Backbone can not be configured as NSSA area');
+        const ar = areaOf(a);
+        if (ar.stub) return err(`% OSPF: Area ${+a} is configured as stub area already（先 no area ${+a} stub）`);
+        const t = String(rest || '').trim().toLowerCase().split(/\s+/).filter(Boolean);
+        const o = {};
+        for (let k = 0; k < t.length; k++) {
+          if ('no-summary'.startsWith(t[k]) && t[k].length >= 4) o.noSum = true;
+          else if ('no-redistribution'.startsWith(t[k]) && t[k].length >= 4) o.noRedist = true;
+          else if ('default-information-originate'.startsWith(t[k]) && t[k].length >= 3) {
+            o.nssaDef = true;
+            while (t[k + 1] === 'metric' || t[k + 1] === 'metric-type') {
+              const kw = t[++k], v = t[++k];
+              if (kw === 'metric' && /^\d+$/.test(v || '')) o.nssaDefMetric = +v;
+              else if (kw === 'metric-type' && /^[12]$/.test(v || '')) o.nssaDefType = +v;
+              else return err('用法：default-information-originate [metric <n>] [metric-type 1|2]');
+            }
+          } else return err(`% 看不懂「${t[k]}」：area <區域> nssa 後面可以接 no-summary、default-information-originate、no-redistribution`);
+        }
+        ar.nssa = true;
+        Object.assign(ar, o);
+        return undefined;
+      }],
+      ['no area <a> nssa [...]', ([a, rest]) => {
+        const ar = ((oc().ospfAreas || {})[+a]);
+        if (!ar || !ar.nssa) return err(`area ${a} 不是 NSSA`);
+        const t = String(rest || '').trim().toLowerCase().split(/\s+/).filter(Boolean);
+        if (!t.length) { for (const k of ['nssa', 'noSum', 'noRedist', 'nssaDef', 'nssaDefMetric', 'nssaDefType']) delete ar[k]; }
+        for (const w of t) {
+          if ('no-summary'.startsWith(w)) delete ar.noSum;
+          else if ('no-redistribution'.startsWith(w)) delete ar.noRedist;
+          else if ('default-information-originate'.startsWith(w)) { delete ar.nssaDef; delete ar.nssaDefMetric; delete ar.nssaDefType; }
+        }
+        tidyArea(+a);
+        return undefined;
+      }],
+      ['area <a> default-cost <n>', ([a, n]) => {
+        if (!/^\d+$/.test(a) || !/^\d+$/.test(n) || +n > 16777215) return err('用法：area <區域> default-cost <0-16777215>');
+        if (+a === 0) return err('% OSPF: Backbone can not be configured as stub area');
+        const ar = areaOf(a);
+        if (+n === 1) delete ar.cost; else ar.cost = +n;
+        tidyArea(+a);
+        return ar.stub || ar.nssa ? undefined : `（area ${+a} 現在不是 stub 或 NSSA：default-cost 只有 ABR 往 stub / NSSA 送預設路由時才用得到）`;
+      }],
+      ['no area <a> default-cost [...]', ([a]) => { const ar = (oc().ospfAreas || {})[+a]; if (ar) { delete ar.cost; tidyArea(+a); } }],
       ['log-adjacency-changes [...]', () => undefined],
-      ['no router-id [...]', () => { delete dev().ospfRid; }],
+      ['no router-id [...]', () => { delete oc().ospfRid; }],
     ],
     ospf6: [
       ['router-id <id>', ([id]) => {
@@ -2481,7 +2625,7 @@ export function iosSession(getDev, getState, who = null) {
       }
       if (match(tok, 'clear ip ospf process') || match(tok, 'clear ip ospf <n> process')) {
         out.push('Reset ALL OSPF processes? [no]: ');
-        S.pending = { fn: (ans, o2) => { S.pending = null; if (!/^y/i.test(ans.trim())) return { out: o2, changed: false }; clearOspfProcess(getState(), dev()); recompute(getState()); o2.push('（OSPF 程序重新啟動：重新選 Router ID，所有鄰居關係從頭建立）'); return { out: o2, changed: true }; } };
+        S.pending = { fn: (ans, o2) => { S.pending = null; if (!/^y/i.test(ans.trim())) return { out: o2, changed: false }; clearOspfAll(getState(), dev()); recompute(getState()); o2.push('（OSPF 程序重新啟動：重新選 Router ID，所有鄰居關係從頭建立）'); return { out: o2, changed: true }; } };
         return done(false);
       }
       if (match(tok, 'clear ipv6 ospf process') || match(tok, 'clear ipv6 ospf <n> process')) {
@@ -3201,24 +3345,30 @@ export function runningConfig(state, dev) {
     const mg = dev.ifaces.find((x) => x.id === 'mgmt');
     if (mg && mg.gateway) o.push(`ip default-gateway ${mg.gateway}`, '!');
   }
-  // network 敘述照原樣列出；在圖形介面上個別啟用、而且沒有被任何敘述涵蓋的介面，各自列一條
-  const stmts = dev.ospfNets || [];
-  const os = dev.ifaces.filter((i) => i.ospf && i.rt && i.rt.ip != null && !stmts.some((n) => netOf(i.rt.ip, n.bits) === n.net))
-    .sort((a, b) => netOf(a.rt.ip, a.rt.bits) - netOf(b.rt.ip, b.rt.bits));
-  if (os.length || stmts.length || (dev.ospfRedist || []).length) {
-    o.push('router ospf 1');
-    if (dev.ospfRid) o.push(` router-id ${dev.ospfRid}`);
-    for (const r of dev.ospfRedist || []) o.push(redistLine(r, 'ospf'));
-    if (dev.ospfRefBw) o.push(` auto-cost reference-bandwidth ${dev.ospfRefBw}`);
-    for (const [a, t] of Object.entries(dev.ospfAreaAuth || {})) o.push(` area ${a} authentication${t === 'md5' ? ' message-digest' : ''}`);
-    for (const r of dev.ospfRanges || []) o.push(` area ${r.area} range ${fmtIp(r.net)} ${fmtMask(r.bits)}`);
+  // network 敘述照原樣列出；在圖形介面上個別啟用、而且沒有被任何敘述涵蓋的介面，各自列一條。VRF 的程序寫成 router ospf <pid> vrf <名稱>
+  for (const { vrf, pid, c } of ospfProcs(dev)) {
+    const stmts = c.ospfNets || [];
+    const os = dev.ifaces.filter((i) => (i.vrf || '') === vrf && i.ospf && i.rt && i.rt.ip != null && !stmts.some((n) => netOf(i.rt.ip, n.bits) === n.net))
+      .sort((a, b) => netOf(a.rt.ip, a.rt.bits) - netOf(b.rt.ip, b.rt.bits));
+    if (!vrf && !(os.length || stmts.length || (c.ospfRedist || []).length)) continue;
+    o.push(vrf ? `router ospf ${pid} vrf ${vrf}` : 'router ospf 1');
+    if (c.ospfRid) o.push(` router-id ${c.ospfRid}`);
+    for (const r of c.ospfRedist || []) o.push(redistLine(r, 'ospf'));
+    if (c.ospfRefBw) o.push(` auto-cost reference-bandwidth ${c.ospfRefBw}`);
+    for (const [a, t] of Object.entries(c.ospfAreaAuth || {})) o.push(` area ${a} authentication${t === 'md5' ? ' message-digest' : ''}`);
+    for (const [a, x] of Object.entries(c.ospfAreas || {})) {
+      if (x.cost != null) o.push(` area ${a} default-cost ${x.cost}`);
+      if (x.nssa) o.push(` area ${a} nssa${x.noRedist ? ' no-redistribution' : ''}${x.nssaDef ? ' default-information-originate' + (x.nssaDefMetric != null ? ' metric ' + x.nssaDefMetric : '') + (x.nssaDefType === 1 ? ' metric-type 1' : '') : ''}${x.noSum ? ' no-summary' : ''}`);
+      if (x.stub) o.push(` area ${a} stub${x.noSum ? ' no-summary' : ''}`);
+    }
+    for (const r of c.ospfRanges || []) o.push(` area ${r.area} range ${fmtIp(r.net)} ${fmtMask(r.bits)}`);
     const ifl = (id) => longIf((dev.ifaces.find((x) => x.id === id) || { label: id }).label);
-    if (dev.ospfPassiveDefault) { o.push(' passive-interface default'); for (const id of dev.ospfNoPassive || []) o.push(` no passive-interface ${ifl(id)}`); }
-    else for (const id of dev.ospfPassive || []) o.push(` passive-interface ${ifl(id)}`);
+    if (c.ospfPassiveDefault) { o.push(' passive-interface default'); for (const id of c.ospfNoPassive || []) o.push(` no passive-interface ${ifl(id)}`); }
+    else for (const id of c.ospfPassive || []) o.push(` passive-interface ${ifl(id)}`);
     for (const n of stmts) o.push(` network ${fmtIp(n.net)} ${wild(n.bits)} area ${+(n.area || 0)}`);
     for (const i of os) o.push(i.bind.t === 'loop' ? ` network ${fmtIp(i.rt.ip)} 0.0.0.0 area ${+(i.ospfArea || 0)}` : ` network ${fmtIp(netOf(i.rt.ip, i.rt.bits))} ${wild(i.rt.bits)} area ${+(i.ospfArea || 0)}`);
-    if (dev.ospfMaxPaths) o.push(` maximum-paths ${dev.ospfMaxPaths}`);
-    if (dev.ospfDefault) o.push(' default-information originate');
+    if (c.ospfMaxPaths) o.push(` maximum-paths ${c.ospfMaxPaths}`);
+    if (c.ospfDefault) o.push(' default-information originate');
     o.push('!');
   }
   if (dev.bgp && dev.bgp.asn) {
@@ -3246,7 +3396,8 @@ export function runningConfig(state, dev) {
   for (const i of dev.ifaces) if (i.mode === 'static' && i.gateway && dev.routing) o.push(`ip route 0.0.0.0 0.0.0.0 ${i.gateway}`);
   for (const r of dev.routes || []) {
     if (!r.dst || !r.via) continue;
-    o.push(`ip route ${r.vrf ? 'vrf ' + r.vrf + ' ' : ''}${r.dst} ${parseMask(r.mask || '') != null ? fmtMask(parseMask(r.mask)) : r.mask} ${r.via}${+r.ad > 1 ? ' ' + r.ad : ''}${r.track != null && r.track !== '' ? ' track ' + r.track : ''}`);
+    const oi = r.outIf && dev.ifaces.find((x) => x.id === r.outIf);
+    o.push(`ip route ${r.vrf ? 'vrf ' + r.vrf + ' ' : ''}${r.dst} ${parseMask(r.mask || '') != null ? fmtMask(parseMask(r.mask)) : r.mask} ${oi ? longIf(oi.label) + ' ' : ''}${r.via}${r.global ? ' global' : ''}${+r.ad > 1 ? ' ' + r.ad : ''}${r.track != null && r.track !== '' ? ' track ' + r.track : ''}`);
   }
   if (dev.localPolicy) o.push(`ip local policy route-map ${dev.localPolicy}`);
   for (const [n, op] of Object.entries(dev.sla || {})) {

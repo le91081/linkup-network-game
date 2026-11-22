@@ -8,7 +8,7 @@ import { acl6Text, up6 } from '../engine/ios.js';
 import { transact, routeRows, isBridgePort, arpRows, clearArp, hitsOf, fmtDur, portfastOn, macRows, clearMac, macAgeOf, sessionRows, clearSessions, saInfo, isTrunk, dtpSpeaker } from '../engine/sim.js';
 import { cdpCfg, lldpCfg, cdpOn, lldpTxOn, lldpRxOn, neighbors, ndCounters, cdpCapText, speaksCdp, speaksLldp } from '../engine/disc.js';
 import { dscpName, COS_DSCP_DEFAULT, portTrust, egressOf, classify, QLIMIT } from '../engine/qos.js';
-import { ospfArea, ospfCost, ospfPassive, ospfHello, ospfDead, ospfPrio, ospfNetType, isLoopback } from '../engine/ospf.js';
+import { ospfArea, ospfCost, ospfPassive, ospfHello, ospfDead, ospfPrio, ospfNetType, isLoopback, ospfProcs, ospfKeys, ospfAreaCfg, ospfAreaType, areaKindText } from '../engine/ospf.js';
 import { bgpCfg } from '../engine/bgp.js';
 import { ikeVer, errdisRows, ERR_CAUSES, vrfOf, pbrHits } from '../engine/sim.js';
 import { ERR_RECOVERY_CAUSES } from '../engine/ios.js';
@@ -342,7 +342,7 @@ const SHOW = {
     return o.length > 1 ? o : ['沒有任何鄰居'];
   },
   'show ip ospf neighbor': (st, d) => {
-    const n = d.rt.nbrs || [];
+    const n = ospfViews(st, d).flatMap((v) => v.nbrs);
     if (!n.length) return ['沒有 OSPF 鄰居'];
     const two = (v) => String(Math.max(0, Math.ceil(v))).padStart(2, '0');
     const rid = (x) => fmtIp(x.rid ?? routerId(st.devices[x.dev]) ?? x.ip);
@@ -445,31 +445,19 @@ const SHOW = {
     return ['IP:', ...(x.packet ? ['  IP packet debugging is on'] : []), ...(x.icmp ? ['  ICMP packet debugging is on'] : []),
       '', '（debug 的輸出會出現在 console 上，也會進紀錄緩衝區 (show logging)。用 SSH 登入的話，要先輸入 terminal monitor 才看得到）'];
   },
-  'show ip protocols': (st, d) => {
-    if (!d.routing) return ['% 這台設備沒有啟用 IP 路由'];
-    const stmts = d.ospfNets || [], on = d.ifaces.filter((i) => i.ospf && i.rt && i.rt.ip != null);
-    if (!stmts.length && !on.length) return ['（沒有啟用任何動態路由協定，路由表只有直連與靜態路由）'];
-    const rid = routerId(d), wild = (b) => fmtIp(b === 0 ? 0xffffffff : ((1 << (32 - b)) - 1) >>> 0);
-    return ['*** IP Routing is NSF aware ***', '', 'Routing Protocol is "ospf 1"', '  Outgoing update filter list for all interfaces is not set', '  Incoming update filter list for all interfaces is not set',
-      `  Router ID ${rid != null ? fmtIp(rid) : '0.0.0.0'}`, `  Number of areas in this router is ${((d.rt.ospf || {}).areas || [0]).length}. ${((d.rt.ospf || {}).areas || [0]).length} normal 0 stub 0 nssa`, `  Maximum path: ${+d.ospfMaxPaths || 4}`, '  Routing for Networks:',
-      ...stmts.map((n) => `    ${fmtIp(n.net)} ${wild(n.bits)} area ${+(n.area || 0)}`),
-      ...(d.ifaces.some((i) => ospfPassive(d, i) && !isLoopback(i) && ospfArea(d, i) != null) ? ['  Passive Interface(s):', ...d.ifaces.filter((i) => ospfPassive(d, i) && !isLoopback(i) && ospfArea(d, i) != null).map((i) => '    ' + longIf(i.label))] : []),
-      ...on.filter((i) => !stmts.some((n) => (i.rt.ip >>> (32 - n.bits || 0)) === (n.net >>> (32 - n.bits || 0)))).map((i) => `    ${longIf(i.label)}`),
-      ...((d.ospfRedist || []).length ? [`  Redistributing: ${(d.ospfRedist || []).map((r) => r.src + (r.as != null ? ' ' + r.as : '')).join(', ')}`] : []),
-      '  Routing Information Sources:', '    Gateway         Distance      Last Update',
-      ...(d.rt.nbrs || []).filter((n) => n.state === 'full').map((n) => `    ${pad(fmtIp(routerId(st.devices[n.dev]) ?? n.ip), 16)}${pad(110, 14)}${hms(Math.min(st.clock, 3600))}`),
-      '  Distance: (default is 110)'];
-  },
+  'show ip protocols': (st, d) => protocolLines(st, d, ''),
   'show ip ospf interface brief': (st, d) => {
-    const ifs = (d.rt.ospf && d.rt.ospf.ifs) || {};
-    const on = d.ifaces.filter((i) => ifs[i.id]);
-    if (!on.length) return ['（沒有任何介面啟用 OSPF）'];
+    const rows = [];
     const SHORT = { DROTHER: 'DROTH', WAITING: 'WAIT', P2P: 'P2P', LOOP: 'LOOP', PASSIVE: 'DR' };
-    return [pad('Interface', 12) + pad('PID', 6) + pad('Area', 16) + pad('IP Address/Mask', 20) + pad('Cost', 6) + pad('State', 6) + 'Nbrs F/C',
-      ...on.map((i) => {
-        const f = ifs[i.id], nb = (d.rt.nbrs || []).filter((n) => n.iface === i.id), full = nb.filter((n) => n.state === 'full');
-        return pad(i.label.replace('Loopback', 'Lo'), 12) + pad(1, 6) + pad(f.area, 16) + pad(`${fmtIp(i.rt.ip)}/${i.rt.bits}`, 20) + pad(f.cost, 6) + pad(SHORT[f.state] || f.state, 6) + `${full.length}/${nb.length}`;
-      })];
+    for (const v of ospfViews(st, d)) {
+      const ifs = (v.o2 && v.o2.ifs) || {};
+      for (const i of d.ifaces.filter((x) => ifs[x.id])) {
+        const f = ifs[i.id], nb = v.nbrs.filter((n) => n.iface === i.id), full = nb.filter((n) => n.state === 'full');
+        rows.push(pad(i.label.replace('Loopback', 'Lo'), 12) + pad(v.pid, 6) + pad(f.area, 16) + pad(`${fmtIp(i.rt.ip)}/${i.rt.bits}`, 20) + pad(f.cost, 6) + pad(SHORT[f.state] || f.state, 6) + `${full.length}/${nb.length}`);
+      }
+    }
+    if (!rows.length) return ['（沒有任何介面啟用 OSPF）'];
+    return [pad('Interface', 12) + pad('PID', 6) + pad('Area', 16) + pad('IP Address/Mask', 20) + pad('Cost', 6) + pad('State', 6) + 'Nbrs F/C', ...rows];
   },
   'show ip ospf interface': (st, d) => ospfIfLines(st, d, null),
   'show ip bgp': (st, d) => bgpTable(st, d, null),
@@ -510,47 +498,14 @@ const SHOW = {
     return all.flatMap(([n, l]) => [`AS path access list ${n}`, ...l.map((e) => `    ${e.action} ${e.re}`)]);
   },
   'show ip ospf': (st, d) => {
-    const o2 = d.rt.ospf;
-    if (!o2) return ['%OSPF: Router process 1 is not running, please configure a router-id'];
-    const areas = o2.areas || [];
-    return [` Routing Process "ospf 1" with ID ${o2.rid != null ? fmtIp(o2.rid) : '0.0.0.0'}`, ' Start time: 00:00:12.345, Time elapsed: ' + hms(st.clock + 273600),
-      ...(o2.pending ? [` （設定了新的 router-id ${d.ospfRid}，但要 clear ip ospf process 才會生效）`] : []),
-      ' Supports only single TOS(TOS0) routes', ' Supports opaque LSA', ' Supports Link-local Signaling (LLS)',
-      ...(o2.abr ? [' It is an area border router'] : []), ...(o2.asbr ? [' It is an autonomous system boundary router', ' Redistributing External Routes from,', ...(d.ospfRedist || []).map((r) => `    ${r.src}${r.as != null ? ' ' + r.as : ''}${r.metric != null ? ', metric ' + r.metric : ''}${r.type === 1 ? ', metric-type 1' : ''}, includes subnets in redistribution${r.rm ? ', route-map ' + r.rm : ''}`)] : []),
-      ` Router is not originating router-LSAs with maximum metric`, ' Initial SPF schedule delay 5000 msecs', ' Number of external LSA ' + (st.rt.ospf ? Object.values(st.rt.ospf.exts || {}).reduce((n, l) => n + l.length, 0) : 0),
-      ` Number of areas in this router is ${areas.length}. ${areas.length} normal 0 stub 0 nssa`, ` Reference bandwidth unit is ${+d.ospfRefBw || 100} mbps`,
-      ...areas.flatMap((a) => {
-        const n = Object.values(o2.ifs).filter((x) => x.area === a).length;
-        return [`    Area ${a === 0 ? 'BACKBONE(0)' : a}`, `        Number of interfaces in this area is ${n}`,
-          `        Area has ${(d.ospfAreaAuth || {})[a] === 'md5' ? 'message digest authentication' : (d.ospfAreaAuth || {})[a] === 'plain' ? 'simple password authentication' : 'no authentication'}`,
-          ...(d.ospfRanges || []).filter((r) => +r.area === a).map((r) => `        Area ranges are\n           ${fmtIp(r.net)}/${r.bits} Active Advertise`).join('\n').split('\n').filter(Boolean)];
-      })];
+    const vs = ospfViews(st, d).filter((v) => v.o2);
+    if (!vs.length) return ['%OSPF: Router process 1 is not running, please configure a router-id'];
+    return vs.flatMap((v, k) => [...(k ? [''] : []), ...ospfProcLines(st, d, v)]);
   },
   'show ip ospf database': (st, d) => {
-    const o2 = d.rt.ospf, db = st.rt.ospf;
-    if (!o2 || !db) return ['%OSPF: Router process 1 is not running'];
-    const age = (x) => String(((x * 7 + st.clock) % 1800) | 0).padStart(4);
-    const seq = (x) => '0x800000' + (((x >>> 0) % 200) + 16).toString(16).toUpperCase().padStart(2, '0');
-    const o = [`            OSPF Router with ID (${fmtIp(o2.rid)}) (Process ID 1)`];
-    for (const a of o2.areas || []) {
-      // 這個區域裡的路由器：每一台送一筆 Router LSA (Type 1)
-      const rs = Object.entries(db.stubs).filter(([, l]) => l.some((x) => x.area === a)).map(([id]) => id);
-      o.push('', `\t\tRouter Link States (Area ${a})`, '', 'Link ID         ADV Router      Age         Seq#       Checksum Link count');
-      for (const id of rs) { const r = db.rid[id] ?? (st.dyn.rid[id] || {}).rid; if (r == null) continue; o.push(pad(fmtIp(r), 16) + pad(fmtIp(r), 16) + pad(age(r), 12) + pad(seq(r), 11) + pad('0x00' + (r % 0xffff).toString(16).padStart(4, '0').toUpperCase(), 9) + db.stubs[id].filter((x) => x.area === a).length); }
-      // 有 DR 的廣播網段：DR 送一筆 Network LSA (Type 2)
-      const nets = [];
-      for (const x of Object.values(st.devices)) for (const i of x.ifaces) { const f = x.rt && x.rt.ospf && x.rt.ospf.ifs[i.id]; if (f && f.area === a && f.state === 'DR' && f.full) nets.push({ ip: i.rt.ip, rid: x.rt.ospf.rid }); }
-      if (nets.length) { o.push('', `\t\tNet Link States (Area ${a})`, '', 'Link ID         ADV Router      Age         Seq#       Checksum'); for (const n of nets) o.push(pad(fmtIp(n.ip), 16) + pad(fmtIp(n.rid), 16) + pad(age(n.ip), 12) + pad(seq(n.ip), 11) + '0x00' + (n.ip % 0xffff).toString(16).padStart(4, '0').toUpperCase()); }
-      // ABR 送進這個區域的 Summary LSA (Type 3)
-      const sums = [];
-      for (const b of db.abrs) {
-        const list = a === 0 ? Object.values(db.sumInto0[b] || {}) : Object.values(((db.sumOut[b] || {})[a]) || {});
-        for (const x of list) sums.push({ ...x, rid: db.rid[b] });
-      }
-      if (sums.length) { o.push('', `\t\tSummary Net Link States (Area ${a})`, '', 'Link ID         ADV Router      Age         Seq#       Checksum'); for (const x of sums) o.push(pad(fmtIp(x.net), 16) + pad(fmtIp(x.rid), 16) + pad(age(x.net), 12) + pad(seq(x.net), 11) + '0x00' + (x.net % 0xffff).toString(16).padStart(4, '0').toUpperCase()); }
-    }
-    if (db.asbrs.length) { o.push('', '\t\tType-5 AS External Link States', '', 'Link ID         ADV Router      Age         Seq#       Checksum Tag'); for (const id of db.asbrs) for (const x of (db.exts || {})[id] || []) o.push(pad(fmtIp(x.net), 16) + pad(fmtIp(db.rid[id]), 16) + pad(age(x.net + 1), 12) + pad(seq(x.net + 1), 11) + pad('0x00' + ((x.net + 7) % 0xffff).toString(16).padStart(4, '0').toUpperCase(), 9) + (x.tag || (x.def ? 1 : 0))); }
-    return o;
+    const vs = ospfViews(st, d).filter((v) => v.o2 && v.db);
+    if (!vs.length) return ['%OSPF: Router process 1 is not running'];
+    return vs.flatMap((v, k) => [...(k ? [''] : []), ...ospfDbLines(st, d, v)]);
   },
   'show snmp': (st, d) => {
     const m = d.mgmt || {};
@@ -960,7 +915,7 @@ const routeTail = (st, r) => {
   const m = `[${r.ad}/${r.metric}] via ${fmtIp(r.via)}`;
   if (r.type === 'O') return `${m}, ${rtAge(st, r)}, ${longIf(r.iface.label)}`;
   if (r.type === 'B') return `${m}, ${rtAge(st, r)}`; // BGP 的下一站要再查一次路由表（遞迴），所以不寫介面
-  return m; // 靜態路由只寫下一站
+  return r.exitIf && r.iface ? `${m}, ${longIf(r.iface.label)}` : m; // 靜態路由只寫下一站；有寫出口介面的才印介面
 };
 function routeLines(st, d, keep, vrf = '') {
   if (!d.routing) {
@@ -1018,9 +973,10 @@ function routeEntry(st, d, rs) {
     o.push(`  Known via "static", distance ${r.ad}, metric 0${def ? ', candidate default path' : ''}`, '  Routing Descriptor Blocks:');
     rs.forEach((x, k) => o.push(`  ${k ? ' ' : '*'} ${fmtIp(x.via)}`, metricLine(0)));
   } else if (r.type === 'O') {
-    const type = r.sub === 'IA' ? 'inter area' : r.sub === 'E2' ? 'extern 2' : r.sub === 'E1' ? 'extern 1' : 'intra area';
-    if (r.sub === 'E2' || r.sub === 'E1') o.push(`  Known via "ospf 1", distance 110, metric ${r.metric}${def ? ', candidate default path' : ''}`, `  Tag ${r.tag ?? (def ? 1 : 0)}, type ${type}${r.sub === 'E2' ? `, forward metric ${r.fwd ?? 1}` : ''}`);
-    else o.push(`  Known via "ospf 1", distance 110, metric ${r.metric}, type ${type}`);
+    const type = { IA: 'inter area', E2: 'extern 2', E1: 'extern 1', N2: 'NSSA extern 2', N1: 'NSSA extern 1' }[r.sub] || 'intra area';
+    const pid = r.vrf ? +((d.ospfVrf || {})[r.vrf] || {}).pid || 1 : 1;
+    if (/^[EN][12]$/.test(r.sub || '')) o.push(`  Known via "ospf ${pid}", distance 110, metric ${r.metric}${def ? ', candidate default path' : ''}`, `  Tag ${r.tag ?? (def ? 1 : 0)}, type ${type}${/2$/.test(r.sub) ? `, forward metric ${r.fwd ?? 1}` : ''}`);
+    else o.push(`  Known via "ospf ${pid}", distance 110, metric ${r.metric}${def ? ', candidate default path' : ''}, type ${type}`);
     o.push(`  Last update from ${fmtIp(r.via)} on ${longIf(r.iface.label)}, ${rtAge(st, r)} ago`, '  Routing Descriptor Blocks:');
     rs.forEach((x, k) => o.push(`  ${k ? ' ' : '*'} ${fmtIp(x.via)}, from ${x.adv != null ? fmtIp(x.adv) : fmtIp(x.via)}, ${rtAge(st, x)} ago, via ${longIf(x.iface.label)}`, metricLine(x.metric)));
   } else if (r.type === 'B') {
@@ -1161,29 +1117,130 @@ function bgpTable(st, d, only) {
 // ───────────────────────── OSPF ─────────────────────────
 /** show ip ospf interface [介面] */
 function ospfIfLines(st, d, only) {
-  const ifs = (d.rt.ospf && d.rt.ospf.ifs) || {}, rid = d.rt.ospf ? d.rt.ospf.rid : null;
-  const list = d.ifaces.filter((i) => ifs[i.id] && (!only || i === only));
-  if (!list.length) return [only ? `%OSPF: OSPF not enabled on ${only.label}` : '（沒有任何介面啟用 OSPF）'];
-  const who = (k) => { if (!k) return null; const [id, iid] = k.split('/'); const x = st.devices[id]; const i = x && x.ifaces.find((y) => y.id === iid); return x && i ? { rid: x.rt.ospf ? x.rt.ospf.rid : null, ip: i.rt.ip } : null; };
   const o = [];
-  for (const i of list) {
-    const f = ifs[i.id], nb = (d.rt.nbrs || []).filter((n) => n.iface === i.id), full = nb.filter((n) => n.state === 'full');
-    const dr = who(f.dr), bdr = who(f.bdr);
-    o.push(`${longIf(i.label)} is up, line protocol is up`, `  Internet Address ${fmtIp(i.rt.ip)}/${i.rt.bits}, Area ${f.area}, Attached via Network Statement`,
-      `  Process ID 1, Router ID ${rid != null ? fmtIp(rid) : '0.0.0.0'}, Network Type ${f.type === 'point-to-point' ? 'POINT_TO_POINT' : f.type === 'loopback' ? 'LOOPBACK' : 'BROADCAST'}, Cost: ${f.cost}`);
-    if (f.type === 'loopback') { o.push('  Loopback interface is treated as a stub Host', ''); continue; }
-    o.push(`  Transmit Delay is 1 sec, State ${f.state === 'P2P' ? 'POINT_TO_POINT' : f.state === 'PASSIVE' ? 'DR' : f.state}${f.type === 'broadcast' ? `, Priority ${f.prio}` : ''}`);
-    if (f.type === 'broadcast' && dr) o.push(`  Designated Router (ID) ${fmtIp(dr.rid)}, Interface address ${fmtIp(dr.ip)}`);
-    if (f.type === 'broadcast' && bdr) o.push(`  Backup Designated router (ID) ${fmtIp(bdr.rid)}, Interface address ${fmtIp(bdr.ip)}`);
-    o.push(`  Timer intervals configured, Hello ${f.hello}, Dead ${f.dead}, Wait ${f.dead}, Retransmit 5`);
-    if (f.passive) o.push('    No Hellos (Passive interface)');
-    else o.push(`    Hello due in 00:00:0${(st.clock % f.hello) | 0}`);
-    o.push(`  Neighbor Count is ${nb.length}, Adjacent neighbor count is ${full.length}`,
-      ...full.map((n) => `    Adjacent with neighbor ${fmtIp(n.rid ?? n.ip)}${n.role === 'DR' ? '  (Designated Router)' : n.role === 'BDR' ? '  (Backup Designated Router)' : ''}`),
-      ...(i.mtu ? [`  （ip mtu ${i.mtu}：兩端的 MTU 要一樣，不然資料庫交換會卡在 EXSTART）`] : []),
-      ...f.why.map((w) => `  （沒有成為鄰居：${w}）`), '');
+  for (const v of ospfViews(st, d)) {
+    const ifs = (v.o2 && v.o2.ifs) || {}, rid = v.o2 ? v.o2.rid : null;
+    const list = d.ifaces.filter((i) => ifs[i.id] && (!only || i === only));
+    const who = (k) => { if (!k) return null; const [id, iid] = k.split('/'); const x = st.devices[id]; const i = x && x.ifaces.find((y) => y.id === iid); const xo = x && x.rt[ospfKeys(v.vrf).key]; return x && i ? { rid: xo ? xo.rid : null, ip: i.rt.ip } : null; };
+    for (const i of list) {
+      const f = ifs[i.id], nb = v.nbrs.filter((n) => n.iface === i.id), full = nb.filter((n) => n.state === 'full');
+      const dr = who(f.dr), bdr = who(f.bdr);
+      o.push(`${longIf(i.label)} is up, line protocol is up`, `  Internet Address ${fmtIp(i.rt.ip)}/${i.rt.bits}, Area ${f.area}, Attached via Network Statement`,
+        `  Process ID ${v.pid}, Router ID ${rid != null ? fmtIp(rid) : '0.0.0.0'}, Network Type ${f.type === 'point-to-point' ? 'POINT_TO_POINT' : f.type === 'loopback' ? 'LOOPBACK' : 'BROADCAST'}, Cost: ${f.cost}`);
+      if (f.type === 'loopback') { o.push('  Loopback interface is treated as a stub Host', ''); continue; }
+      o.push(`  Transmit Delay is 1 sec, State ${f.state === 'P2P' ? 'POINT_TO_POINT' : f.state === 'PASSIVE' ? 'DR' : f.state}${f.type === 'broadcast' ? `, Priority ${f.prio}` : ''}`);
+      if (f.type === 'broadcast' && dr) o.push(`  Designated Router (ID) ${fmtIp(dr.rid)}, Interface address ${fmtIp(dr.ip)}`);
+      if (f.type === 'broadcast' && bdr) o.push(`  Backup Designated router (ID) ${fmtIp(bdr.rid)}, Interface address ${fmtIp(bdr.ip)}`);
+      o.push(`  Timer intervals configured, Hello ${f.hello}, Dead ${f.dead}, Wait ${f.dead}, Retransmit 5`);
+      if (f.passive) o.push('    No Hellos (Passive interface)');
+      else o.push(`    Hello due in 00:00:0${(st.clock % f.hello) | 0}`);
+      o.push(`  Neighbor Count is ${nb.length}, Adjacent neighbor count is ${full.length}`,
+        ...full.map((n) => `    Adjacent with neighbor ${fmtIp(n.rid ?? n.ip)}${n.role === 'DR' ? '  (Designated Router)' : n.role === 'BDR' ? '  (Backup Designated Router)' : ''}`),
+        ...(i.mtu ? [`  （ip mtu ${i.mtu}：兩端的 MTU 要一樣，不然資料庫交換會卡在 EXSTART）`] : []),
+        ...f.why.map((w) => `  （沒有成為鄰居：${w}）`), '');
+    }
   }
+  if (!o.length) return [only ? `%OSPF: OSPF not enabled on ${only.label}` : '（沒有任何介面啟用 OSPF）'];
   return o;
+}
+
+/** 這台設備的每一個 IPv4 OSPF 程序：設定、執行狀態、鄰居、資料庫（全域的排第一個） */
+function ospfViews(st, d) {
+  return ospfProcs(d).map(({ vrf, pid, c }) => { const k = ospfKeys(vrf); return { vrf, pid, c, ns: k.ns, o2: d.rt[k.key], nbrs: d.rt[k.nkey] || [], db: st.rt.ospf }; });
+}
+/** 區域種類的統計：「2 normal 1 stub 0 nssa」 */
+function areaCounts(v, areas) {
+  const k = (a) => (v.o2 && v.o2.kinds ? v.o2.kinds[a] : ospfAreaType(v.c, a)) || 'normal';
+  const n = (t) => areas.filter((a) => k(a) === t).length;
+  return `${n('normal')} normal ${n('stub')} stub ${n('nssa')} nssa`;
+}
+/** show ip ospf：一個程序 */
+function ospfProcLines(st, d, v) {
+  const o2 = v.o2, c = v.c, areas = o2.areas || [];
+  const dom = v.db && (v.db.domain || {})[o2.id], same = (id) => ((v.db && v.db.domain) || {})[id] === dom;
+  const ext5 = v.db ? Object.entries(v.db.exts || {}).filter(([id]) => same(id)).reduce((n, [, l]) => n + l.length, 0) + (v.db.translated || []).filter((x) => same(x.by)).length : 0;
+  const hasNormal = areas.some((a) => ((o2.kinds || {})[a] || 'normal') === 'normal');
+  return [` Routing Process "ospf ${v.pid}" with ID ${o2.rid != null ? fmtIp(o2.rid) : '0.0.0.0'}`,
+    ...(v.vrf ? [`   Domain ID type 0x0005, value 0.0.0.${v.pid}`] : []),
+    ' Start time: 00:00:12.345, Time elapsed: ' + hms(st.clock + 273600),
+    ...(o2.pending ? [` （設定了新的 router-id ${c.ospfRid}，但要 clear ip ospf process 才會生效）`] : []),
+    ' Supports only single TOS(TOS0) routes', ' Supports opaque LSA', ' Supports Link-local Signaling (LLS)', ' Supports area transit capability', ' Supports NSSA (compatible with RFC 3101)',
+    ...(v.vrf ? [` Connected to MPLS VPN Superbackbone, VRF ${v.vrf}`] : []),
+    ...(o2.abr && o2.asbr ? [' It is an area border and autonomous system boundary router'] : o2.abr ? [' It is an area border router'] : o2.asbr ? [' It is an autonomous system boundary router'] : []),
+    ...(o2.asbr && (c.ospfRedist || []).length ? [' Redistributing External Routes from,', ...(c.ospfRedist || []).map((r) => `    ${r.src}${r.as != null ? ' ' + r.as : ''}${r.metric != null ? ', metric ' + r.metric : ''}${r.type === 1 ? ', metric-type 1' : ''}, includes subnets in redistribution${r.rm ? ', route-map ' + r.rm : ''}`)] : []),
+    ' Router is not originating router-LSAs with maximum metric', ' Initial SPF schedule delay 5000 msecs',
+    ` Number of external LSA ${hasNormal ? ext5 : 0}`,
+    ` Number of areas in this router is ${areas.length}. ${areaCounts(v, areas)}`, ` Reference bandwidth unit is ${+c.ospfRefBw || 100} mbps`,
+    ...areas.flatMap((a) => {
+      const n = Object.values(o2.ifs).filter((x) => x.area === a).length;
+      const t = (o2.kinds || {})[a] || 'normal', ac = ospfAreaCfg(c, a);
+      const kind = t === 'stub' ? [`        It is a stub area${ac.noSum ? ', no summary LSA in this area' : ''}`, ...(o2.abr ? [`          generates stub default route with cost ${ac.cost ?? 1}`] : [])]
+        : t === 'nssa' ? [`        It is a NSSA area${ac.noSum ? ', no summary LSA in this area' : ''}`, ...((o2.translates || []).includes(a) ? ['        Perform type-7/type-5 LSA translation'] : []),
+          ...(o2.abr && (ac.noSum || ac.nssaDef) ? [`          generates NSSA default route with cost ${ac.cost ?? 1}`] : [])] : [];
+      return [`    Area ${a === 0 ? 'BACKBONE(0)' : a}`, `        Number of interfaces in this area is ${n}`, ...kind,
+        `        Area has ${(c.ospfAreaAuth || {})[a] === 'md5' ? 'message digest authentication' : (c.ospfAreaAuth || {})[a] === 'plain' ? 'simple password authentication' : 'no authentication'}`,
+        ...(c.ospfRanges || []).filter((r) => +r.area === a).map((r) => `        Area ranges are\n           ${fmtIp(r.net)}/${r.bits} Active Advertise`).join('\n').split('\n').filter(Boolean)];
+    })];
+}
+/** show ip ospf database：一個程序 */
+function ospfDbLines(st, d, v) {
+  const o2 = v.o2, db = v.db, key = ospfKeys(v.vrf).key;
+  const age = (x) => String(((x * 7 + st.clock) % 1800) | 0).padStart(4);
+  const seq = (x) => '0x800000' + (((x >>> 0) % 200) + 16).toString(16).toUpperCase().padStart(2, '0');
+  const ck = (x) => '0x00' + ((x >>> 0) % 0xffff).toString(16).padStart(4, '0').toUpperCase();
+  // 節點 id：全域的程序是設備 id，VRF 的程序是「設備@VRF」
+  const split = (id) => { const k = id.indexOf('@'); return k < 0 ? [id, ''] : [id.slice(0, k), id.slice(k + 1)]; };
+  const ridOf = (id) => { const [dv, vr] = split(id); return db.rid[id] ?? ((st.dyn['rid' + ospfKeys(vr).ns] || {})[dv] || {}).rid; };
+  const lsdb = o2.lsdb || {}, dom = (db.domain || {})[o2.id];
+  const sameDom = (id) => (db.domain || {})[id] === dom;
+  const o = [`            OSPF Router with ID (${fmtIp(o2.rid)}) (Process ID ${v.pid})`];
+  const kinds = o2.kinds || {};
+  for (const a of o2.areas || []) {
+    // 這個區域裡的路由器：每一台送一筆 Router LSA (Type 1)
+    const inArea = new Set(lsdb[a] || []);
+    const rs = Object.entries(db.stubs).filter(([id, l]) => inArea.has(id) && l.some((x) => x.area === a)).map(([id]) => id);
+    o.push('', `		Router Link States (Area ${a})`, '', 'Link ID         ADV Router      Age         Seq#       Checksum Link count');
+    for (const id of rs) { const r = ridOf(id); if (r == null) continue; o.push(pad(fmtIp(r), 16) + pad(fmtIp(r), 16) + pad(age(r), 12) + pad(seq(r), 11) + pad(ck(r), 9) + db.stubs[id].filter((x) => x.area === a).length); }
+    // 有 DR 的廣播網段：DR 送一筆 Network LSA (Type 2)
+    const nets = [];
+    for (const id of inArea) { const [dv, vr] = split(id), x = st.devices[dv], xo = x && x.rt && x.rt[ospfKeys(vr).key]; if (!xo) continue; for (const i of x.ifaces) { const f = xo.ifs[i.id]; if (f && f.area === a && f.state === 'DR' && f.full) nets.push({ ip: i.rt.ip, rid: xo.rid }); } }
+    if (nets.length) { o.push('', `		Net Link States (Area ${a})`, '', 'Link ID         ADV Router      Age         Seq#       Checksum'); for (const n of nets) o.push(pad(fmtIp(n.ip), 16) + pad(fmtIp(n.rid), 16) + pad(age(n.ip), 12) + pad(seq(n.ip), 11) + ck(n.ip)); }
+    // ABR 送進這個區域的 Summary LSA (Type 3)：stub 區域裡會有一筆 0.0.0.0（預設路由）
+    const sums = [];
+    for (const b of db.abrs.filter((x) => inArea.has(x))) {
+      const list = a === 0 ? Object.values(db.sumInto0[b] || {}) : Object.values(((db.sumOut[b] || {})[a]) || {});
+      for (const x of list) sums.push({ ...x, rid: db.rid[b] });
+    }
+    if (sums.length) { o.push('', `		Summary Net Link States (Area ${a})`, '', 'Link ID         ADV Router      Age         Seq#       Checksum'); for (const x of sums) o.push(pad(fmtIp(x.net), 16) + pad(fmtIp(x.rid), 16) + pad(age(x.net), 12) + pad(seq(x.net), 11) + ck(x.net)); }
+    // NSSA：區域裡的 ASBR 送的 Type-7
+    const t7 = kinds[a] === 'nssa' ? ((db.type7 || {})[a] || []).filter((x) => inArea.has(x.asbr)) : [];
+    if (t7.length) { o.push('', `		Type-7 AS External Link States (Area ${a})`, '', 'Link ID         ADV Router      Age         Seq#       Checksum Tag'); for (const x of t7) o.push(pad(fmtIp(x.net), 16) + pad(fmtIp(ridOf(x.asbr)), 16) + pad(age(x.net + 3), 12) + pad(seq(x.net + 3), 11) + pad(ck(x.net + 11), 9) + (x.tag || 0)); }
+  }
+  // Type-5：整個網域的一般區域都有同一份；只在 stub / NSSA 區域裡的路由器完全沒有
+  const hasNormal = (o2.areas || []).some((a) => (kinds[a] || 'normal') === 'normal');
+  const ext = hasNormal ? [...db.asbrs.filter(sameDom).flatMap((id) => ((db.exts || {})[id] || []).map((x) => ({ ...x, rid: db.rid[id] }))), ...(db.translated || []).filter((x) => sameDom(x.by)).map((x) => ({ ...x, rid: db.rid[x.by] }))] : [];
+  if (ext.length) { o.push('', '\t\tType-5 AS External Link States', '', 'Link ID         ADV Router      Age         Seq#       Checksum Tag'); for (const x of ext) o.push(pad(fmtIp(x.net), 16) + pad(fmtIp(x.rid), 16) + pad(age(x.net + 1), 12) + pad(seq(x.net + 1), 11) + pad(ck(x.net + 7), 9) + (x.tag || (x.def ? 1 : 0))); }
+  return o;
+}
+/** show ip protocols [vrf <名稱>]：這個路由表的 OSPF 程序 */
+function protocolLines(st, d, vrf) {
+  if (!d.routing) return ['% 這台設備沒有啟用 IP 路由'];
+  const v = ospfViews(st, d).find((x) => x.vrf === vrf);
+  const c = v && v.c;
+  const stmts = (c && c.ospfNets) || [], on = d.ifaces.filter((i) => (i.vrf || '') === vrf && i.ospf && i.rt && i.rt.ip != null && ospfArea(d, i) != null);
+  if (!c || (!stmts.length && !on.length)) return [vrf ? `（VRF ${vrf} 沒有啟用任何動態路由協定，路由表只有直連與靜態路由）` : '（沒有啟用任何動態路由協定，路由表只有直連與靜態路由）'];
+  const rid = v.o2 ? v.o2.rid : vrf ? null : routerId(d), wild = (b) => fmtIp(b === 0 ? 0xffffffff : ((1 << (32 - b)) - 1) >>> 0);
+  const areas = (v.o2 || {}).areas || [0];
+  const mine = (i) => (i.vrf || '') === vrf && ospfArea(d, i) != null;
+  return [...(vrf ? [`Routing Protocol is "ospf ${v.pid}"`] : ['*** IP Routing is NSF aware ***', '', 'Routing Protocol is "ospf 1"']), '  Outgoing update filter list for all interfaces is not set', '  Incoming update filter list for all interfaces is not set',
+    `  Router ID ${rid != null ? fmtIp(rid) : '0.0.0.0'}`, ...(v.o2 && v.o2.asbr ? ['  It is an autonomous system boundary router'] : []), `  Number of areas in this router is ${areas.length}. ${areaCounts(v, areas)}`, `  Maximum path: ${+c.ospfMaxPaths || 4}`, '  Routing for Networks:',
+    ...stmts.map((n) => `    ${fmtIp(n.net)} ${wild(n.bits)} area ${+(n.area || 0)}`),
+    ...(d.ifaces.some((i) => mine(i) && ospfPassive(d, i) && !isLoopback(i)) ? ['  Passive Interface(s):', ...d.ifaces.filter((i) => mine(i) && ospfPassive(d, i) && !isLoopback(i)).map((i) => '    ' + longIf(i.label))] : []),
+    ...on.filter((i) => !stmts.some((n) => (i.rt.ip >>> (32 - n.bits || 0)) === (n.net >>> (32 - n.bits || 0)))).map((i) => `    ${longIf(i.label)}`),
+    ...((c.ospfRedist || []).length ? [`  Redistributing: ${(c.ospfRedist || []).map((r) => r.src + (r.as != null ? ' ' + r.as : '')).join(', ')}`] : []),
+    '  Routing Information Sources:', '    Gateway         Distance      Last Update',
+    ...v.nbrs.filter((n) => n.state === 'full').map((n) => `    ${pad(fmtIp(n.rid ?? n.ip), 16)}${pad(110, 14)}${hms(Math.min(st.clock, 3600))}`),
+    '  Distance: (default is 110)'];
 }
 
 // ───────────────────────── QoS ─────────────────────────
@@ -1561,17 +1618,31 @@ function showOrPing(app, devId, line, print) {
     ipv6IfLines(st, d, i).forEach((l) => print(l, l.startsWith('（') ? 'hint' : 'pre'));
     return true;
   }
-  if (tok[0].length >= 2 && 'show'.startsWith(tok[0]) && tok[1] === 'ip' && (tok[2] || '').length >= 2 && 'route'.startsWith(tok[2]) && tok[3] === 'vrf') {
+  // show ip protocols vrf <名稱>
+  if (tok[0].length >= 2 && 'show'.startsWith(tok[0]) && tok[1] === 'ip' && (tok[2] || '').length >= 4 && 'protocols'.startsWith(tok[2]) && tok[3] === 'vrf') {
     const v = line.trim().split(/\s+/)[4];
-    if (!v || !(d.vrfs || {})[v]) { print(v ? `% IP routing table ${v} does not exist` : '用法：show ip route vrf <名稱>', 'warn'); return true; }
-    routeLines(st, d, () => true, v).forEach((l) => print(l, l.startsWith('（') ? 'hint' : 'pre'));
+    if (!v || !(d.vrfs || {})[v]) { print(v ? `% VRF ${v} does not exist` : '用法：show ip protocols vrf <名稱>', 'warn'); return true; }
+    protocolLines(st, d, v).forEach((l) => print(l, l.startsWith('（') ? 'hint' : 'pre'));
     return true;
+  }
+  // show ip route vrf <名稱> [connected | static | ospf | bgp | <位址> [遮罩]]
+  let rvrf = '';
+  if (tok[0].length >= 2 && 'show'.startsWith(tok[0]) && tok[1] === 'ip' && (tok[2] || '').length >= 2 && 'route'.startsWith(tok[2]) && tok[3] === 'vrf') {
+    const words = line.trim().split(/\s+/), v = words[4];
+    if (!v || !(d.vrfs || {})[v]) { print(v ? `% IP routing table ${v} does not exist` : '用法：show ip route vrf <名稱>', 'warn'); return true; }
+    const what = (tok[5] || '').toLowerCase();
+    const KEEP = { connected: (r) => r.type === 'C' || r.type === 'L', static: (r) => r.type === 'S' || r.type === 'D', ospf: (r) => r.type === 'O', bgp: (r) => r.type === 'B' };
+    const kw = what && Object.keys(KEEP).find((k) => k.startsWith(what) && what.length >= 2);
+    if (!what || kw) { routeLines(st, d, kw ? KEEP[kw] : () => true, v).forEach((l) => print(l, l.startsWith('（') ? 'hint' : 'pre')); return true; }
+    if (parseIp(tok[5]) == null) { print(`% Invalid input detected：${tok[5]}`, 'warn'); return true; }
+    rvrf = v;
+    tok.splice(3, 2); // 接下來和 show ip route <位址> 一樣處理，只是看這個 VRF 的路由表
   }
   if (tok[0].length >= 2 && 'show'.startsWith(tok[0]) && tok[1] === 'ip' && (tok[2] || '').length >= 2 && 'route'.startsWith(tok[2]) && tok[3] && parseIp(tok[3]) != null) {
     if (!d.routing) { routeLines(st, d, () => true).forEach((l) => print(l, l.startsWith('（') ? 'hint' : 'pre')); return true; }
     const ip = parseIp(tok[3]), bits = tok[4] != null ? parseMask(tok[4]) : null;
     if (tok[4] != null && bits == null) { print(`% Invalid input detected：${tok[4]} 不是子網路遮罩`, 'warn'); return true; }
-    const { rib } = ribOf(d);
+    const { rib } = ribOf(d, rvrf);
     let hit;
     if (bits != null) hit = rib.filter((r) => r.bits === bits && r.net === netOf(ip, bits));
     else {
@@ -1580,6 +1651,7 @@ function showOrPing(app, devId, line, print) {
       hit = best ? rib.filter((r) => r.net === best.net && r.bits === best.bits) : [];
     }
     if (!hit.length) { print(bits != null ? '% Subnet not in table' : '% Network not in table', 'warn'); return true; }
+    if (rvrf) print(`Routing Table: ${rvrf}`, 'pre');
     routeEntry(st, d, hit).forEach((l) => print(l, 'pre'));
     return true;
   }

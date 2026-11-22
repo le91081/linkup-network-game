@@ -274,12 +274,18 @@ function buildRoutes(state, d) {
     const dst = parseIp(s.dst), bits = parseMask(s.mask), via = parseIp(s.via);
     if (dst == null || bits == null || via == null) continue;
     if (s.track != null && s.track !== '' && !trackUp(state, d, s.track).up) continue; // 追蹤的物件 Down：這條路由從路由表撤掉
-    // ip route vrf X …：下一站要在同一個 VRF 的直連網段上
+    // ip route vrf X …：下一站要在同一個 VRF 的直連網段上。VRF 之間的路由洩漏有兩種寫法：
+    //   ip route vrf X <網段> <遮罩> <下一站> global：下一站在全域的路由表找
+    //   ip route [vrf X] <網段> <遮罩> <出口介面> <下一站>：出口介面可以在別的 VRF（或全域）
     const v = s.vrf || '';
-    const i = d.ifaces.find((x) => up(x) && vrfOf(x) === v && sameNet(via, x.rt.ip, x.rt.bits) && via !== x.rt.ip);
+    const on = (x) => up(x) && sameNet(via, x.rt.ip, x.rt.bits) && via !== x.rt.ip;
+    const out = s.outIf ? d.ifaces.find((x) => x.id === s.outIf) : null;
+    const i = s.outIf ? (out && on(out) ? out : null) : d.ifaces.find((x) => on(x) && vrfOf(x) === (s.global ? '' : v));
     r.push({
       net: netOf(dst, bits), bits, via, iface: i || null, type: 'S', ad: Math.max(1, +s.ad || 1), metric: 0, vrf: v,
-      bad: i ? null : `下一站 ${fmtIp(via)} 不在${v ? ` VRF ${v} 的` : '任何已連線的'}直連網段上`,
+      ...(i && vrfOf(i) !== v ? { leak: vrfOf(i) || 'global' } : {}), ...(s.outIf ? { exitIf: true } : {}),
+      bad: i ? null : s.outIf ? (!out ? `出口介面 ${s.outIf} 不存在` : !up(out) ? `出口介面 ${out.label} 沒有 IP 或沒有連線` : `下一站 ${fmtIp(via)} 不在 ${out.label} 的網段上`)
+        : `下一站 ${fmtIp(via)} 不在${s.global ? '全域路由表的' : v ? ` VRF ${v} 的` : '任何已連線的'}直連網段上`,
     });
   }
   d.rt.routes = r;
@@ -311,7 +317,7 @@ export function routesTo(d, ip, vrf = '') {
  * network 敘述是持續生效的 — 之後才設定 IP 的介面，只要位址符合就會自動加入。
  */
 export function ospfOn(d, i) {
-  if (i.ospf) return true;
+  // 介面在 VRF 裡：要那個 VRF 有 OSPF 程序（router ospf <pid> vrf <名稱>）才算
   return ospfArea(d, i) != null;
 }
 /** 圖形介面的開關：關閉時連同涵蓋它的 network 敘述一起移除（其他被同一條敘述涵蓋的介面維持啟用） */
