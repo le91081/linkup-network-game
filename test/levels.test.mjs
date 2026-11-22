@@ -4357,6 +4357,33 @@ console.log('\nQSFP28 的 breakout');
   ok(/^interface breakout module 1 port 1 map 25g-4x$/m.test(rc) && /^interface breakout module 1 port 32 map 25g-4x$/m.test(rc) && rc.indexOf('interface breakout') < rc.indexOf('interface Ethernet1/1/2') && /interface Ethernet1\/1\/2\n\s+description GPU-2/.test(rc), 'running-config：breakout 印在 interface 前面，子埠的設定照常');
 }
 
+console.log('\n存檔格式遷移');
+{
+  const { SAVE_VER, migrateState, migrateStore } = await import('../src/engine/migrate.js');
+  const sim = await import('../src/engine/sim.js');
+  const ok = (cond, title) => (cond ? console.log('  ✔ ' + title) : fail(title));
+  // 第 1 版的存檔：DNS 伺服器還是舊的「名稱 → IP」對照表，也沒有版本號
+  const lv = LEVELS.find((x) => Object.values(x.setup().devices).some((d) => d.dnsZone && d.dnsZone.records.some((r) => r.type === 'A')));
+  const s = lv.setup(); settle(s);
+  const dns = Object.values(s.devices).find((d) => d.dnsZone || d.dnsRecords);
+  const { cloneState } = await import('../src/engine/model.js');
+  const old = cloneState(s);
+  const od = old.devices[dns.id];
+  od.dnsRecords = Object.fromEntries((od.dnsZone ? od.dnsZone.records : []).filter((r) => r.type === 'A').map((r) => [r.name, r.value]));
+  delete od.dnsZone; delete old.ver;
+  const r = migrateState(old);
+  ok(r.from === 1 && !r.newer && old.ver === SAVE_VER && !old.devices[dns.id].dnsRecords && old.devices[dns.id].dnsZone.records.every((x) => x.type === 'A' && x.ttl > 0), '第 1 版的存檔：dnsRecords 搬成 dnsZone.records，版本號更新');
+  const again = JSON.stringify(old);
+  migrateState(old);
+  ok(JSON.stringify(old) === again, '已經是目前的版本：再跑一次什麼都不變');
+  sim.recompute(old);
+  ok(lv.objectives.length && sim.evaluate(old, lv.objectives).length === lv.objectives.length, '升級後的存檔照樣算得出來');
+  const future = { ver: SAVE_VER + 5, devices: {}, cables: [] };
+  ok(migrateState(future).newer && future.ver === SAVE_VER + 5, '比較新的版本存的：不動它、標成 newer');
+  const store = migrateStore({ saves: { la: { devices: { dns: { id: 'dns', dnsRecords: { 'a.corp.local': '10.0.0.5' } } }, cables: [] }, lx: future }, custom: [{ state: { devices: {}, cables: [] } }] });
+  ok(store.ver === SAVE_VER && store.saves.la.ver === SAVE_VER && store.saves.la.devices.dns.dnsZone.records[0].value === '10.0.0.5' && store.saves.lx.ver === SAVE_VER + 5 && store.custom[0].state.ver === SAVE_VER, '整份進度：每一關的存檔、自訂關卡都升級，新版本的留著不動');
+}
+
 console.log('\nNetFlow 與 QoS 的 police');
 {
   const sim = await import('../src/engine/sim.js');

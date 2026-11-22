@@ -616,3 +616,28 @@ test('breakout：連接埠分頁把 Eth1/1 拆成 4 × 25G，GPU 伺服器接上
   await typeCmd(page, 'ping 10.0.0.50');
   await expect(page.locator('#panel .term-out')).toContainText('回覆自 10.0.0.50');
 });
+
+test('存檔格式遷移：舊版本的存檔（DNS 用 dnsRecords、沒有版本號）重新整理之後照樣載入、升級成新格式', async ({ page }) => {
+  await boot(page);
+  const id = await page.evaluate(() => {
+    const app = window.linkup;
+    const lv = app.levels.find((l) => !l.sandbox && Object.values(l.setup().devices).some((d) => d.dnsZone && d.dnsZone.records.some((r) => r.type === 'A')));
+    app.openLevel(lv, { fresh: true });
+    const st = JSON.parse(JSON.stringify(app.state, (k, v) => (k === 'rt' || typeof v === 'bigint' ? undefined : v)));
+    delete st.ver;
+    for (const d of Object.values(st.devices)) if (d.dnsZone) { d.dnsRecords = Object.fromEntries(d.dnsZone.records.filter((r) => r.type === 'A').map((r) => [r.name, r.value])); delete d.dnsZone; }
+    app.store.saves[lv.id] = st;
+    delete app.store.ver;
+    app.saveStore();
+    return lv.id;
+  });
+  await page.reload();
+  await page.waitForFunction(() => window.linkup && window.linkup.state);
+  const r = await page.evaluate((lid) => {
+    const app = window.linkup;
+    app.openLevel(app.levels.find((l) => l.id === lid));
+    const ds = Object.values(app.state.devices).filter((d) => d.dnsZone || d.dnsRecords);
+    return { ver: app.store.ver, ok: ds.length > 0 && ds.every((d) => d.dnsZone && !d.dnsRecords), level: app.level.id };
+  }, id);
+  expect(r).toEqual({ ver: 2, ok: true, level: id });
+});

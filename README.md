@@ -40,6 +40,18 @@ npm run build    # 輸出到 dist/
 
 失敗時的截圖與操作紀錄在 `e2e/.results/`，可以用 `npx playwright show-trace <trace.zip>` 一步一步回放。
 
+### 持續整合與 GitHub Pages
+
+推上 GitHub 之後：
+
+- `.github/workflows/ci.yml`：每次 push 與 pull request 先跑引擎測試與兩種建置，再跑 Playwright（GitHub 的 ubuntu-latest 已經裝好 Google Chrome，設定不用改）；失敗時把 `e2e/.results/` 上傳成附件。
+- `.github/workflows/pages.yml`：main 分支用相對路徑建置（`vite build --base=./`）並發佈到 GitHub Pages，放在 `https://<帳號>.github.io/<儲存庫>/` 底下也找得到檔案。第一次使用要在儲存庫的 Settings → Pages 把 Source 設成「GitHub Actions」。
+
+### 存檔格式
+
+進度存在瀏覽器的 localStorage（`linkup.v1`，加上 `?profile=` 就是另一份），每一份存檔、匯出的拓撲檔與關卡檔都記著格式的版本（`ver`）。
+設定的資料結構改版時，在 `src/engine/migrate.js` 加一個遷移步驟：舊的存檔載入時一步一步升級；比較新的版本存的檔案不會被改動（那一關當作沒有存檔，匯入時提示要更新）。
+
 ## 玩法
 
 | 操作 | 效果 |

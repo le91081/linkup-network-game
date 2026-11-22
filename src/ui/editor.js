@@ -6,6 +6,7 @@ import { saveJson } from './save.js';
 import { cloneState } from '../engine/model.js';
 import { recompute } from '../engine/sim.js';
 import { sandboxObjectives, checkImport } from './sandbox.js';
+import { SAVE_VER, migrateState } from '../engine/migrate.js';
 
 const metaOf = (st) => (st.meta ||= { title: '', brief: '', hints: [], lock: [] });
 
@@ -89,7 +90,7 @@ export function editorSection(app) {
 }
 
 function downloadLevel(c) {
-  const data = { app: 'LinkUp', kind: 'level', version: 1, title: c.title, brief: c.brief, hints: c.hints, lock: c.lock, state: c.state };
+  const data = { app: 'LinkUp', kind: 'level', version: 1, title: c.title, brief: c.brief, hints: c.hints, lock: c.lock, state: { ...c.state, ver: SAVE_VER } };
   saveJson(`linkup-level-${(c.title || 'custom').replace(/[\\/:*?"<>|\s]+/g, '-').slice(0, 40)}.json`, data, `已匯出關卡「${c.title}」`);
 }
 
@@ -98,6 +99,7 @@ export function importLevel(app, text) {
   let data;
   try { data = JSON.parse(text); } catch { toast('讀不懂這個檔案：它不是 JSON', 'bad'); return null; }
   if (!data || data.app !== 'LinkUp' || data.kind !== 'level') { toast('這不是 LinkUp 的關卡檔（拓撲檔請到自由模式匯入）', 'bad', 5000); return null; }
+  if (data.state && migrateState(data.state).newer) { toast('這個關卡檔是比較新的版本做的，這個版本讀不懂：請更新 LinkUp 再匯入', 'bad', 5000); return null; }
   const why = checkImport(data);
   if (why) { toast('無法匯入：' + why, 'bad', 5000); return null; }
   const c = { id: 'custom-' + Date.now().toString(36), title: String(data.title || '匯入的關卡').slice(0, 60), brief: String(data.brief || '').slice(0, 2000), hints: (Array.isArray(data.hints) ? data.hints : []).map((x) => String(x).slice(0, 500)).slice(0, 10), lock: (Array.isArray(data.lock) ? data.lock : []).map(String), state: cloneState(data.state) };

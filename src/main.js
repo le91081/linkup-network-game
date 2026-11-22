@@ -5,6 +5,7 @@ import { LEVELS } from './levels/index.js';
 import { recompute, runObjective, advance, settle, pendingOf, fmtDur } from './engine/sim.js';
 import { takeScriptNews } from './engine/script.js';
 import { cloneState, addCable, cableAt, portOf } from './engine/model.js';
+import { SAVE_VER, migrateState, migrateStore } from './engine/migrate.js';
 import * as hud from './ui/hud.js';
 import { renderDevicePanel } from './ui/panel.js';
 import { toast, sleep } from './ui/dom.js';
@@ -28,7 +29,7 @@ function loadStore() {
   const base = { done: {}, saves: {}, hints: {}, quiz: {}, seenHelp: false, last: null };
   try {
     const s = JSON.parse(localStorage.getItem(STORE_KEY) || 'null');
-    if (s && typeof s === 'object') return { ...base, ...s };
+    if (s && typeof s === 'object') return migrateStore({ ...base, ...s }); // 舊版本的存檔：升級成目前的格式
   } catch { /* 無痕模式等情況：不存檔也能玩 */ }
   return base;
 }
@@ -74,7 +75,8 @@ const app = {
   openLevel(lv, { fresh = false } = {}) {
     const idx = LEVELS.indexOf(lv);
     let st = null;
-    const saved = !fresh && app.store.saves[lv.id];
+    let saved = !fresh && app.store.saves[lv.id];
+    if (saved && migrateState(saved).newer) saved = null; // 比較新的版本存的：這個版本讀不懂，當作沒有存檔（存檔本身留著）
     if (saved) {
       try {
         const base = lv.setup();
@@ -433,6 +435,7 @@ function feedback(o, r) {
  */
 function saveOf(st) {
   const s = cloneState(st), d = s.dyn;
+  s.ver = SAVE_VER; // 存檔格式的版本（engine/migrate.js）
   if (d) {
     delete d.mac; delete d.ct; delete d.outbox;
     for (const k of ['cap', 'con', 'sniff', 'dflow', 'dbg', 'dbgSeen', 'vty', 'bgAcc', 'ifcAcc']) delete d[k];

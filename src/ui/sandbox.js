@@ -5,6 +5,7 @@ import { CATALOG, makeDevice, makeState, setLine, uniqueId, cloneState } from '.
 import { recompute, runObjective } from '../engine/sim.js';
 import { isIos, saveStartup } from '../engine/ios.js';
 import { editorSection } from './editor.js';
+import { SAVE_VER, migrateState } from '../engine/migrate.js';
 
 const VENDOR = /^(Cisco|TP-Link|Ubiquiti|Fortinet|NETGEAR|ASUS|Dell|Lenovo|Apple|HP|Synology|VMware) /;
 const HOST_NAME = { pc: 'PC', laptop: '筆電', phone: '手機', printer: '印表機', wprinter: '無線印表機', nas: 'NAS', tower: '伺服器', rack1u: '機架伺服器', vm: 'VM' };
@@ -209,7 +210,7 @@ export function installSandbox(app, hooks) {
     hooks.renderMission();
   };
   app.sandboxExport = () => {
-    const data = { app: 'LinkUp', kind: 'sandbox', version: 1, state: cloneState(app.state) };
+    const data = { app: 'LinkUp', kind: 'sandbox', version: 1, state: { ...cloneState(app.state), ver: SAVE_VER } };
     saveJson(`linkup-topology-${new Date().toISOString().slice(0, 10)}.json`, data, `已匯出 ${Object.keys(app.state.devices).length} 台設備的拓撲`);
   };
   /** 匯入拓撲：text 是匯出檔的內容。成功回傳 true */
@@ -217,6 +218,7 @@ export function installSandbox(app, hooks) {
     if (!app.level.sandbox || app.running) return false;
     let data;
     try { data = JSON.parse(text); } catch { toast('讀不懂這個檔案：它不是 JSON', 'bad'); return false; }
+    if (data && data.state && migrateState(data.state).newer) { toast('這個檔案是比較新的版本做的，這個版本讀不懂：請更新 LinkUp 再匯入', 'bad', 5000); return false; }
     const bad = checkImport(data);
     if (bad) { toast('無法匯入：' + bad, 'bad', 5000); return false; }
     const st = cloneState(data.state);
