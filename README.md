@@ -400,10 +400,12 @@ npm run build    # 輸出到 dist/
 
 完整的功能規劃（每個領域已完成、部分完成、尚未開始的項目，以及建議的實作順序）在 [PLAN.md](PLAN.md)。以下是最接近的幾項：
 
-1. FortiGate HA、堆疊 / vPC；OSPF point-to-multipoint、FortiGate 的 IPsec 介面模式與 IPv6 政策、DHCPv6 Prefix Delegation、NAT64 / DNS64。
-2. BGP 的 VRF 與 MP-BGP route-target、自由模式畫牆。
-3. 中繼憑證鏈、OCSP 與 FortiGate 的憑證驗證。
-4. NTP 與 Syslog 的維運關卡（引擎已經有了，還沒有獨立的關卡）。
+1. FortiGate 的 SD-WAN 與 HA、堆疊 / vPC；IPv6 的網際網路與 FortiGate 的 IPv6 政策、DHCPv6 Prefix Delegation、NAT64 / DNS64。
+2. breakout、Console 與帶外管理、STP 進階（Loop Guard、UDLD）、IOS 的 Zone-Based Firewall、NGFW。
+3. OSPF point-to-multipoint、BGP 的 VRF 與 MP-BGP route-target、自由模式畫牆。
+4. 中繼憑證鏈、OCSP 與 FortiGate 的憑證驗證。
+
+遊戲系統（成就、預算與採購、名詞表、帳號與雲端存檔、多人）暫時不做；手機與平板、多語系、無障礙、淺色主題不在規劃內。
 
 ## 程式結構
 
