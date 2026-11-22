@@ -1,6 +1,7 @@
 // 設備設定面板：依設備類別產生對應的管理頁面
 import * as AUTO from './panel-auto.js';
 import { sdwanTab } from './panel-sdwan.js';
+import { haTab } from './panel-ha.js';
 import { ZONE, sdwanOn } from '../engine/sdwan.js';
 import * as CL from './panel-cloud.js';
 import * as W from './panel-wlc.js';
@@ -655,7 +656,7 @@ function baseTabs(dev) {
     case 'l3switch': return [T.swports, T.vlan, T.l3, T.route, T.sec, ['qos', 'QoS', V.qosTab], T.mgmt, T.status];
     case 'router': return [T.ifs, T.route, T.nat, T.acl, T.vpn, ['qos', 'QoS', V.qosTab], T.mgmt, T.status];
     case 'homerouter': return [['wan', '網際網路 (WAN)', hrWan], ['lan', '區域網路 (LAN)', hrLan], ['wifi', '無線網路', X.ssidTab], ['nat', '連接埠轉發', forwardsTab], T.status];
-    case 'firewall': return [['if', '介面', fwIfaces], ['sdwan', 'SD-WAN', sdwanTab], ['pol', '政策', fwPolicies], ['nat', '虛擬 IP', forwardsTab], T.vpn, T.route, T.mgmt, ['log', '紀錄', M.logTab], T.status, ['fcli', 'CLI', buildFortiCli]];
+    case 'firewall': return [['if', '介面', fwIfaces], ['sdwan', 'SD-WAN', sdwanTab], ['pol', '政策', fwPolicies], ['nat', '虛擬 IP', forwardsTab], T.vpn, T.route, ['ha', 'HA', haTab], T.mgmt, ['log', '紀錄', M.logTab], T.status, ['fcli', 'CLI', buildFortiCli]];
     default: return [['info', '線路資訊', inetInfo]];
   }
 }
@@ -698,6 +699,11 @@ export function renderDevicePanel(app, root) {
       const left = (app.state.rt.booting || {})[dev.id], rom = (app.state.rt.rommon || {})[dev.id];
       if (rom) return note('warn', `這台設備沒有開機成功，停在 ROMMON（開機程式）：${rom}。到 CLI 分頁用 dir flash: 看看有哪些檔案，再用 boot flash:<檔名> 手動開機。`);
       return left > 0 ? note('warn', `這台設備正在開機，還要 ${Math.ceil(left)} 秒才會開始工作。在那之前所有連接埠都沒有燈號，也不會回應任何封包。`) : null;
+    }));
+    // HA 的次要機：設定由主要機同步，在這裡改的會被蓋掉
+    if (dev.kind === 'firewall') body.append(ctx.live(() => {
+      const r = dev.rt && dev.rt.ha;
+      return r && r.role === 'secondary' && cur !== 'ha' ? note('muted', `這台是 HA 的次要機：設定由主要機 ${(app.state.devices[r.peer] || {}).name || ''} 同步過來，在這裡改的設定會被主要機蓋掉（要改請到主要機）。`) : null;
     }));
   }
   const tabBar = tabs.length > 1 && h('div', { class: 'tabs' + (tabs.length > 8 ? ' many many9' : tabs.length > 7 ? ' many' : '') }, tabs.map(([id, label]) =>

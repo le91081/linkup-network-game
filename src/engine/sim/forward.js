@@ -17,6 +17,7 @@ import { daiBlock } from './auth.js';
 import { findTunnel } from './tunnels.js';
 import { lookupRoute } from './l3.js';
 import { GRE_OVERHEAD, greRx, greTarget, isTun, nhrpRedirect, tunMode } from './gre.js';
+import { haLostNote } from '../ha.js';
 
 // ───────────────────────────── 封包轉送 ─────────────────────────────
 
@@ -464,7 +465,7 @@ export function forward(state, ctx, startId, pkt) {
     }
     // 已經建立的連線，半路上的封包來到防火牆時連線表裡卻沒有它（閒置太久被移除了）：FortiGate 不會把它當成新連線
     if (tr && !established && !pkt.reply && !ctx.mid) T('init_ip_session_common', `allocate a new session-${sessId({ proto: pkt.proto, ...o })}, tun_id=0.0.0.0`);
-    const lostSession = () => (T('ip_session_handler', 'no session matched'), drop(`${dev.name} 的連線表裡已經沒有這條連線：閒置超過 ${sessionTtl(dev, { proto: 'tcp', st: 'est' })} 秒就會被移除。防火牆不會讓半路出現、不是 SYN 的 TCP 封包通過，直接丟棄 (no session matched)`));
+    const lostSession = () => (T('ip_session_handler', 'no session matched'), drop(haLostNote(state, dev) || `${dev.name} 的連線表裡已經沒有這條連線：閒置超過 ${sessionTtl(dev, { proto: 'tcp', st: 'est' })} 秒就會被移除。防火牆不會讓半路出現、不是 SYN 的 TCP 封包通過，直接丟棄 (no session matched)`));
     if (tun) {
       if (!tun.up) return drop(`VPN 通道「${tun.name}」沒有建立：${tun.why}`);
       if (inIf && !established && ctx.mid && dev.kind === 'firewall') return lostSession();

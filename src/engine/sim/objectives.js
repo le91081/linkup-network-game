@@ -12,7 +12,7 @@ import { fmtDur } from './core.js';
 import { recompute, settle } from '../sim.js';
 import { resolveName } from './resolve.js';
 import { throughput } from './bandwidth.js';
-import { transact } from './transact.js';
+import { transact, flowSend } from './transact.js';
 
 // ───────────────────────────── 任務目標 ─────────────────────────────
 
@@ -22,6 +22,7 @@ import { transact } from './transact.js';
  *  { type:'dhcp', dev, subnet? }
  *  { type:'check', test(state) → true | '原因' }
  *  { type:'failover', down?:[devId], cut?:[[devId, portId]], test:{...} }
+ *    keep:{ from, ip, port } 取代 test：故障之前先建立 TCP 連線，故障之後在同一條連線上繼續送資料（連線表要跟著換手）
  */
 export function runObjective(state, o) {
   if (o.type === 'login') {
@@ -131,6 +132,13 @@ export function runObjective(state, o) {
   }
   if (o.type === 'failover') {
     const s2 = cloneState(state);
+    let keep = null;
+    if (o.keep) {
+      recompute(s2);
+      const dst = parseIp(o.keep.ip), k = transact(s2, o.keep.from, { proto: 'tcp', dst, dport: o.keep.port, keep: 'keep-' + o.keep.port });
+      if (!k.ok) return { pass: false, ok: false, reason: `故障之前就連不上 ${o.keep.ip}:${o.keep.port}：${k.reason}`, failDev: k.failDev, log: k.log, hops: k.hops };
+      keep = { cid: 'keep-' + o.keep.port, to: k.responder, src: k.srcIp, sport: k.sport, dst, dport: o.keep.port, data: { kind: 'enc' }, echo: { kind: 'out' } };
+    }
     s2.down = { ...(state.down || {}), ...Object.fromEntries((o.down || []).map((id) => [id, true])) };
     s2.cut = {};
     const what = (o.down || []).map((id) => state.devices[id].name + ' 斷電');
@@ -148,7 +156,12 @@ export function runObjective(state, o) {
     const t0 = s2.clock;
     settle(s2);
     const took = Math.round(s2.clock - t0);
-    const r = runObjective(s2, o.test);
+    let r;
+    if (keep) {
+      const f = flowSend(s2, o.keep.from, keep);
+      r = { pass: f.ok, ok: f.ok, reason: f.ok ? '' : `進行中的連線（${o.keep.ip}:${o.keep.port}）斷了：${f.reason}`, failDev: f.failDev, log: f.log, hops: f.hops };
+      if (f.ok) r.log.push({ dev: o.keep.from, kind: 'ok', text: `故障之前建立的連線（${o.keep.ip}:${o.keep.port}）照常收送資料` });
+    } else r = runObjective(s2, o.test);
     r.log.unshift({ dev: (o.down || [])[0] || (o.cut || [[]])[0][0], kind: 'info', text: `故障演練：${what.join('、')}${took ? `；${fmtDur(took)}後網路重新收斂，再進行測試` : ''}` });
     if (!r.pass && r.reason) r.reason = `故障演練（${what.join('、')}）：${r.reason}`;
     return r;

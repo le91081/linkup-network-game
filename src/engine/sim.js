@@ -25,6 +25,7 @@ import { prepDtp, prepLag, prepPhysical, prepStp, prepStpTimers, prepVoice } fro
 import { prepTunnels } from './sim/tunnels.js';
 import { sessionTtl } from './sim/forward.js';
 import { scriptTick } from './script.js';
+import { prepHa, haIdle, haMacs } from './ha.js';
 export { portalPending, portalAccept } from './portal.js';
 import { transact } from './sim/transact.js';
 setCdpCheck((d, pid, x, xp) => cdpOn(d, pid) && cdpOn(x, xp));
@@ -157,6 +158,8 @@ function computePass(state, auth) {
   prepStp(state);
   prepStpTimers(state);
   prepWifi(state);
+  // FortiGate 的 HA：選出主要機、把設定同步給次要機（要先知道每個埠的燈號）
+  prepHa(state, (d, i) => ({ ip: null, bits: 0, gw: null, dns: [], src: null, note: '', active: ifaceActive(d, i), link: true, mac: ifaceMac(d, i), vips: [], assoc: null }));
   for (const d of devs) {
     const dead = down[d.id] || state.rt.off[d.id];
     for (const i of d.ifaces) {
@@ -166,6 +169,7 @@ function computePass(state, auth) {
       else if (b.t === 'wlan') i.rt.link = !!i.rt.assoc;
       else if (b.t === 'loop') i.rt.link = !i.shut;
       else if (b.t === 'gre') i.rt.link = false; // Tunnel 的 line protocol 等外層的路由算好才知道（sim/l3.js 的 routesAll）
+      if (haIdle(d, i)) { i.rt.active = false; i.rt.note = 'HA 的次要機：這個介面由主要機運作，次要機不回應、不轉送'; continue; }
       if (!i.rt.active || i.mode !== 'static') continue;
       const ip = parseIp(i.ip), bits = parseMask(i.mask);
       if (ip == null || bits == null) continue;
@@ -189,6 +193,7 @@ function computePass(state, auth) {
       if (i) i.rt.vips.push(pub); // 讓這個介面替靜態 NAT 的公用 IP 回應 ARP
     }
   }
+  haMacs(state); // HA 的主要機：介面用叢集的虛擬 MAC
   prepL2Attacks(state); // macof 把 MAC 位址表塞滿、狂送廣播佔掉整個 VLAN 的線路
   prepCloud(state); // 雲端：彈性 IP 掛到網際網路閘道上
   const old = state.leases || {};

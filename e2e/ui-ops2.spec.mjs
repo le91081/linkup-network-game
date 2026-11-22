@@ -429,3 +429,32 @@ test('NAT64 / DNS64：DNS 伺服器開 DNS64、R1 設 NAT64，IPv6-only 的筆�
   await expect(page.locator('#panel .term-out')).toContainText('[64:ff9b::5db8:d822]');
   expect(await scan(page, '#panel', 'R1 的 CLI（show nat64 translations）')).toEqual([]);
 });
+
+test('FortiGate HA：FG-A 用 CLI、FG-B 用 HA 分頁組成叢集，FG-A 當主要機，get system ha status 看得到', async ({ page }) => {
+  await boot(page);
+  await open(page, 'l121');
+  await clickDevice(page, 'fga');
+  await page.locator('#panel .tab', { hasText: 'CLI' }).click();
+  await typeCmd(page, 'config system ha', 'set group-name "FGT-HA"', 'set mode a-p', 'set password "Ha-Secret-42"', 'set hbdev "dmz" 50', 'set priority 200', 'set monitor "wan1" "internal"', 'set session-pickup enable', 'end');
+  await clickDevice(page, 'fgb');
+  await page.locator('#panel .tab', { hasText: 'HA' }).click();
+  await page.locator('#panel .ha-cfg .seg button', { hasText: 'Active-Passive' }).click();
+  await expect(page.locator('#panel .ha-status .note.warn')).toContainText('還沒有組成叢集');
+  const cfg = page.locator('#panel .ha-cfg');
+  for (const [label, v] of [['群組名稱', 'FGT-HA'], ['密碼', 'Ha-Secret-42']]) { const x = page.locator('#panel .ha-cfg label.field', { hasText: label }).locator('input'); await x.fill(v); await x.press('Enter'); }
+  await cfg.locator('label.switch', { hasText: 'DMZ' }).first().click();
+  await expect(page.locator('#panel .ha-status')).toContainText('次要機 (secondary)');
+  await expect(page.locator('#panel .ha-status .note')).toContainText('設定由主要機 FG-A 同步過來');
+  expect(await scan(page, '#panel', 'FortiGate 的 HA 分頁（次要機）')).toEqual([]);
+  await clickDevice(page, 'fga');
+  await page.locator('#panel .tab', { hasText: 'CLI' }).click();
+  await typeCmd(page, 'get system ha status');
+  const out = page.locator('#panel .term-out');
+  await expect(out).toContainText('Mode: HA A-P');
+  // 剛組成時 FG-B 還沒有監控的介面（比監控）；設定同步過去之後兩台一樣，改比 HA uptime
+  await expect(out).toContainText(/selected as the primary because it has the largest value of (monitored interfaces|uptime)/);
+  await expect(out).toContainText('Primary     : FG-A');
+  await page.locator('#panel .tab', { hasText: 'HA' }).click();
+  await expect(page.locator('#panel .ha-status')).toContainText('主要機 (primary)');
+  expect(await scan(page, '#panel', 'FortiGate 的 HA 分頁（主要機）')).toEqual([]);
+});

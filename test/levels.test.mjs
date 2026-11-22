@@ -4067,6 +4067,66 @@ console.log('\nNAT64 與 DNS64（IPv6-only 的網段）');
   ok(/^nat64 prefix stateful 64:FF9B::\/96$/m.test(rc) && /^nat64 v6v4 list NAT64-SRC interface GigabitEthernet0\/0\/0 overload$/m.test(rc) && (rc.match(/^ nat64 enable$/gm) || []).length === 2, 'running-config：nat64 prefix、v6v4 list 與兩個介面的 nat64 enable');
 }
 
+console.log('\nFortiGate HA（Active-Passive）');
+{
+  const { fortiSession, fortiConfig } = await import('../src/engine/fortios.js');
+  const { serialOf, haVmac } = await import('../src/engine/ha.js');
+  const sim = await import('../src/engine/sim.js');
+  const { fmtIp } = await import('../src/engine/ip.js');
+  const ok = (cond, title) => (cond ? console.log('  ✔ ' + title) : fail(title));
+  const lv = LEVELS.find((x) => x.id === 'l121');
+  const s = lv.setup(); settle(s);
+  const A = s.devices.fga, B = s.devices.fgb, WEB = parseIp('93.184.216.34');
+  const run = (o) => (o.type === 'check' ? (o.test(s) === true ? { pass: true } : { pass: false, reason: o.test(s) }) : sim.runObjective(s, o));
+  const cli = (id, lines) => { const F = fortiSession(() => s.devices[id], () => s); const o = []; for (const l of lines) o.push(...F.exec(l).out); settle(s); return o.join('\n'); };
+  ok(!A.rt.ha && sim.transact(s, 'pc1', { proto: 'tcp', dst: WEB, dport: 443, quiet: true }).ok, '一開始只有 FG-A 在運作，FG-B 是原廠設定（192.168.1.99）');
+  const base = ['config system ha', 'set group-name "FGT-HA"', 'set mode a-p', 'set password "Ha-Secret-42"', 'set hbdev "dmz" 50'];
+  cli('fga', [...base, 'set priority 200', 'end']);
+  ok(A.rt.ha.role === 'standalone' && /FG-B 沒有啟用 HA/.test(A.rt.ha.why), '只有 FG-A 開了 HA：說明另一端沒有啟用');
+  cli('fgb', ['config system ha', 'set group-name "FGT-HA"', 'set mode a-p', 'set password "wrong"', 'set hbdev "dmz" 50', 'end']);
+  ok(/HA 密碼不一樣/.test(A.rt.ha.why) && A.policies.length === 1, '密碼不一樣：不組成叢集，FG-A 的設定也沒被動到');
+  cli('fgb', ['config system ha', 'set password "Ha-Secret-42"', 'end']);
+  ok(A.rt.ha.role === 'primary' && B.rt.ha.role === 'secondary' && A.rt.ha.by === 'priority', '組成叢集：FG-A 的 priority 200 比較高，當主要機');
+  const bInt = B.ifaces.find((i) => i.id === 'internal');
+  ok(bInt.ip === '192.168.1.1' && B.policies.length === 1 && B.policies[0].name === '上網' && B.ha.prio === 128 && B.name === 'FG-B', '設定由主要機同步給次要機（priority、名稱是每台自己的）');
+  ok(bInt.rt.ip == null && A.ifaces.find((i) => i.id === 'wan1').rt.mac === haVmac(0, 0), '次要機的資料介面不運作；主要機用虛擬 MAC 00:09:0f:09:00:00');
+  ok(run(lv.objectives[0]).pass && run(lv.objectives[1]).pass, '叢集組成、平常上網正常');
+  const o2 = run(lv.objectives[2]);
+  ok(!o2.pass && /FG-A 的 wan1 斷線/.test(o2.reason), '沒有 monitor：wan1 斷線時 FG-A 還是主要機，上不了網');
+  ok(run(lv.objectives[3]).pass, '整台故障：FG-B 收不到 heartbeat，自己接手');
+  cli('fga', ['config system ha', 'set monitor "wan1" "internal"', 'end']);
+  ok(B.ha.monitor.join() === 'wan1,internal' && run(lv.objectives[2]).pass, 'set monitor "wan1" "internal"（也同步給次要機）：wan1 斷線時換手');
+  const o4 = run(lv.objectives[4]);
+  ok(!o4.pass && /剛接手成為 HA 的主要機.*session-pickup/.test(o4.reason), '沒有 session-pickup：換手之後遠端桌面斷線，說明原因');
+  cli('fga', ['config system ha', 'set session-pickup enable', 'end']);
+  ok(B.ha.pickup, 'session-pickup 也同步給次要機');
+  ok(lv.objectives.every((o) => run(o).pass), '加上 monitor 與 session-pickup：五個目標都通過');
+  // 真的拔掉 wan1：FG-B 接手；接回去之後 override disable，不會搶回來
+  const c = s.cables.find((x) => (x.a.dev === 'fga' && x.a.port === 'wan1') || (x.b.dev === 'fga' && x.b.port === 'wan1'));
+  s.cut = { [c.id]: true }; settle(s);
+  ok(B.rt.ha.role === 'primary' && A.rt.ha.role === 'secondary' && B.rt.ha.by === 'monitor' && sim.transact(s, 'pc2', { proto: 'tcp', dst: WEB, dport: 443, quiet: true }).ok, 'wan1 斷線：FG-B 監控的介面比較完整，接手當主要機');
+  s.cut = {}; settle(s);
+  ok(B.rt.ha.role === 'primary' && B.rt.ha.by === 'uptime', 'wan1 修好：override disable，FG-B 的 HA uptime 比較長，繼續當主要機');
+  cli('fga', ['config system ha', 'set override enable', 'end']);
+  ok(A.rt.ha.role === 'primary' && A.rt.ha.by === 'priority', 'FG-A set override enable：priority 排在 uptime 前面，搶回主要機');
+  const st = cli('fga', ['get system ha status']);
+  ok(/Mode: HA A-P/.test(st) && st.includes(`Primary     : FG-A            , ${serialOf(A)}`) && /in-sync/.test(st) && /largest value of override priority/.test(st), 'get system ha status：主要機、序號、選出的原因、設定同步');
+  ok(/Current HA mode: a-p, secondary/.test(cli('fgb', ['get system status'])), 'get system status：次要機');
+  // heartbeat 線斷了：兩台都當主要機 (split brain)
+  const hb = s.cables.find((x) => x.a.port === 'dmz' && x.b.port === 'dmz');
+  s.cut = { [hb.id]: true }; settle(s);
+  ok(A.rt.ha.role === 'primary' && B.rt.ha.role === 'primary' && A.rt.ha.lost && B.rt.ha.lost, 'heartbeat 斷了：兩台都以為對方掛了，都當主要機 (split brain)');
+  s.cut = {}; settle(s);
+  const txt = fortiConfig(s, A).join('\n');
+  ok(/config system ha\n    set group-name "FGT-HA"\n    set mode a-p\n    set password ENC [0-9a-f]+\n    set hbdev "dmz" 50\n    set session-pickup enable\n    set override enable\n    set priority 200\n    set monitor "wan1" "internal"\nend/.test(txt), 'show：config system ha（密碼顯示成 ENC）');
+  // 貼回設定：ENC 的密碼認得
+  const s3 = lv.setup(); settle(s3);
+  const F3 = fortiSession(() => s3.devices.fgb, () => s3);
+  for (const l of txt.split('\n').filter((l) => l)) F3.exec(l);
+  ok(s3.devices.fgb.ha && s3.devices.fgb.ha.pass === 'Ha-Secret-42', '貼回 show 的內容：ENC 的密碼還原成原本的密碼');
+  ok(/不能同時當監控的介面/.test(cli('fga', ['config system ha', 'set monitor "dmz"', 'end', 'abort'])) || /不能同時當監控的介面/.test(cli('fga', ['end'])), 'heartbeat 介面不能同時當監控的介面');
+}
+
 console.log('\nNetFlow 與 QoS 的 police');
 {
   const sim = await import('../src/engine/sim.js');

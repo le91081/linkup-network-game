@@ -10,6 +10,11 @@ import { linkInfo, cloneState, makeDevice } from './model.js';
 import { ZONE, sdwanOn, diagHealth, diagService, sdwanConfigLines, applySdwanCli } from './sdwan.js';
 import { recompute } from './sim.js';
 import { transfer, configFile, IMAGES, PLATFORM, PLATFORM_NAME, ensureFlash } from './files.js';
+import { newHa, haOn, haStatusLines } from './ha.js';
+
+// HA 的密碼在設定裡顯示成 ENC <十六進位>（貼回來也認得），也可以直接打明文
+const encPass = (p) => Array.from(new TextEncoder().encode(p)).map((b) => b.toString(16).padStart(2, '0')).join('');
+const decPass = (t) => (t[0] === 'ENC' && /^([0-9a-f]{2})+$/i.test(t[1] || '') ? new TextDecoder().decode(new Uint8Array(t[1].match(/../g).map((x) => parseInt(x, 16)))) : t.join(' '));
 
 /**
  * execute restore config：整份設定換掉。FortiGate 沒有 running / startup 之分，
@@ -292,6 +297,59 @@ const SEC = {
     },
   },
   // 連線可以閒置多久（TCP）。UDP 與 ICMP 另有較短的固定逾時
+  // HA（FGCP）：兩台用 heartbeat 介面對接，群組名稱 / ID / 密碼一樣就組成叢集（engine/ha.js）
+  'system ha': {
+    single: true, only: (d) => d.kind === 'firewall',
+    fields: { 'group-id': 'b', 'group-name': 'q', mode: 'b', password: 'b', hbdev: 'hb', 'session-pickup': 'b', override: 'b', priority: 'b', monitor: 'q' },
+    read(d) {
+      const h = d.ha, f = {};
+      if (!h) return [{ key: '', f }];
+      if (+h.gid) f['group-id'] = [String(h.gid)];
+      if (h.group) f['group-name'] = [h.group];
+      if (h.mode !== 'standalone') f.mode = [h.mode];
+      if (h.pass) f.password = ['ENC', encPass(h.pass)];
+      if ((h.hbdev || []).length) f.hbdev = h.hbdev.flatMap((n) => [n, '50']);
+      if (h.pickup) f['session-pickup'] = ['enable'];
+      if (h.override) f.override = ['enable'];
+      if ((h.prio ?? 128) !== 128) f.priority = [String(h.prio)];
+      if ((h.monitor || []).length) f.monitor = [...h.monitor];
+      return [{ key: '', f }];
+    },
+    write(d, key, f) {
+      const one = (k) => (f[k] || [])[0];
+      const mode = one('mode') || 'standalone';
+      if (mode === 'a-a') return ERR('Active-Active 這個模擬還沒有：請用 a-p (Active-Passive)');
+      if (!['standalone', 'a-p'].includes(mode)) return ERR('mode 必須是 standalone、a-p 或 a-a');
+      const gid = one('group-id') ?? '0', prio = one('priority') ?? '128';
+      if (!/^\d+$/.test(gid) || +gid > 1023) return ERR('group-id 必須是 0 – 1023');
+      if (!/^\d+$/.test(prio) || +prio > 255) return ERR('priority 必須是 0 – 255（預設 128）');
+      const group = (f['group-name'] || []).join(' ');
+      if (group.length > 32) return ERR('group-name 最長 32 個字元');
+      const hb = [];
+      const toks = f.hbdev || [];
+      for (let n = 0; n < toks.length; n++) {
+        const name = toks[n];
+        if (/^\d+$/.test(name)) continue; // 每個 heartbeat 介面後面跟著它的優先順序
+        const i = d.ifaces.find((x) => x.id === name);
+        if (!i) return notFound(`hbdev 的 ${name} 不是這台的介面`);
+        if (i.bind.t !== 'port') return ERR(`${name} 不能當 heartbeat 介面：要用實體的埠（例如 "dmz"、"wan2"）`);
+        if (!hb.includes(name)) hb.push(name);
+      }
+      const mon = [];
+      for (const name of f.monitor || []) {
+        if (!d.ifaces.some((x) => x.id === name)) return notFound(`monitor 的 ${name} 不是這台的介面`);
+        if (hb.includes(name)) return ERR(`${name} 是 heartbeat 介面，不能同時當監控的介面`);
+        if (!mon.includes(name)) mon.push(name);
+      }
+      const onOff = (k) => { const v = one(k); if (v != null && v !== 'enable' && v !== 'disable') return null; return v === 'enable'; };
+      const pickup = onOff('session-pickup'), override = onOff('override');
+      if (pickup == null) return ERR('session-pickup 必須是 enable 或 disable');
+      if (override == null) return ERR('override 必須是 enable 或 disable');
+      const h = { ...newHa(), mode, group, gid: +gid, pass: f.password ? decPass(f.password) : '', hbdev: hb, monitor: mon, prio: +prio, override, pickup };
+      if (JSON.stringify(h) === JSON.stringify(newHa())) delete d.ha; else d.ha = h;
+      return undefined;
+    },
+  },
   'system session-ttl': {
     single: true, only: (d) => !!d.policies, fields: { default: 'b' },
     read: (d) => [{ key: '', f: d.natTimeout && +d.natTimeout.tcp > 0 ? { default: [String(d.natTimeout.tcp)] } : {} }],
@@ -746,7 +804,7 @@ const ORDER = Object.keys(SEC);
 
 // ───────────────────────── 輸出 ─────────────────────────
 
-function fmtVal(kind, v) { return v.map((x) => (kind === 'q' || /[\s"]/.test(x) || x === '' ? qv(x) : x)).join(' '); }
+function fmtVal(kind, v) { return v.map((x) => (kind === 'hb' ? (/^\d+$/.test(x) ? x : qv(x)) : kind === 'q' || /[\s"]/.test(x) || x === '' ? qv(x) : x)).join(' '); }
 function block(name, sec, entries, indent = '') {
   const o = [`${indent}config ${name}`], ind = indent + '    ';
   for (const e of entries) {
@@ -780,9 +838,12 @@ function getInfo(state, d, what) {
     const s = plainStamp(state, d);
     ensureFlash(d);
     const img = d.fw && IMAGES[d.fw.image];
+    const r = d.rt && d.rt.ha;
     return [`Version: FortiGate-${d.model === 'fg100f' ? '100F' : '60F'} v${d.fw ? d.fw.ver : '7.4.7'},build${img ? d.fw.image.match(/build(\d+)/)[1] : '2731'} (GA)`, `Hostname: ${hostOf(d)}`, 'Operation Mode: NAT', 'Current virtual domain: root',
+      `Current HA mode: ${haOn(d) ? `a-p, ${r && r.role === 'secondary' ? 'secondary' : 'primary'}` : 'standalone'}`,
       `System time: ${s.day} ${s.mon} ${String(s.dd).padStart(2)} ${s.time} ${s.yyyy}`];
   }
+  if (what === 'system ha status') return haStatusLines(state, d);
   if (what === 'system info admin status') {
     const rows = vtyRows(state, d);
     return ['Index  User name        Login type  From', ...rows.map((v, n) => `${String(n).padEnd(7)}${v.user.padEnd(17)}${v.proto.padEnd(12)}${v.ip}`), `logged in users: ${rows.length}`];
@@ -1070,7 +1131,7 @@ export function fortiSession(getDev, getState) {
     if (cmd === 'get') {
       if (t && t.t === 'edit') { for (const [k, v] of Object.entries(t.f)) out.push(`${k.padEnd(20)}: ${v.join(' ')}`); return res(); }
       const r = getInfo(st(), d, tok.slice(1).join(' ').toLowerCase());
-      if (!r) return fail([...parseErr(tok[1] || ''), '（可用：get system status、get system interface、get system info admin status、get router info routing-table all、get vpn ipsec tunnel summary）']);
+      if (!r) return fail([...parseErr(tok[1] || ''), '（可用：get system status、get system interface、get system ha status、get system info admin status、get router info routing-table all、get vpn ipsec tunnel summary）']);
       out.push(...r);
       return res();
     }

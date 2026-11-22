@@ -9,7 +9,7 @@ import { consoleFollow } from './cli.js';
 const HELP = {
   config: '進入一個設定區段，例如 config firewall policy',
   show: '顯示設定；在最外層可以接區段名稱，例如 show firewall policy',
-  get: 'get system status / get system interface / get router info routing-table all / get vpn ipsec tunnel summary / get system info admin status',
+  get: 'get system status / get system interface / get system ha status / get router info routing-table all / get vpn ipsec tunnel summary / get system info admin status',
   diagnose: "diagnose sniffer packet any 'host <IP>' 4 / diagnose debug flow … / diagnose sys session list / diagnose vpn tunnel list / diagnose hardware deviceinfo nic <埠> / diagnose sys ntp status",
   execute: 'execute ping / traceroute <IP> / backup config tftp <檔名> <IP> / restore config tftp <檔名> <IP> / restore image tftp <檔名> <IP> / log display / date / reboot',
   edit: '編輯或新增一筆，例如 edit 1、edit "HQ"；edit 0 會自動用下一個編號',
