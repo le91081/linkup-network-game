@@ -52,6 +52,21 @@ export function showVpc(st, d) {
   if (notes.length) o.push('', ...notes.map((x) => '（' + x + '）'));
   return o;
 }
+/** show vpc consistency-parameters vpc <n>：兩台同一個 vPC 的成員埠設定（Type 1 不一致的話 secondary 會暫停） */
+export function showVpcConsistency(st, d, n) {
+  if (!isNexus(d)) return NOT;
+  if (!vpcOn(d)) return OFF;
+  const r = d.rt.vpc || {}, peer = r.peer && st.devices[r.peer];
+  const mine = vpcMembers(d, n), theirs = peer ? vpcMembers(peer, n) : [];
+  if (!mine.length) return [`% vPC ${n} 不在這台 Nexus 上`];
+  const col = (D, ps) => { if (!ps.length) return ['-', '-', '-', '-']; const pc = D.sw.ports[ps[0]]; return [pc.mode === 'trunk' ? 'trunk' : 'access', pc.mode === 'trunk' ? String(pc.native) : '-', pc.mode === 'trunk' ? (pc.allowed || 'all') === 'all' ? '1-4094' : pc.allowed : String(pc.vlan), pc.lagMode || 'active']; };
+  const a = col(d, mine), b = col(peer || d, theirs);
+  const names = ['Mode', 'Native Vlan', 'Allowed VLANs', 'lag mode'], types = ['1', '1', '-', '1'];
+  return [`    Legend:`, `        Type 1 : vPC will be suspended in case of mismatch`, '',
+    'Name                        Type  Local Value            Peer Value', '-------------               ----  ---------------------- -----------------------',
+    ...names.map((nm, k) => `${pad(nm, 28)}${pad(types[k], 6)}${pad(a[k], 23)}${theirs.length ? b[k] : '（對端沒有這個 vPC）'}`),
+    ...(r.bad && r.bad[n] ? ['', `（${r.bad[n]}）`] : [])];
+}
 export function showVpcKeepalive(st, d) {
   if (!isNexus(d)) return NOT;
   if (!vpcOn(d)) return OFF;

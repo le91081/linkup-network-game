@@ -40,7 +40,7 @@ import { CATALOG, MEDIA, peerOf, portOf, linkInfo, phyConfig, fiberLink } from '
 import { xcvrAt, xcvrSerial, MEDIA_TYPE } from '../engine/optics.js';
 import { PLATFORM as PID_OF } from '../engine/dnac.js';
 import { showSwitch, showSwitchDetail, showStackPorts, showRedundancy, stackChassis } from './cli-stack.js';
-import { showVpc, showVpcKeepalive } from './cli-vpc.js';
+import { showVpc, showVpcKeepalive, showVpcConsistency } from './cli-vpc.js';
 import { iosSession, runningConfig, startupConfig, hostName as host, aclName, aclLine, aclSeqs } from '../engine/ios.js';
 import { ipMtu, l2Mtu, jumboNow, isCat2960, isCat9300, isNexus } from '../engine/mtu.js';
 import { tunByName, tunnelDetail, dmvpnLines, nhrpLines, nhsLines, ipsecProfileLines, cryptoSessionLines, transformSetLines, bfdLines, pkiCertLines, pkiTrustpointLines } from './cli-tun.js';
@@ -2251,6 +2251,11 @@ function showOrPing(app, devId, line, print) {
     if (!v || !(d.vrfs || {})[v]) { print(v ? `% VRF ${v} does not exist` : '用法：show ip protocols vrf <名稱>', 'warn'); return true; }
     protocolLines(st, d, v).forEach((l) => print(l, l.startsWith('（') ? 'hint' : 'pre'));
     return true;
+  }
+  // show vpc consistency-parameters vpc <編號>（NX-OS）
+  {
+    const m = line.trim().match(/^sh(?:o(?:w)?)?\s+vpc\s+consistency-parameters\s+vpc\s+(\d+)$/i);
+    if (m) { showVpcConsistency(st, d, +m[1]).forEach((l) => print(l, l.startsWith('（') ? 'hint' : 'pre')); return true; }
   }
   // show ip route vrf <名稱> [connected | static | ospf | bgp | <位址> [遮罩]]
   let rvrf = '';
