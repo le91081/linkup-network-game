@@ -37,7 +37,9 @@ export const IMAGES = Object.fromEntries([
   ['isr4300-universalk9.17.06.05.SPA.bin', 'isr4300', '17.6.5', 689143808],
   ['isr4300-universalk9.17.09.05a.SPA.bin', 'isr4300', '17.9.5a', 722546688],
   ['isr4400-universalk9.17.09.05a.SPA.bin', 'isr4400', '17.9.5a', 740818944],
+  ['cat9k_iosxe.17.06.05.SPA.bin', 'cat9k', '17.6.5', 1105199104],
   ['cat9k_iosxe.17.09.05.SPA.bin', 'cat9k', '17.9.5', 1184620544],
+  ['cat9k_iosxe.17.12.04.SPA.bin', 'cat9k', '17.12.4', 1249050624],
   ['nxos64-cs.10.3.4a.M.bin', 'n9k', '10.3(4a)', 2026438656],
   ['FGT_60F-v7.0.15.M-build0632-FORTINET.out', 'FGT_60F', '7.0.15', 73400320],
   ['FGT_60F-v7.2.10.M-build1706-FORTINET.out', 'FGT_60F', '7.2.10', 83886080],
@@ -65,8 +67,38 @@ export function ensureFlash(d) {
   if (d.kind === 'firewall' || d.flash) return;
   const files = { [d.fw.image]: imageFile(d.fw.image, -1) };
   if (d.sw && d.sw.mode === 'vlan') files['vlan.dat'] = { size: 676, md5: md5Of('vlan.dat/' + d.id), kind: 'other', t: -1 };
-  if (p === 'isr4300' || p === 'cat9k') Object.assign(files, { 'tracelogs/': { size: 0, kind: 'dir', md5: '', t: -1 }, 'packages.conf': { size: 7354, md5: md5Of('pk' + d.id), kind: 'other', t: -1 } });
+  if (p === 'isr4300') Object.assign(files, { 'tracelogs/': { size: 0, kind: 'dir', md5: '', t: -1 }, 'packages.conf': { size: 7354, md5: md5Of('pk' + d.id), kind: 'other', t: -1 } });
+  // Catalyst 9300 出廠是 install 模式：映像檔已經解開成一個個 .pkg，開機讀 packages.conf
+  if (p === 'cat9k' && d.fw.image === FACTORY.cat9k) {
+    delete files[d.fw.image];
+    files['tracelogs/'] = { size: 0, kind: 'dir', md5: '', t: -1 };
+    for (const [n, f] of Object.entries(pkgFiles(d.fw.image, -1))) files[n] = f;
+    files['packages.conf'] = pkgConfFile(d.fw.image, -1);
+    d.fw = { image: 'packages.conf', ver: IMAGES[FACTORY.cat9k].ver, mode: 'install' };
+  }
   d.flash = { size: FLASH_SIZE[p], files };
+}
+
+// ── IOS XE 的 install 模式 ──
+// .bin（bundle）可以直接開機；install 模式先把它解開成 .pkg、寫一份 packages.conf，開機讀 packages.conf（比較快、比較省記憶體）。
+// install add file <bin> activate commit：解開、啟用（重新開機）、確認；install remove inactive 刪掉沒在用的套件
+const PKGS = [['rpbase', 0.42], ['espbase', 0.22], ['sipbase', 0.12], ['wlc', 0.08], ['srdriver', 0.07], ['webui', 0.04], ['rpboot', 0.03], ['guestshell', 0.02]];
+/** cat9k_iosxe.17.12.04.SPA.bin → 17.12.04 */
+export const imgTag = (img) => (String(img).match(/\.(\d+\.\d+\.\d+\w*)\.SPA\.bin$/) || [])[1] || '';
+export const pkgNames = (img) => PKGS.map(([p]) => `cat9k-${p}.${imgTag(img)}.SPA.pkg`);
+export function pkgFiles(img, t) {
+  const total = IMAGES[img].size, out = {};
+  PKGS.forEach(([p, r]) => { const n = `cat9k-${p}.${imgTag(img)}.SPA.pkg`; out[n] = { size: Math.round(total * r), md5: md5Of('pkg:' + n), kind: 'pkg', img, t }; });
+  return out;
+}
+export const pkgConfFile = (img, t) => ({ size: 7354, md5: md5Of('conf:' + img), kind: 'pkgconf', img, pkgs: pkgNames(img), t });
+/** 版本加上組建編號：17.12.04.0.5200 */
+export const buildOf = (img) => `${imgTag(img)}.0.${1000 + (parseInt(IMAGES[img].md5.slice(0, 4), 16) % 9000)}`;
+/** flash 裡解開過、還留著套件的版本（第一個是正在用的） */
+export function installedImgs(d) {
+  const files = (d.flash && d.flash.files) || {}, cur = files['packages.conf'] && files['packages.conf'].kind === 'pkgconf' ? files['packages.conf'].img : null;
+  const imgs = [...new Set(Object.values(files).filter((f) => f.kind === 'pkg').map((f) => f.img))];
+  return imgs.sort((a, b) => (a === cur ? -1 : b === cur ? 1 : 0)).map((img) => ({ img, active: img === cur, complete: pkgNames(img).every((n) => files[n]) }));
 }
 export const imageFile = (name, t) => ({ size: IMAGES[name].size, md5: IMAGES[name].md5, kind: 'image', img: name, t });
 export const flashUsed = (d) => Object.values((d.flash && d.flash.files) || {}).reduce((a, f) => a + (f.size || 0), 0);
@@ -84,6 +116,12 @@ export function bootPick(d) {
   const usable = (name) => {
     const f = d.flash.files[name];
     if (!f) return `${fs}:${name} 不存在`;
+    // install 模式：packages.conf 列的每一個套件都要在
+    if (f.kind === 'pkgconf') {
+      if (!IMAGES[f.img] || IMAGES[f.img].platform !== p) return `${fs}:${name} 不是這台的套件設定`;
+      const miss = (f.pkgs || []).find((n) => !d.flash.files[n]);
+      return miss ? `${fs}:${name} 裡列的套件 ${miss} 不見了` : null;
+    }
     if (f.kind !== 'image' || !f.img) return `${fs}:${name} 不是可以開機的映像檔`;
     const img = IMAGES[f.img];
     if (img.platform !== p) return `${fs}:${name} 是給 ${PLATFORM_NAME[img.platform]} 的映像檔，這台是 ${PLATFORM_NAME[p]}`;

@@ -5206,6 +5206,36 @@ console.log('\n帶外管理：Catalyst 9300 的 Gi0/0 與 Mgmt-vrf');
   const ntp = s.dyn.clk.core && s.dyn.clk.core.ntp;
   ok(!ntp || ntp.srv === parseIp('192.168.200.20'), 'NTP 經由 Mgmt-vrf 送出');
 }
+console.log('\nIOS XE 的 install 模式（Catalyst 9300）');
+{
+  const { iosSession, iosDirty } = await import('../src/engine/ios.js');
+  const { iosRun } = await import('../src/ui/cli.js');
+  const { imageFile, installedImgs } = await import('../src/engine/files.js');
+  const ok = (cond, title) => (cond ? console.log('  ✔ ' + title) : fail(title));
+  const cli = (s, id) => { const S = iosSession(() => s.devices[id], () => s); return (...lines) => { const out = []; for (const l of lines) { const r = iosRun({ state: s, showTrace() {}, refreshLive() {} }, id, S, l, (x) => out.push(x)); if (r.changed) settle(s); } return out.join('\n'); }; };
+  const lv = LEVELS.find((x) => x.id === 'l143');
+  const s = lv.setup(); settle(s);
+  const C = cli(s, 'core'), d = s.devices.core, NEW = 'cat9k_iosxe.17.12.04.SPA.bin';
+  C('enable');
+  ok(/INSTALL$/m.test(C('show version')) && /System image file is "bootflash:packages\.conf"/.test(C('show version')) && /IMG {3}C {4}17\.09\.05\.0\.\d+/.test(C('show install summary')) && /IMG {3}I {4}17\.06\.05\.0\.\d+/.test(C('show install summary')), '出廠是 INSTALL 模式：show version、show install summary（17.9.5 是 C、17.6.5 留下來的是 I）');
+  d.flash.files[NEW] = imageFile(NEW, 0);
+  ok(/FAILED: install_add : Insufficient disk space/.test(C('install add file bootflash:' + NEW)), 'flash 空間不夠：install add 失敗（解開的套件和 .bin 差不多大）');
+  delete d.flash.files[NEW];
+  const rm = C('install remove inactive', 'y');
+  ok(/cat9k-rpbase\.17\.06\.05\.SPA\.pkg/.test(rm) && /cat9k_iosxe\.17\.09\.05\.SPA\.bin/.test(rm) && !/17\.09\.05\.SPA\.pkg/.test(rm) && installedImgs(d).length === 1, 'install remove inactive：刪掉沒在用的套件與 .bin，正在用的 17.9.5 套件留著');
+  d.flash.files[NEW] = imageFile(NEW, 0);
+  const add = C('install add file bootflash:' + NEW);
+  ok(/Image added\. Version: 17\.12\.04\.0\.\d+/.test(add) && /IMG {3}I {4}17\.12\.04/.test(C('show install summary')), 'install add：解開成套件，狀態是 I (Inactive)');
+  const dirty = iosDirty(s, d);
+  C('install activate', 'y');
+  settle(s, 600);
+  C('enable');
+  ok(d.fw.ver === '17.12.4' && d.fw.mode === 'install' && /IMG {3}U {4}17\.12\.04/.test(C('show install summary')) && /Auto abort timer: active/.test(C('show install summary')), 'install activate：重新開機成 17.12.4，還沒 commit 是 U、計時器在跑');
+  ok(dirty && !s.devices.core.sw.vlans.some((v) => v.id === 30), '沒有先存檔：重新開機之後昨天新增的 VLAN 30 不見了');
+  C('install commit');
+  ok(/IMG {3}C {4}17\.12\.04/.test(C('show install summary')) && /IMG {3}I {4}17\.09\.05/.test(C('show install summary')), 'install commit：變成 C，17.9.5 變成 I');
+  ok(/install 指令只有 IOS XE 的 Catalyst 9300/.test(cli(settle(LEVELS.find((x) => x.id === 'l41').setup()), 'rt')('enable', 'install add file bootflash:x.bin')), '其他平台沒有 install 指令');
+}
 console.log('\nNetFlow 與 QoS 的 police');
 {
   const sim = await import('../src/engine/sim.js');

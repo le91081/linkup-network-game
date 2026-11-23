@@ -20,7 +20,7 @@ import { iosClock, deviceTime, ntpInfo, logRows, clearLog, syslogStats, uptimeOf
 import { quietLeft } from '../engine/remote.js';
 import { counters, clearCounters, clearedAt, spanDest, debugOf, setDebug, consoleRows } from '../engine/wire.js';
 import { DEBUG_KINDS } from '../engine/debug.js';
-import { ensureFlash, IMAGES, PLATFORM, fsName, flashUsed } from '../engine/files.js';
+import { ensureFlash, IMAGES, PLATFORM, fsName, flashUsed, buildOf, installedImgs, imgTag } from '../engine/files.js';
 import { hostKey, vtyMode } from '../engine/remote.js';
 import { snmpStats } from '../engine/snmp.js';
 import { portByName } from '../engine/ios.js';
@@ -65,6 +65,14 @@ const SHOW = {
     return c ? c.filter((l) => l !== 'Building configuration...') : ['startup-config is not present'];
   },
   'show version': (st, d) => versionLines(st, d),
+  'show install summary': (st, d) => {
+    if (PLATFORM[d.model] !== 'cat9k') return ['% install 模式只有 IOS XE 的 Catalyst 9300 有'];
+    ensureFlash(d);
+    const imgs = installedImgs(d), pend = d.install && d.install.pending;
+    return ['[ Switch 1 ] Installed Package(s) Information:', 'State (St): I - Inactive, U - Activated & Uncommitted,', '            C - Activated & Committed, D - Deactivated & Uncommitted', '-'.repeat(80), 'Type  St   Filename/Version', '-'.repeat(80),
+      ...imgs.map((x) => `IMG   ${x.active ? (pend && pend.img === x.img ? 'U' : 'C') : 'I'}    ${buildOf(x.img)}${x.complete ? '' : '（套件不完整）'}`),
+      ...((d.fw || {}).mode !== 'install' ? [`（現在是 BUNDLE 模式：從 ${(d.fw || {}).image} 開機）`] : []), '', '-'.repeat(80), `Auto abort timer: ${pend ? 'active , time before rollback - 05:59:58' : 'inactive'}`, '-'.repeat(80)];
+  },
   'show ip ssh': (st, d) => {
     const m = d.mgmt || {}, k = m.sshKey;
     if (!k || k.bits < 768) return [`SSH Disabled - version ${m.sshVer === 2 ? '2.0' : '1.99'}`, '%Please create RSA keys to enable SSH (and of atleast 768 bits for SSH v2).',
@@ -1679,8 +1687,8 @@ function mlsQosLines(st, d, p) {
 function versionLines(st, d) {
   ensureFlash(d);
   const p = PLATFORM[d.model], fw = d.fw || {}, fs = fsName(d);
-  const xeVer = (fw.image || '').match(/\.(\d+\.\d+\.\d+\w*)\.SPA/);
-  const codename = { '16.12': 'Gibraltar', '17.3': 'Amsterdam', '17.6': 'Bengaluru', '17.9': 'Cupertino' }[String(fw.ver).split('.').slice(0, 2).join('.')] || 'Cupertino';
+  const xeVer = (fw.image || '').match(/\.(\d+\.\d+\.\d+\w*)\.SPA/) || (fw.mode === 'install' && d.flash && d.flash.files['packages.conf'] ? [0, imgTag(d.flash.files['packages.conf'].img)] : null);
+  const codename = { '16.12': 'Gibraltar', '17.3': 'Amsterdam', '17.6': 'Bengaluru', '17.9': 'Cupertino', '17.12': 'Dublin' }[String(fw.ver).split('.').slice(0, 2).join('.')] || 'Cupertino';
   const head = p === 'n9k'
     ? ['Cisco Nexus Operating System (NX-OS) Software', `  NXOS: version ${fw.ver}`, `  NXOS image file is: bootflash:///${fw.image}`]
     : xeVer
@@ -1689,7 +1697,9 @@ function versionLines(st, d) {
   return [...head, 'Technical Support: http://www.cisco.com/techsupport', '', `${host(d)} uptime is ${upText(uptimeOf(st, d))}`, 'System returned to ROM by reload',
     `System image file is "${fs}:${fw.image}"`, '', `cisco ${CATALOG[d.model].title.replace(/^Cisco /, '')} processor with 4194304K bytes of memory.`,
     `${d.ports.length} Gigabit Ethernet interfaces`, ...(d.flash ? [`${Math.round(d.flash.size / 1024)}K bytes of ${fs === 'flash' ? 'flash-simulated non-volatile configuration memory' : 'flash memory at bootflash:'}.`] : []), '',
-    'Configuration register is 0x2102', ...(d.flash ? [`（${fs} 已經用了 ${Math.round(flashUsed(d) / 1048576)} MB / ${Math.round(d.flash.size / 1048576)} MB）`] : [])];
+    'Configuration register is 0x2102', ...(p === 'cat9k' ? ['', 'Switch Ports Model              SW Version        SW Image              Mode', '------ ----- -----              ----------        ----------            ----',
+      `*    1 ${String(d.ports.length).padEnd(5)} ${'C9300-24T'.padEnd(18)} ${(xeVer ? xeVer[1] : fw.ver).padEnd(17)} ${'CAT9K_IOSXE'.padEnd(21)} ${fw.mode === 'install' ? 'INSTALL' : 'BUNDLE'}`] : []),
+    ...(d.flash ? [`（${fs} 已經用了 ${Math.round(flashUsed(d) / 1048576)} MB / ${Math.round(d.flash.size / 1048576)} MB）`] : [])];
 }
 void IMAGES;
 

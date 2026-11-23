@@ -368,7 +368,7 @@ export function opsBefore(state) {
       const b = isCiscoOs(d) && d.flash ? bootPick(d) : null;
       if (b && b.rommon) { c.rommon = { why: b.rommon, notes: b.notes }; c.up = Infinity; }
       else {
-        if (b) { d.fw = { image: b.image, ver: IMAGES[d.flash.files[b.image].img].ver }; c.bootNotes = b.notes; }
+        if (b) { const f = d.flash.files[b.image]; d.fw = { image: b.image, ver: IMAGES[f.img].ver, ...(f.kind === 'pkgconf' ? { mode: 'install' } : {}) }; c.bootNotes = b.notes; }
         c.up = now + bootTime(d);
       }
     }

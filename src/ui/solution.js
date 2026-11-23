@@ -133,6 +133,9 @@ export function solutionChanges(lv) {
     if (isIos(b)) {
       const lines = cfgDiff(runningConfig(s0, a), runningConfig(s1, b));
       if (lines.length) devs.push({ name: b.name, ios: true, lines });
+      // 韌體不在 running-config 裡（install 模式升級、boot system 換映像檔）：另外列出版本的變化
+      const fa = a.fw || {}, fb = b.fw || {};
+      if (fb.ver && (fa.ver !== fb.ver || fa.mode !== fb.mode)) devs.push({ name: b.name, ios: false, lines: [`韌體：${fa.ver || '?'}${fa.mode === 'install' ? '（INSTALL）' : ''} → ${fb.ver}${fb.mode === 'install' ? '（INSTALL 模式）' : '（BUNDLE 模式）'}`] });
       continue;
     }
     const out = [];

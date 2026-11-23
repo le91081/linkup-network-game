@@ -10,7 +10,7 @@ import { cdpCfg, lldpCfg, portNd, setPortNd, speaksCdp, clearNeighbors, CDP_TIME
 import { parseDscp, dscpName, COS_DSCP_DEFAULT } from './qos.js';
 import { clearOspfProcess, clearOspfAll, ospfArea, ospfProc, ospfKeys, ospfProcs } from './ospf.js';
 import { parseComm } from './bgp.js';
-import { transfer, configFile, ensureFlash, flashFree, flashPath, fsName, IMAGES, PLATFORM, PLATFORM_NAME, imageFile, fmtBytes } from './files.js';
+import { transfer, configFile, ensureFlash, flashFree, flashPath, fsName, IMAGES, PLATFORM, PLATFORM_NAME, imageFile, fmtBytes, pkgFiles, pkgConfFile, pkgNames, buildOf, installedImgs } from './files.js';
 import { macsBehind, recompute, ospfOn, ikeVer, isTun, tunMode, transact } from './sim.js';
 import { parseMethods, METHOD_TEXT, aaaAuthorize, aaaAccount } from './aaa.js';
 import { tpOf, urlTarget, caCert, validityError, issue, certHex, hexCert } from './pki.js';
@@ -38,7 +38,7 @@ const ripVers = (v) => { const l = [...new Set(String(v || '').split(/\s+/).filt
 /** 這台設備是不是跑 IOS（有 running / startup 兩份設定） */
 export const isIos = (dev) => !dev.locked && CATALOG[dev.model].vendor === 'Cisco' && ['router', 'mswitch', 'l3switch'].includes(dev.kind);
 // fw（正在跑的韌體）與 flash 裡的檔案不是設定：重新開機、還原設定都不會動到它們
-const KEEP = new Set(['id', 'model', 'kind', 'pos', 'ports', 'rt', 'startup', 'locked', 'note', 'fw', 'flash', 'fwNext']);
+const KEEP = new Set(['id', 'model', 'kind', 'pos', 'ports', 'rt', 'startup', 'locked', 'note', 'fw', 'flash', 'fwNext', 'install']);
 const snapshot = (dev) => JSON.stringify(Object.fromEntries(Object.entries(dev).filter(([k]) => !KEEP.has(k))), (k, v) => (k === 'rt' ? undefined : v));
 /** write memory：把目前的設定存成 startup-config */
 export function saveStartup(dev) { dev.startup = snapshot(dev); }
@@ -3963,6 +3963,7 @@ export function iosSession(getDev, getState, who = null) {
         if (dev().archive && dev().archive.wm) { const r = archiveRunning(getState(), dev()); if (r.err) out.push(r.err); }
         return done(true);
       }
+      if (match(tok, 'install <...>') || t0 === 'install') return installExec(tok, out);
       const fileCmd = fileExec(tok, text, out);
       if (fileCmd) return fileCmd;
       // clock set 14:30:00 5 January 2026（月份和日期的順序兩種都可以）
@@ -4202,6 +4203,85 @@ export function iosSession(getDev, getState, who = null) {
   };
   const bang = (bytes) => '!'.repeat(Math.max(1, Math.min(60, Math.round(bytes / 400000))));
   const copied = (r) => `${r.bytes} bytes copied in ${r.secs.toFixed(3)} secs (${r.rate} bytes/sec)`;
+
+  /**
+   * IOS XE 的 install 模式（Catalyst 9300）：install add file <bin> [activate commit]、install activate commit、install remove inactive。
+   * 解開的套件和 .bin 差不多大，flash 要有足夠的空間；啟用要重新開機（沒存檔的設定會不見）
+   */
+  function installExec(tok, out) {
+    const d = dev();
+    if (PLATFORM[d.model] !== 'cat9k') { out.push('% install 指令只有 IOS XE 的 Catalyst 9300 有（這台用 boot system 指定 .bin）'); return { out, changed: false }; }
+    ensureFlash(d);
+    const files = d.flash.files, fsn = fsName(d), now = () => iosClock(getState(), d).replace(/^[*.]/, '');
+    const args = tok.slice(1).map((x) => x.toLowerCase());
+    const reloadNow = (o, img, commit) => {
+      if (files['packages.conf'] && files['packages.conf'].kind === 'pkgconf') files['packages.conf.00-'] = { ...files['packages.conf'], t: getState().clock };
+      files['packages.conf'] = pkgConfFile(img, getState().clock);
+      if ((d.bootSys || []).length && !d.bootSys.every((b) => /packages\.conf$/.test(b))) d.bootSys = ['flash:packages.conf'];
+      d.install = { pending: commit ? null : { img, at: getState().clock } };
+      o.push('', '--- Starting Activate ---', 'Performing Activate on all members', '  [1] Activate package(s) on switch 1', '  [1] Finished Activate on switch 1', 'Checking status of Activate on [1]', 'Activate: Passed on [1]', 'Finished Activate', '');
+      if (commit) o.push('--- Starting Commit ---', 'Performing Commit on all members', '  [1] Commit package(s) on switch 1', '  [1] Finished Commit on switch 1', 'Checking status of Commit on [1]', 'Commit: Passed on [1]', 'Finished Commit', '');
+      o.push(`SUCCESS: install_${commit ? 'add_activate_commit' : 'activate'} ${now()}`);
+      // 啟用之後馬上重新開機（不會先存檔）
+      return doReload(o);
+    };
+    const activate = (o, img, commit) => {
+      o.push(`install_add_activate_commit: Activating PACKAGE`, 'Following packages shall be activated:', ...pkgNames(img).map((n) => `/flash/${n}`), '', 'This operation may require a reload of the system. Do you want to proceed? [y/n]');
+      S.pending = { fn: (text, o2) => { S.pending = null; if (!/^y/i.test(text.trim())) { o2.push('install_add_activate_commit: Aborted by user'); return { out: o2, changed: true }; } return reloadNow(o2, img, commit); } };
+      return { out: o, changed: true };
+    };
+    // install add file flash:<bin> [activate [commit]]
+    if (args[0] === 'add' && args[1] === 'file' && tok[3]) {
+      const name = flashPath(tok[3]), f = files[name], wantAct = args.includes('activate'), commit = args.includes('commit');
+      out.push(`install_add${wantAct ? '_activate' : ''}${commit ? '_commit' : ''}: START ${now()}`, `install_add${wantAct ? '_activate_commit' : ''}: Adding PACKAGE`);
+      if (!f) { out.push(`FAILED: install_add : ${fsn}:${name} does not exist`); return { out, changed: false }; }
+      if (f.kind !== 'image' || !IMAGES[f.img] || IMAGES[f.img].platform !== 'cat9k') { out.push(`FAILED: install_add : ${fsn}:${name} is not a valid Catalyst 9000 image`); return { out, changed: false }; }
+      if (f.md5 !== IMAGES[f.img].md5 || f.size !== IMAGES[f.img].size) { out.push(`FAILED: install_add : ${fsn}:${name} failed integrity check (file is corrupted)`, '（檔案不完整：重新下載，先用 verify /md5 比對）'); return { out, changed: false }; }
+      const have = installedImgs(d).find((x) => x.img === f.img && x.complete);
+      if (!have) {
+        const need = pkgNames(f.img).reduce((a, n) => a + (files[n] ? 0 : pkgFiles(f.img, 0)[n].size), 0), free = flashFree(d);
+        if (need > free) {
+          out.push(`FAILED: install_add : Insufficient disk space on ${fsn}: Free space ${Math.floor(free / 1048576)} MB, required ${Math.ceil(need / 1048576)} MB`, '（解開的套件和映像檔差不多大：先 install remove inactive 刪掉舊版本沒在用的套件，或 delete 用不到的 .bin）');
+          return { out, changed: false };
+        }
+        Object.assign(files, pkgFiles(f.img, getState().clock));
+      }
+      out.push('install_add: Checking whether new add is allowed ....', '', '--- Starting Add ---', 'Performing Add on all members', '  [1] Add package(s) on switch 1', '  [1] Finished Add on switch 1', 'Checking status of Add on [1]', 'Add: Passed on [1]', 'Finished Add', '', `Image added. Version: ${buildOf(f.img)}`);
+      if (!wantAct) { out.push(`SUCCESS: install_add ${now()}`, '（套件解開了，還沒有啟用：install activate commit 才會換成這個版本，show install summary 看狀態）'); return { out, changed: true }; }
+      return activate(out, f.img, commit);
+    }
+    // install activate [commit]：啟用最近解開、還沒在用的版本
+    if (args[0] === 'activate') {
+      const cand = installedImgs(d).filter((x) => !x.active && x.complete).pop();
+      if (!cand) { out.push('FAILED: install_activate : No inactive package to activate（先 install add file <bin>）'); return { out, changed: false }; }
+      return activate(out, cand.img, args.includes('commit'));
+    }
+    if (args[0] === 'commit') {
+      if (!(d.install && d.install.pending)) { out.push('FAILED: install_commit : No uncommitted package found'); return { out, changed: false }; }
+      d.install.pending = null;
+      out.push('install_commit: START ' + now(), '--- Starting Commit ---', 'Performing Commit on all members', '  [1] Finished Commit on switch 1', 'Commit: Passed on [1]', 'Finished Commit', '', 'SUCCESS: install_commit ' + now());
+      return { out, changed: true };
+    }
+    // install remove inactive：沒在用的套件、.bin、舊的 packages.conf
+    if (args[0] === 'remove' && args[1] === 'inactive') {
+      const cur = files['packages.conf'], keep = new Set(cur && cur.kind === 'pkgconf' ? cur.pkgs : []);
+      const dead = Object.keys(files).filter((n) => (files[n].kind === 'pkg' && !keep.has(n)) || (files[n].kind === 'image' && !(d.fw && d.fw.image === n)) || /^packages\.conf\.\d+-$/.test(n));
+      out.push('install_remove: START ' + now(), 'Cleaning up unnecessary package files', 'Scanning boot directory for packages ... done.', 'Preparing packages list to delete ...');
+      if (!dead.length) { out.push('  No path specified, will use booted path flash:packages.conf', 'SUCCESS: No extra package or provisioning files found on media. Nothing to clean.'); return { out, changed: false }; }
+      out.push('    [1]: Following files will be deleted:', ...dead.map((n) => `    [1]: /flash/${n}`), '', 'Do you want to remove the above files? [y/n]');
+      S.pending = { fn: (text, o) => {
+        S.pending = null;
+        if (!/^y/i.test(text.trim())) { o.push('install_remove: Aborted by user'); return { out: o, changed: false }; }
+        const freed = dead.reduce((a, n) => a + (files[n].size || 0), 0);
+        for (const n of dead) delete files[n];
+        o.push('[1]:', 'Deleting file flash:... done.', `SUCCESS: Files deleted.`, `（空出 ${Math.round(freed / 1048576)} MB）`, 'SUCCESS: install_remove ' + now());
+        return { out: o, changed: true };
+      } };
+      return { out, changed: false };
+    }
+    out.push('% 用法：install add file flash:<映像檔> [activate commit]、install activate commit、install commit、install remove inactive');
+    return { out, changed: false };
+  }
 
   /** dir、delete、verify、copy、show flash / boot；不是這幾個就回傳 null */
   function fileExec(tok, text, out) {
