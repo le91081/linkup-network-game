@@ -926,3 +926,14 @@ test('IOS 的 monitor capture：擷取經過介面的 ICMP、show buffer brief�
   await expect(out).toContainText('cap.pcap');
   expect(await scan(page, '#panel', 'CLI（monitor capture）')).toEqual([]);
 });
+
+test('流量熱圖：2D 拓撲圖上被塞滿的上行顯示紅色與使用率', async ({ page }) => {
+  await boot(page);
+  await open(page, 'l137');
+  await page.evaluate(() => document.activeElement && document.activeElement.blur());
+  await page.keyboard.press('t');
+  await page.locator('#topo2d .t2-tools .btn', { hasText: '流量熱圖' }).click();
+  await expect(page.locator('#topo2d .t2-heat').filter({ hasText: /9\d%/ })).toHaveCount(1);
+  expect(await scan(page, '#topo2d', '2D 拓撲圖（流量熱圖）')).toEqual([]);
+  await page.keyboard.press('t');
+});

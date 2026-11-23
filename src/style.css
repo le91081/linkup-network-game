@@ -945,3 +945,8 @@ table.ipplan { border-collapse: collapse; width: 100%; font-size: 12.5px; }
 table.ipplan th { position: sticky; top: 0; background: var(--panel-solid); color: var(--faint); font-weight: 700; text-align: left; padding: 6px 8px; white-space: nowrap; }
 table.ipplan td { padding: 5px 8px; border-top: 1px solid var(--line); white-space: nowrap; }
 .export-img { max-width: 100%; max-height: 60vh; display: block; margin: 8px auto; border-radius: 6px; }
+
+/* 流量熱圖：線的顏色照使用率（綠 < 40% < 黃 < 70% < 橘 < 90% < 紅） */
+.t2-link.heat { stroke-linecap: round; opacity: 0.95; }
+.t2-heat { font-size: 11px; font-weight: 700; text-anchor: middle; paint-order: stroke; stroke: #0a0f1f; stroke-width: 3px; }
+#topo2d .t2-tools .btn.on { background: rgba(245, 181, 71, 0.18); border-color: #f5b547; color: #f5b547; }

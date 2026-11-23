@@ -4,6 +4,17 @@
 import { CATALOG, MEDIA } from '../engine/model.js';
 import { fmtIp } from '../engine/ip.js';
 import { isTrunk } from '../engine/sim.js';
+import { linkInfo } from '../engine/model.js';
+
+/** 流量熱圖：這條線兩個方向裡比較忙的那一邊（Mbps、使用率 %） */
+export function cableLoad(st, c) {
+  const load = (st.rt && st.rt.load) || {};
+  const mbps = Math.max(load[c.id + '>' + c.b.dev] || 0, load[c.id + '>' + c.a.dev] || 0);
+  const li = linkInfo(st, c.a.dev, c.a.port), speed = li && !li.down ? li.speed : 0;
+  return { mbps, speed, pct: speed ? Math.min(100, (mbps / speed) * 100) : 0 };
+}
+const heatColor = (p) => (p >= 90 ? '#ff5d6c' : p >= 70 ? '#ff9f43' : p >= 40 ? '#f5d547' : p >= 5 ? '#4ade80' : '#3d7a5a');
+const fmtMbps = (m) => (m >= 1000 ? (m / 1000).toFixed(1) + ' Gbps' : m >= 10 ? Math.round(m) + ' Mbps' : m.toFixed(1) + ' Mbps');
 
 const NS = 'http://www.w3.org/2000/svg';
 const KIND = {
@@ -115,7 +126,12 @@ export function renderTopo(app, svg, rect) {
     const A = st.devices[c.a.dev], B = st.devices[c.b.dev];
     const why = (st.rt.why || {})[c.id];
     const tip = `${A.name} ${portTag(st, A, c.a.port) || c.a.port} ↔ ${B.name} ${portTag(st, B, c.b.port) || c.b.port} · ${MEDIA[c.media || 'rj45'].cable}${cs === 'blocked' ? ' · 被 STP 封鎖' : cs === 'down' ? ' · 沒有燈號' : ''}${why ? '\n' + why : ''}`;
-    parts.push(`<line class="${cls}" x1="${e.pa.x}" y1="${e.pa.y}" x2="${e.pb.x}" y2="${e.pb.y}"><title>${esc(tip)}</title></line>`);
+    if (app.heat && !virt && cs === 'up') {
+      // 流量熱圖：線的顏色與粗細照使用率，中間標出目前的流量
+      const L = cableLoad(st, c), col = heatColor(L.pct);
+      parts.push(`<line class="t2-link heat" style="stroke:${col};stroke-width:${2.5 + (L.pct / 100) * 5}" x1="${e.pa.x}" y1="${e.pa.y}" x2="${e.pb.x}" y2="${e.pb.y}"><title>${esc(`${tip}\n目前 ${fmtMbps(L.mbps)}（${Math.round(L.pct)}%，${L.speed >= 1000 ? L.speed / 1000 + ' Gbps' : L.speed + ' Mbps'} 線路）`)}</title></line>`);
+      if (L.mbps >= 0.5) parts.push(`<text class="t2-heat" x="${(e.pa.x + e.pb.x) / 2}" y="${(e.pa.y + e.pb.y) / 2 - 6}" fill="${col}">${esc(`${fmtMbps(L.mbps)} · ${Math.round(L.pct)}%`)}</text>`);
+    } else parts.push(`<line class="${cls}" x1="${e.pa.x}" y1="${e.pa.y}" x2="${e.pb.x}" y2="${e.pb.y}"><title>${esc(tip)}</title></line>`);
     // 兩端的埠名
     for (const [end, t, dev] of [[c.a, e.ta, A], [c.b, e.tb, B]]) {
       const tag = portTag(st, dev, end.port);

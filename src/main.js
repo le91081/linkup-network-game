@@ -462,7 +462,8 @@ function topoEl() {
   // 文件產出：拓撲圖匯出成圖片、IP 位址規劃表
   root.append(h('div', { class: 't2-tools' },
     button('匯出圖片', { ic: 'download', small: true, onclick: () => exportTopoDialog(app, svg) }),
-    button('IP 位址表', { ic: 'grid', small: true, onclick: () => ipPlanDialog(app) })));
+    button('IP 位址表', { ic: 'grid', small: true, onclick: () => ipPlanDialog(app) }),
+    button('流量熱圖', { ic: 'bolt', small: true, onclick: (e) => { app.heat = !app.heat; e.currentTarget.classList.toggle('on', app.heat); app.render2d(); } })));
   document.body.append(root);
   // 點設備：和 3D 場景一樣打開設定；點空白處取消選取（拖曳平移結束時的那一下不算）
   svg.addEventListener('click', (e) => {
