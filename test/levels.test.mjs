@@ -5789,6 +5789,21 @@ console.log('\nMetro Ethernet：EVPL 與 CE-VLAN');
   ok(runObjective(s2, lv.objectives[0]).pass, '換成 EPL（整個埠透通）：不帶標籤也通');
 }
 
+console.log('\n配線架：端對端的連線');
+{
+  const { runObjective } = await import('../src/engine/sim/objectives.js');
+  const ok = (cond, title) => (cond ? console.log('  ✔ ' + title) : fail(title));
+  const lv = LEVELS.find((x) => x.id === 'l164');
+  const s = lv.setup(); settle(s);
+  const L = s.rt.links;
+  ok(L['sw:Gi0/1'] && L['sw:Gi0/1'].dev === 'pc01' && L['pc01:eth0'].dev === 'sw' && !L['pp:f1'], '配線架是透明的：交換器的 Gi0/1 直接連到 3F-01 的電腦');
+  ok(!L['sw:Gi0/5'] && !L['pc12:eth0'] && /前面沒有接線/.test(s.rt.why[s.cables.find((c) => c.b.dev === 'pc12' || c.a.dev === 'pc12').id]), '只接一面：Gi0/5（第 21 孔後面沒接）和 3F-12（第 12 孔前面沒插）都沒有燈號');
+  lv.solve(s); settle(s);
+  ok(lv.objectives.every((o) => (o.type === 'check' ? o.test(s) : runObjective(s, o).pass) === true), '跳線改插第 12 孔：三個目標都通過');
+  s.dist['pc12|pp'] = 98; settle(s);
+  ok(!s.rt.links['sw:Gi0/5'] && /整條通道是 101 公尺/.test(Object.values(s.rt.why).join()), '水平佈線 98 公尺 + 跳線 3 公尺：每一段都沒超過，整條通道 101 公尺超過 100 公尺，沒有連線');
+}
+
 console.log('\nNetFlow 與 QoS 的 police');
 {
   const sim = await import('../src/engine/sim.js');

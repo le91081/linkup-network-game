@@ -40,6 +40,7 @@ import * as VZ from './panel-virt.js';
 import * as LTM from './panel-ltm.js';
 import { stackTab } from './panel-stack.js';
 import { buildJunosCli } from './junoscli.js';
+import { jackInfo } from '../engine/patch.js';
 import { isStack } from '../engine/stack.js';
 import { dnsTab } from './panel-dns.js';
 import { vrfField, vrfCard } from './panel-vrf.js';
@@ -536,6 +537,24 @@ function forwardsTab(ctx, body) {
   if (npc) body.append(npc);
 }
 
+/** 配線架：每一孔貼的標籤、後面與前面各接到哪裡、端對端有沒有燈號 */
+function patchTab(ctx, body) {
+  const { dev, state } = ctx;
+  body.append(note('muted', '配線架是被動的：前面第 n 孔和後面第 n 孔直接相通。後面通常打線到牆上的網路孔（標籤寫牆上的編號，例如 3F-12），前面用短跳線接到交換器。兩面都接好，交換器和那台設備之間才有燈號；整條通道（跳線 + 水平佈線）一樣不能超過 100 公尺。'));
+  const rows = [];
+  for (let n = 1; n <= 24; n++) {
+    const j = jackInfo(state, dev, n);
+    if (!j.back && !j.front && !(dev.patch.labels || {})[n]) continue;
+    const nm = (e) => (e ? `${state.devices[e.dev].name} ${(state.devices[e.dev].ports.find((p) => p.id === e.port) || {}).label || e.port}` : '（沒有接）');
+    rows.push(h('div', { class: 'trow c-patch' }, h('b', { class: 'mono', text: String(n) }),
+      inp(ctx, () => (dev.patch.labels || {})[n] || '', (v) => { (dev.patch.labels ||= {})[n] = v.trim(); }, { ph: '標籤', mono: false }),
+      h('span', { class: 'muted', text: nm(j.front) }), h('span', { class: 'muted', text: nm(j.back) }),
+      j.up ? badge('on', '通') : badge('off', j.front || j.back ? '只接一面' : '—')));
+  }
+  body.append(h('div', { class: 'card' }, cardHead('配線'), h('div', { class: 'thead c-patch' }, h('span', { text: '孔' }), h('span', { text: '標籤' }), h('span', { text: '前面（跳線）' }), h('span', { text: '後面（水平佈線）' }), h('span')),
+    rows.length ? rows : note('muted', '還沒有任何一孔接線。')));
+}
+
 /** Metro Ethernet 專線：業者給的服務內容（EPL / EVPL、對應的 CE-VLAN、MTU）與兩端 UNI 的燈號 */
 function evcInfo(ctx, body) {
   const { dev } = ctx, e = dev.evc;
@@ -715,6 +734,7 @@ function baseTabs(dev) {
     case 'hub': case 'switch': return [T.ports];
     case 'ap': return dev.lwap ? [['lwap', 'AP', W.lwapTab]] : [['ssid', '無線網路', X.ssidTab], ['radio', '無線電', X.radioTab], T.ports];
     case 'hypervisor': return [['vsw', '虛擬交換器', VZ.vswTab], ['vms', '虛擬機器', VZ.vmsTab], T.status];
+    case 'patch': return [['patch', '配線', patchTab]];
     case 'lb': return [['if', 'Self IP', lbIfaces], T.route, ['vs', 'Virtual Servers', LTM.vsTab], ['pool', 'Pools', LTM.poolTab], ['mon', 'Monitors', LTM.monTab], T.status];
     case 'cloud': return dev.tgw ? [['tgw', 'Transit Gateway', CL.tgwTab]] : [['vpc', 'VPC', CL.vpcTab], ['sub', '子網路', CL.subnetTab], ['rtb', '路由表', CL.rtTab], ['ec2', 'EC2', CL.ec2Tab], ['sg', '安全群組', CL.sgTab], ['nacl', '網路 ACL', CL.naclTab], ['nat', 'NAT 閘道', CL.natTab], ['alb', '負載平衡器', CL.lbTab], ['pcx', 'Peering', CL.peeringTab], ['cvpn', 'VPN', CL.cloudVpnTab]];
     case 'wlc': return [['wlan', 'WLAN', W.wlanTab], ['aps', 'AP', W.apsTab], ['wcl', '用戶端', W.wlcClientsTab], ['wmi', '管理介面', W.wmiTab], T.swports];
@@ -729,7 +749,7 @@ function baseTabs(dev) {
 
 const KIND_NAME = {
   host: '終端設備', hub: '集線器', switch: '交換器', mswitch: '網管型交換器', l3switch: 'L3 交換器',
-  router: '路由器', homerouter: '家用路由器', firewall: '防火牆', ap: '無線基地台', wlc: '無線控制器', internet: 'ISP', cloud: '公有雲', hypervisor: '虛擬化主機', lb: '負載平衡器',
+  router: '路由器', homerouter: '家用路由器', firewall: '防火牆', ap: '無線基地台', wlc: '無線控制器', internet: 'ISP', cloud: '公有雲', hypervisor: '虛擬化主機', lb: '負載平衡器', patch: '配線架',
 };
 
 /** 把選取的設備畫到面板上；回傳 false 表示沒有選取設備 */

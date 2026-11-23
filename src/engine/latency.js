@@ -9,7 +9,7 @@
 // 回應 ping 或送出 TTL exceeded 的是設備的 CPU（不是轉送晶片），所以 ping 路由器、交換器本身會多一點時間
 import { CATALOG, cableDist, linkInfo } from './model.js';
 
-const PROC = { host: 0.05, hub: 0.002, switch: 0.006, mswitch: 0.006, l3switch: 0.02, router: 0.04, homerouter: 0.25, firewall: 0.09, lb: 0.06, ap: 0.3, wlc: 0.05, hypervisor: 0.01, internet: 4.5, cloud: 0.8 };
+const PROC = { host: 0.05, hub: 0.002, switch: 0.006, mswitch: 0.006, l3switch: 0.02, router: 0.04, homerouter: 0.25, firewall: 0.09, lb: 0.06, patch: 0, ap: 0.3, wlc: 0.05, hypervisor: 0.01, internet: 4.5, cloud: 0.8 };
 /** 由 CPU 回應 ICMP 的時間（主機的作業系統很快；交換器的 CPU 最慢） */
 const CPU = { host: 0.02, router: 0.6, l3switch: 1.1, mswitch: 1.4, firewall: 0.4, lb: 0.3, homerouter: 1.2, ap: 1.5, wlc: 0.6, hypervisor: 0.1, internet: 0.3, cloud: 0.3 };
 

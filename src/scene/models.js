@@ -13,7 +13,7 @@ export const PALETTE = {
 
 export const ACCENT = {
   host: PALETTE.blue, hub: PALETTE.mid, switch: PALETTE.teal, mswitch: PALETTE.teal, l3switch: PALETTE.teal,
-  router: PALETTE.violet, homerouter: PALETTE.violet, firewall: PALETTE.orange, internet: PALETTE.sky, cloud: PALETTE.amber, hypervisor: 0xb48cff, lb: 0xe4002b,
+  router: PALETTE.violet, homerouter: PALETTE.violet, firewall: PALETTE.orange, internet: PALETTE.sky, cloud: PALETTE.amber, hypervisor: 0xb48cff, lb: 0xe4002b, patch: 0x9aa4b8,
 };
 
 const matCache = new Map();

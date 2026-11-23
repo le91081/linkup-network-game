@@ -1,5 +1,6 @@
 // 供電與連線、err-disabled、DTP、語音 VLAN、LACP、STP 與連接埠的 STP 計時
 // （從 sim.js 拆出來的一部分；其他程式一律從 engine/sim.js 引入，不直接引入這裡）
+import { patchThrough } from '../patch.js';
 import { prepVpc, lagIdentity } from '../vpc.js';
 import { stackPortDown } from '../stack.js';
 import { stpPrio, isMst, mstKey, bpduFilterIf, bpduGuardOn, loopGuardOn } from '../stpcfg.js';
@@ -83,6 +84,7 @@ export function prepPhysical(state) {
     rt.links[B.id + ':' + c.b.port] = { dev: A.id, port: c.a.port, cable: c.id };
     rt.cable[c.id] = 'up';
   }
+  patchThrough(state); // 配線架：經過它的兩段線接成一條端對端的連線
   // ── err-disabled ──
   // 違規一發生埠就被關掉，而且會一直維持：就算原因排除了（拔掉那台設備、改了設定）也不會自己恢復，
   // 要 shutdown 再 no shutdown；或是設定了 errdisable recovery，計時器到了交換器自己試著打開（原因還在就馬上又被關掉）。

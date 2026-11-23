@@ -178,6 +178,11 @@ export const CATALOG = {
     ports: [...seq(8, (i) => rj('Gi0/' + i, 'Gi0/' + i, { poe: true })), rj('Gi0/9'), rj('Gi0/10'), sfp('Gi0/11'), sfp('Gi0/12')],
     poeBudget: 124, // PoE+ 的總預算（瓦）：每個埠最多 30 W，但八個埠加起來只有 124 W
   },
+  patch24: {
+    kind: 'patch', shape: 'switch-r', vendor: '配線架', title: '24 埠 Cat6 配線架 (Patch Panel)',
+    tagline: '被動元件：前面第 n 孔和後面第 n 孔直接相通（後面打線到牆上的網路孔，前面用跳線接交換器）',
+    ports: [...seq(24, (i) => rj('f' + i, '前 ' + i)), ...seq(24, (i) => rj('r' + i, '後 ' + i))],
+  },
   metroe: {
     kind: 'mswitch', shape: 'switch-r', vendor: '電信業者', title: 'Metro Ethernet 專線（E-Line）', evc: true,
     tagline: '電信業者的第二層專線：兩個據點之間的 EVC，客戶端的介面叫 UNI', ports: [rj('uni-a', 'UNI A'), rj('uni-b', 'UNI B')],
@@ -286,6 +291,9 @@ export function makeDevice(model, id, o = {}) {
       if (m.cam) d.cam = { nvr: '', mbps: 4 }; // 網路攝影機：影像送到哪一台 NVR、位元率
       if (m.ups) d.ups = { feed: '', ext: 0 }; // UPS：供應哪一路電（engine/power.js）、外接電池組
       if (m.wlan) d.ifaces.push(iface('wlan0', 'Wi-Fi', { t: 'wlan' }, { mode: 'dhcp', wifi: { ssid: '', pass: '' } }));
+      break;
+    case 'patch':
+      d.patch = { labels: {} };
       break;
     case 'hub':
     case 'switch':
