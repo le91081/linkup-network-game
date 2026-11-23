@@ -5388,6 +5388,33 @@ console.log('\nTLS：中繼 CA 與完整的憑證鏈');
   api.web = { cert: issueCert(s, { cn: 'api.corp.local', san: ['api.corp.local'], issuer: 'DigiCert Global G2 TLS RSA SHA256 2020 CA1', days: 90 }) };
   ok(!t(ship).ok && t(pc).ok, '公開 CA 的中繼憑證也一樣：伺服器沒送，Linux 就接不上（根憑證內建也沒用）');
 }
+console.log('\n設定檔裡的密碼：password、secret 與 service password-encryption');
+{
+  const { iosSession, runningConfig } = await import('../src/engine/ios.js');
+  const ok = (cond, title) => (cond ? console.log('  ✔ ' + title) : fail(title));
+  const lv = LEVELS.find((x) => x.id === 'l149');
+  const s = lv.setup(); settle(s);
+  const S = iosSession(() => s.devices.rt, () => s);
+  const run = (...ls) => ls.map((l) => S.exec(l).out.join('\n')).join('\n');
+  const rc = () => runningConfig(s, s.devices.rt).join('\n');
+  run('enable');
+  ok(/^enable password cisco123$/m.test(rc()) && /^username netadmin privilege 15 password 0 NetAdmin#2026$/m.test(rc()) && /^ password Vty#2026$/m.test(rc()), '開場：enable password、username … password 0、line vty 的 password 都是明文');
+  run('configure terminal', 'service password-encryption', 'end');
+  ok(/^enable password 7 [0-9a-f]+$/m.test(rc()) && /^username netadmin privilege 15 password 7 [0-9a-f]+$/m.test(rc()) && /^ password 7 [0-9a-f]+$/m.test(rc()), 'service password-encryption：可逆的密碼都改用 type 7 顯示');
+  run('configure terminal', 'no service password-encryption', 'end');
+  ok(/^enable password 7 /m.test(rc()) && !/^service password-encryption$/m.test(rc()), '關掉之後，已經變成 type 7 的不會變回明文');
+  run('configure terminal', 'enable password NewPass#2026', 'end');
+  ok(/^enable password NewPass#2026$/m.test(rc()), '關掉之後新設定的又是明文');
+  run('configure terminal', 'security passwords min-length 10', 'end');
+  ok(/Password too short - must be at least 10 characters/.test(run('configure terminal', 'enable secret short', 'end')) && !s.devices.rt.mgmt.enableSecret, 'security passwords min-length 10：太短的密碼被拒絕');
+  run('configure terminal', 'enable secret Enable#Secret2026', 'end');
+  ok(/^enable secret 9 \$9\$/m.test(rc()), 'enable secret 存雜湊 (type 9)');
+  // 用 enable password 登入特權模式（沒有 enable secret 時）
+  const t = lv.setup(); settle(t);
+  const T = iosSession(() => t.devices.rt, () => t, { user: 'netadmin', line: 'vty 0', ip: '10.0.99.10', priv: 1 });
+  const o1 = T.exec('enable').out.join('\n');
+  ok(/Password:/.test(o1) && T.exec('cisco123').out.join('\n') === '', '沒有 enable secret：用 enable password 進入特權模式');
+}
 console.log('\nNetFlow 與 QoS 的 police');
 {
   const sim = await import('../src/engine/sim.js');

@@ -34,7 +34,7 @@ README 說明「現在有什麼、怎麼玩」，這份文件說明「整體應�
 | 2. 第二層：交換 | 16 | 1 | 0 | 0 |
 | 3. 第三層：路由 | 17 | 0 | 0 | 0 |
 | 4. IP 服務 | 13 | 1 | 0 | 0 |
-| 5. 網路安全 | 15 | 2 | 0 | 0 |
+| 5. 網路安全 | 16 | 1 | 0 | 0 |
 | 6. VPN 與廣域網路 | 11 | 2 | 0 | 0 |
 | 7. 無線網路 | 8 | 1 | 1 | 0 |
 | 8. IPv6 | 8 | 0 | 0 | 0 |
@@ -46,9 +46,9 @@ README 說明「現在有什麼、怎麼玩」，這份文件說明「整體應�
 | 14. 遊戲系統 | 16 | 0 | 0 | 6 |
 | 15. 介面與體驗 | 10 | 0 | 0 | 0 |
 | 16. 工程品質 | 6 | 3 | 1 | 0 |
-| **合計** | **187** | **12** | **6** | **6** |
+| **合計** | **188** | **11** | **6** | **6** |
 
-另外：關卡 148 關（第 17 節）、證照條目涵蓋情形（第 18 節）、建議的實作順序（第 19 節）。
+另外：關卡 149 關（第 17 節）、證照條目涵蓋情形（第 18 節）、建議的實作順序（第 19 節）。
 
 範圍的調整（2026-11-22）：第 14 節遊戲系統還沒做完的項目暫時不做（⏸）；第 15 節的手機與平板、多語系、無障礙、主題從規劃中移除，不做。
 
@@ -145,7 +145,7 @@ README 說明「現在有什麼、怎麼玩」，這份文件說明「整體應�
 | 狀態檢查 | ✅ | TCP 三向交握、連線紀錄，後續封包不重新比對政策 |
 | DMZ 與 VIP | ✅ | |
 | 防火牆紀錄 | ✅ | 每條新連線被哪一條政策放行或拒絕 |
-| 管理介面加固 | 🟡 | 多個本機帳號（一人一個，`username` / `no username`）、SSH 取代 Telnet（要先有主機名稱、網域名稱、RSA 金鑰與 `login local`）、vty `access-class`、`exec-timeout`、`login block-for`、`banner motd`、FortiGate 各介面的 allowaccess 與 `admintimeout`、密碼以雜湊顯示；權限等級：`username … privilege <0-15>`（沒寫就是 1）、使用者模式 (>) 與 `enable` / `enable secret` / `disable`、line vty 的 `privilege level`；遠端登入沒有 enable secret 會 % No password set |
+| 管理介面加固 | ✅ | 多個本機帳號（一人一個，`username` / `no username`）、SSH 取代 Telnet（要先有主機名稱、網域名稱、RSA 金鑰與 `login local`）、vty `access-class`、`exec-timeout`、`login block-for`、`banner motd`、FortiGate 各介面的 allowaccess 與 `admintimeout`、密碼以雜湊顯示；權限等級：`username … privilege <0-15>`（沒寫就是 1）、使用者模式 (>) 與 `enable` / `enable secret` / `disable`、line vty 的 `privilege level`；遠端登入沒有 enable secret 會 % No password set；可逆的密碼與雜湊：`enable password` 與 `enable secret`、`username … password` 與 `secret`、line con / vty 的 `password`，沒有 `service password-encryption` 就是明文、有的話是 type 7（關掉之後已經加密的不會變回明文），`security passwords min-length`（% Password too short）→ 6-20 |
 | DHCP Snooping、DAI | ✅ | |
 | Port Security | ✅ | maximum、靜態 / sticky / 動態的安全位址（照 IOS 的順序學，打開 sticky 會把已經學到的轉成 sticky）、protect / restrict / shutdown（預設）、違規次數與 `%PORT_SECURITY-2-PSECURE_VIOLATION`、斷線時動態的安全位址清掉；`show port-security [interface \| address]` |
 | err-disabled | ✅ | BPDU Guard 與 Port Security 關掉的埠會一直維持，原因排除也不會自己恢復：`shutdown` → `no shutdown`、重新開機，或 `errdisable recovery cause` / `interval`（原因還在就馬上再被關）；`show interfaces status err-disabled`、`show errdisable recovery` |
@@ -294,7 +294,7 @@ README 說明「現在有什麼、怎麼玩」，這份文件說明「整體應�
 
 | 功能 | 狀態 | 說明 |
 | --- | --- | --- |
-| 關卡 | ✅ | 17 章 148 關（清單見第 17 節） |
+| 關卡 | ✅ | 17 章 149 關（清單見第 17 節） |
 | 任務目標 | ✅ | ping、TCP、UDP、DHCP、設定檢查、故障演練、IPv6 ping、傳輸速率、遠端登入（SSH / Telnet 帳號密碼）、IP 電話註冊、通話品質 (MOS)、HTTPS（連得上之後還要通過憑證驗證）、路徑（一定要經過 / 不能經過某台設備）；TCP 的目標交握完還會送一個裝滿的資料區段（設了 DF），MTU 的問題才看得出來 |
 | 提示與星等 | ✅ | 每關 3 個提示，看一個少一顆星 |
 | 學習卡 | ✅ | 每關 2 到 4 張觀念說明 |
@@ -353,7 +353,7 @@ README 說明「現在有什麼、怎麼玩」，這份文件說明「整體應�
 
 ## 17. 關卡規劃
 
-### 現有的 148 關
+### 現有的 149 關
 
 | 章 | 關卡 |
 | --- | --- |
@@ -362,7 +362,7 @@ README 說明「現在有什麼、怎麼玩」，這份文件說明「整體應�
 | 3 企業網路 | 守門員、總公司與分公司、對外伺服器群、十點以後進公司的人都上不了網（NAT 位址池與 overload）、在公司裡打不開自己的網站（NAT hairpin 與 split DNS）、公司自己架了郵件伺服器，信卻寄不出也收不到（SMTP、MX 與 DMZ 的 VIP） |
 | 4 資料中心 | 機櫃上線、Spine-Leaf、跨棟連線、一開 Jumbo Frame，備份就卡住、光纖接好了，燈還是不亮（收發器）、A 路的電一跳，機房就全黑了（雙電源）、新的 GPU 伺服器接不上（breakout） |
 | 5 無線網路 | 家裡的 Wi-Fi、辦公室基地台、訪客 Wi-Fi、下午的視訊會議一直斷（頻道寬度與 DFS）、新筆電明明支援 Wi-Fi 6E（6 GHz 與 WPA3）、訪客連上 Wi-Fi，卻沒有跳出登入頁面（Captive Portal） |
-| 6 網路安全 | 只開了 TCP、誰在發 IP？、不速之客、存取控制清單、管理介面加固、冒牌閘道、搶走根橋、你是誰？、偽裝成交換器、交換器變成了 Hub（MAC flooding）、跳進伺服器 VLAN 的封包（雙重標籤）、飯店的房間網路（Private VLAN）、星期一早上，有線網路全部登不進去（EAP-TLS）、分公司只有一台路由器，也要當防火牆（ZBF）、上班時間有人在玩線上博弈（網頁過濾與 SSL 檢查）、防火牆擋得住位址，擋不住應用程式（應用程式控管與 IPS）、同事點了釣魚信的連結（DNS 過濾與防毒）、午休才開放的影音網站，晚上八點才打得開（時間型 ACL 與時區）、網頁打得開，名稱卻查不到（established 與 Reflexive ACL） |
+| 6 網路安全 | 只開了 TCP、誰在發 IP？、不速之客、存取控制清單、管理介面加固、冒牌閘道、搶走根橋、你是誰？、偽裝成交換器、交換器變成了 Hub（MAC flooding）、跳進伺服器 VLAN 的封包（雙重標籤）、飯店的房間網路（Private VLAN）、星期一早上，有線網路全部登不進去（EAP-TLS）、分公司只有一台路由器，也要當防火牆（ZBF）、上班時間有人在玩線上博弈（網頁過濾與 SSL 檢查）、防火牆擋得住位址，擋不住應用程式（應用程式控管與 IPS）、同事點了釣魚信的連結（DNS 過濾與防毒）、午休才開放的影音網站，晚上八點才打得開（時間型 ACL 與時區）、網頁打得開，名稱卻查不到（established 與 Reflexive ACL）、稽核報告：設定檔裡的密碼看得一清二楚（enable secret 與 service password-encryption） |
 | 7 VPN 與廣域備援 | 站對站 VPN、在家上班、雙線路備援、三個據點，一個中心、線路燈還亮著（IP SLA）、小檔案可以，大檔案卡住（PMTUD 黑洞）、兩個分公司的連線一下通一下斷（GRE 與 recursive routing）、稽核報告（GRE over IPsec）、每加一個網段就要改兩邊的 ACL（VTI）、門市之間的監視器畫面（DMVPN）、新分公司在共享辦公室裡（NAT-T）、換了主機板電池，VPN 就起不來了（IKEv2 的憑證驗證）、下午一塞車電話就斷斷續續（SD-WAN）、換成 MPLS 專線之後互相看不到（MPLS L3VPN 與 allowas-in）、離職的同事還連得上 VPN（SSL-VPN 改用 AD 的帳號） |
 | 8 高可用與進階路由 | 迴圈與生成樹、EtherChannel、閘道備援、集中式 DHCP、OSPF 路徑選擇、切蛋糕、閘道還活著，但出不去（HSRP 追蹤）、主線斷了，電話斷了四十秒（BFD）、兩台閘道，只有一台在做事（GLBP）、防火牆一壞，全公司就斷網（FortiGate HA）、兩台核心說好分擔，結果全擠在 Core-1（MST）、備援線一接上，整棟樓斷網（BPDU Filter 與 Loop Guard） |
 | 9 IPv6 | IPv6 初體驗、雙協定、位址從哪裡來？、IPv6 也要動態路由、封了 IPv4，忘了 IPv6、IPv6 的預設閘道被搶走了（RA Guard）、內部網站加了 IPv6 之後（AAAA 與 Happy Eyeballs）、IPv6 過不了 VPN（VTI 只載 IPv4）、換了 ISP，IPv6 就上不了網（DHCPv6 PD）、防火牆開了 IPv6，網站卻都打不開（FortiGate 的 IPv6 政策）、新大樓只有 IPv6，網站卻大多只有 IPv4（NAT64 與 DNS64） |

@@ -533,6 +533,8 @@ export function iosSession(getDev, getState, who = null) {
   // 帶外管理埠（Gi0/0）不是交換埠
   const mgmtL2 = (t) => (t.port && isMgmtPort(dev(), t.port.id) ? err(`% ${t.name} 是帶外管理埠（Mgmt-vrf），不能設定成交換埠`) : null);
   const onL2 = (fn) => each((t) => l2(t) || mgmtL2(t) || fn(t.pc, t));
+  // 已經加密 / 雜湊過的輸入（type 5、7、9：貼回設定檔時）量不出長度，不檢查
+  const minLenErr = (p, t) => { const n = +((dev().mgmt || {}).minLen || 0); if (t && t.length >= 2 && /^[579]$/.test(t[0])) return null; return n && String(p).length < n ? err(`% Password too short - must be at least ${n} characters. Password configuration failed`) : null; };
   /** 第三層介面能設定的最大 ip mtu：路由器看介面的 mtu、Catalyst 9300 看 system mtu */
   const l2Of = (i) => {
     const d = dev();
@@ -2452,16 +2454,18 @@ export function iosSession(getDev, getState, who = null) {
       const m = dev().mgmt, t = rest.split(/\s+/);
       const k = t.findIndex((x) => ['secret', 'password'].includes(x.toLowerCase()));
       if (!m || k < 0 || !t[k + 1]) return err('用法：username <帳號> privilege 15 secret <密碼>');
-      const name = t[0], pass = readSecret(t.slice(k + 1));
+      const name = t[0], pass = readSecret(t.slice(k + 1)), kind = t[k].toLowerCase() === 'password' ? 'password' : undefined;
+      const short = minLenErr(pass, t.slice(k + 1)); if (short) return short;
+      const enc = kind === 'password' && (t[k + 1] === '7' || !!m.pwEnc);
       const pk = t.findIndex((x) => x.toLowerCase() === 'privilege');
       if (pk >= 0 && pk < k && !(/^\d+$/.test(t[pk + 1] || '') && +t[pk + 1] <= 15)) return err('用法：username <帳號> privilege <0-15> secret <密碼>');
       const priv = pk >= 0 && pk < k ? +t[pk + 1] : 1; // 沒寫 privilege 就是 1：登入之後在使用者模式 (>)，要 enable 才能設定
       // 第一個帳號（或同名）是主要帳號，其他人的帳號另外存。
       // 模擬裡出廠的 admin / admin 只是方便用的預設值（真的 IOS 出廠沒有帳號），建立第一個帳號就取代它
       const factory = m.user === 'admin' && m.pass === 'admin' && !(m.users || []).length;
-      if (m.user == null || m.user === '' || m.user === name || factory) { m.user = name; m.pass = pass; m.priv = priv; return undefined; }
-      const list = (m.users ||= []), cur = list.find((u) => u.user === name);
-      if (cur) Object.assign(cur, { pass, priv }); else list.push({ user: name, pass, priv });
+      if (m.user == null || m.user === '' || m.user === name || factory) { m.user = name; m.pass = pass; m.priv = priv; if (kind) { m.passKind = kind; m.passEnc = enc; } else { delete m.passKind; delete m.passEnc; } return undefined; }
+      const list = (m.users ||= []), cur = list.find((u) => u.user === name), extra = kind ? { kind, enc } : {};
+      if (cur) { Object.assign(cur, { pass, priv }); delete cur.kind; delete cur.enc; Object.assign(cur, extra); } else list.push({ user: name, pass, priv, ...extra });
       return undefined;
     }],
     ['no username <name> [...]', ([name]) => {
@@ -2476,7 +2480,15 @@ export function iosSession(getDev, getState, who = null) {
       return undefined;
     }],
     // enable secret：從使用者模式 (>) 進入特權模式 (#) 的密碼。遠端登入（vty）沒有設定的話，enable 會被拒絕
-    ['enable secret <...>', ([rest]) => { const m = dev().mgmt; if (!m) return err('這台設備不支援'); const t = rest.split(/\s+/); m.enableSecret = readSecret(t); if (!m.enableSecret) return err('用法：enable secret <密碼>'); return undefined; }],
+    ['enable secret <...>', ([rest]) => { const m = dev().mgmt; if (!m) return err('這台設備不支援'); const t = rest.split(/\s+/); const p = readSecret(t); if (!p) return err('用法：enable secret <密碼>'); const short = minLenErr(p, t); if (short) return short; m.enableSecret = p; return undefined; }],
+    // enable password：舊的寫法（可逆，沒有 service password-encryption 就是明文）。有 enable secret 的話用 enable secret
+    ['enable password <...>', ([rest]) => { const m = dev().mgmt; if (!m) return err('這台設備不支援'); const t = rest.split(/\s+/); const p = readSecret(t); if (!p) return err('用法：enable password <密碼>'); const short = minLenErr(p, t); if (short) return short; m.enablePass = p; m.enablePassEnc = t[0] === '7' || !!m.pwEnc; return undefined; }],
+    ['no enable password [...]', () => { if (dev().mgmt) { delete dev().mgmt.enablePass; delete dev().mgmt.enablePassEnc; } }],
+    // 把設定檔裡可逆的密碼（line、enable password、username … password）改用 type 7 顯示；關掉之後已經加密的不會變回明文
+    ['service password-encryption', () => { const m = dev().mgmt; if (!m) return err('這台設備不支援'); m.pwEnc = true; if (m.vtyPass) m.vtyPassEnc = true; if (m.conPass) m.conPassEnc = true; if (m.enablePass) m.enablePassEnc = true; if (m.passKind === 'password') m.passEnc = true; for (const u of m.users || []) if (u.kind === 'password') u.enc = true; return undefined; }],
+    ['no service password-encryption', () => { if (dev().mgmt) delete dev().mgmt.pwEnc; }],
+    ['security passwords min-length <n>', ([n]) => { const m = dev().mgmt; if (!m) return err('這台設備不支援'); if (!/^\d+$/.test(n) || +n < 0 || +n > 16) return err('% 用法：security passwords min-length <0-16>'); if (+n) m.minLen = +n; else delete m.minLen; return undefined; }],
+    ['no security passwords min-length [...]', () => { if (dev().mgmt) delete dev().mgmt.minLen; }],
     ['no enable secret [...]', () => { if (dev().mgmt) delete dev().mgmt.enableSecret; }],
     // 隱藏指令：接受第三方的收發器（Cisco 不保證、TAC 也不支援）。已經 err-disabled 的埠要 shutdown 再 no shutdown
     ['service unsupported-transceiver', (args, out) => {
@@ -3111,8 +3123,8 @@ export function iosSession(getDev, getState, who = null) {
       ['privilege level <n>', ([n]) => { const m = dev().mgmt; if (!m || S.cur === 'console') return undefined; if (!/^\d+$/.test(n) || +n > 15) return err('用法：privilege level <0-15>'); if (+n === 1) delete m.vtyPriv; else m.vtyPriv = +n; return undefined; }],
       ['no privilege level [...]', () => { const m = dev().mgmt; if (m) delete m.vtyPriv; }],
       ['no login', () => { const m = dev().mgmt; if (m && S.cur !== 'console') m.vtyLogin = 'none'; return S.cur === 'console' ? undefined : '（no login：任何人連進來都不用驗證就能下指令，非常危險）'; }],
-      ['password <...>', ([p]) => { const m = dev().mgmt; if (m && S.cur !== 'console') m.vtyPass = readSecret(p.split(/\s+/)); }],
-      ['no password [...]', () => { const m = dev().mgmt; if (m && S.cur !== 'console') delete m.vtyPass; }],
+      ['password <...>', ([p]) => { const m = dev().mgmt; if (!m) return undefined; const t = p.split(/\s+/), v = readSecret(t); const short = minLenErr(v, t); if (short) return short; if (S.cur === 'console') { m.conPass = v; m.conPassEnc = t[0] === '7' || !!m.pwEnc; } else { m.vtyPass = v; m.vtyPassEnc = t[0] === '7' || !!m.pwEnc; } return undefined; }],
+      ['no password [...]', () => { const m = dev().mgmt; if (!m) return; if (S.cur === 'console') { delete m.conPass; delete m.conPassEnc; } else { delete m.vtyPass; delete m.vtyPassEnc; } }],
       // 登入之後閒置多久自動登出。預設 10 分鐘；0 0 代表永遠不會
       ['exec-timeout <...>', ([rest]) => {
         const m = dev().mgmt, t = rest.split(/\s+/);
@@ -3923,7 +3935,7 @@ export function iosSession(getDev, getState, who = null) {
     }
     if (S.mode === 'exec' && S.priv < 15) {
       if (match(tok, 'enable') || match(tok, 'enable 15')) {
-        const sec = (dev().mgmt || {}).enableSecret;
+        const sec = (dev().mgmt || {}).enableSecret || (dev().mgmt || {}).enablePass;
         if (!sec && !(who && /vty/i.test(String(who.line || '')))) { S.priv = 15; return done(false); }
         if (!sec) { out.push('% No password set'); out.push('（遠端登入要先在設備上設定 enable secret，才能從使用者模式進入特權模式；或用 privilege 15 的帳號登入）'); return done(false); }
         out.push('Password: ');
@@ -4552,7 +4564,11 @@ export function runningConfig(state, dev) {
   if (+dev.tftpBlk > 512) o.push(`ip tftp blocksize ${+dev.tftpBlk}`, '!');
   for (const [k, id] of Object.entries(dev.srcIf || {})) { const i = dev.ifaces.find((x) => x.id === id); if (i) o.push(`ip ${k} source-interface ${longIf(i.label)}`); }
   const m = dev.mgmt;
+  const pw = (p, enc) => (enc ? `7 ${hex(p)}` : p); // 可逆的密碼：service password-encryption 之前是明文
+  if (m && m.pwEnc) o.push('service password-encryption', '!');
+  if (m && +m.minLen) o.push(`security passwords min-length ${+m.minLen}`);
   if (m && m.enableSecret) o.push(`enable secret 9 ${secret9(m.enableSecret)}`, '!');
+  if (m && m.enablePass) o.push(`enable password ${pw(m.enablePass, m.enablePassEnc)}`, '!');
   const aaa = aaaTop(dev) ? dev.aaa : null;
   if (aaa) {
     const ml = (x) => x.map((k) => METHOD_TEXT[k]).join(' ');
@@ -4565,7 +4581,7 @@ export function runningConfig(state, dev) {
     if (aaa.acctCmd) o.push(`aaa accounting commands 15 default ${aaa.acctCmd} group tacacs+`);
     o.push('!');
   }
-  if (m && localUsers(m).length) o.push(...localUsers(m).map((u) => `username ${u.user}${u.priv === 1 ? '' : ` privilege ${u.priv}`} secret 9 ${secret9(u.pass || '')}`), '!');
+  if (m && localUsers(m).length) o.push(...localUsers(m).map((u) => `username ${u.user}${u.priv === 1 ? '' : ` privilege ${u.priv}`} ${u.kind === 'password' ? `password ${u.enc ? `7 ${hex(u.pass || '')}` : `0 ${u.pass || ''}`}` : `secret 9 ${secret9(u.pass || '')}`}`), '!');
   if (m && (m.domain || m.sshVer === 2 || m.sshTimeout || m.sshRetries)) {
     o.push(...(m.domain ? [`ip domain name ${m.domain}`] : []), ...(m.sshVer === 2 ? ['ip ssh version 2'] : []),
       ...(m.sshTimeout ? [`ip ssh time-out ${m.sshTimeout}`] : []), ...(m.sshRetries ? [`ip ssh authentication-retries ${m.sshRetries}`] : []), '!');
@@ -5188,8 +5204,9 @@ export function runningConfig(state, dev) {
     if (allow.length) { o.push(`ip access-list standard ${an}`); for (const c of allow) o.push(c.bits === 32 ? ` permit host ${fmtIp(c.net)}` : ` permit ${fmtIp(netOf(c.net, c.bits))} ${wild(c.bits)}`); }
     const tr = [m.ssh && 'ssh', m.telnet && 'telnet'].filter(Boolean).join(' ') || 'none';
     const et = m.execTimeout == null || m.execTimeout === '' ? null : +m.execTimeout;
+    if (m.conPass) o.push('line con 0', ` password ${pw(m.conPass, m.conPassEnc)}`, ' login', '!');
     o.push('line vty 0 4', ` transport input ${tr}`, ...(allow.length ? [` access-class ${an} in`] : []),
-      ...(et != null && et !== 600 ? [` exec-timeout ${Math.floor(et / 60)} ${et % 60}`] : []), ...(m.vtyPriv != null ? [` privilege level ${m.vtyPriv}`] : []), ...(m.vtyPass ? [` password 7 ${hex(m.vtyPass)}`] : []),
+      ...(et != null && et !== 600 ? [` exec-timeout ${Math.floor(et / 60)} ${et % 60}`] : []), ...(m.vtyPriv != null ? [` privilege level ${m.vtyPriv}`] : []), ...(m.vtyPass ? [` password ${pw(m.vtyPass, m.vtyPassEnc ?? true)}`] : []),
       ...(dev.aaa && dev.aaa.on && (m.vtyAuthList || Object.keys(dev.aaa.authn || {}).length) ? (m.vtyAuthList ? [` login authentication ${m.vtyAuthList}`] : []) : [m.vtyLogin === 'local' ? ' login local' : m.vtyLogin === 'none' ? ' no login' : ' login']));
   }
   o.push('!', 'end');
