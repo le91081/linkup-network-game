@@ -4858,6 +4858,26 @@ console.log('\nSCP：copy running-config scp://帳號@伺服器/檔名');
   ok(/Destination username/.test(H('copy running-config scp://10.1.0.10/y.cfg', '')), '網址裡沒有帳號：問完檔名再問 Destination username');
 }
 
+console.log('\n隱藏 SSID 與 MAC 過濾');
+{
+  const { visibleSsids, ssidsOf } = await import('../src/engine/sim.js');
+  const ok = (cond, title) => (cond ? console.log('  ✔ ' + title) : fail(title));
+  const lv = LEVELS.find((x) => x.id === 'l13');
+  const s = lv.setup(); lv.solve(s); settle(s);
+  const wl = (d) => d.ifaces.find((i) => i.bind.t === 'wlan');
+  const cl = Object.values(s.devices).find((d) => d.kind === 'host' && wl(d) && wl(d).rt.assoc);
+  const ap = s.devices[wl(cl).rt.assoc.ap], ssid = ssidsOf(s, ap).find((x) => x.name === wl(cl).wifi.ssid);
+  ok(cl && ssid && visibleSsids(s, cl).some((n) => n.name === ssid.name), `開場：${cl.name} 連在「${ssid.name}」，掃描清單看得到`);
+  ssid.hidden = true; settle(s);
+  ok(!visibleSsids(s, cl).some((n) => n.name === ssid.name) && wl(cl).rt.assoc, '隱藏 SSID：掃描清單看不到，但已經設定過名稱的設備照樣連得上');
+  ssid.macFilter = { mode: 'allow', list: '02:00:00:00:00:01' }; settle(s);
+  ok(!wl(cl).rt.assoc && /MAC 過濾/.test(wl(cl).rt.note), `MAC 過濾（只允許清單裡的）：${cl.name} 不在清單裡，關聯不上`);
+  ssid.macFilter.list += ', ' + wl(cl).rt.mac.toUpperCase(); settle(s);
+  ok(!!wl(cl).rt.assoc, '把它的 MAC 加進清單（大小寫、分隔符號都可以）：又連上了');
+  ssid.macFilter = { mode: 'deny', list: wl(cl).rt.mac }; settle(s);
+  ok(!wl(cl).rt.assoc && /封鎖清單/.test(wl(cl).rt.note), '封鎖清單裡的 MAC：連不上');
+}
+
 console.log('\nNetFlow 與 QoS 的 police');
 {
   const sim = await import('../src/engine/sim.js');

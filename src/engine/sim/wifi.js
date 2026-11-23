@@ -198,6 +198,7 @@ export function prepWifi(state) {
         ssidsOf(state, ap).forEach((s, idx) => {
           if (s.off || s.name !== w.ssid) return;
           if (!SEC_MODES[s.sec || 'open'].some((m) => caps.includes(m))) { why = `${d.name} 不支援 ${WIFI_SEC[s.sec]}，連不上「${s.name}」`; return; }
+          { const mf = macFilterWhy(s, i.rt.mac, d.name); if (mf) { why = mf; return; } }
           if (s.sec === 'wpa2ent') {
             const a = rt.auth.ent[d.id + '/' + i.id];
             if (!a || !a.ok) { why = `「${s.name}」的 802.1X 驗證沒有通過：${(a && a.why) || '等待驗證'}`; return; }
@@ -311,6 +312,21 @@ export function capwapTick(state) {
   return changed;
 }
 
+/**
+ * MAC 過濾：s.macFilter = { mode: 'allow' | 'deny', list: 'aa:bb:cc:dd:ee:ff, …' }
+ * allow：只有清單裡的 MAC 能關聯；deny：清單裡的不能。回傳被擋的原因或 ''
+ */
+export function macFilterWhy(s, mac, who) {
+  const f = s.macFilter;
+  if (!f || !f.mode) return '';
+  const norm = (x) => String(x || '').toLowerCase().replace(/[^0-9a-f]/g, '');
+  const list = String(f.list || '').split(/[,\s]+/).map(norm).filter((x) => x.length === 12);
+  const hit = list.includes(norm(mac));
+  if (f.mode === 'allow' && !hit) return `「${s.name}」開了 MAC 過濾（只允許清單裡的設備）：${who} 的 MAC ${mac} 不在清單裡，基地台不讓它關聯`;
+  if (f.mode === 'deny' && hit) return `「${s.name}」的 MAC 過濾把 ${who}（${mac}）列在封鎖清單裡`;
+  return '';
+}
+
 /** 某台設備掃描得到的無線網路清單 */
 export function visibleSsids(state, dev) {
   const out = new Map();
@@ -318,7 +334,7 @@ export function visibleSsids(state, dev) {
     const rf = rfAt(state, ap, dev.pos);
     if (!rf.band) continue;
     for (const s of ssidsOf(state, ap)) {
-      if (s.off || !s.name) continue;
+      if (s.off || !s.name || s.hidden) continue; // 隱藏的 SSID：beacon 裡沒有名稱，掃描清單看不到（手動輸入名稱照樣連得上）
       const cur = out.get(s.name);
       if (!cur || rf.rssi > cur.rssi) out.set(s.name, { name: s.name, sec: s.sec || 'open', ap: ap.name, dist: rf.dist, rssi: rf.rssi, bars: rf.rssi >= -54 ? 3 : rf.rssi >= -68 ? 2 : 1 });
     }

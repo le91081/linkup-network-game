@@ -160,6 +160,7 @@ export function wifiPicker(ctx, i) {
       : grid2(
         field('無線網路 (SSID)', sel(ctx, ...bind(w, 'ssid'), opts, { rerender: true })),
         field('密碼', inp(ctx, ...bind(w, 'pass'), { ph: '開放網路可留空' }))),
+    field('或手動輸入網路名稱（隱藏的 SSID）', inp(ctx, ...bind(w, 'ssid'), { ph: '例如 Office-Hidden', mono: false, rerender: true })),
   ];
 }
 
@@ -242,8 +243,13 @@ export function ssidTab(ctx, body) {
         s.sec && s.sec !== 'open' && s.sec !== 'wpa2ent' && field('密碼', inp(ctx, ...bind(s, 'pass'), { ph: '至少 8 個字元', check: (v) => v.length >= 8 })),
         dev.kind === 'ap' && field('對應的 VLAN', inp(ctx, ...bind(s, 'vlan'), { ph: '留空＝不貼標籤', check: isNum(1, 4094) }))),
       h('div', { class: 'toggles' }, toggle(ctx, ...bind(s, 'isolate'), '用戶端隔離（連上這個 SSID 的設備彼此不能互連）'),
+        toggle(ctx, () => !!s.hidden, (v) => { if (v) s.hidden = true; else delete s.hidden; }, '隱藏 SSID（不廣播名稱：掃描清單看不到，要手動輸入名稱才連得上）', { rerender: true }),
         dev.kind === 'ap' && toggle(ctx, ...bind(s, 'kv'), '802.11k/v：提供鄰近基地台的清單、建議用戶端換到訊號更好的基地台（改善 sticky client）'),
         dev.kind === 'ap' && toggle(ctx, ...bind(s, 'ft'), '802.11r（Fast Transition）：漫遊時沿用金鑰，不用重新做完整的驗證')),
+      field('MAC 過濾', sel(ctx, () => (s.macFilter && s.macFilter.mode) || '', (v) => { if (v) s.macFilter = { ...(s.macFilter || {}), mode: v }; else delete s.macFilter; }, [['', '不過濾'], ['allow', '只允許清單裡的 MAC'], ['deny', '封鎖清單裡的 MAC']], { rerender: true })),
+      s.macFilter && s.macFilter.mode && field('MAC 清單（逗號或空白分隔）', inp(ctx, () => s.macFilter.list || '', (v) => { s.macFilter.list = v; }, { ph: '例如 02:1c:42:00:00:15' })),
+      s.hidden && note('muted', '隱藏 SSID 只是不在 beacon 裡放名稱：用戶端連線時的 probe 照樣會送出名稱，用工具一掃就看得到，不能當成安全機制。'),
+      s.macFilter && s.macFilter.mode && note('muted', 'MAC 位址可以偽造（側錄到合法設備的 MAC 就能冒用），MAC 過濾只能擋一般人，不能取代 WPA2 / WPA3 的密碼或 802.1X。'),
       s.sec !== 'wpa2ent' && toggle(ctx, () => !!(s.portal && s.portal.on), (v) => { s.portal = { ...(s.portal || {}), on: v }; }, '訪客入口 (Captive Portal)：連上之後要先在入口網頁按同意才能上網', { rerender: true }),
       s.portal && s.portal.on && grid2(field('入口網頁伺服器', inp(ctx, () => s.portal.ip || '', (v) => { s.portal.ip = v; }, { ph: '例如 192.168.50.5', check: isIp })),
         field('認證前允許的位址（pre-auth ACL）', inp(ctx, () => s.portal.preauth || '', (v) => { s.portal.preauth = v; }, { ph: '例如 DNS 伺服器 8.8.8.8', mono: true }))),

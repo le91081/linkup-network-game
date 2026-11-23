@@ -187,7 +187,7 @@ README 說明「現在有什麼、怎麼玩」，這份文件說明「整體應�
 | 多台 AP | 🟡 | 漫遊已完成：sticky client（-75 dBm 以上不換）、802.11k/v 的 BSS Transition、換 VLAN 會換 IP、「走過去」的任務測試；802.11r 只有設定，還沒有模擬漫遊時間 |
 | 無線控制器 | ✅ | Catalyst 9800 + 9120：CAPWAP 加入（手動指定的主要 / 次要控制器、option 43、同網段廣播）、N+1（heartbeat 逾時約 30 秒才加入下一台、主要的回來自動切回）、Local 與 FlexConnect（standalone）、RRM 自動分頻道、WLAN 的 VLAN / 用戶端隔離 / 802.11k/v/r、`show ap summary` 等；只能用圖形介面設定 |
 | 頻道寬度與新標準 | ✅ | 5 GHz 的 20 / 40 / 80 / 160 MHz（綁在一起的整塊頻譜重疊就干擾，自動模式像 DBS 一樣縮窄，速率跟著寬度）、DFS 頻道（關卡劇本的雷達：換頻道、用戶端斷 15 秒、30 分鐘不能回來）→ 5-4；6 GHz（三頻 AP 與 6E 用戶端、160 MHz、只廣播 WPA3 / 混合模式的 SSID → 5-5）；還沒有 Wi-Fi 7 的 320 MHz 與 MLO |
-| 訪客功能 | 🟡 | 用戶端隔離、Captive Portal（入口網頁、pre-auth ACL、DNS 偵測、8 小時 session → 5-6）；還沒有 MAC 過濾、隱藏 SSID、訪客碼 |
+| 訪客功能 | 🟡 | 用戶端隔離、Captive Portal（入口網頁、pre-auth ACL、DNS 偵測、8 小時 session → 5-6）；隱藏 SSID（掃描清單看不到、手動輸入名稱照樣連得上）、MAC 過濾（只允許 / 封鎖清單，基地台不讓它關聯）；還沒有訪客碼 |
 | Mesh 與無線橋接 | ⬜ | |
 | 現場勘測 | 🟡 | 有牆的關卡顯示訊號熱力圖；還沒有現場量測、預測工具與自由模式畫牆 |
 
