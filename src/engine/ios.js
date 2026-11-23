@@ -300,6 +300,22 @@ export function portByName(dev, text) {
 }
 
 /** 把輸入的介面名稱（可以縮寫，例如 gi0/1、g0/0/0.10、vlan 10）對應到設備上的埠或 L3 介面 */
+/**
+ * PPPoE 撥接：IOS 的設定寫在 Dialer 介面（ip address negotiated、dialer pool、ppp chap、ip nat outside、mtu、ip tcp adjust-mss），
+ * 實體介面只有 pppoe-client dial-pool-number。模擬裡真正撥接的是實體介面：把 Dialer 的設定同步過去
+ */
+export function syncDialers(d) {
+  if (!d || !d.ifaces) return;
+  const dl = d.ifaces.filter((x) => x.bind.t === 'dialer' && x.dialer);
+  for (const p of d.ifaces) {
+    if (p.dialPool == null || p.bind.t === 'dialer') continue;
+    const di = dl.find((x) => +x.dialer.pool === +p.dialPool);
+    if (!di || !di.dialer.negotiated) { if (p.viaDialer) { p.mode = 'static'; delete p.viaDialer; } continue; }
+    Object.assign(p, { mode: 'pppoe', user: di.dialer.user || '', pass: di.dialer.pass || '', viaDialer: di.id, natOut: !!di.natOut, natRule: !!di.natRule, natAcl: di.natAcl || '', nat: !!(di.natOut && di.natRule) });
+    if (+di.mtu) p.mtu = +di.mtu; else delete p.mtu;
+    if (+di.adjMss) p.adjMss = +di.adjMss; else delete p.adjMss;
+  }
+}
 function resolveIf(dev, text) {
   const s = text.toLowerCase().replace(/\s+/g, '');
   const lo = s.match(/^lo[a-z]*(\d+)$/);
@@ -309,6 +325,15 @@ function resolveIf(dev, text) {
     let i = dev.ifaces.find((x) => x.bind.t === 'loop' && x.bind.n === n);
     if (!i) { i = newIface(id, 'Loopback' + n, { t: 'loop', n }); dev.ifaces.push(i); }
     return { name: 'Loopback' + n, iface: i, loop: true };
+  }
+  const di = s.match(/^di[a-z]*(\d+)$/);
+  if (di) {
+    if (dev.kind !== 'router') return err('這個模擬只有路由器可以建立 Dialer 介面');
+    const n = +di[1];
+    let i = dev.ifaces.find((x) => x.bind.t === 'dialer' && x.bind.n === n);
+    if (!i) { i = newIface('Di' + n, 'Dialer' + n, { t: 'dialer', n }); i.dialer = { pool: null, user: '', pass: '', negotiated: false }; dev.ifaces.push(i); }
+    i.dialer ||= { pool: null, user: '', pass: '', negotiated: false };
+    return { name: 'Dialer' + n, iface: i, dialer: true };
   }
   const tu = s.match(/^tu[a-z]*(\d+)$/);
   if (tu) {
@@ -711,7 +736,18 @@ export function iosSession(getDev, getState, who = null) {
       delete i.vrf; Object.assign(i, { ip: '', mask: '' });
       return undefined;
     })]),
+    ['ip address negotiated', () => onL3((i) => { if (i.bind.t !== 'dialer') return err('ip address negotiated 用在 Dialer 介面（位址由 PPP 協商）'); i.dialer.negotiated = true; return undefined; })],
+    ['encapsulation ppp', () => onL3((i) => { if (i.bind.t !== 'dialer') return err('encapsulation ppp 用在 Dialer 介面'); i.dialer.ppp = true; return undefined; })],
+    ['dialer pool <n>', ([n]) => (/^\d+$/.test(n) ? onL3((i) => { if (i.bind.t !== 'dialer') return err('dialer pool 用在 Dialer 介面'); i.dialer.pool = +n; return undefined; }) : err('用法：dialer pool <1-255>'))],
+    ['ppp chap hostname <u>', ([u]) => onL3((i) => { if (i.bind.t !== 'dialer') return err('ppp chap 用在 Dialer 介面'); i.dialer.user = u; return undefined; })],
+    ['ppp chap password <...>', ([p]) => onL3((i) => { if (i.bind.t !== 'dialer') return err('ppp chap 用在 Dialer 介面'); i.dialer.pass = readSecret(p.split(/\s+/)); return undefined; })],
+    ['ppp pap sent-username <u> password <...>', ([u, p]) => onL3((i) => { if (i.bind.t !== 'dialer') return err('ppp pap 用在 Dialer 介面'); Object.assign(i.dialer, { user: u, pass: readSecret(p.split(/\s+/)), pap: true }); return undefined; })],
+    ['ppp authentication <...>', () => onL3(() => undefined)],
+    ['pppoe enable [...]', () => onL3((i) => { if (i.bind.t === 'dialer') return err('pppoe enable 要下在接 ISP 的實體介面上'); i.pppoeEnable = true; return undefined; })],
+    ['no pppoe enable [...]', () => onL3((i) => { delete i.pppoeEnable; })],
+    ['pppoe-client dial-pool-number <n>', ([n]) => (/^\d+$/.test(n) ? onL3((i) => { if (i.bind.t === 'dialer') return err('pppoe-client 要下在接 ISP 的實體介面上'); i.dialPool = +n; return undefined; }) : err('用法：pppoe-client dial-pool-number <1-255>'))],
     ['pppoe-client [...]', () => onL3((i) => { i.mode = 'pppoe'; }) || 'PPPoE 的帳號與密碼請到「介面」分頁填寫'],
+    ['no pppoe-client [...]', () => onL3((i) => { delete i.dialPool; if (i.viaDialer) { i.mode = 'static'; delete i.viaDialer; } })],
     ['ip nat outside', () => {
       syncNat();
       const r = onL3((i) => { i.natOut = true; setNat(i); });
@@ -797,6 +833,8 @@ export function iosSession(getDev, getState, who = null) {
     ['mtu <n>', ([n]) => {
       const d = dev(), v = +n;
       if (!/^\d+$/.test(n)) return err('用法：mtu <位元組>');
+      // Dialer 介面：PPPoE 少了 8 個位元組的標頭，常見的是 mtu 1492
+      if (S.cur.length && S.cur.every((t) => t.iface && t.iface.bind.t === 'dialer')) return v >= 576 && v <= 1500 ? each((t) => { if (v === 1500) delete t.iface.mtu; else t.iface.mtu = v; return undefined; }) : err('% Dialer 的 mtu 範圍是 576 – 1500');
       if (isCat2960(d)) return err('% Catalyst 2960 不能各別設定連接埠的 MTU：用全域的 system mtu jumbo <1500-9000>（重新開機之後才生效）');
       if (d.kind === 'l3switch' && !isNexus(d)) return err('% Catalyst 9300 的 MTU 是整台一起設定：用全域的 system mtu <1500-9198>');
       return each((t) => {
@@ -1353,7 +1391,7 @@ export function iosSession(getDev, getState, who = null) {
       if (w[0] && /^\d+\/[\d/.]+$|^\d+$/.test(w[0]) && parseIp(w[0]) == null && !/\d$/.test(via)) via += w.shift();
       const i = ifByName(via);
       if (isErr(i)) return err(`${ROUTE_USAGE}（「${via}」不是 IP 位址，也不是這台的介面）`);
-      if (parseIp(w[0] || '') == null && !isTun(i)) return err(`% 寫了出口介面 ${i.label}，後面還要接下一站的 IP（乙太網路介面只寫出口介面要靠 Proxy ARP，這個模擬不支援；點對點的 Tunnel 介面可以只寫介面）`);
+      if (parseIp(w[0] || '') == null && !isTun(i) && i.bind.t !== 'dialer') return err(`% 寫了出口介面 ${i.label}，後面還要接下一站的 IP（乙太網路介面只寫出口介面要靠 Proxy ARP，這個模擬不支援；點對點的 Tunnel 介面可以只寫介面）`);
       outIf = i.id; via = parseIp(w[0] || '') != null ? w.shift() : '';
     }
     let ad = '', track = null, global = false;
@@ -4082,6 +4120,7 @@ export function iosSession(getDev, getState, who = null) {
     if (res.r && typeof res.r === 'object' && res.r.delegate) { const r = res.r.delegate(out); if (r.changed) S.touched = true; return r; }
     if (isErr(res.r)) { out.push(res.r); return done(false); }
     for (const x of [].concat(res.r ?? [])) out.push(x);
+    syncDialers(dev());
     S.touched = true;
     logCfg(text, viaSub);
     return done(true);
@@ -4795,7 +4834,9 @@ export function runningConfig(state, dev) {
     if (+i.l2mtu) l.push(` mtu ${+i.l2mtu}`);
     if (i.vrf) l.push(((dev.vrfs || {})[i.vrf] || {}).style === 'ip' ? ` ip vrf forwarding ${i.vrf}` : ` vrf forwarding ${i.vrf}`);
     if (i.mode === 'dhcp') l.push(' ip address dhcp');
-    else if (i.mode === 'pppoe') l.push(' pppoe-client dial-pool-number 1', ` ! PPPoE 帳號 ${i.user || '(未設定)'}`);
+    // PPPoE 的實體介面：位址、NAT、MTU 都在 Dialer 上
+    else if (i.mode === 'pppoe' || i.dialPool != null) { l.push(' no ip address', ' pppoe enable group global', ` pppoe-client dial-pool-number ${i.dialPool ?? 1}`); return l; }
+    else if (i.bind.t === 'dialer') l.push(...(i.dialer.negotiated ? [' ip address negotiated'] : [' no ip address']));
     else if (i.ip && parseMask(i.mask) != null) l.push(` ip address ${i.ip} ${fmtMask(parseMask(i.mask))}`);
     else l.push(' no ip address');
     if (i.nvi) l.push(' ip nat enable');
@@ -4803,7 +4844,7 @@ export function runningConfig(state, dev) {
     if (i.helper) l.push(` ip helper-address ${i.helper}`);
     if (i.policyRm) l.push(` ip policy route-map ${i.policyRm}`);
     if (+i.bandwidth > 0) l.push(` bandwidth ${i.bandwidth}`);
-    if (i.mtu) l.push(isNexus(dev) ? ` mtu ${i.mtu}` : ` ip mtu ${i.mtu}`);
+    if (i.mtu) l.push(isNexus(dev) || i.bind.t === 'dialer' ? ` mtu ${i.mtu}` : ` ip mtu ${i.mtu}`);
     if (+i.adjMss) l.push(` ip tcp adjust-mss ${+i.adjMss}`);
     if (i.redirects === false) l.push(' no ip redirects');
     if (i.pim) l.push(` ip pim ${i.pim}-mode`);
@@ -4883,6 +4924,15 @@ export function runningConfig(state, dev) {
     o.push(t.type === 'sla' ? `track ${n} ip sla ${t.sla} reachability` : `track ${n} interface ${longIf(ti ? ti.label : t.iface)} line-protocol`, '!');
   }
   for (const i of dev.ifaces.filter((x) => x.bind.t === 'loop').sort((a, b) => a.bind.n - b.bind.n)) o.push(`interface Loopback${i.bind.n}`, ...(i.desc ? [` description ${i.desc}`] : []), ...l3lines(i).filter((x) => !/ip nat (inside|outside)/.test(x)), ...(i.shut ? [' shutdown'] : []), '!');
+  // Dialer：PPPoE 撥接的設定（圖形介面設定的 PPPoE 沒有 Dialer 介面：照實體介面的設定寫出一個 Dialer1）
+  const pppLines = (di) => [' encapsulation ppp', ` dialer pool ${di.pool ?? 1}`, ...(di.user ? [` ppp chap hostname ${di.user}`] : []), ...(di.pass ? [` ppp chap password 0 ${di.pass}`] : [])];
+  for (const i of dev.ifaces.filter((x) => x.bind.t === 'dialer' && x.dialer).sort((a, b) => a.bind.n - b.bind.n)) {
+    const L = l3lines(i); // IOS 把 Dialer 的 mtu 寫在最前面
+    o.push(`interface Dialer${i.bind.n}`, ...(i.desc ? [` description ${i.desc}`] : []), ...L.filter((x) => /^ mtu /.test(x)), ...L.filter((x) => !/^ mtu /.test(x)), ...pppLines(i.dialer), '!');
+  }
+  for (const p of dev.ifaces.filter((x) => x.mode === 'pppoe' && !x.viaDialer && x.bind.t === 'port')) {
+    o.push('interface Dialer1', ' ip address negotiated', ...(natOut(p) && anyNat ? [' ip nat outside'] : []), ...(p.mtu ? [` ip mtu ${p.mtu}`] : []), ...(+p.adjMss ? [` ip tcp adjust-mss ${+p.adjMss}`] : []), ...pppLines({ pool: p.dialPool ?? 1, user: p.user, pass: p.pass }), '!');
+  }
   for (const i of dev.ifaces.filter((x) => x.bind.t === 'gre').sort((a, b) => a.bind.n - b.bind.n)) {
     const t = i.tun || {}, n = i.nhrp || {};
     const srcIf = t.src && dev.ifaces.find((x) => x.id === t.src);
@@ -5088,10 +5138,10 @@ export function runningConfig(state, dev) {
     if (c.default) o.push(' default-information originate');
     o.push('!');
   }
-  const out = dev.ifaces.filter(natRule);
+  const out = dev.ifaces.filter((i) => natRule(i) && !i.viaDialer); // PPPoE：規則寫在 Dialer 上
   // NAT 的範圍：指定的 ACL、圖形介面填的「NAT 例外」（轉成一份 ACL），或預設的 list 1（全部轉換）
   const natList = (i) => i.natAcl || (splitList(i.natSkip).length ? 'NAT-' + i.label.replace(/[^\w.]+/g, '_').toUpperCase() : '1');
-  for (const i of out) o.push(`ip nat inside source list ${natList(i)} interface ${longIf(i.label)} overload`);
+  for (const i of out) o.push(`ip nat inside source list ${natList(i)} interface ${i.mode === 'pppoe' && i.bind.t === 'port' ? 'Dialer1' : longIf(i.label)} overload`);
   for (const [name, p] of Object.entries(dev.natPools || {})) o.push(`ip nat pool ${name} ${p.start} ${p.end} netmask ${fmtMask(p.bits)}`);
   for (const r of dev.natPoolRules || []) o.push(`ip nat inside source list ${r.acl} pool ${r.pool}${r.overload ? ' overload' : ''}`);
   for (const n of dev.staticNat || []) if (n.pub && n.priv) o.push(`ip nat ${n.nvi ? '' : 'inside '}source static ${n.priv} ${n.pub}`);

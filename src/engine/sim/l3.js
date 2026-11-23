@@ -334,6 +334,12 @@ function buildRoutes(state, d) {
     if (via == null) {
       // ip route <網段> <遮罩> Tunnel0：只寫出口介面（點對點的介面不需要下一站）
       const out = s.outIf ? d.ifaces.find((x) => x.id === s.outIf) : null;
+      // ip route 0.0.0.0 0.0.0.0 Dialer1：PPPoE 的點對點連線，下一站就是 ISP 那一端
+      if (out && out.bind.t === 'dialer') {
+        const ph = d.ifaces.find((x) => x.viaDialer === out.id), ok = ph && up(ph) && ph.rt.gw != null;
+        r.push({ net: netOf(dst, bits), bits, via: ok ? ph.rt.gw : null, iface: ok ? ph : null, type: 'S', ad: Math.max(1, +s.ad || 1), metric: 0, vrf: s.vrf || '', exitIf: true, bad: ok ? null : `${out.label} 還沒有撥接成功（PPPoE）` });
+        continue;
+      }
       if (!out || !isTun(out)) continue;
       r.push({ net: netOf(dst, bits), bits, via: null, iface: up(out) ? out : null, type: 'S', ad: Math.max(1, +s.ad || 1), metric: 0, vrf: s.vrf || '', exitIf: true,
         bad: up(out) ? null : `出口介面 ${out.label} 是 line protocol down（${(out.rt.tun && out.rt.tun.why) || '沒有 IP'}）` });

@@ -5415,6 +5415,32 @@ console.log('\n設定檔裡的密碼：password、secret 與 service password-en
   const o1 = T.exec('enable').out.join('\n');
   ok(/Password:/.test(o1) && T.exec('cisco123').out.join('\n') === '', '沒有 enable secret：用 enable password 進入特權模式');
 }
+console.log('\nIOS 的 PPPoE：Dialer 介面');
+{
+  const { iosSession, runningConfig } = await import('../src/engine/ios.js');
+  const { iosRun } = await import('../src/ui/cli.js');
+  const ok = (cond, title) => (cond ? console.log('  ✔ ' + title) : fail(title));
+  const cli = (s, id) => { const S = iosSession(() => s.devices[id], () => s); return (...lines) => { const out = []; for (const l of lines) { const r = iosRun({ state: s, showTrace() {}, refreshLive() {} }, id, S, l, (x) => out.push(x)); if (r.changed) settle(s); } return out.join('\n'); }; };
+  const lv = LEVELS.find((x) => x.id === 'l150');
+  const s = lv.setup(); settle(s);
+  const R = cli(s, 'rt');
+  R('enable');
+  const ping = () => transact(s, 'pc1', { proto: 'icmp', dst: parseIp('8.8.8.8') });
+  ok(!ping().ok, '開場：舊專線的固定 IP，上不了網');
+  R('configure terminal', 'interface Gi0/0/0', 'no ip address', 'no ip nat outside', 'pppoe enable group global', 'pppoe-client dial-pool-number 1', 'exit',
+    'interface Dialer1', 'mtu 1492', 'ip address negotiated', 'ip nat outside', 'encapsulation ppp', 'dialer pool 2', 'ppp chap hostname 81234567@hinet.net', 'ppp chap password q8w3e7r2', 'end');
+  ok(/Dialer1 +unassigned/.test(R('show ip interface brief')), 'dialer pool 2 和實體介面的 dial-pool-number 1 對不上：撥不起來');
+  R('configure terminal', 'interface Dialer1', 'dialer pool 1', 'ppp chap password wrongpass', 'end');
+  ok(/Dialer1 +unassigned/.test(R('show ip interface brief')) && /驗證失敗/.test(s.devices.rt.ifaces.find((i) => i.id === 'Gi0/0/0').rt.note || ''), '密碼錯誤：PPPoE 驗證失敗');
+  R('configure terminal', 'interface Dialer1', 'ppp chap password q8w3e7r2', 'end');
+  ok(/Dialer1 +203\.0\.113\.88 +YES IPCP +up +up/.test(R('show ip interface brief')) && /GigabitEthernet0\/0\/0 +unassigned/.test(R('show ip interface brief')), 'show ip interface brief：位址在 Dialer1（IPCP），實體介面是 unassigned');
+  ok(!ping().ok, 'NAT 規則和預設路由還指著舊的：上不了網');
+  R('configure terminal', 'no ip nat inside source list 1 interface Gi0/0/0 overload', 'ip nat inside source list 1 interface Dialer1 overload', 'no ip route 0.0.0.0 0.0.0.0 203.0.113.9', 'ip route 0.0.0.0 0.0.0.0 Dialer1', 'end');
+  const r = ping();
+  ok(r.ok && r.log.some((l) => /來源位址 192\.168\.10\.21 換成 203\.0\.113\.88/.test(l.text)), 'NAT 掛在 Dialer1、ip route 0.0.0.0 0.0.0.0 Dialer1：上得了網，來源換成撥接拿到的位址');
+  const rc = runningConfig(s, s.devices.rt).join('\n');
+  ok(/interface Dialer1\n mtu 1492\n ip address negotiated\n ip nat outside\n encapsulation ppp\n dialer pool 1\n ppp chap hostname 81234567@hinet\.net\n ppp chap password 0 q8w3e7r2/.test(rc) && /interface GigabitEthernet0\/0\/0\n( description .*\n)? no ip address\n pppoe enable group global\n pppoe-client dial-pool-number 1/.test(rc) && /^ip route 0\.0\.0\.0 0\.0\.0\.0 Dialer1$/m.test(rc), 'running-config：Dialer1 的區塊、實體介面只有 pppoe 的設定、ip route … Dialer1');
+}
 console.log('\nNetFlow 與 QoS 的 police');
 {
   const sim = await import('../src/engine/sim.js');

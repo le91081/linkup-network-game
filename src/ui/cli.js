@@ -149,6 +149,9 @@ const SHOW = {
     const o = [pad('Interface', 24) + pad('IP-Address', 16) + pad('OK? Method', 11) + pad('Status', 22) + 'Protocol'];
     for (const i of d.ifaces) {
       if (!i.rt || i.rt.active === false) continue;
+      // PPPoE：位址在 Dialer 上，實體介面是 unassigned
+      if (i.bind.t === 'dialer') { const ph = d.ifaces.find((x) => x.viaDialer === i.id); const ip = ph && ph.rt && ph.rt.ip; o.push(pad(longIf(i.label), 24) + pad(ip != null ? fmtIp(ip) : 'unassigned', 16) + pad(ip != null ? 'YES IPCP' : 'YES unset', 11) + pad('up', 22) + (ip != null ? 'up' : 'down')); continue; }
+      if (i.viaDialer) { o.push(pad(longIf(i.label), 24) + pad('unassigned', 16) + pad('YES NVRAM', 11) + pad(i.rt.link ? 'up' : 'down', 22) + (i.rt.link ? 'up' : 'down')); continue; }
       const pc = d.sw && i.bind.port && d.sw.ports[i.bind.port];
       const adm = (pc && pc.shut) || i.shut;
       o.push(pad(i.bind.t === 'svi' ? 'Vlan' + i.bind.vlan : longIf(i.label), 24) + pad(i.rt.ip != null ? fmtIp(i.rt.ip) : 'unassigned', 16)

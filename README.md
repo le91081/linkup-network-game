@@ -105,6 +105,7 @@ npm run build    # 輸出到 dist/
 - **郵件 (SMTP)**：伺服器可以當郵件伺服器（「郵件伺服器」分頁：網域、信箱、寄不出去的佇列與原因），員工的電腦有「郵件」分頁設定寄件伺服器、寄測試信。信的路徑：員工用 TCP 587 交給公司的伺服器 → 收件人在自己的網域就放進信箱，否則查收件人網域的 MX、用 TCP 25 交給對方；外面寄進來的信從網際網路上別家公司的郵件伺服器連到我們 MX 的公用位址。退信的原因照 SMTP 寫：550 User unknown、Relaying denied。任務可以檢查「這封信寄不寄得到」。
 - **中繼 CA 與憑證鏈**：網站的憑證可以由中繼 CA 簽發（公司的 Corp Issuing CA，根是 Corp Root CA；公開 CA 的 DigiCert 中繼）。網站的「網站」分頁有「一起送出中繼憑證（完整的憑證鏈 fullchain）」：沒有送的話，Windows（瀏覽器、Schannel 的 curl）會照 AIA 自己去下載中繼憑證所以正常，Linux 的 OpenSSL（curl、程式）會失敗；任務可以要求用戶端不自己下載 (strict)。
 - **設定檔裡的密碼**：`enable password` 與 `enable secret`（兩個都有時 secret 優先）、`username … password` 與 `username … secret`、line con 0 / vty 的 `password`。可逆的密碼在沒有 `service password-encryption` 時以明文出現在 running-config，有的話是 type 7（只是遮住）；關掉 service password-encryption 之後，已經是 type 7 的不會變回明文。`security passwords min-length <n>`：之後設定的明文密碼太短就拒絕（% Password too short）。
+- **IOS 的 PPPoE（Dialer）**：實體介面 `pppoe enable group global`、`pppoe-client dial-pool-number <n>`；`interface Dialer<n>` 底下 `ip address negotiated`、`encapsulation ppp`、`dialer pool <n>`、`ppp chap hostname` / `ppp chap password`（或 `ppp pap sent-username … password …`）、`mtu 1492`、`ip nat outside`、`ip tcp adjust-mss 1452`；`ip nat inside source list … interface Dialer1 overload`、`ip route 0.0.0.0 0.0.0.0 Dialer1`（點對點，不用下一站）。`show ip interface brief` 的位址顯示在 Dialer（IPCP），實體介面是 unassigned。圖形介面設定的 PPPoE，running-config 也會寫成 Dialer1。
 - **定時封存**：`archive` 底下的 `time-period <分鐘>` 每隔一段時間自動封存一份 running-config 到 path。
 - Cisco 的路由器與交換器有「CLI」分頁：IOS 風格的命令列。`show running-config`、`show startup-config`、`show ip route`、`show vlan brief`、`show interfaces trunk`、`show arp` 等四十多個 `show` 指令用來查看狀態；輸入 `configure terminal` 之後可以直接用指令設定（見下方「CLI 設定指令」），改的和圖形介面是同一份設定。
 - FortiGate 防火牆也有「CLI」分頁，用的是 FortiOS 的階層式語法（`config firewall policy` → `edit 1` → `set …` → `next` → `end`）。
@@ -125,12 +126,12 @@ npm run build    # 輸出到 dist/
 - **評分**：過關時依實際作答時間（畫面在前景、沒有開對話框才算；標準時間是 3 分鐘加上每個目標 1.5 分鐘）、看了幾個提示、跑了幾次完整測試給 S / A / B / C 與分數，關卡選單上顯示最佳等級。設定變更的次數只列出來參考。
 - **關卡編輯器**：自由模式的「關卡設計」可以寫關卡名稱、任務說明、提示，指定哪些設備鎖定（玩家看得到、不能設定），然後試玩、存成自訂關卡、或匯出成關卡檔分享；關卡選單的「自訂關卡」可以遊玩、匯出、刪除與匯入。
 
-## 關卡（17 章 149 關）
+## 關卡（17 章 150 關）
 
 | 章節 | 關卡數 | 主題 |
 | --- | --- | --- |
 | 1 家用網路 | 4 | Hub、Switch、固定 IP、DHCP、PPPoE、NAT、DNS |
-| 2 小型辦公室 | 4 | 固定 IP 線路、連接埠轉發、VLAN、Trunk、子介面 |
+| 2 小型辦公室 | 5 | 固定 IP 線路、連接埠轉發、VLAN、Trunk、子介面；固定 IP 專線換成光世代：R1 改用 PPPoE 撥接，實體介面 `pppoe-client dial-pool-number 1`、Dialer1 的 `ip address negotiated` 與 `ppp chap`，NAT 與預設路由改到 Dialer1，`mtu 1492` 與 `ip tcp adjust-mss 1452` |
 | 3 企業網路 | 6 | 防火牆政策與 DMZ、靜態路由與回程路由、一對一靜態 NAT；NAT 位址池沒有 overload：早到的四個人把公用位址借光，晚到的人上不了網（`show ip nat statistics` 的 allocated 100% 與 misses，規則還有轉換在用時要先 `clear ip nat translation *` 才能改）；公司網站用靜態 NAT，外面連得到、辦公室卻連不上：傳統的 inside / outside NAT 不處理 hairpin，改用 split DNS（內部 DNS 回內部位址，改完要 `ipconfig /flushdns` 或等 TTL）；郵件伺服器搬回公司的 DMZ：寄給客戶的信卡在佇列（DMZ → wan1 沒有放行 SMTP），客戶寄來的信進不來（MX 的公用位址沒有 VIP 轉 TCP 25、也沒有政策），而且只對外開 25 |
 | 4 資料中心 | 7 | ToR 與 SVI、Spine-Leaf 與 OSPF、銅纜 / 多模 / 單模光纖與距離；Jumbo Frame 要整條路一致（交換器默默丟掉 giant、`ping -f -l 8972`、2960 的 `system mtu jumbo` 要存檔重新開機）；光纖接好了燈還是不亮：第三方的收發器被關成 err-disabled (gbic-invalid)、兩端一端 10G 一端 1G、接頭髒了收到的光太弱（`show interfaces transceiver`、CRC）；A 路的電一跳機房就全黑：每台設備的兩個電源供應器要都裝上、都接電，而且分別接 A、B 兩路（`show environment power`、故障演練一路一路斷電）；新的 25G GPU 伺服器接不上只有 QSFP28 的 Nexus：`interface breakout module 1 port 1 map 25g-4x` 拆成 4 個 25G 的子埠，用分歧線接（10g-4x 只有 10G） |
 | 5 無線網路 | 6 | SSID、WPA2 / WPA3、PoE、頻道規劃、訪客 SSID 對應 VLAN；三台 AP 都開 80 MHz 互相重疊、會議室用 DFS 頻道被雷達打斷（改用 40 MHz 與非 DFS 頻道）；Wi-Fi 6E 的新筆電一直連在 5 GHz：6 GHz 規定要 WPA3，只支援 WPA2 的印表機讓 SSID 停在 WPA2（改成 WPA2 / WPA3 混合）；訪客入口 (Captive Portal) 設好了，登入頁面卻從來不跳出：認證前允許的位址沒有 DNS，手機查不到 captive.apple.com |

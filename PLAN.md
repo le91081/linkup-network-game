@@ -33,7 +33,7 @@ README 說明「現在有什麼、怎麼玩」，這份文件說明「整體應�
 | 1. 實體層與接線 | 12 | 1 | 1 | 0 |
 | 2. 第二層：交換 | 16 | 1 | 0 | 0 |
 | 3. 第三層：路由 | 17 | 0 | 0 | 0 |
-| 4. IP 服務 | 13 | 1 | 0 | 0 |
+| 4. IP 服務 | 14 | 0 | 0 | 0 |
 | 5. 網路安全 | 16 | 1 | 0 | 0 |
 | 6. VPN 與廣域網路 | 11 | 2 | 0 | 0 |
 | 7. 無線網路 | 8 | 1 | 1 | 0 |
@@ -46,9 +46,9 @@ README 說明「現在有什麼、怎麼玩」，這份文件說明「整體應�
 | 14. 遊戲系統 | 16 | 0 | 0 | 6 |
 | 15. 介面與體驗 | 10 | 0 | 0 | 0 |
 | 16. 工程品質 | 6 | 3 | 1 | 0 |
-| **合計** | **188** | **11** | **6** | **6** |
+| **合計** | **189** | **10** | **6** | **6** |
 
-另外：關卡 149 關（第 17 節）、證照條目涵蓋情形（第 18 節）、建議的實作順序（第 19 節）。
+另外：關卡 150 關（第 17 節）、證照條目涵蓋情形（第 18 節）、建議的實作順序（第 19 節）。
 
 範圍的調整（2026-11-22）：第 14 節遊戲系統還沒做完的項目暫時不做（⏸）；第 15 節的手機與平板、多語系、無障礙、主題從規劃中移除，不做。
 
@@ -129,7 +129,7 @@ README 說明「現在有什麼、怎麼玩」，這份文件說明「整體應�
 | DNS 查詢 | ✅ | 自己架的 DNS 伺服器（A / CNAME / MX / PTR、每筆的 TTL）、用戶端依 TTL 快取（`ipconfig /displaydns` / `/flushdns`）、`nslookup` 直接問伺服器不看快取、`-type=mx` 與反查、家用路由器的 DNS 代理；還沒有 AAAA、轉送器與遞迴伺服器的快取、區域轉送 |
 | NAT | ✅ | PAT、一對一靜態 NAT、連接埠轉發、用 ACL 指定範圍、NAT 例外；可以查看轉換表 |
 | NAT 進階 | ✅ | 轉換表的閒置逾時已完成（依協定不同，可以用 `ip nat translation` 調整）；位址池已完成（`ip nat pool`、`ip nat inside source list … pool … [overload]`、一對一的動態 NAT 借光了就丟封包、閒置到 `ip nat translation timeout` 才釋放、`show ip nat statistics` 的 allocated / misses、規則還有轉換在用時不能改 → 3-4）；NAT hairpin：傳統的 inside / outside NAT 只轉換從 outside 進來的封包，內部連公用位址會失敗（用 split DNS 解決 → 3-5），沒有 outside 介面時靜態 NAT 不生效；NVI：介面上 `ip nat enable`、`ip nat source static`、`ip nat source list … interface … overload`，不分 inside / outside，進出 NVI 介面的都轉換，所以 hairpin 也通（伺服器看到的來源是路由器的公用位址）、`show ip nat nvi translations`；FortiGate 的 VIP：`set extintf`（只轉換從那個介面進來的，any 才處理內部連公用位址的 hairpin），伺服器和用戶端在同一個介面時 internal → internal 的政策要開 NAT（來源換成防火牆的位址）；用戶端收到「不是剛才連的那個位址」的回應會丟掉（只轉了一個方向的 hairpin 因此失敗） |
-| PPPoE | 🟡 | 帳號密碼驗證與撥接；IOS 沒有 Dialer 介面，只能在圖形介面設定 |
+| PPPoE | ✅ | 帳號密碼驗證與撥接（家用路由器、圖形介面）；IOS 的 Dialer 介面：實體介面的 `pppoe enable group global`、`pppoe-client dial-pool-number`，Dialer 的 `ip address negotiated`、`encapsulation ppp`、`dialer pool`、`ppp chap hostname / password`（或 `ppp pap sent-username`）、`mtu 1492`、`ip nat outside`、`ip tcp adjust-mss`，`ip nat inside source list … interface Dialer1 overload`、`ip route 0.0.0.0 0.0.0.0 Dialer1`，`show ip interface brief` 的位址在 Dialer（IPCP）→ 2-5 |
 | NTP | ✅ | 每台設備有自己的時鐘；每 64 秒輪詢，IOS 約四分鐘後才採信；`ntp master`、`clock set`、`clock timezone`；伺服器失聯八次輪詢後失去同步；`service timestamps log | debug`（datetime / msec / localtime / show-timezone / year、uptime，預設和 IOS 15 一樣用 UTC → 11-8） |
 | Syslog | ✅ | 設備記下介面、OSPF、VRRP、VPN、err-disabled 等事件，用 UDP 514 送到伺服器；`logging trap` 設定門檻；伺服器有收件畫面 |
 | SNMP | ✅ | v2c community（RO / RW、綁標準 ACL）、v3 的 group / user（SHA + AES）、Trap（linkUp / linkDown / coldStart / authenticationFailure）；網管伺服器每 60 秒輪詢、依計數器差值算使用率；FortiGate 的 sysinfo / community / hosts / user 與 allowaccess snmp；沒有 MIB 瀏覽器與 SET |
@@ -294,7 +294,7 @@ README 說明「現在有什麼、怎麼玩」，這份文件說明「整體應�
 
 | 功能 | 狀態 | 說明 |
 | --- | --- | --- |
-| 關卡 | ✅ | 17 章 149 關（清單見第 17 節） |
+| 關卡 | ✅ | 17 章 150 關（清單見第 17 節） |
 | 任務目標 | ✅ | ping、TCP、UDP、DHCP、設定檢查、故障演練、IPv6 ping、傳輸速率、遠端登入（SSH / Telnet 帳號密碼）、IP 電話註冊、通話品質 (MOS)、HTTPS（連得上之後還要通過憑證驗證）、路徑（一定要經過 / 不能經過某台設備）；TCP 的目標交握完還會送一個裝滿的資料區段（設了 DF），MTU 的問題才看得出來 |
 | 提示與星等 | ✅ | 每關 3 個提示，看一個少一顆星 |
 | 學習卡 | ✅ | 每關 2 到 4 張觀念說明 |
@@ -353,12 +353,12 @@ README 說明「現在有什麼、怎麼玩」，這份文件說明「整體應�
 
 ## 17. 關卡規劃
 
-### 現有的 149 關
+### 現有的 150 關
 
 | 章 | 關卡 |
 | --- | --- |
 | 1 家用網路 | 第一條網路線、換上交換器、自動發 IP、連上網際網路 |
-| 2 小型辦公室 | 辦公室開張、部門隔離、跨樓層、跨 VLAN 路由 |
+| 2 小型辦公室 | 辦公室開張、部門隔離、跨樓層、跨 VLAN 路由、換成光世代，路由器要自己撥接（IOS 的 PPPoE 與 Dialer） |
 | 3 企業網路 | 守門員、總公司與分公司、對外伺服器群、十點以後進公司的人都上不了網（NAT 位址池與 overload）、在公司裡打不開自己的網站（NAT hairpin 與 split DNS）、公司自己架了郵件伺服器，信卻寄不出也收不到（SMTP、MX 與 DMZ 的 VIP） |
 | 4 資料中心 | 機櫃上線、Spine-Leaf、跨棟連線、一開 Jumbo Frame，備份就卡住、光纖接好了，燈還是不亮（收發器）、A 路的電一跳，機房就全黑了（雙電源）、新的 GPU 伺服器接不上（breakout） |
 | 5 無線網路 | 家裡的 Wi-Fi、辦公室基地台、訪客 Wi-Fi、下午的視訊會議一直斷（頻道寬度與 DFS）、新筆電明明支援 Wi-Fi 6E（6 GHz 與 WPA3）、訪客連上 Wi-Fi，卻沒有跳出登入頁面（Captive Portal） |
