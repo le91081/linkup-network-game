@@ -5633,6 +5633,34 @@ console.log('\n光纖數據機的橋接模式與兩層 NAT');
   ok(lv.objectives.every((o) => (o.type === 'check' ? o.test(s) : runObjective(s, o).pass) === true), '三個目標都通過');
 }
 
+console.log('\nUPS：負載、過載與電池時間');
+{
+  const { runObjective } = await import('../src/engine/sim/objectives.js');
+  const ok = (cond, title) => (cond ? console.log('  ✔ ' + title) : fail(title));
+  const lv = LEVELS.find((x) => x.id === 'l157');
+  const s = lv.setup(); settle(s);
+  ok(s.rt.feeds.A.load === 595 && s.rt.feeds.A.src === 'utility' && /過載/.test(s.rt.feeds.A.why) === false, '平常：雙電源各分一半，UPS 的負載 595 W');
+  const out = (x) => { const t = cloneState(x); t.utility = false; t.utilityAt = t.clock; recomputeNow(t); return t; };
+  let t = out(s);
+  ok(!t.rt.feeds.A.up && t.rt.feeds.A.load === 1190 && /過載/.test(t.rt.feeds.A.why) && t.rt.off.srv1 && t.rt.off.fg, '停電：B 路沒有 UPS，負載全壓到 A 路（1190 W > 1000 W）：過載，全部關機');
+  // 外接電池組解決不了過載
+  const s2 = cloneState(s); s2.devices.ups.ups.ext = 2; settle(s2);
+  ok(!out(s2).rt.feeds.A.up, '加外接電池組：電池變多，還是過載');
+  // 不重要的設備改接 B 路
+  for (const id of ['bak', 'lab']) s.devices[id].psu = [{ on: true, feed: 'B' }, { on: true, feed: 'B' }];
+  settle(s);
+  t = out(s);
+  ok(t.rt.feeds.A.up && t.rt.feeds.A.src === 'battery' && t.rt.feeds.A.load === 510 && t.rt.feeds.A.runtime === 17.5 && t.rt.off.bak && !t.rt.off.srv1, '備份與實驗室改接 B 路：停電時 A 路只剩 510 W，電池撐 17.5 分鐘；備份伺服器關機');
+  t.clock += 17 * 60; recomputeNow(t);
+  ok(t.rt.feeds.A.up && t.rt.feeds.A.left === 0.5, '17 分鐘後還剩 0.5 分鐘');
+  t.clock += 60; recomputeNow(t);
+  ok(!t.rt.feeds.A.up && /電池用完了/.test(t.rt.feeds.A.why) && t.rt.off.srv1, '18 分鐘：電池用完，全部關機');
+  ok(lv.objectives.every((o) => (o.type === 'check' ? o.test(s) : runObjective(s, o).pass) === true), '四個目標都通過');
+  // 有外接電池組：撐得更久
+  s.devices.ups.ups.ext = 1; settle(s);
+  ok(out(s).rt.feeds.A.runtime === 34.9, '加一組外接電池：17.5 → 34.9 分鐘');
+}
+
 console.log('\nNetFlow 與 QoS 的 police');
 {
   const sim = await import('../src/engine/sim.js');

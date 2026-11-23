@@ -25,6 +25,7 @@ import { httpStatus } from '../ltm.js';
  *  { type:'check', test(state) → true | '原因' }
  *  { type:'failover', down?:[devId], cut?:[[devId, portId]], test:{...} }
  *    member:[[devId, 成員編號]] 堆疊的某一台成員故障（它的埠全部斷線，Active 換 Standby 接手）
+ *    utility:true 市電中斷（有 UPS 的那一路靠電池撐）；wait: 秒數，停電之後過多久再測
  *    feed:['A'] 某一路電斷了（設備的電源供應器接在哪一路，見 engine/power.js）
  *    keep:{ from, ip, port } 取代 test：故障之前先建立 TCP 連線，故障之後在同一條連線上繼續送資料（連線表要跟著換手）
  *  { type:'http'|'https', … } 連得上之後還要看網站回應的狀態碼（4xx、5xx 算失敗）；https 還要驗證憑證
@@ -178,13 +179,17 @@ export function runObjective(state, o) {
       (s2.stackDown ||= {})[dv + ':' + n] = true;
       what.push(`${state.devices[dv].name} 的 Switch ${n} 故障`);
     }
+    // 市電中斷（UPS 靠電池撐）：utility: true，wait: 秒數（停電之後過多久再測）
+    if (o.utility) { s2.utility = false; s2.utilityAt = s2.clock; what.push('市電中斷' + (o.wait ? `，過了 ${fmtDur(o.wait)}` : '')); }
     for (const id of o.ispFail || []) {
       s2.devices[id].inet = { ...s2.devices[id].inet, fault: true };
       what.push(`${state.devices[id].name} 的骨幹故障（線路燈號正常）`);
     }
     // 故障發生後要等網路重新收斂（VRRP 換手、OSPF 的 Dead timer…）才測試
     recompute(s2);
+    if (o.wait) { s2.clock += o.wait; recompute(s2); }
     const t0 = s2.clock;
+    if (o.utility) settle(s2, 60); else
     settle(s2);
     const took = Math.round(s2.clock - t0);
     let r;

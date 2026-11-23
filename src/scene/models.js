@@ -243,6 +243,16 @@ const BUILDERS = {
     jacks(g, u, dev, 0.5, 0.34, 0.2, -0.75, 0, -1, { w: 0.2, h: 0.1 });
     u.rect = [-1.3, 1.3, -0.8, 0.8];
   },
+  /** UPS：2U 的機身、前面一塊液晶面板 */
+  ups(g, dev, u) {
+    Object.assign(u, { w: 2.6, h: 0.9, d: 1.7 });
+    box(g, 2.5, 0.86, 1.6, mat(PALETTE.darker, { metal: 0.25, rough: 0.5 }), 0, 0.43, 0, 0.04);
+    box(g, 0.7, 0.3, 0.03, glow(0x7dd3fc, 0.7), -0.6, 0.55, 0.805, 0.01);
+    for (let i = 0; i < 3; i++) box(g, 0.14, 0.08, 0.03, glow(i === 0 ? 0x5dfc9b : 0x39425a, 0.9), 0.3 + i * 0.22, 0.6, 0.805, 0.01);
+    u.led = box(g, 0.2, 0.035, 0.03, glow(PALETTE.screenOff, 0.4), 1.0, 0.25, 0.805, 0.012);
+    jacks(g, u, dev, 0.5, 0.3, 0.2, -0.8, 0, -1, { w: 0.2, h: 0.1 });
+    u.rect = [-1.3, 1.3, -0.8, 0.8];
+  },
   /** 負載平衡器：1U 的機身加上一條紅色的燈條 */
   bigip(g, dev, u) {
     BUILDERS.rack1u(g, dev, u);

@@ -107,7 +107,7 @@ function transactInner(state, fromId, spec) {
     const t = src.rt.tunnels.find((x) => x.up && x.vip != null && selMatch(x.remote, spec.dst));
     const r = t ? null : lookupRoute(src, spec.dst, undefined, spec.vrf || '');
     if (!t && !r) {
-      const reason = state.rt.off[fromId] ? `${src.name} 沒有電` : noRouteReason(state, src, spec.dst);
+      const reason = state.rt.off[fromId] ? (state.rt.offWhy || {})[fromId] || `${src.name} 沒有電` : noRouteReason(state, src, spec.dst);
       ctx.log.push({ dev: fromId, kind: 'drop', text: reason });
       return done({ ok: false, reason, failDev: fromId, phase: 'request' });
     }

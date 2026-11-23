@@ -162,7 +162,7 @@ function computePass(state, auth) {
     }
   }
   prepTimeRanges(state); // time-range：哪些 ACL 規則現在不在時間內
-  prepPower(state); // 電源供應器全部沒電的設備：當作關機
+  prepPower(state, CATALOG); // 電源供應器全部沒電的設備：當作關機（UPS 的電池、市電中斷）
   prepPhysical(state);
   prepDtp(state);
   prepVtp(state); // VTP：Trunk 協商好之後，同一個網域的交換器同步 VLAN 資料庫

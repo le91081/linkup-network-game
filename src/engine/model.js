@@ -110,6 +110,11 @@ export const CATALOG = {
     kind: 'lb', shape: 'bigip', vendor: 'F5', title: 'F5 BIG-IP i2800',
     tagline: '應用程式交付控制器（負載平衡器 LTM）· 4×1GbE + 2×10GbE SFP+', ports: [rj('1.1'), rj('1.2'), rj('1.3'), rj('1.4'), sfp('2.1'), sfp('2.2')],
   },
+  ups: {
+    kind: 'host', shape: 'ups', vendor: 'APC', title: 'APC Smart-UPS SMT1500RMI2U',
+    tagline: '不斷電系統 · 1500 VA / 1000 W · 機架式 2U · 網路管理卡 (NMC)', ports: [rj('mgmt', 'NMC（網路管理卡）')],
+    ups: { va: 1500, watts: 1000, wh: 165 }, services: [{ proto: 'tcp', port: 443, name: 'NMC 網頁' }, { proto: 'udp', port: 161, name: 'SNMP' }],
+  },
   esxi: {
     kind: 'hypervisor', shape: 'esxi', vendor: 'VMware', title: 'VMware ESXi 8',
     tagline: 'Dell PowerEdge R650 · 2×25GbE 上行（NIC teaming）· 8 個虛擬埠', ports: [sfp('vmnic0', 'vmnic0'), sfp('vmnic1', 'vmnic1'), ...seq(8, (i) => virt('vp' + i, '虛擬埠 ' + i))],
@@ -269,6 +274,7 @@ export function makeDevice(model, id, o = {}) {
       }
       d.ifaces = d.ports.map((p) => iface(p.id, p.label, { t: 'port', port: p.id }));
       if (m.cam) d.cam = { nvr: '', mbps: 4 }; // 網路攝影機：影像送到哪一台 NVR、位元率
+      if (m.ups) d.ups = { feed: '', ext: 0 }; // UPS：供應哪一路電（engine/power.js）、外接電池組
       if (m.wlan) d.ifaces.push(iface('wlan0', 'Wi-Fi', { t: 'wlan' }, { mode: 'dhcp', wifi: { ssid: '', pass: '' } }));
       break;
     case 'hub':
