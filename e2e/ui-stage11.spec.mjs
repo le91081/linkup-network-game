@@ -156,7 +156,7 @@ test('HTTPS：curl 的憑證錯誤、-k 與 -v、換憑證、匯入根憑證、�
   expect(await scan(page, '#panel', 'HTTPS・網站分頁')).toEqual([]);
   await page.screenshot({ path: info.outputPath('web-tab.png') });
   // 公開 CA 不簽內部名稱
-  await page.locator('#panel .field', { hasText: '交給哪個 CA 簽發' }).locator('select').selectOption({ index: 1 });
+  await page.locator('#panel .field', { hasText: '交給哪個 CA 簽發' }).locator('select').selectOption('DigiCert Global Root G2');
   await page.locator('#panel button', { hasText: '產生 CSR、簽發並安裝' }).click();
   await expect(page.locator('#toasts')).toContainText('公開 CA 不會簽發內部網域');
   // PC-1 兩個網址都好了
