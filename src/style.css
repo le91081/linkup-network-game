@@ -726,6 +726,8 @@ textarea.code:focus { outline: none; border-color: var(--accent); }
 .palette .chip.k-hypervisor { background: rgba(180, 140, 255, 0.13); color: #ddd0ff; border-color: rgba(180, 140, 255, 0.3); }
 .c-pg { grid-template-columns: minmax(0, 1fr) 64px 52px 26px; }
 .c-lbm { grid-template-columns: minmax(0, 1fr) 64px 118px 26px; }
+.survey-tag { position: absolute; pointer-events: none; background: rgba(12, 16, 26, 0.92); border: 1px solid rgba(125, 211, 252, 0.45); border-radius: 8px; padding: 6px 9px; font-size: 12px; line-height: 1.55; color: #dbe6f5; white-space: nowrap; z-index: 6; }
+.survey-tag .hd { color: #7dd3fc; font-weight: 600; }
 .c-patch { grid-template-columns: 26px 72px minmax(0, 1fr) minmax(0, 1fr) 64px; align-items: center; }
 .c-stk { grid-template-columns: 56px 96px 64px minmax(0, 1fr); align-items: center; }
 .c-dns { grid-template-columns: minmax(0, 1.3fr) 70px minmax(0, 1.2fr) 62px 26px; }

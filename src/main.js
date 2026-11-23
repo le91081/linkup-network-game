@@ -1,4 +1,6 @@
 // LinkUp 主程式：把模擬引擎、3D 場景與介面串在一起
+import { apsOf, rfAt } from './engine/sim/wifi.js';
+import { meshServes } from './engine/mesh.js';
 import './style.css';
 import { Scene3D } from './scene/scene.js';
 import { LEVELS } from './levels/index.js';
@@ -497,6 +499,13 @@ app.scene = new Scene3D(app.el.stage, {
   onCable: (id, x, y) => hud.openCableMenu(app, id, x, y),
   canMove: () => !!app.level.sandbox,
   onMoved: () => app.sandboxMoved(),
+  onSurvey: (x, z) => {
+    const aps = apsOf(app.state).filter((ap) => meshServes(app.state, ap)); // 回程沒連上的 mesh 基地台不廣播，量不到
+    if (!aps.length) return ['訊號量測', '（場景裡沒有正在發射的基地台）'];
+    const rows = aps.map((ap) => ({ ap, rf: rfAt(app.state, ap, [x, z]) })).sort((a, b) => Math.max(b.rf.rssi5, b.rf.rssi24) - Math.max(a.rf.rssi5, a.rf.rssi24));
+    const q = (v) => (v >= -60 ? '很好' : v >= -67 ? '好' : v >= -75 ? '普通' : v >= -80 ? '很弱' : '收不到');
+    return [`訊號量測 (${x.toFixed(1)}, ${z.toFixed(1)})`, ...rows.slice(0, 4).map(({ ap, rf }) => `${ap.name}：5 GHz ${rf.rssi5} dBm（${q(rf.rssi5)}）· 2.4 GHz ${rf.rssi24} dBm（${q(rf.rssi24)}）${rf.walls.length ? ` · 穿過 ${rf.walls.length} 道牆` : ''}`)];
+  },
 });
 installSandbox(app, { renderMission: () => hud.renderMission(app) });
 hud.initClock(app);

@@ -31,6 +31,7 @@ export function renderTopbar(app) {
     h('div', { class: 'histbtns' },
       h('button', { class: 'btn ghost icon', id: 'btn-undo', type: 'button', title: '復原上一個變更（Ctrl + Z）', disabled: !app.undoStack.length, onclick: () => app.undo() }, icon('undo', 16)),
       h('button', { class: 'btn ghost icon', id: 'btn-redo', type: 'button', title: '重做（Ctrl + Y）', disabled: !app.redoStack.length, onclick: () => app.redo() }, icon('redo', 16)),
+      h('button', { class: 'btn ghost icon' + (app.scene && app.scene.survey ? ' on' : ''), id: 'btn-survey', type: 'button', title: '訊號量測：滑鼠移到地板上，看那個位置收到每台基地台的訊號（像現場勘測的 App）', onclick: (e) => { app.scene.survey = !app.scene.survey; e.currentTarget.classList.toggle('on', app.scene.survey); if (!app.scene.survey) app.scene.surveyEl.style.display = 'none'; } }, icon('bolt', 16)),
       h('button', { class: 'btn ghost icon' + (app.view2d ? ' on' : ''), id: 'btn-view', type: 'button', title: app.view2d ? '回到 3D 場景' : '切換成 2D 邏輯拓撲圖（埠、VLAN、IP 一目了然）', onclick: () => app.toggle2d() }, icon(app.view2d ? 'cube' : 'topo', 16))),
     button('測驗', { ic: 'book', kind: 'ghost quiz-btn', onclick: () => openQuiz(app) }),
     button('證照', { ic: 'award', kind: 'ghost', onclick: () => openCerts(app) }),

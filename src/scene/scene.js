@@ -177,6 +177,11 @@ export class Scene3D {
     this.ghosts = [];
     this.ghostGeo = new THREE.SphereGeometry(0.1, 12, 8);
     this.tagPos = null;
+    // 訊號量測：滑鼠所在位置的訊號強度（main.js 的 onSurvey 算）
+    this.surveyEl = document.createElement('div');
+    this.surveyEl.className = 'survey-tag';
+    this.surveyEl.style.display = 'none';
+    this.labelLayer.append(this.surveyEl);
     this.tagEl = document.createElement('div');
     this.tagEl.className = 'pkt-tag';
     this.labelLayer.append(this.tagEl);
@@ -285,6 +290,21 @@ export class Scene3D {
     return new THREE.Vector2(((e.clientX - r.left) / r.width) * 2 - 1, -((e.clientY - r.top) / r.height) * 2 + 1);
   }
 
+  /** 訊號量測：在游標旁邊顯示這個位置收到的訊號 */
+  surveyAt(e) {
+    const el = this.surveyEl;
+    if (!this.survey || !this.h.onSurvey) { el.style.display = 'none'; return; }
+    const p = this.groundAt(e);
+    const lines = p ? this.h.onSurvey(p.x, p.z) : null;
+    if (!lines || !lines.length) { el.style.display = 'none'; return; }
+    const r = this.canvas.getBoundingClientRect(), lr = this.labelLayer.getBoundingClientRect();
+    el.replaceChildren(...lines.map((t, n) => { const x = document.createElement('div'); x.textContent = t; if (n === 0) x.className = 'hd'; return x; }));
+    el.style.display = 'block';
+    el.style.left = (e.clientX - lr.left + 16) + 'px';
+    el.style.top = (e.clientY - lr.top + 16) + 'px';
+    void r;
+  }
+
   groundAt(e) {
     this.ray.setFromCamera(this.ndc(e), this.cam);
     return this.ray.ray.intersectPlane(this.ground, new THREE.Vector3());
@@ -333,6 +353,7 @@ export class Scene3D {
     if (!d) {
       const hit = this.pick(e);
       this.setHover(hit.dev || null, hit.cable || null);
+      this.surveyAt(e);
       return;
     }
     const dx = e.clientX - d.lx, dy = e.clientY - d.ly;
