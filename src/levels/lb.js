@@ -77,6 +77,7 @@ export const LEVELS72 = [
       'BIG-IP →「Virtual Servers」→ vs_erp_http 的「來源位址轉換 (SNAT)」改成 Auto Map：送給伺服器時來源換成 self IP 10.0.20.5，回應就會回到 BIG-IP。（把伺服器的預設閘道改成 BIG-IP 也行得通，但伺服器自己要連外的流量會被 BIG-IP 擋掉）',
       `再 curl 幾次：每三次有一次是 HTTP/1.1 500，那是 web-03。「Pools」裡它還是 Available，因為 pool_erp 用的是 tcp monitor，只看 80 埠開不開。`,
       '「Monitors」→ 建立一個 HTTP 類型的 monitor，Receive String 填 200 OK，再到「Pools」把 pool_erp 的健康檢查換成它。web-03 會變成 Offline；不要把它刪掉，修好之後會自動回來。',
+      '也可以用「tmsh」分頁：modify ltm virtual vs_erp_http source-address-translation { type automap }、create ltm monitor http http_200 recv "200 OK"、modify ltm pool pool_erp monitor http_200，show ltm pool pool_erp members 看每個成員的狀態。',
     ],
     solve(s) {
       const d = dev(s, 'lb');

@@ -41,6 +41,7 @@ import * as LTM from './panel-ltm.js';
 import { stackTab } from './panel-stack.js';
 import { buildJunosCli } from './junoscli.js';
 import { jackInfo } from '../engine/patch.js';
+import { buildTmsh } from './tmsh.js';
 import { isStack } from '../engine/stack.js';
 import { dnsTab } from './panel-dns.js';
 import { vrfField, vrfCard } from './panel-vrf.js';
@@ -735,7 +736,7 @@ function baseTabs(dev) {
     case 'ap': return dev.lwap ? [['lwap', 'AP', W.lwapTab]] : [['ssid', '無線網路', X.ssidTab], ['radio', '無線電', X.radioTab], T.ports];
     case 'hypervisor': return [['vsw', '虛擬交換器', VZ.vswTab], ['vms', '虛擬機器', VZ.vmsTab], T.status];
     case 'patch': return [['patch', '配線', patchTab]];
-    case 'lb': return [['if', 'Self IP', lbIfaces], T.route, ['vs', 'Virtual Servers', LTM.vsTab], ['pool', 'Pools', LTM.poolTab], ['mon', 'Monitors', LTM.monTab], T.status];
+    case 'lb': return [['if', 'Self IP', lbIfaces], T.route, ['vs', 'Virtual Servers', LTM.vsTab], ['pool', 'Pools', LTM.poolTab], ['mon', 'Monitors', LTM.monTab], ['tmsh', 'tmsh', buildTmsh], T.status];
     case 'cloud': return dev.tgw ? [['tgw', 'Transit Gateway', CL.tgwTab]] : [['vpc', 'VPC', CL.vpcTab], ['sub', '子網路', CL.subnetTab], ['rtb', '路由表', CL.rtTab], ['ec2', 'EC2', CL.ec2Tab], ['sg', '安全群組', CL.sgTab], ['nacl', '網路 ACL', CL.naclTab], ['nat', 'NAT 閘道', CL.natTab], ['alb', '負載平衡器', CL.lbTab], ['pcx', 'Peering', CL.peeringTab], ['cvpn', 'VPN', CL.cloudVpnTab]];
     case 'wlc': return [['wlan', 'WLAN', W.wlanTab], ['aps', 'AP', W.apsTab], ['wcl', '用戶端', W.wlcClientsTab], ['wmi', '管理介面', W.wmiTab], T.swports];
     case 'mswitch': return [T.swports, T.vlan, T.sec, T.mgmt, T.status];

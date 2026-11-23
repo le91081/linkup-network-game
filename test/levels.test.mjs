@@ -5804,6 +5804,22 @@ console.log('\n配線架：端對端的連線');
   ok(!s.rt.links['sw:Gi0/5'] && /整條通道是 101 公尺/.test(Object.values(s.rt.why).join()), '水平佈線 98 公尺 + 跳線 3 公尺：每一段都沒超過，整條通道 101 公尺超過 100 公尺，沒有連線');
 }
 
+console.log('\nBIG-IP 的 tmsh');
+{
+  const { runObjective } = await import('../src/engine/sim/objectives.js');
+  const { tmshRun } = await import('../src/ui/tmsh.js');
+  const ok = (cond, title) => (cond ? console.log('  ✔ ' + title) : fail(title));
+  const lv = LEVELS.find((x) => x.id === 'l152');
+  const s = lv.setup(); settle(s);
+  const d = s.devices.lb;
+  const tm = (...lines) => { const out = []; for (const l of lines) { const r = tmshRun(s, d, l, (...t) => out.push(...t)); if (r.changed) settle(s); } return out.join('\n'); };
+  ok(/10\.0\.20\.13:80\n  \|   Availability : available/.test(tm('show ltm pool pool_erp members')), 'show ltm pool members：tcp monitor 下 web-03 是 available');
+  tm('modify ltm virtual vs_erp_http source-address-translation { type automap }', 'create ltm monitor http http_200 recv "200 OK"', 'modify ltm pool pool_erp monitor http_200');
+  ok(/10\.0\.20\.13:80\n  \|   Availability : offline/.test(tm('show ltm pool pool_erp members')) && /type automap/.test(tm('list ltm virtual')), 'tmsh 改 SNAT、建 monitor、換 monitor：web-03 offline');
+  ok(lv.objectives.every((o) => (o.type === 'check' ? o.test(s) : runObjective(s, o).pass) === true), '用 tmsh 也能過關');
+  ok(/was not found/.test(tm('modify ltm pool nope monitor tcp')) && /Syntax Error/.test(tm('bogus command')), '找不到物件、打錯指令：tmsh 的錯誤訊息');
+}
+
 console.log('\nNetFlow 與 QoS 的 police');
 {
   const sim = await import('../src/engine/sim.js');
