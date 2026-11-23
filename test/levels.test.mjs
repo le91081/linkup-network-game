@@ -4925,6 +4925,36 @@ console.log('\nSTP：每個 VLAN 的優先權（PVST+）與 MST 區域');
   ok(/^spanning-tree vlan 10 priority 4096$/m.test(runningConfig(t, t.devices.core1).join('\n')) && /Bridge ID  Priority    4106  \(priority 4096 sys-id-ext 10\)/.test(cli(t, 'core1')('show spanning-tree')), 'running-config 寫成每個 VLAN 一行；show spanning-tree 的優先權加上 sys-id-ext');
 }
 
+console.log('\nping 的往返時間：設備處理、線路速率、距離、排隊與 CPU 回應');
+{
+  const { pingStats, pathTimes, rttSamples, winMs, winCol, linuxMs, iosMs } = await import('../src/engine/latency.js');
+  const { iosSession } = await import('../src/engine/ios.js');
+  const { iosRun } = await import('../src/ui/cli.js');
+  const ok = (cond, title) => (cond ? console.log('  ✔ ' + title) : fail(title));
+  const lv = LEVELS.find((x) => x.id === 'l05');
+  const s = lv.setup(); lv.solve(s); settle(s);
+  const ping = (dst, bytes) => { const r = transact(s, 'pc-1', { proto: 'icmp', dst: parseIp(dst) }); return { r, t: pingStats(s, r, 4, bytes) }; };
+  const net = ping('8.8.8.8');
+  ok(net.r.ok && net.t.min > 8 && net.t.max < 14, `到網際網路約 9 ms（${net.t.list.map((v) => v.toFixed(2)).join(' / ')}）`);
+  const gw = rttSamples(s, net.r, 3, 74, 'rt');
+  ok(gw.every((v) => v > 0.3 && v < 1), `traceroute 第一站（路由器的 CPU 回應）不到 1 ms（${gw.map((v) => v.toFixed(2)).join(' / ')}）`);
+  ok(new Set(net.t.list.map((v) => v.toFixed(3))).size === 4 && net.t.mdev > 0, '四個封包的時間有一點差異（抖動）');
+  // 大封包：傳送時間跟著變長（1 Gbps 每 1500 位元組 12 微秒）
+  const big = ping('8.8.8.8', 1500);
+  ok(big.t.avg > net.t.avg, `封包越大越久（74 位元組 ${net.t.avg.toFixed(3)} ms，1500 位元組 ${big.t.avg.toFixed(3)} ms）`);
+  // 往路由器的線被塞滿：排隊
+  const up = net.r.hops.find((h) => !h.reply && h.cable && h.to === 'rt');
+  const before = pathTimes(s, net.r).find((x) => x.dev === 'rt').ms;
+  s.rt.load = { ...(s.rt.load || {}), [up.cable + '>rt']: 990 };
+  const after = pathTimes(s, net.r).find((x) => x.dev === 'rt').ms;
+  ok(after > before + 0.3, `線路的使用率 99%：排隊讓這一段從 ${before.toFixed(3)} ms 變成 ${after.toFixed(3)} ms`);
+  s.rt.load[up.cable + '>rt'] = 0;
+  ok(winMs(0.4) === '<1ms' && winMs(9.4) === '=9ms' && winCol(0.4) === ' <1 ms' && winCol(12.2) === ' 12 ms' && linuxMs(0.4123) === '0.412' && linuxMs(9.456) === '9.46' && linuxMs(12.34) === '12.3' && iosMs(0.4) === 1, 'Windows（<1ms）、Linux（有效位數）、IOS（整數，最少 1）的寫法');
+  const S = iosSession(() => s.devices.rt, () => s), out = [];
+  for (const l of ['enable', 'ping 8.8.8.8', 'traceroute 8.8.8.8']) iosRun({ state: s, showTrace() {}, refreshLive() {} }, 'rt', S, l, (x) => out.push(x));
+  const txt = out.join('\n');
+  ok(/round-trip min\/avg\/max = (9|1\d)\/(9|1\d)\/(9|1\d) ms/.test(txt) && /^  1 8\.8\.8\.8 (9|1\d) msec (9|1\d) msec (9|1\d) msec$/m.test(txt), 'IOS 的 ping 與 traceroute 印出算出來的時間');
+}
 console.log('\nNetFlow 與 QoS 的 police');
 {
   const sim = await import('../src/engine/sim.js');

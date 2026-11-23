@@ -339,6 +339,7 @@ npm run build    # 輸出到 dist/
 | 介面計數器 | 每個埠收送了多少封包與位元組、廣播與多點傳送、CRC 錯誤、runt、碰撞、late collision。交換器每 2 秒送一個 STP BPDU、Cisco 設備每 60 秒送一次 CDP，所以沒人在用計數器也會增加。雙工不一致時，全雙工那端的 CRC 與半雙工那端的 late collision 會一直長 |
 | 封包擷取 | 電腦的網路卡收送的訊框。接在交換器上只看得到廣播與給自己的；接在 Hub 上，或交換器用 SPAN 把別的埠鏡像過來，才看得到別人的流量。Telnet 的帳號密碼在這裡是明文，SSH 只看得到加密的封包 |
 | SPAN | 把來源埠進出的訊框複製到目的埠。目的埠只送出複製的訊框，接在上面的設備不能再用它上網（和真的交換器一樣） |
+| `ping` / `tracert` / `traceroute` 的時間 | 往返時間是一段一段算出來的：交換器轉送幾微秒、路由器數十微秒、防火牆約 0.1 ms，加上封包大小 ÷ 線路速率、線的長度、Wi-Fi（訊號弱、干擾多會更慢更不穩）、雙工不一致的重送，線路忙的時候再加上排隊；回應 ping 與 TTL exceeded 的是設備的 CPU，所以 ping 交換器本身比 ping 它後面的電腦還慢。Windows 不到 1 ms 寫成 `<1ms`，最後有最小值、最大值、平均；Linux 有 `rtt min/avg/max/mdev`；經過 ISP 到網際網路約 9 ms |
 | `debug ip packet` / `debug ip icmp` | 只看得到給路由器自己、它自己送出的、以及它丟掉的封包；經過它轉送的封包由 CEF 處理，不會出現（真的路由器也是這樣） |
 | `debug ip ospf adj` / `hello` | 鄰居建不起來時，每個 Hello 間隔印一次原因，格式和 IOS 15 一樣：`Mismatched hello parameters`（Dead / Hello / Mask 的 R 收到的、C 自己設定的）、`mismatched area … in the header`、`Mismatched Authentication type` / `Key`、Stub 選項位元、MTU 不一致時 `Nbr … has larger interface MTU` 與 DBD 重送。Router ID 重複不用開 debug，本來就會記 `%OSPF-4-DUP_RTRID_NBR` |
 | `debug ip dhcp server packet` / `events` | 路由器發出租約時的 DISCOVER、OFFER、REQUEST、ACK（用戶端識別碼是 01 加上 MAC），續約只有 REQUEST / ACK 而且是 unicast |

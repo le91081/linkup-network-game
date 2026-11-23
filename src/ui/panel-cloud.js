@@ -3,6 +3,7 @@ import { h, button, icon, toast, ownKeys, escLine } from './dom.js';
 import { inp, sel, toggle, field, note, kv, del, cardHead, grid2, bind, badge } from './form.js';
 import { parseIp, parseCidr, fmtIp, netOf } from '../engine/ip.js';
 import { transact } from '../engine/sim.js';
+import { rttSamples } from '../engine/latency.js';
 import { subnetOf, rtOf, naclOf, isPublic, reservedWhy, CLOUD_REGION, AWS_P1, AWS_DH, awsPsk, vpnConfig, lbIp, peerState, tgwRoutes } from '../engine/cloud.js';
 
 const isCidr = (v) => v.includes('/') && parseCidr(v) != null;
@@ -130,7 +131,7 @@ export function ec2Tab(ctx, body) {
         const dst = c === 'nc' ? parseIp(b) : ip, port = c === 'nc' ? +line.trim().split(/\s+/)[3] : c === 'curl' ? +(m[2] || (/^http:/.test(a) ? 80 : 443)) : 0;
         const res = transact(state, dev.id, { proto: c === 'ping' ? 'icmp' : 'tcp', dst, dport: port, srcIp: parseIp(x.ip) });
         app.showTrace(`${x.name}$ ${line}`, res.log, res.hops, res);
-        if (res.ok) ui.out.push({ t: c === 'ping' ? `64 bytes from ${fmtIp(dst)}: icmp_seq=1 ttl=${res.l3.length ? 64 - res.l3.length : 64} time=${(2 + res.hops.length * 1.3).toFixed(1)} ms` : c === 'nc' ? `Ncat: Connected to ${fmtIp(dst)}:${port}.` : `HTTP/1.1 200 OK（${fmtIp(dst)}:${port}）`, c: 'ok' });
+        if (res.ok) ui.out.push({ t: c === 'ping' ? `64 bytes from ${fmtIp(dst)}: icmp_seq=1 ttl=${res.l3.length ? 64 - res.l3.length : 64} time=${rttSamples(state, res, 1, 98)[0].toFixed(2)} ms` : c === 'nc' ? `Ncat: Connected to ${fmtIp(dst)}:${port}.` : `HTTP/1.1 200 OK（${fmtIp(dst)}:${port}）`, c: 'ok' });
         else { ui.out.push({ t: c === 'ping' ? `From ${x.ip} icmp_seq=1 Destination Host Unreachable` : `${c}: (28) Failed to connect to ${fmtIp(dst)} port ${port} after 30000 ms: Timeout was reached`, c: 'bad' }); ui.out.push({ t: '  ↳ ' + res.reason, c: 'hint' }); }
       }
       if (ui.out.length > 40) ui.out.splice(0, ui.out.length - 40);

@@ -6,6 +6,7 @@ import { dhcp6Bindings, hits6Of, ACL6_IMPLICIT, DHCP6_PREF, DHCP6_VALID, duidOf 
 import { ospf6Area, ospf6Cost, ospf6Dead, ospf6Hello, ospf6Passive, ospf6Prio, ospf6NetType } from '../engine/ospf.js';
 import { acl6Text, up6 } from '../engine/ios.js';
 import { transact, routeRows, isBridgePort, arpRows, clearArp, hitsOf, fmtDur, portfastOn, macRows, clearMac, macAgeOf, sessionRows, clearSessions, saInfo, isTrunk, dtpSpeaker, unreachOf } from '../engine/sim.js';
+import { rttSamples, pingStats, iosMs } from '../engine/latency.js';
 import { cdpCfg, lldpCfg, cdpOn, lldpTxOn, lldpRxOn, neighbors, ndCounters, cdpCapText, speaksCdp, speaksLldp } from '../engine/disc.js';
 import { dscpName, COS_DSCP_DEFAULT, portTrust, egressOf, classify, QLIMIT } from '../engine/qos.js';
 import { ospfArea, ospfCost, ospfPassive, ospfHello, ospfDead, ospfPrio, ospfNetType, isLoopback, ospfProcs, ospfKeys, ospfAreaCfg, ospfAreaType, areaKindText } from '../engine/ospf.js';
@@ -1705,9 +1706,10 @@ function traceLines(app, d, ip, print, line) {
   print('Type escape sequence to abort.');
   print(`Tracing the route to ${fmtIp(ip)}`);
   print('VRF info: (vrf in name/id, vrf out name/id)');
-  const ms = (n) => `${n} msec ${Math.max(0, n - 1)} msec ${n} msec`;
-  r.l3.forEach((x, n) => print(`  ${n + 1} ${x.ip == null ? '*' : fmtIp(x.ip)} ${ms(n + 1)}`, 'pre'));
-  if (r.ok) print(`  ${r.l3.length + 1} ${fmtIp(ip)} ${ms(r.l3.length + 2)}`, 'ok');
+  // 每一站送三個探測封包；回應的是那台設備的 CPU
+  const ms = (dv) => rttSamples(st, r, 3, 60, dv).map((v) => `${Math.round(v)} msec`).join(' ');
+  r.l3.forEach((x, n) => print(`  ${n + 1} ${x.ip == null ? '*' : `${fmtIp(x.ip)} ${ms(x.dev)}`}`, 'pre'));
+  if (r.ok) print(`  ${r.l3.length + 1} ${fmtIp(ip)} ${ms(null)}`, 'ok');
   else {
     const un = unreachOf(st, d.id, r);
     if (un) print(`  ${r.l3.length + 1} ${fmtIp(un.from)} !${un.code}  *  !${un.code}`, 'bad');
@@ -1872,7 +1874,8 @@ function showOrPing(app, devId, line, print) {
       // M：收到「需要分段」(could not fragment)
       const un = unreachOf(st, d.id, r);
       print(r.ok ? '!!!!!' : r.ptb || r.dfLocal ? 'MMMMM' : un ? 'U.U.U' : '.....', r.ok ? 'ok' : 'bad');
-      print(`Success rate is ${r.ok ? 100 : 0} percent (${r.ok ? 5 : 0}/5)${r.ok ? ', round-trip min/avg/max = 1/1/2 ms' : ''}`);
+      const t = r.ok ? pingStats(st, r, 5, size + 18) : null;
+      print(`Success rate is ${r.ok ? 100 : 0} percent (${r.ok ? 5 : 0}/5)${r.ok ? `, round-trip min/avg/max = ${iosMs(t.min)}/${iosMs(t.avg)}/${iosMs(t.max)} ms` : ''}`);
       if (r.ptb || r.dfLocal) print(`（M 代表 could not fragment：路徑上的 MTU 只有 ${r.ptb ? r.ptb.mtu : r.dfLocal}）`, 'hint');
       if (un) print(`（U 代表 ${fmtIp(un.from)} 回了 ICMP Destination Unreachable（${{ A: 'administratively prohibited：被 ACL 擋掉', N: 'network unreachable：它沒有往這裡的路由', H: 'host unreachable：找不到這台主機' }[un.code]}）；中間的 . 是路由器限制 ICMP 錯誤訊息的速率）`, 'hint');
       if (!r.ok) print('  ↳ ' + r.reason, 'hint');

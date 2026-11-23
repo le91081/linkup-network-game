@@ -2,6 +2,7 @@
 import { h, ownKeys, escLine } from './dom.js';
 import { fmtIp, fmtMask, parseIp } from '../engine/ip.js';
 import { transact, resolveName, dualStack, dnsQuery, dhcpTrace, arpRows, clearArp, dhcpRelease, dhcpRenew, fmtDur, throughput, unreachOf } from '../engine/sim.js';
+import { rttSamples, pingStats, winMs, winCol, linuxMs } from '../engine/latency.js';
 import { cacheRows, cacheFlush, ptrName } from '../engine/dns.js';
 import { plainStamp } from '../engine/ops.js';
 import { remoteOpen, remoteLogin, remoteSend, remoteAlive, remoteClose, remoteBusy } from '../engine/remote.js';
@@ -462,13 +463,16 @@ export function buildTerminal(ctx, body) {
           if (r6 && r6.ok) print(`（${target} 有 AAAA 記錄，這台電腦也有 IPv6 位址，所以用 IPv6；要用 IPv4 請 ping -4 ${target}）`, 'hint');
           if (c !== 'ping') {
             print(`在上限 30 個躍點上追蹤 ${fmtIp6(d6)} 的路由：`);
-            res.l3.forEach((x, n) => print(`  ${String(n + 1).padStart(2)}    ${String(n + 1).padStart(2)} ms    ${fmtIp6(x.ip6).padEnd(28)} ${st().devices[x.dev].name}`));
-            if (res.ok || res.phase === 'reply') print(`  ${String(res.l3.length + 1).padStart(2)}    ${String(res.l3.length + 1).padStart(2)} ms    ${fmtIp6(d6)}`, res.ok ? 'ok' : '');
+            const cols = (dv) => rttSamples(st(), res, 3, 74, dv).map(winCol).join('  ');
+            res.l3.forEach((x, n) => print(`  ${String(n + 1).padStart(2)}  ${cols(x.dev)}  ${fmtIp6(x.ip6).padEnd(28)} ${st().devices[x.dev].name}`));
+            if (res.ok || res.phase === 'reply') print(`  ${String(res.l3.length + 1).padStart(2)}  ${res.ok ? cols(null) : '     *       *       *  '}  ${fmtIp6(d6)}`, res.ok ? 'ok' : '');
             if (!res.ok) { print(`  ${String(res.l3.length + 1 + (res.phase === 'reply' ? 1 : 0)).padStart(2)}     *        *        要求等候逾時。`, 'bad'); print('  ↳ ' + res.reason, 'hint'); }
             else print('追蹤完成。');
           } else {
             print(`Ping ${r6 && r6.ok ? `${target} [${fmtIp6(d6)}]` : fmtIp6(d6)} (使用 32 位元組的資料):`);
-            for (let n = 0; n < 4; n++) print(res.ok ? `回覆自 ${fmtIp6(d6)}: 時間=${Math.max(1, res.hops.length)}ms` : res.phase === 'reply' ? '要求等候逾時。' : '目的地主機無法連線。', res.ok ? 'ok' : 'bad');
+            const t6 = pingStats(st(), res, 4, 32 + 62);
+            for (let n = 0; n < 4; n++) print(res.ok ? `回覆自 ${fmtIp6(d6)}: 時間${winMs(t6.list[n])}` : res.phase === 'reply' ? '要求等候逾時。' : '目的地主機無法連線。', res.ok ? 'ok' : 'bad');
+            if (res.ok) { print(''); print(`${fmtIp6(d6)} 的 Ping 統計資料:`); print('    封包: 已傳送 = 4，已收到 = 4，已遺失 = 0 (0% 遺失)，'); print('大約的來回時間 (毫秒):'); print(`    最小值 = ${Math.round(t6.min)}ms，最大值 = ${Math.round(t6.max)}ms，平均 = ${Math.round(t6.avg)}ms`); }
             if (!res.ok) print('  ↳ ' + res.reason, 'hint');
           }
         }
@@ -481,25 +485,27 @@ export function buildTerminal(ctx, body) {
           app.showTrace(`${dev.name}> ${line}`, [...r.log, ...res.log], [...r.hops, ...res.hops], res);
           if (c === 'ping' && linux) {
             // Linux 的 ping（iputils）
-            const ms = (Math.max(1, res.hops.filter((x) => !x.wave && x.proto !== 'arp').length) * 0.21 + (res.l3.some((x) => st().devices[x.dev].kind === 'internet') ? 8.6 : 0)).toFixed(3);
+            const t = pingStats(st(), res, 4, dataLen + 42);
             print(`PING ${target} (${ip}) ${dataLen}(${dataLen + 28}) bytes of data.`);
             for (let n = 1; n <= 4; n++) {
-              if (res.ok) print(`${dataLen + 8} bytes from ${ip}: icmp_seq=${n} ttl=${64 - res.l3.length} time=${ms} ms`, 'ok');
+              if (res.ok) print(`${dataLen + 8} bytes from ${ip}: icmp_seq=${n} ttl=${64 - res.l3.length} time=${linuxMs(t.list[n - 1])} ms`, 'ok');
               else if (res.dfLocal) print(`ping: local error: message too long, mtu=${res.dfLocal}`, 'bad');
               else if (res.ptb) print(`From ${fmtIp(res.ptb.from)} icmp_seq=${n} Frag needed and DF set (mtu = ${res.ptb.mtu})`, 'bad');
             }
             print('');
             print(`--- ${target} ping statistics ---`);
             print(`4 packets transmitted, ${res.ok ? 4 : 0} received, ${!res.ok && (res.ptb || res.dfLocal) ? '+4 errors, ' : ''}${res.ok ? 0 : 100}% packet loss, time 3005ms`, res.ok ? '' : 'bad');
+            if (res.ok) print(`rtt min/avg/max/mdev = ${[t.min, t.avg, t.max, t.mdev].map((v) => v.toFixed(3)).join('/')} ms`);
             if (!res.ok) print('  ↳ ' + res.reason, 'hint');
           } else if (c === 'ping') {
             print('');
             print(`Ping ${target === ip ? ip : `${target} [${ip}]`} (使用 ${dataLen} 位元組的資料):`);
             const arp = res.hops.filter((x) => x.wave).length; // 第一個封包要先等 ARP，所以比較慢
             const unr = unreachOf(st(), dev.id, res);
-            const ms = Math.max(1, res.hops.filter((x) => !x.wave && x.proto !== 'arp').length) + (res.l3.some((x) => st().devices[x.dev].kind === 'internet') ? 9 : 0);
+            const t = pingStats(st(), res, 4, dataLen + 42);
+            t.list[0] += arp * 0.5; // 第一個封包先等 ARP 的回答
             for (let n = 0; n < 4; n++) {
-              print(res.ok ? `回覆自 ${ip}: 位元組=${dataLen} 時間=${ms + (n === 0 ? arp * 2 : 0)}ms TTL=${64 - res.l3.length}`
+              print(res.ok ? `回覆自 ${ip}: 位元組=${dataLen} 時間${winMs(t.list[n])} TTL=${64 - res.l3.length}`
                 : res.dfLocal ? '封包需要分段，但設定了 DF。'
                   : res.ptb ? `回覆自 ${fmtIp(res.ptb.from)}: 封包需要分段，但設定了 DF。`
                     : unr ? `回覆自 ${fmtIp(unr.from)}: ${unr.code === 'N' ? '目的地網路無法連線。' : '目的地主機無法連線。'}`
@@ -508,13 +514,20 @@ export function buildTerminal(ctx, body) {
             print('');
             // Windows 把「需要分段」的 ICMP 回應也算成收到
             const got = res.ok || res.ptb ? 4 : 0;
+            print(`${ip} 的 Ping 統計資料:`);
             print(`    封包: 已傳送 = 4，已收到 = ${got}，已遺失 = ${4 - got} (${(4 - got) * 25}% 遺失)，`);
+            if (res.ok) {
+              const L = t.list;
+              print('大約的來回時間 (毫秒):');
+              print(`    最小值 = ${Math.round(Math.min(...L))}ms，最大值 = ${Math.round(Math.max(...L))}ms，平均 = ${Math.round(L.reduce((a, b) => a + b, 0) / L.length)}ms`);
+            }
             if (!res.ok) print('  ↳ ' + res.reason, 'hint');
           } else {
             print('');
             print(`追蹤 ${ip} 的路由：`);
-            res.l3.forEach((x, n) => print(`  ${String(n + 1).padStart(2)}    ${String(n + 1).padStart(2)} ms    ${(x.ip == null ? 'VPN 通道' : fmtIp(x.ip)).padEnd(16)} ${st().devices[x.dev].name}`));
-            if (res.ok || res.phase === 'reply') print(`  ${String(res.l3.length + 1).padStart(2)}    ${String(res.l3.length + 1).padStart(2)} ms    ${ip}`, res.ok ? 'ok' : '');
+            const cols = (dv) => rttSamples(st(), res, 3, 74, dv).map(winCol).join('  ');
+            res.l3.forEach((x, n) => print(`  ${String(n + 1).padStart(2)}  ${x.ip == null ? '     *       *       *  ' : cols(x.dev)}  ${(x.ip == null ? 'VPN 通道' : fmtIp(x.ip)).padEnd(16)} ${st().devices[x.dev].name}`));
+            if (res.ok || res.phase === 'reply') print(`  ${String(res.l3.length + 1).padStart(2)}  ${res.ok ? cols(null) : '     *       *       *  '}  ${ip}`, res.ok ? 'ok' : '');
             if (!res.ok) { print(`  ${String(res.l3.length + 1 + (res.phase === 'reply' ? 1 : 0)).padStart(2)}     *        *        要求等候逾時。`, 'bad'); print('  ↳ ' + res.reason, 'hint'); }
             else print('追蹤完成。');
           }
