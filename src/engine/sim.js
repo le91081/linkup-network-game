@@ -202,6 +202,12 @@ function computePass(state, auth) {
       const i = pub != null && d.ifaces.find((x) => x.rt.ip != null && x.rt.ip !== pub && sameNet(pub, x.rt.ip, x.rt.bits));
       if (i) i.rt.vips.push(pub); // 讓這個介面替靜態 NAT 的公用 IP 回應 ARP
     }
+    // 連接埠轉發 (VIP) 指定了對外的位址：FortiGate 預設也替它回應 ARP (arp-reply enable)
+    for (const f of d.portForwards || []) {
+      const pub = parseIp(f.extIp || '');
+      const i = pub != null && d.ifaces.find((x) => x.rt.ip != null && x.rt.ip !== pub && sameNet(pub, x.rt.ip, x.rt.bits));
+      if (i && !i.rt.vips.includes(pub)) i.rt.vips.push(pub);
+    }
     // NAT 位址池：落在 ip nat outside 介面網段裡的位址，也由那個介面回應 ARP
     for (const p of Object.values(d.natPools || {})) {
       const a = parseIp(p.start), b = parseIp(p.end);

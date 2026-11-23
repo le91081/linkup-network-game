@@ -5351,6 +5351,25 @@ console.log('\nLDAP / Active Directory：SSL-VPN 用 AD 的帳號登入');
   s.devices.dc.ad.users.find((u) => u.user === 'amy').disabled = true;
   ok(/停用/.test(why('amy', 'Amy#AD2026')), '人資在 AD 停用 amy：VPN 立刻登不進去');
 }
+console.log('\n郵件：SMTP、MX 與佇列');
+{
+  const { sendMail } = await import('../src/engine/mail.js');
+  const ok = (cond, title) => (cond ? console.log('  ✔ ' + title) : fail(title));
+  const lv = LEVELS.find((x) => x.id === 'l147');
+  const s = lv.setup(); settle(s);
+  const mx = s.devices.mx;
+  ok(sendMail(s, 'amy', 'ken@corp.com.tw').ok && mx.mail.boxes.ken.length === 1, '同一個網域：郵件伺服器直接放進 ken 的信箱');
+  const out = sendMail(s, 'amy', 'bob@partner.com');
+  ok(!out.ok && /連不到 mx\.partner\.com 的 TCP 25/.test(out.why) && mx.mail.queue.length === 1 && /佇列/.test(mx.mail.queue[0].why), `寄給客戶：卡在佇列（${out.why.slice(0, 60)}…）`);
+  ok(/沒有 nobody 這個信箱 \(550 User unknown\)/.test(sendMail(s, 'amy', 'nobody@corp.com.tw').why), '收件人不存在：550 User unknown');
+  ok(/查不到 nowhere\.example 的 MX/.test(sendMail(s, 'amy', 'x@nowhere.example').why), '對方的網域沒有 MX：查不到');
+  const inb = sendMail(s, 'inet', 'amy@corp.com.tw', { via: 'partner.com' });
+  ok(!inb.ok && /mx\.partner\.com 連不到 mail\.corp\.com\.tw 的 TCP 25/.test(inb.why), '客戶寄進來：連不到 MX 的公用位址（沒有 VIP）');
+  lv.solve(s); settle(s);
+  ok(sendMail(s, 'amy', 'bob@partner.com').ok && (s.dyn.extMail || {})['bob@partner.com'].length === 1, '放行 SMTP 之後：信送到 partner.com');
+  ok(sendMail(s, 'inet', 'amy@corp.com.tw', { via: 'partner.com' }).ok && mx.mail.boxes.amy.length === 1, 'VIP 加政策：客戶寄來的信進了 amy 的信箱');
+  ok(sendMail(s, 'inet', 'ken@corp.com.tw', { via: 'partner.com' }).ok && /查不到 other\.com 的 MX/.test(sendMail(s, 'inet', 'x@other.com', { via: 'partner.com' }).why), '寄給 ken 也收得到；別的網域在網際網路上查不到 MX');
+}
 console.log('\nNetFlow 與 QoS 的 police');
 {
   const sim = await import('../src/engine/sim.js');

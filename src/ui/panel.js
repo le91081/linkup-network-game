@@ -669,7 +669,7 @@ function baseTabs(dev) {
   switch (dev.kind) {
     case 'host': if (CATALOG[dev.model].phone) return [['phone', '電話', V.phoneTab], ['pnet', '網路設定', V.phoneNetTab]];
       return [T.net, dev.vpnClient && ['vpn', 'VPN', X.vpnClientTab], dev.dhcpScopes && ['dhcp', 'DHCP 服務', X.dhcpScopesTab],
-      dev.radiusServer && ['radius', 'RADIUS', M.radiusServerTab], dev.ad && ['ad', 'Active Directory', M.adTab], dev.tacacsServer && ['tacacs', 'TACACS+', M.tacacsServerTab], isDnsServer(dev) && ['dns', 'DNS', dnsTab],
+      dev.radiusServer && ['radius', 'RADIUS', M.radiusServerTab], dev.ad && ['ad', 'Active Directory', M.adTab], dev.mail && ['mail', '郵件伺服器', M.mailServerTab], dev.mailClient && ['mailc', '郵件', M.mailClientTab], dev.tacacsServer && ['tacacs', 'TACACS+', M.tacacsServerTab], isDnsServer(dev) && ['dns', 'DNS', dnsTab],
       dev.web && ['web', '網站', webTab], dev.docker && ['docker', 'Docker', dockerTab],
       (dev.services || []).some((s) => s.proto === 'udp' && s.port === 514) && ['syslog', 'Syslog', M.syslogTab],
       (isTftp(dev) || isFtp(dev) || isScp(dev)) && ['files', '檔案', OPS.filesTab], dev.nms && ['nms', '網管', OPS.nmsTab], dev.cucm && ['cucm', 'CUCM', V.cucmTab],

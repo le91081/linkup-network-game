@@ -36,6 +36,9 @@ const SERVICES = {
   MYSQL: (p) => p.proto === 'tcp' && p.dport === 3306,
   RDP: (p) => p.proto === 'tcp' && p.dport === 3389,
   SMB: (p) => p.proto === 'tcp' && p.dport === 445,
+  SMTP: (p) => p.proto === 'tcp' && p.dport === 25,
+  SMTPS: (p) => p.proto === 'tcp' && (p.dport === 465 || p.dport === 587),
+  IMAPS: (p) => p.proto === 'tcp' && p.dport === 993,
 };
 export const SERVICE_NAMES = Object.keys(SERVICES);
 const MGMT = { 22: ['ssh', 'SSH'], 23: ['telnet', 'Telnet'], 80: ['http', 'HTTP'], 443: ['https', 'HTTPS'] };

@@ -6,6 +6,7 @@ import { inp, sel, toggle, field, note, kv, del, cardHead, grid2, bind, isIp } f
 import { fmtIp, parseIp } from '../engine/ip.js';
 import { CORP_CA, fmtDate, certDaysLeft, issueCert } from '../engine/web.js';
 import { deviceTime } from '../engine/ops.js';
+import { sendMail } from '../engine/mail.js';
 
 // ───────────────────────── RADIUS / 802.1X ─────────────────────────
 
@@ -287,5 +288,35 @@ export function adTab(ctx, body) {
     del(() => { ad.users.splice(n, 1); ctx.commit(true); }))));
   card.append(h('div', { class: 'addrow' }, button('新增使用者', { ic: 'plus', small: true, onclick: () => { ad.users.push({ user: '', pass: '', groups: [] }); ctx.commit(true); } })));
   card.append(toggle(ctx, () => !!ad.ldaps, (v) => { ad.ldaps = v; }, 'LDAPS（TCP 636）：伺服器有憑證，查詢的內容加密'));
+  body.append(card);
+}
+
+/** 郵件伺服器：網域、信箱、寄不出去的佇列 */
+export function mailServerTab(ctx, body) {
+  const { dev } = ctx;
+  const m = dev.mail;
+  body.append(h('p', { class: 'tip', text: `網域 ${m.domain}。員工的電腦用 TCP 587 把信交給這台；寄到別的網域時，這台查收件人網域的 MX，再用 TCP 25 交給對方。外面寄進來的信，要能從網際網路連到這台的 TCP 25（MX 指向的公用位址）。` }));
+  const card = h('div', { class: 'card' }, cardHead('信箱'));
+  for (const u of m.users || []) card.append(h('div', { class: 'line' }, h('b', { text: `${u}@${m.domain}` }), h('span', { class: 'muted', text: `${((m.boxes || {})[u] || []).length} 封` })));
+  body.append(card);
+  const q = h('div', { class: 'card' }, cardHead(`佇列（寄不出去的信：${(m.queue || []).length}）`));
+  if (!(m.queue || []).length) q.append(note('muted', '佇列是空的：送得出去的信都已經交給對方了。'));
+  for (const x of (m.queue || []).slice(-6).reverse()) q.append(h('div', { class: 'line' }, h('b', { text: x.to })), note('warn', x.why));
+  if ((m.queue || []).length) q.append(h('div', { class: 'addrow' }, button('清除佇列', { ic: 'trash', small: true, onclick: () => { m.queue = []; ctx.commit(true); } })));
+  body.append(q);
+}
+
+/** 員工電腦的寄件設定與測試信 */
+export function mailClientTab(ctx, body) {
+  const { dev, state } = ctx;
+  const c = dev.mailClient;
+  const card = h('div', { class: 'card' }, cardHead('郵件（寄件伺服器）'),
+    field('電子郵件地址', inp(ctx, ...bind(c, 'addr'), { ph: 'amy@corp.com.tw', mono: false })),
+    field('寄件伺服器 (SMTP)', inp(ctx, ...bind(c, 'server'), { ph: 'mail.corp.com.tw 或 IP' })),
+    field('連接埠', inp(ctx, () => String(c.port || 587), (v) => { c.port = +v || 587; }, { ph: '587' })));
+  let to = '', out = null;
+  const res = h('div');
+  card.append(h('div', { class: 'addrow' }, inp(ctx, () => to, (v) => { to = v; }, { ph: '收件人，例如 bob@partner.com', mono: false }),
+    button('寄測試信', { ic: 'send', small: true, onclick: () => { out = sendMail(state, dev.id, to); ctx.app.showTrace(`${dev.name} 寄信給 ${to}`, out.log, out.hops, out); res.replaceChildren(note(out.ok ? 'ok' : 'warn', out.ok ? `已送達 ${to}` : out.why)); ctx.app.refreshLive(); } })), res);
   body.append(card);
 }

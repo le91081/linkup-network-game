@@ -10,6 +10,7 @@ import { tlsCheck } from '../web.js';
 import { dhcpTrace } from './l3.js';
 import { fmtDur } from './core.js';
 import { recompute, settle } from '../sim.js';
+import { sendMail } from '../mail.js';
 import { resolveName } from './resolve.js';
 import { throughput } from './bandwidth.js';
 import { transact, flowSend } from './transact.js';
@@ -94,6 +95,12 @@ export function runObjective(state, o) {
     const log = [...tr.log];
     if (reason && !log.some((l) => l.text === reason)) log.push({ dev: d.id, kind: 'drop', text: reason });
     return { pass: !reason, ok: !reason, reason, failDev: reason ? d.id : null, log, hops: tr.hops };
+  }
+  if (o.type === 'mail') {
+    // 寄一封信：員工的電腦 → 公司的郵件伺服器 → 對方的 MX；或外面的人從網際網路寄進來
+    const r = sendMail(state, o.from, o.to, { via: o.via });
+    const expect = o.expect ?? true, pass = r.ok === expect;
+    return { pass, ok: r.ok, reason: pass ? '' : expect ? r.why : `${o.to} 收到了，但這封信應該要被擋下`, failDev: o.from, log: r.log, hops: r.hops };
   }
   if (o.type === 'roam') {
     // 漫遊：拿著筆電走到另一個位置（在複本上），看它有沒有換到該換的基地台、IP 有沒有變、連線還在不在
