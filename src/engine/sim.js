@@ -40,7 +40,7 @@ export { CAPWAP_JOIN, WALL_MATS, WIFI_SEC, apRange, rfAt, ssidsOf, visibleSsids,
 export { DEFAULT_LEASE, dhcpRelease, dhcpRenew, dhcpTrace, lookupRoute, ospfOn, routeRows, routesTo, setOspf } from './sim/l3.js';
 export { IKE_TIME, P1, P2, ikeVer, pskOf, saInfo } from './sim/tunnels.js';
 export { GRE_OVERHEAD, MODE_TEXT, NHRP_HOLD, isTun, nhrpCache, tunMode, tunOverhead } from './sim/gre.js';
-export { SERVICE_NAMES, accessOf, clearSessions, forward, sessionRows, sessionTtl, svcMatch } from './sim/forward.js';
+export { SERVICE_NAMES, accessOf, clearSessions, forward, sessionRows, sessionTtl, svcMatch, unreachOf } from './sim/forward.js';
 export { closeFlow, flowSend, transact } from './sim/transact.js';
 export { dnsQuery, dualStack, resolveName } from './sim/resolve.js';
 export { evaluate, runObjective } from './sim/objectives.js';

@@ -888,3 +888,16 @@ function hubLeak(state, path, n) {
   }
   return out.length ? out : undefined;
 }
+
+/** 這一次失敗會不會收到 ICMP Destination Unreachable：回傳 { code: 'A' | 'N' | 'H', from: 送出它的路由器位址, dev } 或 null */
+export function unreachOf(state, srcId, r) {
+  if (!r || r.ok || r.phase === 'reply' || r.silent || !r.failDev || r.failDev === srcId) return null;
+  const fd = state.devices[r.failDev];
+  if (!fd || !(fd.kind === 'router' || fd.kind === 'l3switch')) return null; // FortiGate 預設不回 ICMP，直接丟掉
+  const why = String(r.reason || '');
+  const code = /ACL|access-list|拒絕了這個封包|隱含拒絕/.test(why) ? 'A' : /^ARP 沒有回應/.test(why) ? 'H' : /路由表裡(還)?沒有通往/.test(why) ? 'N' : null;
+  if (!code) return null;
+  const hop = (r.l3 || []).slice().reverse().find((x) => x.dev === fd.id && x.ip != null);
+  const ip = hop ? hop.ip : (fd.ifaces.find((i) => i.rt && i.rt.ip != null) || { rt: {} }).rt.ip;
+  return ip == null ? null : { code, from: ip, dev: fd.id };
+}

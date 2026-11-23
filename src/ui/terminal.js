@@ -1,7 +1,7 @@
 // 主機上的終端機：ping / ipconfig / tracert / nslookup / curl
 import { h, ownKeys, escLine } from './dom.js';
 import { fmtIp, fmtMask, parseIp } from '../engine/ip.js';
-import { transact, resolveName, dualStack, dnsQuery, dhcpTrace, arpRows, clearArp, dhcpRelease, dhcpRenew, fmtDur, throughput } from '../engine/sim.js';
+import { transact, resolveName, dualStack, dnsQuery, dhcpTrace, arpRows, clearArp, dhcpRelease, dhcpRenew, fmtDur, throughput, unreachOf } from '../engine/sim.js';
 import { cacheRows, cacheFlush, ptrName } from '../engine/dns.js';
 import { plainStamp } from '../engine/ops.js';
 import { remoteOpen, remoteLogin, remoteSend, remoteAlive, remoteClose, remoteBusy } from '../engine/remote.js';
@@ -496,12 +496,14 @@ export function buildTerminal(ctx, body) {
             print('');
             print(`Ping ${target === ip ? ip : `${target} [${ip}]`} (使用 ${dataLen} 位元組的資料):`);
             const arp = res.hops.filter((x) => x.wave).length; // 第一個封包要先等 ARP，所以比較慢
+            const unr = unreachOf(st(), dev.id, res);
             const ms = Math.max(1, res.hops.filter((x) => !x.wave && x.proto !== 'arp').length) + (res.l3.some((x) => st().devices[x.dev].kind === 'internet') ? 9 : 0);
             for (let n = 0; n < 4; n++) {
               print(res.ok ? `回覆自 ${ip}: 位元組=${dataLen} 時間=${ms + (n === 0 ? arp * 2 : 0)}ms TTL=${64 - res.l3.length}`
                 : res.dfLocal ? '封包需要分段，但設定了 DF。'
                   : res.ptb ? `回覆自 ${fmtIp(res.ptb.from)}: 封包需要分段，但設定了 DF。`
-                    : res.phase === 'reply' || res.silent ? '要求等候逾時。' : '目的地主機無法連線。', res.ok ? 'ok' : 'bad');
+                    : unr ? `回覆自 ${fmtIp(unr.from)}: ${unr.code === 'N' ? '目的地網路無法連線。' : '目的地主機無法連線。'}`
+                      : res.phase === 'reply' || res.silent ? '要求等候逾時。' : '目的地主機無法連線。', res.ok ? 'ok' : 'bad');
             }
             print('');
             // Windows 把「需要分段」的 ICMP 回應也算成收到

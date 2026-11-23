@@ -5,7 +5,7 @@ import { fmtIp6, parseIp6, parseCidr6, net6 } from '../engine/ip6.js';
 import { dhcp6Bindings, hits6Of, ACL6_IMPLICIT, DHCP6_PREF, DHCP6_VALID, duidOf } from '../engine/sim6.js';
 import { ospf6Area, ospf6Cost, ospf6Dead, ospf6Hello, ospf6Passive, ospf6Prio, ospf6NetType } from '../engine/ospf.js';
 import { acl6Text, up6 } from '../engine/ios.js';
-import { transact, routeRows, isBridgePort, arpRows, clearArp, hitsOf, fmtDur, portfastOn, macRows, clearMac, macAgeOf, sessionRows, clearSessions, saInfo, isTrunk, dtpSpeaker } from '../engine/sim.js';
+import { transact, routeRows, isBridgePort, arpRows, clearArp, hitsOf, fmtDur, portfastOn, macRows, clearMac, macAgeOf, sessionRows, clearSessions, saInfo, isTrunk, dtpSpeaker, unreachOf } from '../engine/sim.js';
 import { cdpCfg, lldpCfg, cdpOn, lldpTxOn, lldpRxOn, neighbors, ndCounters, cdpCapText, speaksCdp, speaksLldp } from '../engine/disc.js';
 import { dscpName, COS_DSCP_DEFAULT, portTrust, egressOf, classify, QLIMIT } from '../engine/qos.js';
 import { ospfArea, ospfCost, ospfPassive, ospfHello, ospfDead, ospfPrio, ospfNetType, isLoopback, ospfProcs, ospfKeys, ospfAreaCfg, ospfAreaType, areaKindText } from '../engine/ospf.js';
@@ -1686,7 +1686,9 @@ function traceLines(app, d, ip, print, line) {
   r.l3.forEach((x, n) => print(`  ${n + 1} ${x.ip == null ? '*' : fmtIp(x.ip)} ${ms(n + 1)}`, 'pre'));
   if (r.ok) print(`  ${r.l3.length + 1} ${fmtIp(ip)} ${ms(r.l3.length + 2)}`, 'ok');
   else {
-    for (let k = 1; k <= 3; k++) print(`  ${r.l3.length + k}  *  *  * `, 'bad');
+    const un = unreachOf(st, d.id, r);
+    if (un) print(`  ${r.l3.length + 1} ${fmtIp(un.from)} !${un.code}  *  !${un.code}`, 'bad');
+    else for (let k = 1; k <= 3; k++) print(`  ${r.l3.length + k}  *  *  * `, 'bad');
     print('  ↳ ' + r.reason, 'hint');
   }
 }
@@ -1845,9 +1847,11 @@ function showOrPing(app, devId, line, print) {
       print(`Sending 5, ${size}-byte ICMP Echos to ${fmtIp(ip)}, timeout is 2 seconds:`);
       if (df) print('Packet sent with the DF bit set');
       // M：收到「需要分段」(could not fragment)
-      print(r.ok ? '!!!!!' : r.ptb || r.dfLocal ? 'MMMMM' : '.....', r.ok ? 'ok' : 'bad');
+      const un = unreachOf(st, d.id, r);
+      print(r.ok ? '!!!!!' : r.ptb || r.dfLocal ? 'MMMMM' : un ? 'U.U.U' : '.....', r.ok ? 'ok' : 'bad');
       print(`Success rate is ${r.ok ? 100 : 0} percent (${r.ok ? 5 : 0}/5)${r.ok ? ', round-trip min/avg/max = 1/1/2 ms' : ''}`);
       if (r.ptb || r.dfLocal) print(`（M 代表 could not fragment：路徑上的 MTU 只有 ${r.ptb ? r.ptb.mtu : r.dfLocal}）`, 'hint');
+      if (un) print(`（U 代表 ${fmtIp(un.from)} 回了 ICMP Destination Unreachable（${{ A: 'administratively prohibited：被 ACL 擋掉', N: 'network unreachable：它沒有往這裡的路由', H: 'host unreachable：找不到這台主機' }[un.code]}）；中間的 . 是路由器限制 ICMP 錯誤訊息的速率）`, 'hint');
       if (!r.ok) print('  ↳ ' + r.reason, 'hint');
     }
     return true;

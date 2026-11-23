@@ -4814,6 +4814,30 @@ console.log('\n時間型 ACL（time-range）與 archive 的 time-period');
   ok(files.length === 2, `archive time-period 10：25 分鐘自動封存了 ${files.length} 份`);
 }
 
+console.log('\nICMP Destination Unreachable：U.U.U、!A、!N、!H');
+{
+  const { iosSession } = await import('../src/engine/ios.js');
+  const { iosRun } = await import('../src/ui/cli.js');
+  const { unreachOf } = await import('../src/engine/sim.js');
+  const ok = (cond, title) => (cond ? console.log('  ✔ ' + title) : fail(title));
+  const cli = (s, id) => { const S = iosSession(() => s.devices[id], () => s); return (...lines) => { const out = []; for (const l of lines) { const r = iosRun({ state: s, showTrace() {}, refreshLive() {} }, id, S, l, (x) => out.push(x)); if (r.changed) settle(s); } return out.join('\n'); }; };
+  const lv = LEVELS.find((x) => x.id === 'l129');
+  const s = lv.setup(); lv.solve(s); settle(s);
+  const HQ = cli(s, 'hq'), BR = cli(s, 'br');
+  HQ('enable', 'configure terminal', 'ip access-list extended NO-PING', 'deny icmp any host 10.1.0.10', 'permit ip any any', 'exit', 'interface Gi0/0/0', 'ip access-group NO-PING in', 'end');
+  BR('enable');
+  const p = BR('ping 10.1.0.10');
+  ok(/^U\.U\.U$/m.test(p) && /10\.0\.12\.1 回了 ICMP Destination Unreachable（administratively prohibited/.test(p), 'HQ-RT 的 ACL 擋掉：BR-RT 的 ping 是 U.U.U（administratively prohibited）');
+  ok(/^ +1 10\.0\.12\.1 !A {2}\* {2}!A$/m.test(BR('traceroute 10.1.0.10')), 'traceroute：被擋的那一站是 !A');
+  ok(/^\.\.\.\.\.$/m.test(BR('ping 172.31.9.9')), 'BR-RT 自己沒有路由：.....（不會收到 ICMP）');
+  const r = transact(s, 'pc', { proto: 'icmp', dst: parseIp('172.31.9.9'), quiet: true });
+  const u = unreachOf(s, 'pc', r);
+  ok(u && u.code === 'N' && u.from === parseIp('10.2.0.1'), '電腦 ping 不存在的網段：BR-RT 回 network unreachable（Windows：回覆自 10.2.0.1: 目的地網路無法連線。）');
+  const r2 = transact(s, 'pc', { proto: 'icmp', dst: parseIp('10.1.0.99'), quiet: true });
+  const u2 = unreachOf(s, 'pc', r2);
+  ok(u2 && u2.code === 'H', '目的網段裡沒有這台主機（ARP 沒有回應）：host unreachable');
+}
+
 console.log('\nNetFlow 與 QoS 的 police');
 {
   const sim = await import('../src/engine/sim.js');
