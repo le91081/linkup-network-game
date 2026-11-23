@@ -23,7 +23,7 @@ export function syncVsw(d) {
   for (const p of d.ports) {
     const pc = d.sw.ports[p.id];
     if (p.media === 'virt') Object.assign(pc, { mode: 'access', vlan: pgVlan(pgOf(d, pc.pg)) });
-    else Object.assign(pc, { mode: 'trunk', native: 1, allowed: 'all' });
+    else Object.assign(pc, { mode: 'trunk', native: 1, allowed: 'all', lag: d.vsw.teaming === 'iphash' ? '1' : '', lagMode: 'on' }); // IP hash：上行是一條靜態的 EtherChannel
   }
   const vmk = d.ifaces.find((i) => i.id === 'vmk0');
   if (vmk) vmk.bind.vlan = pgVlan(pgOf(d, d.vsw.vmkPg));
@@ -83,8 +83,14 @@ export function teamUplinks(state, d) {
   const active = linked.filter((id) => !standby.has(id));
   return { ups, linked, active: active.length ? active : linked };
 }
+/**
+ * Route based on IP hash：上行綁成一條「靜態」的 EtherChannel（標準 vSwitch 不會 LACP），
+ * 實體交換器那一端也要 channel-group … mode on，而且兩張上行要接同一台（或堆疊 / vPC）
+ */
+export const isIpHash = (d) => !!(d && d.vsw && d.vsw.teaming === 'iphash');
 /** 這個虛擬埠（或 'vmk0'）現在走哪一張上行 */
 export function pinnedUplink(state, d, vport) {
+  if (isIpHash(d)) return null; // IP hash：每條連線依來源 / 目的 IP 分散到兩張上行（當成一條 EtherChannel）
   const { active } = teamUplinks(state, d);
   if (!active.length) return null;
   const n = vport === 'vmk0' ? 0 : +(String(vport).match(/(\d+)$/) || [0, 0])[1];

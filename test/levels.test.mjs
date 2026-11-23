@@ -5714,6 +5714,26 @@ console.log('\nNexus 的 mgmt0 與 vrf context management');
   ok(/vrf member 是 NX-OS 的指令/.test(cli(s, 'ort')('enable', 'configure terminal', 'interface Gi0/0/1', 'vrf member management', 'end')), 'IOS 沒有 vrf member');
 }
 
+console.log('\nIP hash 的 NIC teaming 與靜態 EtherChannel');
+{
+  const { runObjective } = await import('../src/engine/sim/objectives.js');
+  const { iosSession } = await import('../src/engine/ios.js');
+  const ok = (cond, title) => (cond ? console.log('  ✔ ' + title) : fail(title));
+  const typeIn = (s, id, lines) => { const S = iosSession(() => s.devices[id], () => s); for (const l of lines) S.exec(l); };
+  const lv = LEVELS.find((x) => x.id === 'l160');
+  const s = lv.setup(); settle(s);
+  const sw = s.devices.sw, esx = s.devices.esx;
+  ok(sw.rt.lag['Gi0/11'].state === 'suspended' && /靜態 \(on\)、另一端是 LACP/.test(sw.rt.lag['Gi0/11'].why) && !runObjective(s, lv.objectives[0]).pass, 'IP hash 對上 LACP：兩個埠都 suspended，整台主機斷線');
+  typeIn(s, 'sw', ['enable', 'configure terminal', 'interface range Gi0/11 - 12', 'channel-group 1 mode on', 'end']); settle(s);
+  ok(sw.rt.lag['Gi0/11'].state === 'bundled' && sw.rt.lag['Gi0/12'].state === 'bundled' && esx.rt.lag.vmnic0.state === 'bundled', '交換器改成 mode on：兩條都綁進 EtherChannel');
+  ok(lv.objectives.every((o) => (o.type === 'check' ? o.test(s) : runObjective(s, o).pass) === true), '三個目標都通過');
+  const s2 = cloneState(s); s2.cut = { [s2.cables.find((c) => c.a.dev === 'esx' && c.a.port === 'vmnic0').id]: true }; settle(s2);
+  ok(runObjective(s2, lv.objectives[0]).pass && runObjective(s2, lv.objectives[1]).pass, 'vmnic0 斷線：EtherChannel 少一條，照樣通');
+  // 改回依虛擬埠：交換器那一端也要拿掉 EtherChannel
+  delete esx.vsw.teaming; settle(s);
+  ok(!runObjective(s, lv.objectives[0]).pass && /沒有加入 Port-channel/.test(sw.rt.lag['Gi0/11'].why), '改回依虛擬埠、交換器還是 EtherChannel：對端沒有加入 Port-channel，還是斷線');
+}
+
 console.log('\nNetFlow 與 QoS 的 police');
 {
   const sim = await import('../src/engine/sim.js');

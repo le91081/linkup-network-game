@@ -17,7 +17,9 @@ export function vswTab(ctx, body) {
   // NIC teaming：兩張上行、每台 VM 固定走哪一張、備用的上行
   const team = teamUplinks(state, dev), vmsT = vmsOn(state, dev);
   body.append(h('div', { class: 'card' }, cardHead('上行（NIC teaming）'),
-    note('muted', '負載平衡：Route based on originating virtual port。每台 VM 固定走一張有連線的上行（依虛擬埠輪流分配），那張斷線就改走另一張。兩張上行接到的實體交換器埠，VLAN 設定要一模一樣：不然固定走某一張的 VM 會不通。'),
+    field('負載平衡', sel(ctx, () => v.teaming || 'port', (x) => { if (x === 'port') delete v.teaming; else v.teaming = x; }, [['port', 'Route based on originating virtual port'], ['iphash', 'Route based on IP hash']], { rerender: true })),
+    note('muted', v.teaming === 'iphash' ? 'IP hash：兩張上行當成一條 EtherChannel，每條連線依來源 / 目的 IP 分散。標準 vSwitch 不會 LACP：實體交換器那一端要 channel-group … mode on（靜態），而且兩張上行要接同一台交換器（或堆疊 / vPC）。' : '負載平衡：Route based on originating virtual port。每台 VM 固定走一張有連線的上行（依虛擬埠輪流分配），那張斷線就改走另一張。兩張上行接到的實體交換器埠，VLAN 設定要一模一樣：不然固定走某一張的 VM 會不通。'),
+    v.teaming === 'iphash' ? ctx.live(() => { const l = dev.ports.filter((p) => p.media !== 'virt').map((p) => dev.rt.lag && dev.rt.lag[p.id]).filter(Boolean); const bad = l.find((x) => x.state !== 'bundled'); return bad ? note('warn', `EtherChannel 沒有綁起來：${bad.why}`) : l.length ? note('ok', `兩張上行綁成一條 EtherChannel（${l.length} 條都在用）`) : null; }) : null,
     team.ups.map((id) => h('div', { class: 'line' }, h('b', { class: 'mono', text: id }), linkBadge(ctx, id),
       h('span', { class: 'muted', text: (() => { const on = vmsT.filter((m) => pinnedUplink(state, dev, m.port) === id).map((m) => m.vm.name); if (pinnedUplink(state, dev, 'vmk0') === id) on.unshift('vmk0'); return on.length ? '走這張：' + on.join('、') : team.linked.includes(id) ? '（沒有 VM 走這張）' : '（沒有連線）'; })() }),
       toggle(ctx, () => ((v.standby ||= []).includes(id)), (x) => { v.standby = x ? [...new Set([...(v.standby || []), id])] : (v.standby || []).filter((y) => y !== id); }, '備用 (standby)', { rerender: true })))));

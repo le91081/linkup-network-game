@@ -134,8 +134,9 @@ export function l2Explore(state, devId, iface, opts = {}) {
     // 虛擬化主機的 vSwitch（NIC teaming）：上行收到的不從別的上行送出去；虛擬埠送出去的只走它固定的那一張上行。
     // 從上行收到的廣播只交給「固定走這張上行」的虛擬埠與 vmk0（ESXi 的 reverse filter，不然兩張上行各收一份會重複）
     const hv = d.kind === 'hypervisor', upIn = hv && exceptPort && d.ports.some((p) => p.id === exceptPort && p.media !== 'virt');
-    const pin = hv && !upIn ? pinnedUplink(state, d, exceptPort || (iface && /^vmk\d+$/.test(iface.id) && dev === d ? iface.id : 'vmk0')) : null;
-    const mine = (vport) => !upIn || pinnedUplink(state, d, vport) === exceptPort;
+    const ih = hv && d.vsw && d.vsw.teaming === 'iphash'; // IP hash：上行是一條 EtherChannel，交給 Port-channel 的邏輯
+    const pin = hv && !upIn && !ih ? pinnedUplink(state, d, exceptPort || (iface && /^vmk\d+$/.test(iface.id) && dev === d ? iface.id : 'vmk0')) : null;
+    const mine = (vport) => !upIn || ih || pinnedUplink(state, d, vport) === exceptPort;
     const k = d.id + '|' + key + (inner != null ? '|' + inner : '') + (upIn ? '|' + exceptPort : '');
     if (seen.has(k)) { out.storm = d.id; return; } // 同一個網段被走到第二次 = 有迴圈
     seen.add(k);
@@ -160,7 +161,7 @@ export function l2Explore(state, devId, iface, opts = {}) {
       if (pid === exceptPort || !isBridgePort(d, pid)) continue;
       if (prot && d.sw.ports[pid].protected) continue;
       if (d.rt.vpc && vpcBlocks(state, d, exceptPort, pid)) continue; // vPC：從 peer-link 收到的不從兩邊都有的 vPC 埠送出去
-      if (hv && (d.ports.some((p) => p.id === pid && p.media !== 'virt') ? upIn || pid !== pin : !mine(pid))) continue;
+      if (hv && (d.ports.some((p) => p.id === pid && p.media !== 'virt') ? upIn || (!ih && pid !== pin) : !mine(pid))) continue;
       if (d.rt.wait && d.rt.wait[pid] > 0 && links[d.id + ':' + pid]) { out.stp ||= { dev: d.id, pid, left: d.rt.wait[pid] }; continue; }
       const t = egressTag(d, pid, key);
       if (t === DROP) continue;
