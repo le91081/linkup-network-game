@@ -19,11 +19,11 @@ const fmtMbps = (m) => (m >= 1000 ? (m / 1000).toFixed(1) + ' Gbps' : m >= 10 ? 
 const NS = 'http://www.w3.org/2000/svg';
 const KIND = {
   host: '終端', hub: 'Hub', switch: '交換器', mswitch: 'L2 交換器', l3switch: 'L3 交換器', router: '路由器', homerouter: '家用路由器',
-  firewall: '防火牆', ap: '基地台', wlc: '無線控制器', internet: 'ISP', cloud: '公有雲', hypervisor: '虛擬化主機',
+  firewall: '防火牆', ap: '基地台', wlc: '無線控制器', internet: 'ISP', cloud: '公有雲', hypervisor: '虛擬化主機', lb: '負載平衡器',
 };
 const COLOR = {
   host: '#6ea8ff', hub: '#8892b0', switch: '#4fd8c4', mswitch: '#4fd8c4', l3switch: '#4fd8c4', router: '#a58bff', homerouter: '#a58bff',
-  firewall: '#ff8a65', ap: '#7dd3fc', wlc: '#7dd3fc', internet: '#7dd3fc', cloud: '#f5b547', hypervisor: '#b48cff',
+  firewall: '#ff8a65', ap: '#7dd3fc', wlc: '#7dd3fc', internet: '#7dd3fc', cloud: '#f5b547', hypervisor: '#b48cff', lb: '#ff6b6b',
 };
 const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 /** 粗估文字寬度：中文約 12.5px、英數 6.8px（12px 字） */

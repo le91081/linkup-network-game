@@ -132,6 +132,7 @@ export function recompute(state) {
     // 背景流量先算進計數器，網管伺服器這一輪的輪詢才看得到
     // 多點傳送：要等路由算好（PIM 的 RPF 檢查看單點傳送的路由表）
     prepMcast(state);
+    state.rt.ltmOk = true; // 路由算好了：負載平衡器的健康檢查從這裡開始算一次就留著用
     background(state, { isBridge: isBridgePort, ospfOn, uptime0: UPTIME0 });
     flowsTick(state);
     opsAfter(state);
@@ -205,6 +206,12 @@ function computePass(state, auth) {
     // 連接埠轉發 (VIP) 指定了對外的位址：FortiGate 預設也替它回應 ARP (arp-reply enable)
     for (const f of d.portForwards || []) {
       const pub = parseIp(f.extIp || '');
+      const i = pub != null && d.ifaces.find((x) => x.rt.ip != null && x.rt.ip !== pub && sameNet(pub, x.rt.ip, x.rt.bits));
+      if (i && !i.rt.vips.includes(pub)) i.rt.vips.push(pub);
+    }
+    // 負載平衡器的 virtual address：BIG-IP 預設替它回應 ARP
+    for (const v of (d.ltm && d.ltm.virtuals) || []) {
+      const pub = parseIp(v.dst || '');
       const i = pub != null && d.ifaces.find((x) => x.rt.ip != null && x.rt.ip !== pub && sameNet(pub, x.rt.ip, x.rt.bits));
       if (i && !i.rt.vips.includes(pub)) i.rt.vips.push(pub);
     }

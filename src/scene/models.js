@@ -12,7 +12,7 @@ export const PALETTE = {
 
 export const ACCENT = {
   host: PALETTE.blue, hub: PALETTE.mid, switch: PALETTE.teal, mswitch: PALETTE.teal, l3switch: PALETTE.teal,
-  router: PALETTE.violet, homerouter: PALETTE.violet, firewall: PALETTE.orange, internet: PALETTE.sky, cloud: PALETTE.amber, hypervisor: 0xb48cff,
+  router: PALETTE.violet, homerouter: PALETTE.violet, firewall: PALETTE.orange, internet: PALETTE.sky, cloud: PALETTE.amber, hypervisor: 0xb48cff, lb: 0xe4002b,
 };
 
 const matCache = new Map();
@@ -221,6 +221,11 @@ const BUILDERS = {
     // 機架式伺服器的網路卡在背面
     jacks(g, u, dev, 0.5, 0.34, 0.2, -0.75, 0, -1, { w: 0.2, h: 0.1 });
     u.rect = [-1.3, 1.3, -0.8, 0.8];
+  },
+  /** 負載平衡器：1U 的機身加上一條紅色的燈條 */
+  bigip(g, dev, u) {
+    BUILDERS.rack1u(g, dev, u);
+    box(g, 2.3, 0.035, 0.05, glow(0xe4002b, 1.2), 0, 0.535, 0.74, 0.01);
   },
   /** 虛擬化主機：機架伺服器加上一條紫色的燈條；虛擬埠在機身上方（虛擬連線從這裡連到虛擬機器） */
   esxi(g, dev, u) {

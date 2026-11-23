@@ -19,6 +19,7 @@ import { isApiCurl, curlApi, ansibleCmd, fileCmd, netconfCmd, terraformCmd, tfAn
 import { dockerCmd } from './term-docker.js';
 import { dockerDeliver } from '../engine/docker.js';
 import { tlsCheck, fmtDate, certSelf, CORP_CA, PUBLIC_CAS } from '../engine/web.js';
+import { httpStatus } from '../engine/ltm.js';
 import { FG_CATS } from '../engine/utm.js';
 import { ipMtu, jumboCapable } from '../engine/mtu.js';
 
@@ -839,9 +840,10 @@ export function buildTerminal(ctx, body) {
         if (follow) { print(''); one(`https://${host}/`, hop + 1); } else print('（網站把 HTTP 轉到 HTTPS：加 -L 會跟著轉過去）', 'hint');
         return;
       }
-      print('HTTP/1.1 200 OK', 'ok');
+      const hs = httpStatus(srv);
+      print(hs.line, hs.code >= 400 ? 'bad' : 'ok');
       if (head || verbose) { print(`Server: ${srv.kind === 'internet' ? 'ECAcc (sec/96EE)' : web.server || 'nginx'}`, 'pre'); print('Content-Type: text/html; charset=UTF-8', 'pre'); if (https) print('Strict-Transport-Security: max-age=31536000', 'pre'); }
-      if (!head) print(`<title>${srv.kind === 'internet' ? 'Example Domain' : web.title || srv.name}</title>`, 'pre');
+      if (!head) print(`<title>${hs.code >= 400 ? hs.code + ' ' + hs.text : srv.kind === 'internet' ? 'Example Domain' : web.title || srv.name}</title>`, 'pre');
     };
     one(url, 0);
   }

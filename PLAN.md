@@ -33,7 +33,7 @@ README 說明「現在有什麼、怎麼玩」，這份文件說明「整體應�
 | 1. 實體層與接線 | 12 | 1 | 1 | 0 |
 | 2. 第二層：交換 | 16 | 1 | 0 | 0 |
 | 3. 第三層：路由 | 17 | 0 | 0 | 0 |
-| 4. IP 服務 | 14 | 0 | 0 | 0 |
+| 4. IP 服務 | 15 | 0 | 0 | 0 |
 | 5. 網路安全 | 16 | 1 | 0 | 0 |
 | 6. VPN 與廣域網路 | 11 | 2 | 0 | 0 |
 | 7. 無線網路 | 8 | 1 | 1 | 0 |
@@ -42,13 +42,13 @@ README 說明「現在有什麼、怎麼玩」，這份文件說明「整體應�
 | 10. 時間、效能與流量 | 11 | 0 | 0 | 0 |
 | 11. 設備管理與維運 | 17 | 0 | 1 | 0 |
 | 12. 自動化、雲端與虛擬化 | 5 | 1 | 0 | 0 |
-| 13. 設備型錄 | 12 | 0 | 1 | 0 |
+| 13. 設備型錄 | 12 | 1 | 0 | 0 |
 | 14. 遊戲系統 | 16 | 0 | 0 | 6 |
 | 15. 介面與體驗 | 10 | 0 | 0 | 0 |
 | 16. 工程品質 | 6 | 3 | 1 | 0 |
-| **合計** | **189** | **10** | **6** | **6** |
+| **合計** | **190** | **11** | **5** | **6** |
 
-另外：關卡 151 關（第 17 節）、證照條目涵蓋情形（第 18 節）、建議的實作順序（第 19 節）。
+另外：關卡 152 關（第 17 節）、證照條目涵蓋情形（第 18 節）、建議的實作順序（第 19 節）。
 
 範圍的調整（2026-11-22）：第 14 節遊戲系統還沒做完的項目暫時不做（⏸）；第 15 節的手機與平板、多語系、無障礙、主題從規劃中移除，不做。
 
@@ -135,6 +135,7 @@ README 說明「現在有什麼、怎麼玩」，這份文件說明「整體應�
 | SNMP | ✅ | v2c community（RO / RW、綁標準 ACL）、v3 的 group / user（SHA + AES）、Trap（linkUp / linkDown / coldStart / authenticationFailure）；網管伺服器每 60 秒輪詢、依計數器差值算使用率；FortiGate 的 sysinfo / community / hosts / user 與 allowaccess snmp；沒有 MIB 瀏覽器與 SET |
 | TFTP / FTP / SCP | ✅ | TFTP（UDP 69，512 位元組區塊，速度看來回時間）與 FTP（帳號密碼、明文）：設定備份與還原、映像檔下載、伺服器的檔案分頁；SCP（`copy … scp://帳號@伺服器/檔名`，走 SSH TCP 22，密碼另外問、內容加密，伺服器的「SCP / SFTP 伺服器」角色，帳號和 FTP 共用）|
 | HTTP(S) 服務內容與憑證 | ✅ | 網站伺服器的「網站」分頁（標題、HTTP 301 轉到 HTTPS、目前的憑證、產生 CSR 交給 CA 簽發）；`curl` 會驗證憑證並給出和真的 curl 一樣的錯誤（`(60)` 過期 / 尚未生效 / 名稱不符 / 自簽 / 不信任的簽發者、`(35)` 沒有憑證），`-k`、`-v`、`-I`、`-L`；任務目標 `https`。網路設備的管理網頁出廠是自簽憑證 |
+| 負載平衡（地端） | ✅ | F5 BIG-IP i2800：self IP 與預設閘道；virtual server（VIP:埠、pool、SNAT None / Auto Map、source_addr persistence、Enabled / Disabled）；pool（Round Robin、Least Connections，成員 Enabled / Disabled / Forced Offline）；健康檢查（內建 tcp、http、https、gateway_icmp，自訂 http monitor 的 Send / Receive String：Receive String 空的時候 500 也算活著）；BIG-IP 替 VIP 回應 ARP、不屬於 virtual server 的流量預設拒絕、self IP 的 Port Lockdown；沒有 SNAT 時伺服器直接回給用戶端（非對稱路由）；網站伺服器的 HTTP 狀態碼（curl、`http` 任務目標的 `tries`）→ 4-8 |
 
 ## 5. 網路安全
 
@@ -286,7 +287,7 @@ README 說明「現在有什麼、怎麼玩」，這份文件說明「整體應�
 | 語音與監控 | ✅ | Cisco IP Phone 8841、Yealink SIP-T54W（只有 LLDP-MED）；PoE 網路攝影機（Hikvision DS-2CD2043G2-I，Class 3）與 NVR（DS-7608NXI-K2，8 路）：攝影機送固定位元率的影像（H.264 / H.265、1080p 到 4K），NVR 的錄影分頁看每一路順不順 → 12-5 |
 | 無線控制器 | ✅ | Cisco Catalyst 9800-L（WLC）、Catalyst 9120AXI（輕量型 AP，802.3at PoE） |
 | 伺服器角色 | ✅ | 已有 RADIUS、DHCP、DNS、Syslog、NTP、TFTP、FTP、SNMP 網管、CUCM、網站（HTTPS 憑證）、Docker 主機；TFTP / FTP / 網管 / CUCM 可以自己啟用；Active Directory（網域控制站的使用者、群組、停用，LDAP 389 / LDAPS 636）與 FortiGate 的 `config user ldap`（服務帳號 bind、cnid、dn、secure ldaps）、使用者群組的 `config match` 對應 AD 的群組，SSL-VPN 用 AD 的帳號登入 → 7-15；郵件伺服器（網域、信箱、寄不出去的佇列與原因）：員工用 587 交給公司的伺服器，伺服器查 MX、用 TCP 25 交給對方，網際網路上也有別的公司的郵件伺服器與 MX 記錄；防火牆的服務多了 SMTP、SMTPS、IMAPS，VIP 的對外位址會回應 ARP → 3-6 |
-| 其他 | ⬜ | 數據機 / ONT、負載平衡器、UPS、其他廠牌（Juniper、Aruba、MikroTik） |
+| 其他 | 🟡 | 負載平衡器（F5 BIG-IP，見第 4 節）已完成；還沒有數據機 / ONT、UPS、其他廠牌（Juniper、Aruba、MikroTik） |
 
 ## 14. 遊戲系統
 
@@ -294,7 +295,7 @@ README 說明「現在有什麼、怎麼玩」，這份文件說明「整體應�
 
 | 功能 | 狀態 | 說明 |
 | --- | --- | --- |
-| 關卡 | ✅ | 17 章 151 關（清單見第 17 節） |
+| 關卡 | ✅ | 17 章 152 關（清單見第 17 節） |
 | 任務目標 | ✅ | ping、TCP、UDP、DHCP、設定檢查、故障演練、IPv6 ping、傳輸速率、遠端登入（SSH / Telnet 帳號密碼）、IP 電話註冊、通話品質 (MOS)、HTTPS（連得上之後還要通過憑證驗證）、路徑（一定要經過 / 不能經過某台設備）；TCP 的目標交握完還會送一個裝滿的資料區段（設了 DF），MTU 的問題才看得出來 |
 | 提示與星等 | ✅ | 每關 3 個提示，看一個少一顆星 |
 | 學習卡 | ✅ | 每關 2 到 4 張觀念說明 |
@@ -353,14 +354,14 @@ README 說明「現在有什麼、怎麼玩」，這份文件說明「整體應�
 
 ## 17. 關卡規劃
 
-### 現有的 151 關
+### 現有的 152 關
 
 | 章 | 關卡 |
 | --- | --- |
 | 1 家用網路 | 第一條網路線、換上交換器、自動發 IP、連上網際網路 |
 | 2 小型辦公室 | 辦公室開張、部門隔離、跨樓層、跨 VLAN 路由、換成光世代，路由器要自己撥接（IOS 的 PPPoE 與 Dialer） |
 | 3 企業網路 | 守門員、總公司與分公司、對外伺服器群、十點以後進公司的人都上不了網（NAT 位址池與 overload）、在公司裡打不開自己的網站（NAT hairpin 與 split DNS）、公司自己架了郵件伺服器，信卻寄不出也收不到（SMTP、MX 與 DMZ 的 VIP） |
-| 4 資料中心 | 機櫃上線、Spine-Leaf、跨棟連線、一開 Jumbo Frame，備份就卡住、光纖接好了，燈還是不亮（收發器）、A 路的電一跳，機房就全黑了（雙電源）、新的 GPU 伺服器接不上（breakout） |
+| 4 資料中心 | 機櫃上線、Spine-Leaf、跨棟連線、一開 Jumbo Frame，備份就卡住、光纖接好了，燈還是不亮（收發器）、A 路的電一跳，機房就全黑了（雙電源）、新的 GPU 伺服器接不上（breakout）、三台伺服器，有時候會壞掉（負載平衡器） |
 | 5 無線網路 | 家裡的 Wi-Fi、辦公室基地台、訪客 Wi-Fi、下午的視訊會議一直斷（頻道寬度與 DFS）、新筆電明明支援 Wi-Fi 6E（6 GHz 與 WPA3）、訪客連上 Wi-Fi，卻沒有跳出登入頁面（Captive Portal） |
 | 6 網路安全 | 只開了 TCP、誰在發 IP？、不速之客、存取控制清單、管理介面加固、冒牌閘道、搶走根橋、你是誰？、偽裝成交換器、交換器變成了 Hub（MAC flooding）、跳進伺服器 VLAN 的封包（雙重標籤）、飯店的房間網路（Private VLAN）、星期一早上，有線網路全部登不進去（EAP-TLS）、分公司只有一台路由器，也要當防火牆（ZBF）、上班時間有人在玩線上博弈（網頁過濾與 SSL 檢查）、防火牆擋得住位址，擋不住應用程式（應用程式控管與 IPS）、同事點了釣魚信的連結（DNS 過濾與防毒）、午休才開放的影音網站，晚上八點才打得開（時間型 ACL 與時區）、網頁打得開，名稱卻查不到（established 與 Reflexive ACL）、稽核報告：設定檔裡的密碼看得一清二楚（enable secret 與 service password-encryption） |
 | 7 VPN 與廣域備援 | 站對站 VPN、在家上班、雙線路備援、三個據點，一個中心、線路燈還亮著（IP SLA）、小檔案可以，大檔案卡住（PMTUD 黑洞）、兩個分公司的連線一下通一下斷（GRE 與 recursive routing）、稽核報告（GRE over IPsec）、每加一個網段就要改兩邊的 ACL（VTI）、門市之間的監視器畫面（DMVPN）、新分公司在共享辦公室裡（NAT-T）、換了主機板電池，VPN 就起不來了（IKEv2 的憑證驗證）、下午一塞車電話就斷斷續續（SD-WAN）、換成 MPLS 專線之後互相看不到（MPLS L3VPN 與 allowas-in）、離職的同事還連得上 VPN（SSL-VPN 改用 AD 的帳號） |

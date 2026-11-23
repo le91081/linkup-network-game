@@ -5467,6 +5467,48 @@ console.log('\nESXi 的 NIC teaming：兩張上行');
   ok(res(s).every(Boolean), '解法：SW-B 建立 VLAN 20、Gi0/11 放行 99，六個目標都通過');
 }
 
+console.log('\n負載平衡器（BIG-IP）：SNAT Automap 與健康檢查');
+{
+  const { runObjective } = await import('../src/engine/sim/objectives.js');
+  const { ltmHealth } = await import('../src/engine/ltm.js');
+  const ok = (cond, title) => (cond ? console.log('  ✔ ' + title) : fail(title));
+  const lv = LEVELS.find((x) => x.id === 'l152');
+  const s = lv.setup(); settle(s);
+  const lb = s.devices.lb, V = lb.ltm.virtuals[0], P = lb.ltm.pools[0];
+  const http = (n = 1, from = 'pc') => runObjective(s, { type: 'http', from, ip: '10.0.20.100', port: 80, tries: n });
+  const st = (ip) => (ltmHealth(s, lb).pools.pool_erp.find((x) => x.ip === ip) || {}).st;
+  let r = http();
+  ok(!r.pass && /回應卻來自 10\.0\.20\.1[123]/.test(r.reason) && r.log.some((l) => /Virtual server vs_erp_http/.test(l.text)), '沒有 SNAT：伺服器直接回給 PC（經過 R1），來源不是 VIP，PC 丟掉（非對稱路由）');
+  ok(st('10.0.20.13') === 'up', 'tcp monitor：web-03 的 ERP 回 500，埠還開著，照樣是 Available');
+  V.snat = 'automap'; settle(s);
+  r = http(6);
+  ok(!r.pass && /web-03 回應 HTTP\/1\.1 500 Internal Server Error/.test(r.reason), 'SNAT Automap 之後連得上，但 6 次裡有幾次分到 web-03，拿到 500');
+  r = http(1);
+  ok(r.log.some((l) => /SNAT Automap：來源位址 10\.0\.10\.50 換成 BIG-IP 的 self IP 10\.0\.20\.5/.test(l.text)), '路徑：來源換成 self IP 10.0.20.5，回應回到 BIG-IP 再換回 VIP');
+  P.monitor = 'http'; settle(s);
+  ok(st('10.0.20.13') === 'up', '內建的 http monitor：Receive String 是空的，500 也算活著');
+  lb.ltm.monitors.push({ name: 'http_erp', type: 'http', send: 'GET /health', recv: '200 OK' }); P.monitor = 'http_erp'; settle(s);
+  ok(st('10.0.20.13') === 'down' && st('10.0.20.11') === 'up' && st('10.0.20.12') === 'up' && http(6).pass, '自訂 http monitor（Receive String 200 OK）：web-03 Offline，重新整理 6 次都正常');
+  ok(lv.objectives.every((o) => (o.type === 'check' ? o.test(s) : runObjective(s, o).pass) === true), '四個目標都通過');
+  // 另一種做法：不做 SNAT，伺服器的閘道改成 BIG-IP
+  const s2 = cloneState(s); s2.devices.lb.ltm.virtuals[0].snat = 'none';
+  for (const n of [1, 2, 3]) s2.devices['web' + n].ifaces[0].gateway = '10.0.20.5';
+  settle(s2);
+  const r2 = runObjective(s2, { type: 'http', from: 'pc', ip: '10.0.20.100', port: 80, tries: 4 }), r3 = runObjective(s2, lv.objectives[2]);
+  ok(r2.pass && !r3.pass && /不轉送不屬於任何 virtual server 的流量/.test(r3.reason), '伺服器的閘道改成 BIG-IP（routed mode）：網站通了，但伺服器自己連外被 BIG-IP 擋掉（預設拒絕）');
+  // 全部的成員都不能用：連線被重設
+  for (const m of P.members) m.state = 'offline';
+  settle(s);
+  r = http();
+  ok(!r.pass && /沒有可用的成員，連線被重設/.test(r.reason), '成員都 Forced Offline：virtual server 沒有可用的成員，BIG-IP 重設連線');
+  for (const m of P.members) m.state = 'enabled';
+  P.members[1].state = 'disabled'; V.persist = 'source_addr'; settle(s);
+  const seen = new Set();
+  for (let k = 0; k < 5; k++) seen.add(transact(s, 'pc', { proto: 'tcp', dst: parseIp('10.0.20.100'), dport: 80 }).responder);
+  ok(seen.size === 1 && !seen.has('web2') && !seen.has('web3'), 'source_addr persistence：同一台 PC 一直分到同一台；Disabled 的 web-02 不接新的連線');
+  ok(!runObjective(s, { type: 'tcp', from: 'pc', ip: '10.0.20.100', port: 443 }).pass, 'VIP 的 443 沒有 virtual server：連線被拒絕');
+}
+
 console.log('\nNetFlow 與 QoS 的 police');
 {
   const sim = await import('../src/engine/sim.js');

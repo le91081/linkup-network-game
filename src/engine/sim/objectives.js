@@ -14,6 +14,7 @@ import { sendMail } from '../mail.js';
 import { resolveName } from './resolve.js';
 import { throughput } from './bandwidth.js';
 import { transact, flowSend } from './transact.js';
+import { httpStatus } from '../ltm.js';
 
 // ───────────────────────────── 任務目標 ─────────────────────────────
 
@@ -25,8 +26,18 @@ import { transact, flowSend } from './transact.js';
  *  { type:'failover', down?:[devId], cut?:[[devId, portId]], test:{...} }
  *    feed:['A'] 某一路電斷了（設備的電源供應器接在哪一路，見 engine/power.js）
  *    keep:{ from, ip, port } 取代 test：故障之前先建立 TCP 連線，故障之後在同一條連線上繼續送資料（連線表要跟著換手）
+ *  { type:'http'|'https', … } 連得上之後還要看網站回應的狀態碼（4xx、5xx 算失敗）；https 還要驗證憑證
+ *  tries: n 同一個測試做 n 次（例如使用者重新整理好幾次：負載平衡器每次可能交給不同的伺服器），每一次都要通過
  */
 export function runObjective(state, o) {
+  if (o.tries > 1 && !o.try) {
+    let last;
+    for (let k = 1; k <= o.tries; k++) {
+      last = runObjective(state, { ...o, try: k });
+      if (!last.pass) return { ...last, reason: `第 ${k} 次（共 ${o.tries} 次）：${last.reason}` };
+    }
+    return last;
+  }
   if (o.type === 'login') {
     // 真的用 SSH / Telnet 登入一次：連得上、而且帳號密碼對得上才算
     const expect = o.expect ?? true, proto = o.proto || 'ssh';
@@ -205,8 +216,8 @@ export function runObjective(state, o) {
     dst = i.rt.ip;
   }
   const srcIp = o.srcIp ? parseIp(o.srcIp) : from.kind === 'internet' ? parseIp(from.inet.client) : undefined;
-  const proto = o.type === 'ping' ? 'icmp' : o.type === 'speed' || o.type === 'https' ? 'tcp' : o.type;
-  const r = transact(state, o.from, { proto, dst, dport: o.type === 'speed' ? o.port ?? 5201 : o.port ?? 443, srcIp, ...(o.size ? { size: o.size } : {}), ...(o.df ? { df: true } : {}), ...(o.bulk != null ? { bulk: o.bulk } : o.type === 'speed' ? { bulk: 'up' } : {}), ...(o.name ? { host: o.name } : {}), ...(o.attack ? { attack: o.attack } : {}) });
+  const proto = o.type === 'ping' ? 'icmp' : o.type === 'speed' || o.type === 'https' || o.type === 'http' ? 'tcp' : o.type;
+  const r = transact(state, o.from, { proto, dst, dport: o.type === 'speed' ? o.port ?? 5201 : o.type === 'http' ? o.port ?? 80 : o.port ?? 443, srcIp, ...(o.size ? { size: o.size } : {}), ...(o.df ? { df: true } : {}), ...(o.bulk != null ? { bulk: o.bulk } : o.type === 'speed' ? { bulk: 'up' } : {}), ...(o.name ? { host: o.name } : {}), ...(o.attack ? { attack: o.attack } : {}) });
   log.push(...r.log); hops.push(...r.hops);
   if (r.ok && o.type === 'speed') {
     // 傳輸速率測試（iperf3）：連得上之後，看路徑上最慢的那一段
@@ -224,6 +235,15 @@ export function runObjective(state, o) {
       return finish(false, `憑證錯誤：${t.why}`, o.from);
     }
     log.push({ dev: o.from, kind: 'ok', text: `TLS 交握成功：憑證是「${t.cert.issuer}」簽給 ${(t.cert.san || [t.cert.cn]).join('、')} 的` });
+  }
+  if (r.ok && (o.type === 'https' || o.type === 'http')) {
+    // 網站的狀態碼：連線通了，應用程式也可能是壞的（500、503）
+    const srv = state.devices[r.responder], s = httpStatus(srv);
+    if (s.code >= 400) {
+      log.push({ dev: r.responder, kind: 'drop', text: `${srv.name} 回應 ${s.line}` });
+      return finish(false, `${srv.name} 回應 ${s.line}：連線是通的，但網站（應用程式）壞了`, r.responder);
+    }
+    log.push({ dev: o.from, kind: 'ok', text: `收到 ${s.line}（${srv.name}）` });
   }
   if (r.ok && (o.via || o.avoid)) {
     const seen = new Set();

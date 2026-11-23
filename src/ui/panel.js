@@ -37,6 +37,7 @@ import * as V from './panel-voice.js';
 import { bgpCard } from './panel-bgp.js';
 import * as TR from './panel-track.js';
 import * as VZ from './panel-virt.js';
+import * as LTM from './panel-ltm.js';
 import { dnsTab } from './panel-dns.js';
 import { vrfField, vrfCard } from './panel-vrf.js';
 import { webTab, clientTlsCard } from './panel-web.js';
@@ -349,6 +350,14 @@ function swL3(ctx, body) {
   }
 }
 
+/** 負載平衡器：每個埠是一個 VLAN，上面設一個 self IP（預設閘道寫在「路由」分頁的 0.0.0.0/0） */
+function lbIfaces(ctx, body) {
+  body.append(note('muted', 'BIG-IP 在每個 VLAN 上有一個 self IP。self IP 是它自己的位址：送健康檢查、SNAT Automap 都用它。預設閘道在「路由」分頁新增 0.0.0.0 / 0.0.0.0。'));
+  for (const p of ctx.dev.ports) {
+    const i = ctx.dev.ifaces.find((x) => x.bind.t === 'port' && x.bind.port === p.id);
+    body.append(ifaceCard(ctx, i, { title: `${p.label}${i.desc ? '（' + i.desc + '）' : ''}`, port: p.id, shut: true, phy: p.media === 'rj45', modes: [['static', '固定 IP (Self IP)']] }));
+  }
+}
 function rtIfaces(ctx, body) {
   const { dev } = ctx;
   for (const p of dev.ports) {
@@ -680,6 +689,7 @@ function baseTabs(dev) {
     case 'hub': case 'switch': return [T.ports];
     case 'ap': return dev.lwap ? [['lwap', 'AP', W.lwapTab]] : [['ssid', '無線網路', X.ssidTab], ['radio', '無線電', X.radioTab], T.ports];
     case 'hypervisor': return [['vsw', '虛擬交換器', VZ.vswTab], ['vms', '虛擬機器', VZ.vmsTab], T.status];
+    case 'lb': return [['if', 'Self IP', lbIfaces], T.route, ['vs', 'Virtual Servers', LTM.vsTab], ['pool', 'Pools', LTM.poolTab], ['mon', 'Monitors', LTM.monTab], T.status];
     case 'cloud': return dev.tgw ? [['tgw', 'Transit Gateway', CL.tgwTab]] : [['vpc', 'VPC', CL.vpcTab], ['sub', '子網路', CL.subnetTab], ['rtb', '路由表', CL.rtTab], ['ec2', 'EC2', CL.ec2Tab], ['sg', '安全群組', CL.sgTab], ['nacl', '網路 ACL', CL.naclTab], ['nat', 'NAT 閘道', CL.natTab], ['alb', '負載平衡器', CL.lbTab], ['pcx', 'Peering', CL.peeringTab], ['cvpn', 'VPN', CL.cloudVpnTab]];
     case 'wlc': return [['wlan', 'WLAN', W.wlanTab], ['aps', 'AP', W.apsTab], ['wcl', '用戶端', W.wlcClientsTab], ['wmi', '管理介面', W.wmiTab], T.swports];
     case 'mswitch': return [T.swports, T.vlan, T.sec, T.mgmt, T.status];
@@ -693,7 +703,7 @@ function baseTabs(dev) {
 
 const KIND_NAME = {
   host: '終端設備', hub: '集線器', switch: '交換器', mswitch: '網管型交換器', l3switch: 'L3 交換器',
-  router: '路由器', homerouter: '家用路由器', firewall: '防火牆', ap: '無線基地台', wlc: '無線控制器', internet: 'ISP', cloud: '公有雲', hypervisor: '虛擬化主機',
+  router: '路由器', homerouter: '家用路由器', firewall: '防火牆', ap: '無線基地台', wlc: '無線控制器', internet: 'ISP', cloud: '公有雲', hypervisor: '虛擬化主機', lb: '負載平衡器',
 };
 
 /** 把選取的設備畫到面板上；回傳 false 表示沒有選取設備 */

@@ -23,6 +23,7 @@ import { zbfActive, zbfCheck, zbfNeeds } from '../zbf.js';
 import { utmCheck, appIpsCheck, avCheck } from '../utm.js';
 import { redirectFor, learnRedirect, redirectRoute } from '../redirect.js';
 import { reflexAdd, reflexHit } from '../reflex.js';
+import { ltmPick, pickText, noVsReason } from '../ltm.js';
 
 // ───────────────────────────── 封包轉送 ─────────────────────────────
 
@@ -269,6 +270,8 @@ function matchPortForward(dev, inIf, pkt) {
 }
 
 function filter(dev, inIf, outIf, pkt, dnat) {
+  // 負載平衡器：只轉送 virtual server 收下的連線（預設拒絕）
+  if (dev.kind === 'lb') return dnat && dnat.lb ? { ok: true, lbSnat: dnat.lb.vs.snat === 'automap' } : { ok: false, reason: noVsReason(dev, pkt) };
   if (dev.kind === 'homerouter') {
     if (inIf.id === 'wan' && !dnat) return { ok: false, reason: `${dev.name} 的防火牆擋下來自 WAN 的主動連線（沒有對應的連接埠轉發）` };
     return { ok: true, nat: outIf.nat };
@@ -360,6 +363,11 @@ function deliver(dev, inIf, pkt) {
   }
   const owner = dev.ifaces.find((i) => i.rt.ip === pkt.dst);
   const fromWan = inIf && /^wan/.test(inIf.id) && (dev.kind === 'firewall' || dev.kind === 'homerouter');
+  // 負載平衡器：virtual address 上沒有這個埠的 virtual server 就重設；self IP 的 Port Lockdown 預設 Allow None（管理在獨立的管理埠）
+  if (dev.kind === 'lb' && pkt.proto !== 'icmp') {
+    return no(owner ? `${dev.name} 的 self IP ${fmtIp(pkt.dst)} 的 Port Lockdown 是 Allow None：不接受 ${PROTO}/${pkt.dport} 的連線，連線被重設（BIG-IP 的管理介面在獨立的管理埠）`
+      : `${fmtIp(pkt.dst)} 是 ${dev.name} 的 virtual address，但 ${PROTO}/${pkt.dport} 沒有 virtual server（或被停用了）：BIG-IP 直接重設連線，連線被重設 (RST)`);
+  }
   if (pkt.proto === 'icmp') {
     if (dev.kind === 'firewall' && owner && inIf === owner && !accessOf(dev, owner).includes('ping')) return no(`${dev.name} 的 ${owner.label} 介面沒有開放 ping（allowaccess 裡沒有 ping）`);
     if (dev.kind !== 'firewall' && owner && owner.ping === false && inIf === owner) return no(`${dev.name} 的 ${owner.label} 介面不回應來自外部的 ping（安全性預設值）`);
@@ -494,10 +502,11 @@ export function forward(state, ctx, startId, pkt) {
           // 從 inside 進來、要找靜態 NAT 的公用位址（NAT hairpin / loopback）：IOS 不轉換，封包到不了伺服器
           return drop(`${dev.name} 從 inside 介面 ${inIf.label} 收到要給 ${sn.pub} 的封包：傳統的 inside / outside NAT 只轉換「從 outside 介面進來」的封包，這個位址只是路由器替靜態 NAT 回應 ARP 的別名，封包到不了伺服器（NAT hairpin 不通）。內部的人要用內部位址連（內部 DNS 回私有位址：split DNS），或改用 NVI（介面上 ip nat enable、ip nat source static），不分 inside / outside 都會轉換`);
         }
-        dnat = sn ? { ip: parseIp(sn.priv), port: pkt.dport, stat: true } : matchPortForward(dev, inIf, pkt) || nattMap(state, dev, pkt);
+        dnat = sn ? { ip: parseIp(sn.priv), port: pkt.dport, stat: true } : matchPortForward(dev, inIf, pkt) || nattMap(state, dev, pkt) || ltmPick(state, dev, pkt);
+        if (dnat && dnat.drop) return drop(dnat.drop); // 負載平衡器：virtual server 沒有可用的成員
         if (dnat) {
           sess(dev, { act: 'dnat', proto: pkt.proto, src: pkt.src, sport: pkt.sport, dst: pkt.dst, dport: pkt.dport, ndst: dnat.ip, ndport: dnat.port });
-          log.push({ dev: dev.id, kind: 'nat', text: dnat.stat ? `靜態 NAT：目的位址 ${fmtIp(pkt.dst)} 換成 ${fmtIp(dnat.ip)}` : dnat.natt ? `NAT 還原（NAT-T）：UDP 4500 的轉換一直有 IPsec 的封包在用，${fmtIp(pkt.dst)}:4500 轉回裡面的 ${fmtIp(dnat.ip)}:4500` : `連接埠轉發：${fmtIp(pkt.dst)}:${pkt.dport} → ${fmtIp(dnat.ip)}:${dnat.port}` });
+          log.push({ dev: dev.id, kind: 'nat', text: dnat.lb ? pickText(dnat, pkt) : dnat.stat ? `靜態 NAT：目的位址 ${fmtIp(pkt.dst)} 換成 ${fmtIp(dnat.ip)}` : dnat.natt ? `NAT 還原（NAT-T）：UDP 4500 的轉換一直有 IPsec 的封包在用，${fmtIp(pkt.dst)}:4500 轉回裡面的 ${fmtIp(dnat.ip)}:4500` : `連接埠轉發：${fmtIp(pkt.dst)}:${pkt.dport} → ${fmtIp(dnat.ip)}:${dnat.port}` });
           pkt.dst = dnat.ip; pkt.dport = dnat.port;
         }
       }
@@ -670,6 +679,8 @@ export function forward(state, ctx, startId, pkt) {
         } else if (nviOn && dev.nviSrc && nviPermits(dev, pkt)) {
           const wi = dev.ifaces.find((x) => x.id === dev.nviSrc.iface);
           if (wi && wi.rt.ip != null) nSrc = wi.rt.ip;
+        } else if (v.lbSnat && outIf.rt.ip != null) {
+          nSrc = outIf.rt.ip; // BIG-IP 的 SNAT Automap：換成出去那個 VLAN 的 self IP
         } else if (v.nat && (outIf !== inIf || dev.kind === 'firewall') && outIf.rt.ip != null && natPermits(dev, outIf, pkt)) {
           // ESP（IP 協定 50）沒有連接埠號碼：PAT（多對一）沒辦法替它轉換。家用路由器多半有「IPsec passthrough」可以讓一條通過
           if (pkt.proto === 'esp' && !pkt.ssl && dev.kind !== 'homerouter') return drop(`${dev.name} 做的是 PAT（多個位址共用 ${outIf.label} 的位址）：ESP 封包沒有連接埠號碼，PAT 沒辦法替它轉換，只好丟掉。中間有 NAT 時兩端都要用 NAT-T（ESP 包在 UDP 4500 裡）`);
@@ -681,7 +692,7 @@ export function forward(state, ctx, startId, pkt) {
         if (nSrc !== pkt.src) {
           T('__ip_session_run_tuple', `SNAT ${fmtIp(pkt.src)}->${fmtIp(nSrc)}:${pkt.sport}`);
           sess(dev, { act: 'snat', proto: pkt.proto, src: pkt.src, sport: pkt.sport, nsrc: nSrc, dst: pkt.dst, dport: pkt.dport });
-          log.push({ dev: dev.id, kind: 'nat', text: `NAT：來源位址 ${fmtIp(pkt.src)} 換成 ${fmtIp(nSrc)}（${outIf.label}）` });
+          log.push({ dev: dev.id, kind: 'nat', text: v.lbSnat ? `SNAT Automap：來源位址 ${fmtIp(pkt.src)} 換成 ${dev.name} 的 self IP ${fmtIp(nSrc)}（${outIf.label}），成員的回應才會回到 ${dev.name}` : `NAT：來源位址 ${fmtIp(pkt.src)} 換成 ${fmtIp(nSrc)}（${outIf.label}）` });
           pkt.src = nSrc;
         }
       }

@@ -106,6 +106,10 @@ export const CATALOG = {
     kind: 'host', shape: 'rack1u', vendor: 'Dell', title: 'Dell PowerEdge R650',
     tagline: '1U 機架伺服器 · 2×25GbE SFP28', ports: [sfp('eth0', 'NIC 1'), sfp('eth1', 'NIC 2')],
   },
+  bigip: {
+    kind: 'lb', shape: 'bigip', vendor: 'F5', title: 'F5 BIG-IP i2800',
+    tagline: '應用程式交付控制器（負載平衡器 LTM）· 4×1GbE + 2×10GbE SFP+', ports: [rj('1.1'), rj('1.2'), rj('1.3'), rj('1.4'), sfp('2.1'), sfp('2.2')],
+  },
   esxi: {
     kind: 'hypervisor', shape: 'esxi', vendor: 'VMware', title: 'VMware ESXi 8',
     tagline: 'Dell PowerEdge R650 · 2×25GbE 上行（NIC teaming）· 8 個虛擬埠', ports: [sfp('vmnic0', 'vmnic0'), sfp('vmnic1', 'vmnic1'), ...seq(8, (i) => virt('vp' + i, '虛擬埠 ' + i))],
@@ -310,6 +314,12 @@ export function makeDevice(model, id, o = {}) {
         d.vrfs = { ...(d.vrfs || {}), 'Mgmt-vrf': { style: 'def', af4: true, af6: true, mgmt: true } };
         d.ifaces.push(iface(p.id, p.label, { t: 'port', port: p.id }, { vrf: 'Mgmt-vrf' }));
       }
+      break;
+    case 'lb':
+      // 負載平衡器（engine/ltm.js）：每個埠是一個 VLAN 加一個 self IP；virtual server、pool、健康檢查在 d.ltm
+      d.ifaces = d.ports.map((p) => iface(p.id, p.label, { t: 'port', port: p.id }));
+      d.routing = true; d.mgmt = mgmt();
+      d.ltm = { monitors: [], pools: [], virtuals: [] };
       break;
     case 'router':
       d.ifaces = d.ports.map((p) => iface(p.id, p.label, { t: 'port', port: p.id }));
