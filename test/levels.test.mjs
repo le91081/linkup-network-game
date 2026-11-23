@@ -272,12 +272,12 @@ console.log('\nCLI 設定指令');
     for (const d of Object.values(s.devices).filter(hasCli)) {
       const want = runningConfig(s, d);
       const s2 = cloneState(s);
-      s2.devices[d.id] = makeDevice(d.model, d.id, { name: d.name, pos: d.pos });
+      s2.devices[d.id] = makeDevice(d.model, d.id, { name: d.name, pos: d.pos, ...(d.stack ? { stack: d.stack.members.length } : {}) });
       // RSA 金鑰、韌體與 flash 不在設定檔裡：當作同一台設備換回原本的設定
       // SNMPv3 的使用者也一樣：IOS 不會把它寫進 running-config
       if (d.mgmt && s2.devices[d.id].mgmt) { s2.devices[d.id].mgmt.sshKey = d.mgmt.sshKey; if (d.mgmt.snmpUser) s2.devices[d.id].mgmt.snmpUser = { ...d.mgmt.snmpUser }; }
-      // 電源供應器是硬體（裝了幾個、插在哪一路），也不在設定檔裡
-      for (const k of ['fw', 'flash', 'psu']) if (d[k]) s2.devices[d.id][k] = JSON.parse(JSON.stringify(d[k]));
+      // 電源供應器是硬體（裝了幾個、插在哪一路），也不在設定檔裡；堆疊的成員與優先權存在成員自己的 ROMMON 變數裡
+      for (const k of ['fw', 'flash', 'psu', 'stack']) if (d[k]) s2.devices[d.id][k] = JSON.parse(JSON.stringify(d[k]));
       recompute(s2);
       const errs = type(s2, d.id, ['configure terminal', ...want, 'end']);
       recompute(s2);
@@ -5507,6 +5507,43 @@ console.log('\n負載平衡器（BIG-IP）：SNAT Automap 與健康檢查');
   for (let k = 0; k < 5; k++) seen.add(transact(s, 'pc', { proto: 'tcp', dst: parseIp('10.0.20.100'), dport: 80 }).responder);
   ok(seen.size === 1 && !seen.has('web2') && !seen.has('web3'), 'source_addr persistence：同一台 PC 一直分到同一台；Disabled 的 web-02 不接新的連線');
   ok(!runObjective(s, { type: 'tcp', from: 'pc', ip: '10.0.20.100', port: 443 }).pass, 'VIP 的 443 沒有 virtual server：連線被拒絕');
+}
+
+console.log('\n交換器堆疊（StackWise）');
+{
+  const { runObjective } = await import('../src/engine/sim/objectives.js');
+  const { iosSession, runningConfig } = await import('../src/engine/ios.js');
+  const { iosRun } = await import('../src/ui/cli.js');
+  const { stackRoles } = await import('../src/engine/stack.js');
+  const ok = (cond, title) => (cond ? console.log('  ✔ ' + title) : fail(title));
+  const cli = (s, id) => { const S = iosSession(() => s.devices[id], () => s); return (...lines) => { const out = []; for (const l of lines) { const r = iosRun({ state: s, showTrace() {}, refreshLive() {} }, id, S, l, (x) => out.push(x)); if (r.changed) settle(s); } return out.join('\n'); }; };
+  const lv = LEVELS.find((x) => x.id === 'l153');
+  const s = lv.setup(); settle(s);
+  const core = s.devices.core;
+  ok(core.ports.some((p) => p.id === 'Gi2/0/24') && core.ports.some((p) => p.id === 'Te2/1/4') && core.sw.ports['Gi2/0/1'], '兩台堆疊：Switch 2 的埠是 Gi2/0/1 – 24、Te2/1/1 – 4');
+  const R = cli(s, 'core');
+  R('enable');
+  const sw = R('show switch');
+  ok(/\*1 +Active .* 1 +V02 +Ready/.test(sw) && /\n 2 +Standby .* 1 +V02 +Ready/.test(sw), 'show switch：Switch 1 Active、Switch 2 Standby，優先權都是 1');
+  ok(!runObjective(s, lv.objectives[1]).pass && runObjective(s, lv.objectives[2]).pass, '開場：Switch 1 故障就斷線（接 Switch 2 的埠被 shutdown），Switch 2 故障沒事');
+  // 只把 Switch 2 的埠打開：STP 擋掉一條，故障時才接手
+  const s2 = cloneState(s); settle(s2);
+  const R2 = cli(s2, 'core'); R2('enable', 'configure terminal', 'interface range Gi2/0/1 - 2', 'no shutdown', 'end');
+  ok(runObjective(s2, lv.objectives[1]).pass && s2.devices.swu.rt.stp.blocked.size > 0 && /Port-channel/.test(lv.objectives[3].test(s2)), '只打開 Gi2/0/1、Gi2/0/2：故障時通了，但 STP 平常擋掉一條上行（還不是 EtherChannel）');
+  // 成員故障：Standby 接手
+  s.stackDown = { 'core:1': true }; settle(s);
+  ok(stackRoles(s, core).map((r) => r.role).join() === 'Removed,Active' && /\n 1 +Removed +0000\.0000\.0000/.test(R('show switch')) && /Active Location = slot 2/.test(R('show redundancy')), 'Switch 1 故障：Switch 2 接手成為 Active，show switch 顯示 Switch 1 Removed');
+  delete s.stackDown; settle(s);
+  ok(/\n +1 +OK +OK\n +2 +OK +OK/.test(R('show switch stack-ports')) && /Full ring/.test(R('show switch stack-ports')), 'show switch stack-ports：兩條堆疊線都 OK（完整的環）');
+  const out = R('switch 1 priority 15');
+  ok(/Do you want to continue\?\[y\/n\]\? \[yes\]:/.test(out), 'switch 1 priority 15：先問要不要繼續');
+  R('y', 'switch 2 priority 14', 'y');
+  ok(core.stack.members[0].prio === 15 && core.stack.members[1].prio === 14 && /\*1 +Active .* 15 /.test(R('show switch')), '優先權改成 15 / 14：show switch 看得到');
+  ok(/switch 1 provision c9300-24t\nswitch 2 provision c9300-24t/.test(runningConfig(s, core).join('\n')) && !/priority/.test(runningConfig(s, core).filter((l) => /^switch/.test(l)).join()), 'running-config：每台成員的 switch N provision，優先權不在 running-config 裡');
+  lv.solve(s); settle(s);
+  ok(lv.objectives.every((o) => (o.type === 'check' ? o.test(s) : runObjective(s, o).pass) === true), '解法：跨成員的 EtherChannel（LACP）、優先權 15 / 14，五個目標都通過');
+  ok(/Po1\(SU\)\s+LACP\s+Gi1\/0\/1\(P\)\s+Gi2\/0\/1\(P\)/.test(R('show etherchannel summary')), 'show etherchannel summary：Po1 的成員 Gi1/0/1、Gi2/0/1 都是 (P)');
+  ok(/% Invalid input/.test(cli(s, 'swu')('enable', 'show switch')), 'Catalyst 2960 沒有 show switch（不能堆疊）');
 }
 
 console.log('\nNetFlow 與 QoS 的 police');

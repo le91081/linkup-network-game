@@ -1,5 +1,6 @@
 // 供電與連線、err-disabled、DTP、語音 VLAN、LACP、STP 與連接埠的 STP 計時
 // （從 sim.js 拆出來的一部分；其他程式一律從 engine/sim.js 引入，不直接引入這裡）
+import { stackPortDown } from '../stack.js';
 import { stpPrio, isMst, mstKey, bpduFilterIf, bpduGuardOn, loopGuardOn } from '../stpcfg.js';
 import { CABLES, CATALOG, DTP_MODELS, POE_CLASS_W, cableDist, cableKind, linkInfo, fiberLink, looseNext } from '../model.js';
 import { rejectsOptic } from '../optics.js';
@@ -57,11 +58,13 @@ export function prepPhysical(state) {
   for (const c of state.cables) if (c.loose && state.devices[c.a.dev] && state.devices[c.b.dev]) rt.pending.push({ at: looseNext(state, c), dev: c[c.loose === 'a' ? 'a' : 'b'].dev, kind: 'link', text: `${state.devices[c.a.dev].name} ↔ ${state.devices[c.b.dev].name}：網路線接觸不良，連線一下斷一下` });
   for (const c of state.cables) {
     const A = state.devices[c.a.dev], B = state.devices[c.b.dev];
-    if (cut[c.id] || down[A.id] || down[B.id] || rt.off[A.id] || rt.off[B.id] || shut(A, c.a.port) || shut(B, c.b.port)) {
+    const sk = stackPortDown(state, A, c.a.port) || stackPortDown(state, B, c.b.port); // 堆疊的成員故障：它的埠都斷線
+    if (cut[c.id] || sk || down[A.id] || down[B.id] || rt.off[A.id] || rt.off[B.id] || shut(A, c.a.port) || shut(B, c.b.port)) {
       rt.cable[c.id] = 'down';
       const dead = [A, B].find((x) => down[x.id]);
       const adm = shut(A, c.a.port) ? [A, c.a.port] : shut(B, c.b.port) ? [B, c.b.port] : null;
       if (cut[c.id]) rt.why[c.id] = (state.cutWhy || {})[c.id] || '線路斷了';
+      else if (sk) rt.why[c.id] = sk;
       else if (dead) rt.why[c.id] = `${dead.name} 已經關機`;
       else if ([A, B].some((x) => (rt.offWhy || {})[x.id])) rt.why[c.id] = rt.offWhy[[A, B].find((x) => (rt.offWhy || {})[x.id]).id];
       else if (adm) rt.why[c.id] = `${adm[0].name} 的 ${(adm[0].ports.find((p) => p.id === adm[1]) || {}).label || adm[1]} 被停用 (shutdown)`;

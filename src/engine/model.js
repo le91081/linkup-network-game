@@ -172,6 +172,7 @@ export const CATALOG = {
     tagline: '園區核心 L3 交換器 · 24×GE + 4×10G SFP+ · 管理埠 Gi0/0',
     // Gi0/0 是帶外管理埠：不是交換埠，出廠就在 Mgmt-vrf 裡（自己的路由表）
     ports: [...seq(24, (i) => rj('Gi1/0/' + i)), ...seq(4, (i) => sfp('Te1/1/' + i)), rj('Gi0/0', 'Gi0/0', { mgmt: true })],
+    stackable: true, // StackWise-480：最多 8 台堆疊成一台（engine/stack.js）
   },
   fg60f: {
     kind: 'firewall', shape: 'firewall', vendor: 'Fortinet', title: 'Fortinet FortiGate 60F',
@@ -230,6 +231,8 @@ function iface(id, label, bind, extra = {}) {
   };
 }
 export const newIface = iface;
+/** Catalyst 9300 的堆疊：每台成員 24×GE + 4×10G，埠名稱的第一個數字是成員編號（Gi2/0/1、Te2/1/1）；管理埠 Gi0/0 在 Active 上 */
+export const stackPorts = (n) => [...seq(n, (k) => [...seq(24, (i) => rj(`Gi${k}/0/${i}`)), ...seq(4, (i) => sfp(`Te${k}/1/${i}`))]).flat(), rj('Gi0/0', 'Gi0/0', { mgmt: true })];
 
 // Catalyst 的連接埠出廠是 dynamic auto（會用 DTP 和對面協商要不要變成 Trunk）；Nexus 沒有 DTP，出廠是 access
 export const DTP_MODELS = new Set(['c2960', 'c2960p', 'c9300']);
@@ -246,7 +249,7 @@ export function makeDevice(model, id, o = {}) {
   if (!m) throw new Error('unknown model ' + model);
   const d = {
     id, model, kind: m.kind, name: o.name || id, pos: o.pos || [0, 0],
-    ports: (o.ports || m.ports).map((p) => ({ ...p })),
+    ports: (o.ports || (o.stack > 1 && m.stackable ? stackPorts(o.stack) : m.ports)).map((p) => ({ ...p })),
     ifaces: [], routes: [], services: [...(m.services || []), ...(o.services || [])],
     locked: !!o.locked, note: o.note || '',
   };
@@ -373,6 +376,8 @@ export function makeDevice(model, id, o = {}) {
     if (o.dns) i.dns = o.dns;
     if (o.wifi) Object.assign(d.ifaces.find((x) => x.bind.t === 'wlan').wifi, o.wifi);
   }
+  // 堆疊（engine/stack.js）：o.stack = 成員的台數
+  if (o.stack > 1 && m.stackable) d.stack = { members: seq(o.stack, (n) => ({ num: n, prio: 1 })), active: 1, cables: [true, true] };
   if (o.init) o.init(d);
   return d;
 }

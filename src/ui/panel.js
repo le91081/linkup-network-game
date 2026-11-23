@@ -38,6 +38,8 @@ import { bgpCard } from './panel-bgp.js';
 import * as TR from './panel-track.js';
 import * as VZ from './panel-virt.js';
 import * as LTM from './panel-ltm.js';
+import { stackTab } from './panel-stack.js';
+import { isStack } from '../engine/stack.js';
 import { dnsTab } from './panel-dns.js';
 import { vrfField, vrfCard } from './panel-vrf.js';
 import { webTab, clientTlsCard } from './panel-web.js';
@@ -693,7 +695,7 @@ function baseTabs(dev) {
     case 'cloud': return dev.tgw ? [['tgw', 'Transit Gateway', CL.tgwTab]] : [['vpc', 'VPC', CL.vpcTab], ['sub', '子網路', CL.subnetTab], ['rtb', '路由表', CL.rtTab], ['ec2', 'EC2', CL.ec2Tab], ['sg', '安全群組', CL.sgTab], ['nacl', '網路 ACL', CL.naclTab], ['nat', 'NAT 閘道', CL.natTab], ['alb', '負載平衡器', CL.lbTab], ['pcx', 'Peering', CL.peeringTab], ['cvpn', 'VPN', CL.cloudVpnTab]];
     case 'wlc': return [['wlan', 'WLAN', W.wlanTab], ['aps', 'AP', W.apsTab], ['wcl', '用戶端', W.wlcClientsTab], ['wmi', '管理介面', W.wmiTab], T.swports];
     case 'mswitch': return [T.swports, T.vlan, T.sec, T.mgmt, T.status];
-    case 'l3switch': return [T.swports, T.vlan, T.l3, T.route, T.sec, ['qos', 'QoS', V.qosTab], T.mgmt, T.status];
+    case 'l3switch': return [T.swports, isStack(dev) && ['stack', '堆疊', stackTab], T.vlan, T.l3, T.route, T.sec, ['qos', 'QoS', V.qosTab], T.mgmt, T.status].filter(Boolean);
     case 'router': return [T.ifs, T.route, T.nat, T.acl, T.vpn, ['qos', 'QoS', V.qosTab], T.mgmt, T.status];
     case 'homerouter': return [['wan', '網際網路 (WAN)', hrWan], ['lan', '區域網路 (LAN)', hrLan], ['wifi', '無線網路', X.ssidTab], ['nat', '連接埠轉發', forwardsTab], T.status];
     case 'firewall': return [['if', '介面', fwIfaces], ['sdwan', 'SD-WAN', sdwanTab], ['pol', '政策', fwPolicies], ['utm', '安全設定檔', utmTab], ['nat', '虛擬 IP', forwardsTab], T.vpn, T.route, ['ha', 'HA', haTab], T.mgmt, ['log', '紀錄', M.logTab], T.status, ['fcli', 'CLI', buildFortiCli]];
@@ -754,7 +756,7 @@ export function renderDevicePanel(app, root) {
       h('div', { class: 'p-badge', text: m.phone ? 'IP 電話' : m.vm ? '虛擬機器' : KIND_NAME[dev.kind] }),
       h('div', { class: 'p-title' },
         app.level.sandbox ? inp(ctx, () => dev.name, (v) => { if (v) dev.name = v; }, { mono: false, ph: '設備名稱' }) : h('h2', { text: dev.name }),
-        h('p', { text: m.title }), h('p', { class: 'muted', text: m.tagline })),
+        h('p', { text: isStack(dev) ? `${m.title} ×${dev.stack.members.length}（StackWise-480 堆疊）` : m.title }), h('p', { class: 'muted', text: isStack(dev) ? `${dev.stack.members.length} 台堆疊成一台交換器 · 每台 24×GE + 4×10G SFP+ · 埠名稱的第一個數字是成員編號` : m.tagline })),
       isIos(dev) && ctx.live(() => {
         const dirty = iosDirty(app.state, dev);
         return h('button', {

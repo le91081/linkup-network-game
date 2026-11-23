@@ -3,6 +3,7 @@ import * as THREE from 'three';
 import { RoundedBoxGeometry } from 'three/addons/geometries/RoundedBoxGeometry.js';
 import { CATALOG } from '../engine/model.js';
 import { isPublic, subnetOf } from '../engine/cloud.js';
+import { memberOfPort } from '../engine/stack.js';
 
 export const PALETTE = {
   light: 0xe6eaf2, mid: 0x98a3be, dark: 0x3a4564, darker: 0x2a334d, black: 0x141927,
@@ -35,7 +36,21 @@ function box(g, w, h, d, material, x = 0, y = 0, z = 0, r = 0.05) {
 
 // ── 連接埠在前面板上的排列（單位是貼圖的像素）。貼圖和網路線的插頭共用這一份座標，
 //    插頭才會剛好插在畫出來的那個孔上 ──
+/** 堆疊：每台成員一條橫帶，自己的埠排兩列（管理埠放在 Switch 1 那一條） */
+function stackGrid(dev, W, H) {
+  const M = dev.stack.members.length, padX = 22, padY = 6, band = (H - padY * 2) / M, out = [];
+  for (let k = 1; k <= M; k++) {
+    const ps = dev.ports.filter((p) => (memberOfPort(p.id) || 1) === k);
+    const cols = Math.ceil(ps.length / 2), cw = (W - padX * 2) / cols, ch = band / 2, size = Math.min(cw * 0.78, ch * 0.7);
+    ps.forEach((p, i) => {
+      const col = Math.floor(i / 2), row = i % 2;
+      out.push({ id: p.id, media: p.media, cx: padX + cw * (col + 0.5), cy: padY + band * (k - 1) + ch * (row + 0.5) + 2, pw: size, ph: p.media === 'rj45' ? size : size * 0.62 });
+    });
+  }
+  return out;
+}
 function portGrid(dev, W, H) {
+  if (dev.stack && dev.stack.members.length > 1) return stackGrid(dev, W, H);
   const n = dev.ports.length;
   const rows = n > 16 ? 2 : 1;
   const cols = Math.ceil(n / rows);
@@ -62,6 +77,12 @@ function paintFace(u, dev, led) {
   const W = canvas.width, H = canvas.height;
   ctx.fillStyle = u.face.bg;
   ctx.fillRect(0, 0, W, H);
+  // 堆疊：成員之間畫一條分隔線（看起來是好幾台疊在一起）
+  if (dev.stack && dev.stack.members.length > 1) {
+    const M = dev.stack.members.length;
+    ctx.fillStyle = '#05070b';
+    for (let k = 1; k < M; k++) ctx.fillRect(0, 6 + ((H - 12) / M) * k - 2, W, 4);
+  }
   for (const p of portGrid(dev, W, H)) {
     ctx.fillStyle = '#04060a';
     ctx.fillRect(p.cx - p.pw / 2, p.cy - p.ph / 2, p.pw, p.ph);
@@ -304,7 +325,7 @@ const BUILDERS = {
   },
   hub: (g, dev, u) => netBox(g, dev, u, { w: 1.6, h: 0.36, d: 1.0, color: 0xcfd5e2, bg: '#2a3144' }),
   'switch-s': (g, dev, u) => netBox(g, dev, u, { w: 1.9, h: 0.36, d: 1.05, color: 0x31507f, bg: '#141b2b' }),
-  'switch-r': (g, dev, u) => netBox(g, dev, u, { w: 2.7, h: 0.42, d: 1.45, color: PALETTE.dark, bg: '#10151f' }),
+  'switch-r': (g, dev, u) => netBox(g, dev, u, { w: 2.7, h: dev.stack && dev.stack.members.length > 1 ? 0.4 * dev.stack.members.length + 0.04 : 0.42, d: 1.45, color: PALETTE.dark, bg: '#10151f' }),
   'switch-dc'(g, dev, u) {
     netBox(g, dev, u, { w: 3.2, h: 0.44, d: 1.8, color: 0x34405f, bg: '#0c1018' });
     for (const x of [-1.66, 1.66]) box(g, 0.1, 0.44, 0.1, mat(PALETTE.mid, { metal: 0.5 }), x, 0.22, 0.86, 0.02);

@@ -1,6 +1,7 @@
 // IOS 風格的設定指令：把 configure terminal 之後輸入的指令套用到設備的設定物件上。
 // 不依賴瀏覽器，可以直接用 Node 測試。支援的範圍就是 show running-config 會印出來的那些指令，
 // 所以把一台設備的 running-config 整份貼到另一台同型號的設備上，會得到相同的設定。
+import { isStack } from './stack.js';
 import { isMgmtPort } from './mgmtsrc.js';
 import { parseIp, fmtIp, parseMask, fmtMask, maskOf, netOf, bcastOf, parseVlanList } from './ip.js';
 import { parseCidr6, parseIp6, fmtIp6, net6, isLinkLocal } from './ip6.js';
@@ -1978,6 +1979,7 @@ export function iosSession(getDev, getState, who = null) {
     ['no ip igmp snooping querier', () => needSw() || void (((dev().sw.igmp ||= {}).querier = false))],
     ['ip igmp snooping vlan <id>', ([v]) => needSw() || void ((dev().sw.igmp ||= {}).vlanOff = ((dev().sw.igmp.vlanOff || []).filter((x) => x !== +v)))],
     ['no ip igmp snooping vlan <id>', ([v]) => { const e = needSw(); if (e) return e; if (!/^\d+$/.test(v)) return err('用法：no ip igmp snooping vlan <VLAN>'); const g = (dev().sw.igmp ||= {}); g.vlanOff = [...new Set([...(g.vlanOff || []), +v])]; return undefined; }],
+    ['switch <n> provision <...>', ([n]) => (isStack(dev()) && dev().stack.members.some((m) => m.num === +n) ? undefined : err(`% Switch ${n} 不在這個堆疊裡`))],
     ['spanning-tree portfast default', () => needSw() || void ((dev().sw.stp ||= {}).portfastDefault = true)],
     ['no spanning-tree portfast default', () => needSw() || void ((dev().sw.stp ||= {}).portfastDefault = false)],
     // PortFast 的埠（接終端設備）預設開 BPDU Guard / BPDU Filter；Loop Guard 套在交換器之間的點對點線
@@ -4004,6 +4006,22 @@ export function iosSession(getDev, getState, who = null) {
         recompute(getState());
         return done(false);
       }
+      // 堆疊成員的優先權（存在成員自己的 ROMMON 變數裡，不在 running-config）：下次整個堆疊重新開機選 Active 時才有作用
+      const swp = match(tok, 'switch <n> priority <p>');
+      if (swp && dev().model === 'c9300') {
+        const [n, p] = swp.map(Number), m = isStack(dev()) ? dev().stack.members.find((x) => x.num === n) : n === 1 ? null : undefined;
+        if (m === undefined) { out.push(`% Switch ${n} 不在這個堆疊裡`); return done(false); }
+        if (!(p >= 1 && p <= 15)) { out.push('% Invalid input detected: <1-15>  Switch Priority'); return done(false); }
+        out.push('WARNING: Changing the switch priority may result in a configuration change for that switch.', 'Do you want to continue?[y/n]? [yes]: ');
+        S.pending = { fn: (ans, o2) => {
+          S.pending = null;
+          if (ans.trim() && !/^y/i.test(ans.trim())) return { out: o2, changed: false };
+          if (m) m.prio = p; else (dev().stackPrio = p);
+          o2.push(`（Switch ${n} 的優先權改成 ${p}：現在的 Active 不會被搶走，下次整個堆疊一起重新開機時，優先權最高的當 Active）`);
+          return { out: o2, changed: true };
+        } };
+        return done(false);
+      }
       if (match(tok, 'clear ip ospf process') || match(tok, 'clear ip ospf <n> process')) {
         out.push('Reset ALL OSPF processes? [no]: ');
         S.pending = { fn: (ans, o2) => { S.pending = null; if (!/^y/i.test(ans.trim())) return { out: o2, changed: false }; clearOspfAll(getState(), dev()); recompute(getState()); o2.push('（OSPF 程序重新啟動：重新選 Router ID，所有鄰居關係從頭建立）'); return { out: o2, changed: true }; } };
@@ -4598,6 +4616,7 @@ function aaaTop(dev) {
 
 export function runningConfig(state, dev) {
   const o = ['Building configuration...', '', '!', `hostname ${hostName(dev)}`, '!'];
+  if (isStack(dev)) o.push(...dev.stack.members.map((m) => `switch ${m.num} provision c9300-24t`), '!'); // 堆疊：每台成員的型號
   if ((dev.bootSys || []).length) o.push(...dev.bootSys.map((b) => `boot system ${b}`), '!');
   if (dev.ftpLogin && (dev.ftpLogin.user || dev.ftpLogin.pass)) o.push(...(dev.ftpLogin.user ? [`ip ftp username ${dev.ftpLogin.user}`] : []), ...(dev.ftpLogin.pass ? [`ip ftp password 7 ${hex(dev.ftpLogin.pass)}`] : []), '!');
   if (+dev.tftpBlk > 512) o.push(`ip tftp blocksize ${+dev.tftpBlk}`, '!');

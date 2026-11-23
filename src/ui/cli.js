@@ -39,6 +39,7 @@ import { TR_OFF } from '../engine/sim/core.js';
 import { CATALOG, MEDIA, peerOf, portOf, linkInfo, phyConfig, fiberLink } from '../engine/model.js';
 import { xcvrAt, xcvrSerial, MEDIA_TYPE } from '../engine/optics.js';
 import { PLATFORM as PID_OF } from '../engine/dnac.js';
+import { showSwitch, showSwitchDetail, showStackPorts, showRedundancy, stackChassis } from './cli-stack.js';
 import { iosSession, runningConfig, startupConfig, hostName as host, aclName, aclLine, aclSeqs } from '../engine/ios.js';
 import { ipMtu, l2Mtu, jumboNow, isCat2960, isCat9300, isNexus } from '../engine/mtu.js';
 import { tunByName, tunnelDetail, dmvpnLines, nhrpLines, nhsLines, ipsecProfileLines, cryptoSessionLines, transformSetLines, bfdLines, pkiCertLines, pkiTrustpointLines } from './cli-tun.js';
@@ -919,9 +920,14 @@ const SHOW = {
     }
     return o;
   },
+  'show switch': (st, d) => showSwitch(st, d),
+  'show switch detail': (st, d) => showSwitchDetail(st, d),
+  'show switch stack-ports': (st, d) => showStackPorts(st, d),
+  'show redundancy': (st, d) => showRedundancy(st, d),
   'show inventory': (st, d) => {
     const m = CATALOG[d.model] || {};
-    const o = [`NAME: "Chassis", DESCR: "${m.vendor || ''} ${m.title || d.model}"`, `PID: ${(PID_OF[d.model] || d.model.toUpperCase()).padEnd(18)}, VID: V02  , SN: ${xcvrSerial(d.model, d.id)}`, ''];
+    const sk = stackChassis(st, d);
+    const o = sk ? sk.flatMap((n) => [`NAME: "Switch ${n} Chassis", DESCR: "${m.vendor || ''} ${m.title || d.model}"`, `PID: ${(PID_OF[d.model] || d.model.toUpperCase()).padEnd(18)}, VID: V02  , SN: ${xcvrSerial(d.model, d.id + n)}`, '']) : [`NAME: "Chassis", DESCR: "${m.vendor || ''} ${m.title || d.model}"`, `PID: ${(PID_OF[d.model] || d.model.toUpperCase()).padEnd(18)}, VID: V02  , SN: ${xcvrSerial(d.model, d.id)}`, ''];
     for (const p of d.ports) {
       const x = xcvrAt(st, d, p.id, fiberLink);
       if (!x) continue;

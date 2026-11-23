@@ -4,6 +4,7 @@
 // state.dyn.log[設備]   = [{ n, t, sev, line }]       設備自己的紀錄緩衝區（RAM，重開機就沒了）
 // state.dyn.syslog[伺服器] = [{ n, t, ip, dev, sev, line }]   Syslog 伺服器收到的訊息
 // state.dyn.ev[設備]    = 上一次看到的狀態，用來比對出「發生了什麼事」
+import { electActive } from './stack.js';
 import { mgmtSpec } from './mgmtsrc.js';
 import { parseIp, fmtIp } from './ip.js';
 import { transact, macsBehind, closeFlow, poeTable } from './sim.js';
@@ -341,6 +342,7 @@ function wipe(state, d) {
   for (const k of Object.keys(dyn.adj || {})) if (k.split('~').some((x) => x.startsWith(d.id + '/'))) delete dyn.adj[k];
   // 硬體時鐘被重設過的設備（c.set.rtc）：重開機之後還是那個錯的時間，照樣往下走
   delete c.ntp; delete c.reload;
+  if (d.stack) d.stack.active = electActive(d); // 整個堆疊一起重新開機：重新選 Active（優先權 → MAC）
   if (!(c.set && c.set.rtc)) delete c.set;
   delete (dyn.ev || {})[d.id];
 }

@@ -24,6 +24,7 @@ import { httpStatus } from '../ltm.js';
  *  { type:'dhcp', dev, subnet? }
  *  { type:'check', test(state) → true | '原因' }
  *  { type:'failover', down?:[devId], cut?:[[devId, portId]], test:{...} }
+ *    member:[[devId, 成員編號]] 堆疊的某一台成員故障（它的埠全部斷線，Active 換 Standby 接手）
  *    feed:['A'] 某一路電斷了（設備的電源供應器接在哪一路，見 engine/power.js）
  *    keep:{ from, ip, port } 取代 test：故障之前先建立 TCP 連線，故障之後在同一條連線上繼續送資料（連線表要跟著換手）
  *  { type:'http'|'https', … } 連得上之後還要看網站回應的狀態碼（4xx、5xx 算失敗）；https 還要驗證憑證
@@ -171,6 +172,11 @@ export function runObjective(state, o) {
     if ((o.feed || []).length) {
       s2.feeds = { ...(state.feeds || {}), ...Object.fromEntries(o.feed.map((f) => [f, false])) };
       what.push(...o.feed.map((f) => `${f} 路斷電`));
+    }
+    // 堆疊的某一台成員故障：member: [['core', 1]]
+    for (const [dv, n] of o.member || []) {
+      (s2.stackDown ||= {})[dv + ':' + n] = true;
+      what.push(`${state.devices[dv].name} 的 Switch ${n} 故障`);
     }
     for (const id of o.ispFail || []) {
       s2.devices[id].inet = { ...s2.devices[id].inet, fault: true };
