@@ -5261,6 +5261,31 @@ console.log('\n多點傳送與 IGMP snooping');
   L('configure terminal', 'ip igmp snooping', 'no ip igmp snooping vlan 1', 'end');
   ok(wh() === 90 && /^no ip igmp snooping vlan 1$/m.test(runningConfig(s, s.devices.lobby).join('\n')), 'no ip igmp snooping vlan 1：這個 VLAN 不修剪');
 }
+console.log('\n多點傳送到基地台：最低速率吃掉空中時間');
+{
+  const { makeDevice: MD, makeState: MS, newSsid } = await import('../src/engine/model.js');
+  const { throughput } = await import('../src/engine/sim.js');
+  const ok = (cond, title) => (cond ? console.log('  ✔ ' + title) : fail(title));
+  const s = MS([
+    MD('c2960p', 'sw', { name: 'SW', pos: [0, -3], init(d) { Object.assign(d.ifaces.find((x) => x.id === 'mgmt'), { ip: '10.0.0.2', mask: '255.255.255.0' }); } }),
+    MD('tower', 'src', { name: 'IPTV', pos: [-6, -3], ip: '10.0.0.20', init(d) { d.mcastSrc = [{ group: '239.1.1.1', mbps: 8, name: '頻道' }]; } }),
+    MD('tower', 'srv', { name: '伺服器', pos: [6, -3], ip: '10.0.0.10', services: [{ proto: 'tcp', port: 5201, name: 'iperf3' }] }),
+    MD('ap', 'ap', { name: 'AP', pos: [0, 2], init(d) { d.wifi.ssids = [newSsid({ name: 'Corp', sec: 'wpa2', pass: 'Corp#2026pass' })]; } }),
+    MD('laptop', 'nb', { name: '筆電', pos: [1.5, 3.5], wifi: { ssid: 'Corp', pass: 'Corp#2026pass' }, init(d) { Object.assign(d.ifaces.find((x) => x.bind.t === 'wlan'), { mode: 'static', ip: '10.0.0.51', mask: '255.255.255.0' }); } }),
+    MD('laptop', 'tv', { name: '看 IPTV 的筆電', pos: [-1.5, 3.5], wifi: { ssid: 'Corp', pass: 'Corp#2026pass' }, init(d) { d.igmp = ['239.1.1.1']; Object.assign(d.ifaces.find((x) => x.bind.t === 'wlan'), { mode: 'static', ip: '10.0.0.52', mask: '255.255.255.0' }); } }),
+  ], [['src:eth0', 'sw:Gi0/1'], ['srv:eth0', 'sw:Gi0/2'], ['ap:eth0', 'sw:Gi0/3']]);
+  settle(s);
+  const sp = () => { const r = transact(s, 'nb', { proto: 'tcp', dst: parseIp('10.0.0.10'), dport: 5201, bulk: 'up' }); return throughput(s, r.hops, r.mss); };
+  const st = () => s.rt.mstreams[0];
+  ok(st().members.includes('tv') && st().extra.includes('nb') && (s.rt.mair.ap || 0) > 1, '沒有 querier：8 Mbps 的串流泛洪到基地台，用 6 Mbps 的基本速率送，空中時間全部被佔掉');
+  const a = sp();
+  ok(a.mbps < 10 && /空中時間/.test(a.where), `筆電上傳只剩 ${a.mbps} Mbps（${a.where}）`);
+  s.devices.ap.wifi.m2u = true; settle(s);
+  const b = sp();
+  ok(st().members.includes('tv') && !st().extra.includes('nb') && s.rt.mair.ap < 0.5 && b.mbps > a.mbps * 5, `多點傳送轉單點傳送：只送給看 IPTV 的筆電，空中時間 ${Math.round(s.rt.mair.ap * 100)}%，筆電回到 ${b.mbps} Mbps`);
+  s.devices.ap.wifi.m2u = false; (s.devices.sw.sw.igmp ||= {}).querier = true; s.devices.tv.igmp = []; settle(s);
+  ok(!s.rt.mair.ap && !st().extra.length, 'IGMP snooping 有 querier、沒有人收看：串流根本不送到基地台');
+}
 console.log('\nNetFlow 與 QoS 的 police');
 {
   const sim = await import('../src/engine/sim.js');

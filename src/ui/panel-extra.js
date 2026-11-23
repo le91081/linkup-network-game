@@ -287,6 +287,8 @@ export function radioTab(ctx, body) {
       ? note('warn', cableAt(state, dev.id, dev.ports[0].id) ? '沒有電：對面的連接埠不提供 PoE，或已被停用。' : '沒有電：還沒有接上網路線。')
       : note('ok', 'PoE 供電正常 (802.3af)'))),
   radioCard(ctx), clientsCard(ctx),
+  h('div', { class: 'card' }, cardHead('多點傳送'), h('div', { class: 'toggles' }, toggle(ctx, () => !!dev.wifi.m2u, (v) => { dev.wifi.m2u = v; }, '多點傳送轉單點傳送（Multicast-to-Unicast）：只送給有加入的用戶端，用它們各自的速率')),
+    ctx.live(() => { const air = (state.rt.mair || {})[dev.id] || 0; return air > 0.02 ? note(air >= 0.5 ? 'warn' : 'muted', `多點傳送的串流佔掉這台基地台 ${air >= 1 ? '全部' : Math.round(air * 100) + '%'}的空中時間${dev.wifi.m2u ? '' : '：無線上多點傳送要用最低的基本速率送給每一台，比有線慢得多。上游用 IGMP snooping 擋掉沒人看的串流，或打開多點傳送轉單點傳送'}。`) : null; })),
   h('p', { class: 'tip', text: '選取基地台時，場景中的圓圈就是它的訊號涵蓋範圍。兩台基地台的範圍有重疊，頻道就必須錯開。' }));
 }
 

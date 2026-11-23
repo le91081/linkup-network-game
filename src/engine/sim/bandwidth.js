@@ -198,6 +198,9 @@ export function throughput(state, hops, mss = 1460, down = false) {
       const rate = a ? a.rate : 54;
       mbps = rate * 0.5;
       note = `Wi-Fi 連線速率 ${rate} Mbps${a && a.noisy ? '（頻道互相干擾）' : ''}`;
+      // 基地台在用最低速率送多點傳送：剩下的空中時間才輪得到一般的資料
+      const air = a ? ((state.rt.mair || {})[a.ap] || 0) : 0;
+      if (air > 0.02) { mbps = Math.max(0.1, mbps * Math.max(0.01, 1 - air)); note += `，但基地台${air >= 1 ? '全部的' : '有 ' + Math.round(air * 100) + '% 的'}空中時間都在用最低速率送多點傳送的串流`; }
     } else {
       if (!h.cable || seen.has(h.cable)) continue;
       seen.add(h.cable);

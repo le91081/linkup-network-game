@@ -27,7 +27,7 @@ export function querierOf(state, vlan) {
 
 export function prepMcast(state) {
   const rt = state.rt;
-  rt.mcast = {}; rt.mstreams = []; rt.mgroups = {};
+  rt.mcast = {}; rt.mstreams = []; rt.mgroups = {}; rt.mair = {};
   rt.bcast ||= {};
   const down = state.down || {};
   for (const d of Object.values(state.devices)) {
@@ -64,6 +64,21 @@ export function prepMcast(state) {
         const k = l.cable + '>' + l.to;
         rt.mcast[k] = (rt.mcast[k] || 0) + mbps;
         rt.bcast[k] = (rt.bcast[k] || 0) + mbps;
+        // 送到基地台：無線上要用最低的基本速率送給每一台（5 GHz 6 Mbps、2.4 GHz 1 Mbps），佔掉很多空中時間。
+        // 基地台開了「多點傳送轉單點傳送」：只送給有加入的用戶端，用它們各自的速率
+        const ap = state.devices[l.to];
+        if (ap && ap.kind === 'ap' && ap.wifi) {
+          const cl = (rt.clients[ap.id] || []).map((c) => c.iface.rt.assoc).filter(Boolean);
+          const air = ap.wifi.m2u
+            ? (rt.clients[ap.id] || []).filter((c) => members.has(c.dev)).reduce((a, c) => a + mbps / Math.max(6, ((c.iface.rt.assoc || {}).rate || 54) * 0.5), 0)
+            : cl.length ? mbps / (cl.some((a) => a.band === '2.4GHz') ? 1 : 6) : 0;
+          rt.mair[ap.id] = (rt.mair[ap.id] || 0) + air;
+        }
+      }
+      // 基地台收到了：它的無線用戶端也收到（多點傳送轉單點傳送只送給有加入的）
+      for (const id of [...got]) {
+        const ap = state.devices[id];
+        if (ap && ap.kind === 'ap') for (const c of rt.clients[id] || []) if (!ap.wifi.m2u || members.has(c.dev)) got.add(c.dev);
       }
       const vlan = keyOf.size ? keyOf.values().next().value : null;
       rt.mstreams.push({ src: d.id, group: s.group, name: s.name || s.group, mbps, vlan, members: [...members].filter((id) => got.has(id)), missed: [...members].filter((id) => !got.has(id)),
