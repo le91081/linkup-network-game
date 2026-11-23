@@ -5089,6 +5089,35 @@ console.log('\nWi-Fi 漫遊的時間：掃描、重新關聯與金鑰');
   const a2 = t.devices.nb.ifaces.find((i) => i.bind.t === 'wlan').rt.assoc;
   ok(a.ap === 'apb' && a.roamed && a.roamed.ms === 30 && a2.lastRoam && a2.lastRoam.from === 'apa' && !a2.roamed, '走到會議室：換到 AP-B、中斷 30 ms；之後重算還記得最近一次漫遊');
 }
+console.log('\nReflexive ACL 與 established');
+{
+  const { iosSession, runningConfig } = await import('../src/engine/ios.js');
+  const { iosRun } = await import('../src/ui/cli.js');
+  const { reflexLists, REFLEX_TIMEOUT } = await import('../src/engine/reflex.js');
+  const ok = (cond, title) => (cond ? console.log('  ✔ ' + title) : fail(title));
+  const cli = (s, id) => { const S = iosSession(() => s.devices[id], () => s); return (...lines) => { const out = []; for (const l of lines) { const r = iosRun({ state: s, showTrace() {}, refreshLive() {} }, id, S, l, (x) => out.push(x)); if (r.changed) settle(s); } return out.join('\n'); }; };
+  const lv = LEVELS.find((x) => x.id === 'l141');
+  const s = lv.setup(); settle(s);
+  const tcp = transact(s, 'pc', { proto: 'tcp', dst: parseIp('93.184.216.34'), dport: 443 });
+  const udp = transact(s, 'pc', { proto: 'udp', dst: parseIp('8.8.8.8'), dport: 53 });
+  ok(tcp.ok && !udp.ok && /進入方向/.test(udp.reason), 'established：TCP 的回應（SYN-ACK 有 ACK）進得來，DNS 的 UDP 回應被擋');
+  lv.solve(s); settle(s);
+  const R = cli(s, 'rt');
+  R('enable');
+  ok(transact(s, 'pc', { proto: 'udp', dst: parseIp('8.8.8.8'), dport: 53 }).ok && transact(s, 'nb', { proto: 'icmp', dst: parseIp('8.8.8.8') }).ok, 'reflect / evaluate：DNS 與 ping 的回應都進得來');
+  const rows = reflexLists(s, s.devices.rt)[0].rows;
+  ok(rows.some((e) => e.proto === 'udp' && e.src === parseIp('8.8.8.8') && e.sport === 53 && e.dst === parseIp('203.0.113.34')) && rows.every((e) => e.left <= REFLEX_TIMEOUT), '暫時規則是反過來的：來源 8.8.8.8 埠 53 → 路由器的公用位址（NAT 之後）');
+  const sh = R('show access-lists');
+  ok(/Reflexive IP access list MIRROR\n {5}permit udp host 8\.8\.8\.8 eq 53 host 203\.0\.113\.34 eq \d+ \(1 matches\) \(time left \d+\)/.test(sh) && /15 evaluate MIRROR \(\d+ matches\)/.test(sh), 'show access-lists：Reflexive IP access list 與暫時規則、evaluate 的比對次數');
+  ok(!transact(s, 'inet', { proto: 'icmp', dst: parseIp('203.0.113.34') }).ok, '外面主動 ping 路由器：沒有對應的暫時規則，擋掉');
+  advance(s, REFLEX_TIMEOUT + 5);
+  ok(!reflexLists(s, s.devices.rt)[0].rows.length, `閒置 ${REFLEX_TIMEOUT} 秒之後暫時規則消失`);
+  R('configure terminal', 'ip reflexive-list timeout 120', 'end');
+  transact(s, 'pc', { proto: 'udp', dst: parseIp('8.8.8.8'), dport: 53 });
+  const rc = runningConfig(s, s.devices.rt).join('\n');
+  ok(reflexLists(s, s.devices.rt)[0].rows.every((e) => e.timeout === 120) && /^ip reflexive-list timeout 120$/m.test(rc) && /ip access-list extended TO-ISP\n permit tcp any any reflect MIRROR\n/.test(rc) && /ip access-list extended FROM-ISP\n evaluate MIRROR\n deny ip any any/.test(rc), 'ip reflexive-list timeout 與 running-config（reflect、evaluate）');
+  ok(/只能寫在具名的延伸 ACL/.test(R('configure terminal', 'access-list 150 permit ip any any reflect X', 'end')), '編號的 ACL 不能用 reflect');
+}
 console.log('\nNetFlow 與 QoS 的 police');
 {
   const sim = await import('../src/engine/sim.js');

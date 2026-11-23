@@ -34,7 +34,7 @@ README 說明「現在有什麼、怎麼玩」，這份文件說明「整體應�
 | 2. 第二層：交換 | 16 | 1 | 0 | 0 |
 | 3. 第三層：路由 | 16 | 0 | 1 | 0 |
 | 4. IP 服務 | 12 | 2 | 0 | 0 |
-| 5. 網路安全 | 14 | 3 | 0 | 0 |
+| 5. 網路安全 | 15 | 2 | 0 | 0 |
 | 6. VPN 與廣域網路 | 11 | 2 | 0 | 0 |
 | 7. 無線網路 | 8 | 1 | 1 | 0 |
 | 8. IPv6 | 8 | 0 | 0 | 0 |
@@ -46,9 +46,9 @@ README 說明「現在有什麼、怎麼玩」，這份文件說明「整體應�
 | 14. 遊戲系統 | 16 | 0 | 0 | 6 |
 | 15. 介面與體驗 | 10 | 0 | 0 | 0 |
 | 16. 工程品質 | 6 | 3 | 1 | 0 |
-| **合計** | **182** | **16** | **7** | **6** |
+| **合計** | **183** | **15** | **7** | **6** |
 
-另外：關卡 140 關（第 17 節）、證照條目涵蓋情形（第 18 節）、建議的實作順序（第 19 節）。
+另外：關卡 141 關（第 17 節）、證照條目涵蓋情形（第 18 節）、建議的實作順序（第 19 節）。
 
 範圍的調整（2026-11-22）：第 14 節遊戲系統還沒做完的項目暫時不做（⏸）；第 15 節的手機與平板、多語系、無障礙、主題從規劃中移除，不做。
 
@@ -153,7 +153,7 @@ README 說明「現在有什麼、怎麼玩」，這份文件說明「整體應�
 | Wi-Fi 加密 | ✅ | 開放、WEP、WPA2、WPA2 / WPA3 混合、WPA3 |
 | 攻擊情境 | ✅ | 冒牌 DHCP、ARP 欺騙、搶根橋、未授權設備、密碼暴力嘗試（`login block-for`）、側錄 Telnet 明文密碼、DTP 偽裝成交換器的 VLAN hopping；MAC flooding（macof 把每一台走得到的交換器的表塞滿，unknown unicast 泛洪給攻擊者，擋住之後要等老化或 clear）；雙重標籤（Access 埠收自己 VLAN 的標籤、Native VLAN 的 Trunk 不加標籤，封包單向跳進別的 VLAN、繞過 ACL；`vlan dot1q tag native` 或改 Native VLAN）；冒牌的 IPv6 RA；狂送廣播的設備。還沒有 SYN flood |
 | TACACS+ 與 AAA | ✅ | `aaa new-model`、`tacacs server`（address、key）、`ip tacacs source-interface`；`aaa authentication login` 方法清單（伺服器連不到或沒回應才換下一個，FAIL 直接拒絕）、`login authentication`；`aaa authorization exec`（權限由伺服器或本機帳號決定，沒設定一律 1 級）、`aaa authorization commands 15`（Command authorization failed.）、`aaa accounting commands 15`；TACACS+ 伺服器（ISE）的分頁：共用密鑰、登記的網路設備、帳號的權限與指令範圍、指令記錄 → 11-10 |
-| IOS 進階過濾 | 🟡 | Zone-Based Firewall 已完成：zone security、zone-member security、class-map type inspect（match protocol、match access-group）、policy-map type inspect（inspect 有狀態、pass 單向、drop、class-default）、zone-pair 與 self zone、有 zone 和沒 zone 的介面不通；`show zone security`、`show zone-pair security`、`show policy-map type inspect zone-pair sessions`；ACL 分頁的簡化編輯器 → 6-14。時間型 ACL（`time-range` 的 periodic、規則後面的 `time-range`、`show time-range`、(active) / (inactive)，照設備的時鐘與時區）→ 6-18；Reflexive ACL 還沒有 |
+| IOS 進階過濾 | ✅ | Zone-Based Firewall 已完成：zone security、zone-member security、class-map type inspect（match protocol、match access-group）、policy-map type inspect（inspect 有狀態、pass 單向、drop、class-default）、zone-pair 與 self zone、有 zone 和沒 zone 的介面不通；`show zone security`、`show zone-pair security`、`show policy-map type inspect zone-pair sessions`；ACL 分頁的簡化編輯器 → 6-14。時間型 ACL（`time-range` 的 periodic、規則後面的 `time-range`、`show time-range`、(active) / (inactive)，照設備的時鐘與時區）→ 6-18；`established`（只比對有 ACK / RST 的 TCP）與 Reflexive ACL（具名 ACL 的 `permit … reflect <名稱> [timeout <秒>]` 記下反過來的暫時規則、`evaluate <名稱>` 比對，TCP / UDP / ICMP 都適用，閒置 300 秒消失、`ip reflexive-list timeout`，`show access-lists` 列出暫時規則與剩下的秒數）→ 6-19 |
 | NGFW / UTM | ✅ | 網頁過濾已完成：FortiGuard 類別（設定檔、`config webfilter profile` 的 ftgd-wf filters）、政策的 utm-status / webfilter-profile / ssl-ssh-profile、SSL 檢查（no-inspection 看不到 HTTPS、certificate-inspection 看 SNI、deep-inspection 用 Fortinet_CA_SSL 重新簽憑證，電腦要信任）、HTTP 的封鎖頁面、「安全設定檔」分頁 → 6-15；應用程式控管（`config application list`，依類別封鎖 P2P / Proxy…）、IPS 感測器（`config ips sensor`，依嚴重程度封鎖 Log4Shell 這類攻擊）、政策的 application-list / ips-sensor → 6-16。DNS 過濾（`config dnsfilter profile` 的 ftgd-dns filters、政策的 dnsfilter-profile，擋下的名稱回 208.91.112.55，不用解密）、防毒（`config antivirus profile` 的 http / ftp av-scan、政策的 av-profile，EICAR 測試檔，HTTPS 要 deep-inspection 才掃得到）、「安全設定檔」分頁的兩種設定檔 → 6-17。還沒有 DoH 的偵測、沙箱 (FortiSandbox) 與郵件過濾 |
 | IPv6 安全 | ✅ | IPv6 ACL（見第 8 節）；冒牌的 Router Advertisement（主機用每一個 RA 的前綴各產生一個位址、預設閘道選 Router Preference 最高的）與 RA Guard（`ipv6 nd raguard policy` / `device-role host \| router` / `attach-policy`、`show ipv6 nd raguard policy`） |
 | 憑證與 PKI | 🟡 | 公開 CA 與公司內部的 CA（公開 CA 不簽 .local、效期上限）、用戶端的信任清單（加入網域的電腦自動有公司的根憑證，`certutil -addstore root` 匯入）、有效期間用用戶端自己的時鐘判斷（`w32tm`、`timedatectl`、自動設定時間）、SAN 與萬用字元；沒有中繼憑證鏈、CRL / OCSP、ACME 自動續約，用在 802.1X 的 EAP-TLS（→ 6-13）與 IOS 的 IKEv2 rsa-sig（trustpoint、SCEP、revocation-check → 7-12） |
@@ -294,7 +294,7 @@ README 說明「現在有什麼、怎麼玩」，這份文件說明「整體應�
 
 | 功能 | 狀態 | 說明 |
 | --- | --- | --- |
-| 關卡 | ✅ | 17 章 140 關（清單見第 17 節） |
+| 關卡 | ✅ | 17 章 141 關（清單見第 17 節） |
 | 任務目標 | ✅ | ping、TCP、UDP、DHCP、設定檢查、故障演練、IPv6 ping、傳輸速率、遠端登入（SSH / Telnet 帳號密碼）、IP 電話註冊、通話品質 (MOS)、HTTPS（連得上之後還要通過憑證驗證）、路徑（一定要經過 / 不能經過某台設備）；TCP 的目標交握完還會送一個裝滿的資料區段（設了 DF），MTU 的問題才看得出來 |
 | 提示與星等 | ✅ | 每關 3 個提示，看一個少一顆星 |
 | 學習卡 | ✅ | 每關 2 到 4 張觀念說明 |
@@ -353,7 +353,7 @@ README 說明「現在有什麼、怎麼玩」，這份文件說明「整體應�
 
 ## 17. 關卡規劃
 
-### 現有的 140 關
+### 現有的 141 關
 
 | 章 | 關卡 |
 | --- | --- |
@@ -362,7 +362,7 @@ README 說明「現在有什麼、怎麼玩」，這份文件說明「整體應�
 | 3 企業網路 | 守門員、總公司與分公司、對外伺服器群、十點以後進公司的人都上不了網（NAT 位址池與 overload）、在公司裡打不開自己的網站（NAT hairpin 與 split DNS） |
 | 4 資料中心 | 機櫃上線、Spine-Leaf、跨棟連線、一開 Jumbo Frame，備份就卡住、光纖接好了，燈還是不亮（收發器）、A 路的電一跳，機房就全黑了（雙電源）、新的 GPU 伺服器接不上（breakout） |
 | 5 無線網路 | 家裡的 Wi-Fi、辦公室基地台、訪客 Wi-Fi、下午的視訊會議一直斷（頻道寬度與 DFS）、新筆電明明支援 Wi-Fi 6E（6 GHz 與 WPA3）、訪客連上 Wi-Fi，卻沒有跳出登入頁面（Captive Portal） |
-| 6 網路安全 | 只開了 TCP、誰在發 IP？、不速之客、存取控制清單、管理介面加固、冒牌閘道、搶走根橋、你是誰？、偽裝成交換器、交換器變成了 Hub（MAC flooding）、跳進伺服器 VLAN 的封包（雙重標籤）、飯店的房間網路（Private VLAN）、星期一早上，有線網路全部登不進去（EAP-TLS）、分公司只有一台路由器，也要當防火牆（ZBF）、上班時間有人在玩線上博弈（網頁過濾與 SSL 檢查）、防火牆擋得住位址，擋不住應用程式（應用程式控管與 IPS）、同事點了釣魚信的連結（DNS 過濾與防毒）、午休才開放的影音網站，晚上八點才打得開（時間型 ACL 與時區） |
+| 6 網路安全 | 只開了 TCP、誰在發 IP？、不速之客、存取控制清單、管理介面加固、冒牌閘道、搶走根橋、你是誰？、偽裝成交換器、交換器變成了 Hub（MAC flooding）、跳進伺服器 VLAN 的封包（雙重標籤）、飯店的房間網路（Private VLAN）、星期一早上，有線網路全部登不進去（EAP-TLS）、分公司只有一台路由器，也要當防火牆（ZBF）、上班時間有人在玩線上博弈（網頁過濾與 SSL 檢查）、防火牆擋得住位址，擋不住應用程式（應用程式控管與 IPS）、同事點了釣魚信的連結（DNS 過濾與防毒）、午休才開放的影音網站，晚上八點才打得開（時間型 ACL 與時區）、網頁打得開，名稱卻查不到（established 與 Reflexive ACL） |
 | 7 VPN 與廣域備援 | 站對站 VPN、在家上班、雙線路備援、三個據點，一個中心、線路燈還亮著（IP SLA）、小檔案可以，大檔案卡住（PMTUD 黑洞）、兩個分公司的連線一下通一下斷（GRE 與 recursive routing）、稽核報告（GRE over IPsec）、每加一個網段就要改兩邊的 ACL（VTI）、門市之間的監視器畫面（DMVPN）、新分公司在共享辦公室裡（NAT-T）、換了主機板電池，VPN 就起不來了（IKEv2 的憑證驗證）、下午一塞車電話就斷斷續續（SD-WAN）、換成 MPLS 專線之後互相看不到（MPLS L3VPN 與 allowas-in） |
 | 8 高可用與進階路由 | 迴圈與生成樹、EtherChannel、閘道備援、集中式 DHCP、OSPF 路徑選擇、切蛋糕、閘道還活著，但出不去（HSRP 追蹤）、主線斷了，電話斷了四十秒（BFD）、兩台閘道，只有一台在做事（GLBP）、防火牆一壞，全公司就斷網（FortiGate HA）、兩台核心說好分擔，結果全擠在 Core-1（MST）、備援線一接上，整棟樓斷網（BPDU Filter 與 Loop Guard） |
 | 9 IPv6 | IPv6 初體驗、雙協定、位址從哪裡來？、IPv6 也要動態路由、封了 IPv4，忘了 IPv6、IPv6 的預設閘道被搶走了（RA Guard）、內部網站加了 IPv6 之後（AAAA 與 Happy Eyeballs）、IPv6 過不了 VPN（VTI 只載 IPv4）、換了 ISP，IPv6 就上不了網（DHCPv6 PD）、防火牆開了 IPv6，網站卻都打不開（FortiGate 的 IPv6 政策）、新大樓只有 IPv6，網站卻大多只有 IPv4（NAT64 與 DNS64） |

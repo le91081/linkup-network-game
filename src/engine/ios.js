@@ -413,13 +413,31 @@ export function aclSeqs(list) {
 const stripSeq = ({ seq, ...r }) => r;
 
 function parseAclRule(tok0) {
+  const tok1 = [...tok0], extra = {};
+  // reflect <名稱> [timeout <秒>]：Reflexive ACL，只能寫在 permit 上
+  const ri = tok1.findIndex((x) => String(x).toLowerCase() === 'reflect');
+  if (ri > 0) {
+    if (!tok1[ri + 1]) return null;
+    let cut = 2;
+    if (String(tok1[ri + 2] || '').toLowerCase() === 'timeout') {
+      const t = +tok1[ri + 3];
+      if (!(t >= 1 && t <= 2147483)) return null;
+      extra.rtimeout = t; cut = 4;
+    }
+    extra.reflect = tok1[ri + 1];
+    tok1.splice(ri, cut);
+  }
+  // established：只比對 TCP 的 ACK / RST（連線的回應），不比對主動連線的 SYN
+  const ei = tok1.findIndex((x) => String(x).toLowerCase() === 'established');
+  if (ei > 0) { extra.established = true; tok1.splice(ei, 1); }
   // 最後面的 time-range <名稱>：在那個時段才生效
-  const ti = tok0.findIndex((x) => String(x).toLowerCase() === 'time-range');
-  const tr = ti > 0 ? tok0[ti + 1] : null;
+  const ti = tok1.findIndex((x) => String(x).toLowerCase() === 'time-range');
+  const tr = ti > 0 ? tok1[ti + 1] : null;
   if (ti > 0 && !tr) return null;
-  const tok = ti > 0 ? [...tok0.slice(0, ti), ...tok0.slice(ti + 2)] : tok0;
+  const tok = ti > 0 ? [...tok1.slice(0, ti), ...tok1.slice(ti + 2)] : tok1;
   const r = parseAclRule0(tok);
-  return r && tr ? { ...r, tr } : r;
+  if (!r || (extra.reflect && r.action !== 'permit') || (extra.established && r.proto !== 'tcp')) return null;
+  return { ...r, ...extra, ...(tr ? { tr } : {}) };
 }
 function parseAclRule0(tok) {
   let n = 0;
@@ -2009,6 +2027,7 @@ export function iosSession(getDev, getState, who = null) {
         else if (parseIp(a) != null) { const bits = t[2] ? wildBits(t[2]) : 32; if (bits != null) src = bits === 32 ? a : `${fmtIp(netOf(parseIp(a), bits))}/${bits}`; }
         if (action && src) rule = { action, proto: 'ip', src, dst: 'any', port: '' };
       } else rule = parseAclRule(t);
+      if (rule && rule.reflect) return err('% Reflexive ACL（reflect）只能寫在具名的延伸 ACL：ip access-list extended <名稱>');
       if (!rule) return err(+n < 100 ? '用法：access-list <1-99> permit|deny <any | host IP | 網段 萬用遮罩>' : '用法：access-list <100-199> permit|deny <ip|tcp|udp|icmp|esp|gre> <來源> <目的> [eq <埠>]');
       if (n === '1' && !(d.aclDefs || {})['1'] && same(rule, { action: 'permit', proto: 'ip', src: 'any', dst: 'any', port: '' })) return undefined; // 預設的 NAT 清單
       addUnique(((d.aclDefs ||= {})[n] ||= []), rule);
@@ -2016,6 +2035,9 @@ export function iosSession(getDev, getState, who = null) {
       return undefined;
     }],
     ['no access-list <n>', ([n]) => { const d = dev(); if (d.aclDefs) delete d.aclDefs[n]; }],
+    // Reflexive ACL 暫時規則的預設逾時（每一條 reflect 也可以自己寫 timeout）
+    ['ip reflexive-list timeout <n>', ([n]) => (/^\d+$/.test(n) && +n >= 1 ? void (dev().reflexTimeout = +n) : err('% 用法：ip reflexive-list timeout <秒>（預設 300）'))],
+    ['no ip reflexive-list timeout [...]', () => { delete dev().reflexTimeout; }],
     ['ip access-list extended <name>', ([name]) => {
       const d = dev(), N = name.toUpperCase();
       if (!d.routing) return err('這台設備不支援 ACL');
@@ -3053,7 +3075,10 @@ export function iosSession(getDev, getState, who = null) {
       }],
       ['<...>', ([line]) => {
         const t = line.split(/\s+/);
-        const rule = parseAclRule(t);
+        // evaluate <名稱>：在這裡比對 reflexive list 的暫時規則
+        const ev = /^\d+$/.test(t[0]) ? 1 : 0;
+        let rule = (t[ev] || '').toLowerCase() === 'evaluate' ? (t[ev + 1] ? { action: 'evaluate', proto: 'ip', src: 'any', dst: 'any', port: '', evaluate: t[ev + 1] } : null) : parseAclRule(t);
+        if (!rule && (t[ev] || '').toLowerCase() === 'evaluate') return err('用法：evaluate <reflexive list 的名稱>');
         if (!rule) return err('用法：[序號] permit|deny <ip|tcp|udp|icmp|esp|gre> <來源> <目的> [eq <埠> | ICMP 類型]，位址寫 any、host <IP> 或 <網段> <萬用遮罩>');
         const seq = /^\d+$/.test(t[0]) ? +t[0] : null;
         const lists = aclLists(dev(), S.cur);
@@ -3960,7 +3985,7 @@ export function iosSession(getDev, getState, who = null) {
     if (tok.length >= 2 && 'show'.startsWith(t0) && t0.length >= 2) { out.push('% 在設定模式要查看狀態請在前面加 do，例如 do show ip interface brief'); return done(false); }
     // ACL 模式的規則是整行一起解析，只有長得像規則的才交給它，其餘當成全域指令（可以直接跳到別的設定）
     const aclMode = S.mode === 'acl' || S.mode === 'stdacl' || S.mode === 'acl6';
-    const trySub = S.mode !== 'config' && (!aclMode || /^(\d+\s+|sequence\s+\d+\s+)?(permit|deny)\b/i.test(text) || /^no\s+(\d+|sequence\s+\d+|permit\b|deny\b)/i.test(text));
+    const trySub = S.mode !== 'config' && (!aclMode || /^(\d+\s+|sequence\s+\d+\s+)?(permit|deny|evaluate)\b/i.test(text) || /^no\s+(\d+|sequence\s+\d+|permit\b|deny\b)/i.test(text));
     let res = trySub ? run(SUB[S.mode], tok, out) : { hit: false };
     let viaSub = res.hit;
     // 巢狀的子模式不認得的指令，先往上一層找（例如貼上設定時 log config 底下接著 archive 的 path）
@@ -4365,7 +4390,7 @@ function aclAddr(spec) {
 }
 /** running-config 裡的 redistribute：metric、metric-type、subnets、tag、route-map 的順序和 IOS 一樣 */
 const redistLine = (r, into) => ` redistribute ${r.src}${r.as != null ? ' ' + r.as : ''}${r.metric != null ? ' metric ' + r.metric : ''}${r.type === 1 ? ' metric-type 1' : ''}${into === 'ospf' && r.src !== 'ospf' ? ' subnets' : ''}${r.tag ? ' tag ' + r.tag : ''}${r.rm ? ' route-map ' + r.rm : ''}`;
-export const aclLine = (r) => `${r.action} ${r.proto || 'ip'} ${aclAddr(r.src)}${r.sport ? ' eq ' + r.sport : ''} ${aclAddr(r.dst)}${r.port && r.proto !== 'ip' && r.proto !== 'icmp' ? ' eq ' + r.port : ''}${r.icmp ? ' ' + r.icmp : ''}${r.tr ? ' time-range ' + r.tr : ''}`;
+export const aclLine = (r) => (r.evaluate ? `evaluate ${r.evaluate}` : `${r.action} ${r.proto || 'ip'} ${aclAddr(r.src)}${r.sport ? ' eq ' + r.sport : ''} ${aclAddr(r.dst)}${r.port && r.proto !== 'ip' && r.proto !== 'icmp' ? ' eq ' + r.port : ''}${r.icmp ? ' ' + r.icmp : ''}${r.established ? ' established' : ''}${r.reflect ? ` reflect ${r.reflect}${r.rtimeout ? ' timeout ' + r.rtimeout : ''}` : ''}${r.tr ? ' time-range ' + r.tr : ''}`);
 
 /** 產生等效的 running-config */
 /**
@@ -4917,6 +4942,7 @@ export function runningConfig(state, dev) {
   }
   if (out.some((i) => natList(i) === '1') && !(dev.aclDefs || {})['1']) o.push('access-list 1 permit any');
   for (const [n, l] of Object.entries(dev.timeRanges || {})) o.push('!', `time-range ${n}`, ...l.map((p) => ` periodic ${p.text}`));
+  if (+dev.reflexTimeout) o.push(`ip reflexive-list timeout ${+dev.reflexTimeout}`);
   for (const i of dev.ifaces) {
     for (const [key, dir] of [['aclIn', 'in'], ['aclOut', 'out']]) {
       if (!i[key] || !i[key].length) continue;

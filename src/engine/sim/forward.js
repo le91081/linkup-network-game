@@ -22,6 +22,7 @@ import { haLostNote } from '../ha.js';
 import { zbfActive, zbfCheck, zbfNeeds } from '../zbf.js';
 import { utmCheck, appIpsCheck, avCheck } from '../utm.js';
 import { redirectFor, learnRedirect, redirectRoute } from '../redirect.js';
+import { reflexAdd, reflexHit } from '../reflex.js';
 
 // ───────────────────────────── 封包轉送 ─────────────────────────────
 
@@ -61,18 +62,25 @@ function addrMatch(spec, ip) {
   return selMatch(cidrList(s), ip);
 }
 
-/** 無狀態 ACL：回傳 null 代表放行，否則回傳被拒絕的原因 */
-function aclCheck(list, pkt) {
+/**
+ * 無狀態 ACL：回傳 null 代表放行，否則回傳被拒絕的原因。
+ * rx = { state, dev }：套在介面上的 ACL 才有，給 Reflexive ACL 記下 / 比對暫時規則
+ */
+function aclCheck(list, pkt, rx) {
   if (!list || !list.length) return null;
   for (let n = 0; n < list.length; n++) {
     const r = list[n];
     if (r.tr && TR_OFF.has(r)) continue; // time-range 現在不在時間內：這條規則當作不存在
+    // evaluate <名稱>：比對 reflexive list 的暫時規則（自己這邊先送出去的連線的回應），沒有符合就往下一條
+    if (r.evaluate) { if (rx && reflexHit(rx.state, rx.dev, r.evaluate, pkt)) { hit(r); return null; } continue; }
+    if (r.established && !(pkt.proto === 'tcp' && (pkt.reply || pkt.ack || pkt.bulk || pkt.data))) continue; // established：只比對有 ACK 的 TCP
     if (r.proto && r.proto !== 'ip' && r.proto !== pkt.proto) continue;
     if (r.icmp && !icmpTypeMatch(r.icmp, pkt)) continue; // permit icmp any any packet-too-big
     if (!addrMatch(r.src, pkt.src) || !addrMatch(r.dst, pkt.dst)) continue;
     if (r.port && (pkt.proto === 'tcp' || pkt.proto === 'udp') && +r.port !== pkt.dport) continue;
     if (r.sport && (pkt.proto === 'tcp' || pkt.proto === 'udp') && +r.sport !== pkt.sport) continue;
     hit(r);
+    if (r.action === 'permit' && r.reflect && rx) reflexAdd(rx.state, rx.dev, r.reflect, pkt, r.rtimeout);
     return r.action === 'permit' ? null : `ACL 第 ${n + 1} 條規則拒絕了這個封包`;
   }
   return 'ACL 沒有任何規則符合，隱含拒絕 (implicit deny any)';
@@ -436,7 +444,7 @@ export function forward(state, ctx, startId, pkt) {
           : pkt.proto === 'tcp' ? ` flag [${pkt.data ? 'P.' : pkt.ack ? '.' : pkt.reply ? 'S.' : 'S'}], seq 1, ack ${pkt.ack || pkt.reply ? 1 : 0}, win 64240` : '';
         T('print_pkt_detail', `vd-root:0 received a packet(proto=${n}, ${fmtIp(pkt.src)}:${pkt.sport}->${fmtIp(pkt.dst)}:${dp}) tun_id=0.0.0.0 from ${inIf.id.replace(/^vpn:/, '')}.${extra}`);
       }
-      const deny = aclCheck(inIf.aclIn, pkt);
+      const deny = aclCheck(inIf.aclIn, pkt, { state, dev });
       if (deny) {
         D('packet', `IP: s=${fmtIp(pkt.src)} (${longIf(inIf.label)}), d=${fmtIp(pkt.dst)}, len ${ipLen(pkt)}, access denied`);
         return drop(`${dev.name} 的 ${inIf.label}（進入方向）：${deny}`);
@@ -663,7 +671,7 @@ export function forward(state, ctx, startId, pkt) {
       }
     }
     if (inIf) {
-      const deny = aclCheck(outIf.aclOut, pkt);
+      const deny = aclCheck(outIf.aclOut, pkt, { state, dev });
       if (deny) return drop(`${dev.name} 的 ${outIf.label}（離開方向）：${deny}`);
     }
     // TCP 的 SYN / SYN-ACK 經過時記下 MSS 的上限（ip tcp adjust-mss、家用路由器自動調整）

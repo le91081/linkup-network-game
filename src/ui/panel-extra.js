@@ -554,6 +554,14 @@ export function aclTab(ctx, body) {
       card.append(h('div', { class: 'acl-h' }, h('span', { text: title }), h('em', { text: key === 'aclIn' ? '從這個介面進來的封包' : '準備從這個介面出去的封包' }),
         button('新增', { ic: 'plus', small: true, onclick: () => { list.push({ action: 'permit', proto: 'ip', src: 'any', dst: 'any', port: '' }); ctx.commit(true); } })));
       list.forEach((r, n) => {
+        const up = h('button', { class: 'mini', type: 'button', title: '上移', disabled: n === 0, onclick: () => { list.splice(n - 1, 0, list.splice(n, 1)[0]); ctx.commit(true); } }, icon('up', 14));
+        // Reflexive ACL 的 evaluate：只能從 CLI 設定，這裡只列出來
+        if (r.evaluate) {
+          card.append(h('div', { class: 'acl-row permit' },
+            h('div', { class: 'acl-l1' }, h('span', { class: 'pno', text: n + 1 }), h('span', { class: 'mono', text: `evaluate ${r.evaluate}` }), up, del(() => { list.splice(n, 1); ctx.commit(true); })),
+            h('div', { class: 'acl-l2' }, h('span', { class: 'muted', text: `Reflexive ACL：比對 reflect ${r.evaluate} 記下的暫時規則（自己這邊先送出去的連線的回應）` }), hitBadge(ctx, r))));
+          return;
+        }
         card.append(h('div', { class: 'acl-row ' + r.action },
           h('div', { class: 'acl-l1' }, h('span', { class: 'pno', text: n + 1 }),
             sel(ctx, ...bind(r, 'action'), [['permit', '允許 permit'], ['deny', '拒絕 deny']], { rerender: true }),
@@ -564,7 +572,8 @@ export function aclTab(ctx, body) {
             del(() => { list.splice(n, 1); ctx.commit(true); })),
           h('div', { class: 'acl-l2' },
             inp(ctx, ...bind(r, 'src'), { ph: '來源：any 或 10.0.20.0/24', check: isAddr }), h('span', { text: '→' }),
-            inp(ctx, ...bind(r, 'dst'), { ph: '目的：any 或 10.0.30.10', check: isAddr }), hitBadge(ctx, r))));
+            inp(ctx, ...bind(r, 'dst'), { ph: '目的：any 或 10.0.30.10', check: isAddr }), hitBadge(ctx, r)),
+          (r.reflect || r.established) && h('div', { class: 'acl-l2' }, h('span', { class: 'muted mono', text: [r.established ? 'established（只比對有 ACK 的 TCP）' : '', r.reflect ? `reflect ${r.reflect}${r.rtimeout ? ' timeout ' + r.rtimeout : ''}（離開時記下反過來的暫時規則）` : ''].filter(Boolean).join('　') }))));
       });
       if (list.length) card.append(h('div', { class: 'acl-deny', text: '（隱含）拒絕 ip any → any' }));
     }

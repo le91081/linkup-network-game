@@ -44,6 +44,7 @@ import { ipMtu, l2Mtu, jumboNow, isCat2960, isCat9300, isNexus } from '../engine
 import { tunByName, tunnelDetail, dmvpnLines, nhrpLines, nhsLines, ipsecProfileLines, cryptoSessionLines, transformSetLines, bfdLines, pkiCertLines, pkiTrustpointLines } from './cli-tun.js';
 import { cacheFlowLines, flowMonitorLines, flowExporterLines } from './cli-flow.js';
 import { stpDetailLines } from './cli-stp.js';
+import { reflexLists } from '../engine/reflex.js';
 
 const pad = (s, n) => String(s).padEnd(n);
 const isTunIf = (i) => i.bind && i.bind.t === 'gre';
@@ -621,6 +622,9 @@ const SHOW = {
       o.push(`Extended IP access list ${aclName(i, dir)}`);
       { const qs = aclSeqs(i[key]); i[key].forEach((r, n) => o.push(`    ${qs[n]} ${aclLine(r)}${r.tr ? (TR_OFF.has(r) ? ' (inactive)' : ' (active)') : ''}${hitsOf(r) ? ` (${hitsOf(r)} matches)` : ''}`)); }
     }
+    // Reflexive ACL：暫時規則（位址與埠和送出去的那個封包相反）與剩下的秒數
+    const ph = (ip, p) => `host ${fmtIp(ip)}${p != null ? ' eq ' + p : ''}`;
+    for (const x of reflexLists(st, d)) o.push(`Reflexive IP access list ${x.name}`, ...x.rows.map((e) => `     permit ${e.proto} ${ph(e.src, e.sport)} ${ph(e.dst, e.dport)}${e.hits ? ` (${e.hits} matches)` : ''} (time left ${e.left})`));
     return o.length ? o : ['沒有設定任何 ACL'];
   },
   'show arp': (st, d) => {
