@@ -203,7 +203,7 @@ export function runObjective(state, o) {
   log.push(...r.log); hops.push(...r.hops);
   if (r.ok && o.type === 'speed') {
     // 傳輸速率測試（iperf3）：連得上之後，看路徑上最慢的那一段
-    const t = throughput(state, r.hops, r.mss), min = o.min || 0, pass = t.mbps >= min;
+    const t = throughput(state, r.hops, r.mss, o.bulk === 'down'), min = o.min || 0, pass = t.mbps >= min;
     log.push({ dev: pass ? o.from : t.dev || o.from, kind: pass ? 'ok' : 'drop', text: `iperf3：${t.mbps} Mbps${t.retr ? `，重傳 ${t.retr} 次` : ''}。最慢的一段是 ${t.where}${r.mss ? `（MSS ${r.mss}）` : ''}` });
     if (!pass) return { pass: false, ok: true, reason: `只跑得到 ${t.mbps} Mbps（目標 ${min} Mbps 以上）。最慢的一段：${t.where}`, failDev: t.dev || o.from, log, hops, speed: t };
     return { pass: true, ok: true, reason: '', failDev: null, log, hops, speed: t };

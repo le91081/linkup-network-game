@@ -32,7 +32,7 @@ README 說明「現在有什麼、怎麼玩」，這份文件說明「整體應�
 | --- | --- | --- | --- | --- |
 | 1. 實體層與接線 | 12 | 1 | 1 | 0 |
 | 2. 第二層：交換 | 16 | 1 | 0 | 0 |
-| 3. 第三層：路由 | 16 | 0 | 1 | 0 |
+| 3. 第三層：路由 | 16 | 1 | 0 | 0 |
 | 4. IP 服務 | 13 | 1 | 0 | 0 |
 | 5. 網路安全 | 15 | 2 | 0 | 0 |
 | 6. VPN 與廣域網路 | 11 | 2 | 0 | 0 |
@@ -46,9 +46,9 @@ README 說明「現在有什麼、怎麼玩」，這份文件說明「整體應�
 | 14. 遊戲系統 | 16 | 0 | 0 | 6 |
 | 15. 介面與體驗 | 10 | 0 | 0 | 0 |
 | 16. 工程品質 | 6 | 3 | 1 | 0 |
-| **合計** | **185** | **13** | **7** | **6** |
+| **合計** | **185** | **14** | **6** | **6** |
 
-另外：關卡 143 關（第 17 節）、證照條目涵蓋情形（第 18 節）、建議的實作順序（第 19 節）。
+另外：關卡 144 關（第 17 節）、證照條目涵蓋情形（第 18 節）、建議的實作順序（第 19 節）。
 
 範圍的調整（2026-11-22）：第 14 節遊戲系統還沒做完的項目暫時不做（⏸）；第 15 節的手機與平板、多語系、無障礙、主題從規劃中移除，不做。
 
@@ -115,7 +115,7 @@ README 說明「現在有什麼、怎麼玩」，這份文件說明「整體應�
 | VRF（VRF-Lite） | ✅ | `vrf definition`（`rd`、`address-family ipv4`）與舊式的 `ip vrf`；介面的 `vrf forwarding` 會清掉原本的 IP；同一個路由表裡網段重疊會被拒絕（`% … overlaps with …`），不同 VRF 可以重疊；`ip route vrf`、`show vrf`、`show ip route vrf`、`ping vrf`；圖形介面的 VRF 卡片與介面的 VRF 選單；每個 VRF 自己的 OSPF 程序（`router ospf <pid> vrf <名稱>`，每個（路由器, VRF）是各自的節點，和 CE 的全域程序成為鄰居）；用靜態路由洩漏（`ip route vrf X … global`、出口介面在另一個 VRF）。BGP 還不分 VRF，沒有 MP-BGP 的 route-target 匯入匯出 |
 | 路由重分配、PBR | ✅ | `redistribute static \| connected \| bgp <AS>` 進 OSPF（ASBR、Type-5 LSA、O E2 固定 metric 與 O E1 加上內部 cost、種子 metric 20 / 1、預設路由不會跟著出去、IOS XE 自動補 subnets、`metric` / `metric-type` / `tag` / `route-map`）；`redistribute static \| connected \| ospf` 進 BGP（origin ?、MED 是原本的 cost、跑 OSPF 的直連網段也算）；route-map 的 `match ip address prefix-list \| <ACL>`、`match tag`、`set metric \| metric-type \| tag`；政策路由 `ip policy route-map`、`ip local policy route-map`、`set ip next-hop`（不通就照路由表）、`set ip default next-hop`；`show route-map`（Policy routing matches）、`show ip policy`、`show ip ospf database` 的 Type-5；路由分頁的重分配卡片與政策路由卡片。OSPF ↔ EIGRP 的雙向重分配（`redistribute eigrp <AS>` 連同跑 EIGRP 的直連網段、`redistribute ospf <程序> metric …`，重分配卡片也可以設定）；RIP 重分配進 OSPF（`redistribute rip`），靜態、直連、OSPF、EIGRP 重分配進 RIP（`metric <跳數>`，OSPF / EIGRP 沒有給就是 16）；還沒有模擬兩個地方雙向重分配造成的迴圈 |
 | IP SLA 與物件追蹤 | ✅ | 見第 9 節 |
-| 多播 | ⬜ | IGMP、PIM |
+| 多播 | 🟡 | 第二層的多點傳送：來源送固定速率的串流（不會讓路的 UDP），電腦用 IGMP 加入群組（主機的「多點傳送」分頁、`netsh interface ipv4 show joins`）；交換器沒有 snooping 就像廣播一樣泛洪，有 IGMP snooping 而且 VLAN 裡有 querier（`ip igmp snooping querier`）才只送往有人加入的埠；`show ip igmp snooping [groups | querier]`、流量熱圖看得到被串流佔掉的線路 → 10-12。還沒有跨網段的 PIM、多點傳送路由與 Wi-Fi 的多點傳送速率 |
 
 ## 4. IP 服務
 
@@ -294,7 +294,7 @@ README 說明「現在有什麼、怎麼玩」，這份文件說明「整體應�
 
 | 功能 | 狀態 | 說明 |
 | --- | --- | --- |
-| 關卡 | ✅ | 17 章 143 關（清單見第 17 節） |
+| 關卡 | ✅ | 17 章 144 關（清單見第 17 節） |
 | 任務目標 | ✅ | ping、TCP、UDP、DHCP、設定檢查、故障演練、IPv6 ping、傳輸速率、遠端登入（SSH / Telnet 帳號密碼）、IP 電話註冊、通話品質 (MOS)、HTTPS（連得上之後還要通過憑證驗證）、路徑（一定要經過 / 不能經過某台設備）；TCP 的目標交握完還會送一個裝滿的資料區段（設了 DF），MTU 的問題才看得出來 |
 | 提示與星等 | ✅ | 每關 3 個提示，看一個少一顆星 |
 | 學習卡 | ✅ | 每關 2 到 4 張觀念說明 |
@@ -353,7 +353,7 @@ README 說明「現在有什麼、怎麼玩」，這份文件說明「整體應�
 
 ## 17. 關卡規劃
 
-### 現有的 143 關
+### 現有的 144 關
 
 | 章 | 關卡 |
 | --- | --- |
@@ -366,7 +366,7 @@ README 說明「現在有什麼、怎麼玩」，這份文件說明「整體應�
 | 7 VPN 與廣域備援 | 站對站 VPN、在家上班、雙線路備援、三個據點，一個中心、線路燈還亮著（IP SLA）、小檔案可以，大檔案卡住（PMTUD 黑洞）、兩個分公司的連線一下通一下斷（GRE 與 recursive routing）、稽核報告（GRE over IPsec）、每加一個網段就要改兩邊的 ACL（VTI）、門市之間的監視器畫面（DMVPN）、新分公司在共享辦公室裡（NAT-T）、換了主機板電池，VPN 就起不來了（IKEv2 的憑證驗證）、下午一塞車電話就斷斷續續（SD-WAN）、換成 MPLS 專線之後互相看不到（MPLS L3VPN 與 allowas-in） |
 | 8 高可用與進階路由 | 迴圈與生成樹、EtherChannel、閘道備援、集中式 DHCP、OSPF 路徑選擇、切蛋糕、閘道還活著，但出不去（HSRP 追蹤）、主線斷了，電話斷了四十秒（BFD）、兩台閘道，只有一台在做事（GLBP）、防火牆一壞，全公司就斷網（FortiGate HA）、兩台核心說好分擔，結果全擠在 Core-1（MST）、備援線一接上，整棟樓斷網（BPDU Filter 與 Loop Guard） |
 | 9 IPv6 | IPv6 初體驗、雙協定、位址從哪裡來？、IPv6 也要動態路由、封了 IPv4，忘了 IPv6、IPv6 的預設閘道被搶走了（RA Guard）、內部網站加了 IPv6 之後（AAAA 與 Happy Eyeballs）、IPv6 過不了 VPN（VTI 只載 IPv4）、換了 ISP，IPv6 就上不了網（DHCPv6 PD）、防火牆開了 IPv6，網站卻都打不開（FortiGate 的 IPv6 政策）、新大樓只有 IPv6，網站卻大多只有 IPv4（NAT64 與 DNS64） |
-| 10 故障排除 | 誰搶了我的 IP、樓層之間又斷了、分公司的求救電話、明明連得上，為什麼這麼慢、分公司的 OSPF 鄰居起不來、流量為什麼繞去實驗室、VPN 通了，資料卻過不去、DNS 改了，為什麼還連到舊的、整層樓都慢了（廣播風暴與 Storm Control）、新交換器一插上去，整棟樓的 VLAN 都不見了（VTP）、會議室的電腦每隔一分鐘就斷一次（接觸不良的網路線與 PortFast） |
+| 10 故障排除 | 誰搶了我的 IP、樓層之間又斷了、分公司的求救電話、明明連得上，為什麼這麼慢、分公司的 OSPF 鄰居起不來、流量為什麼繞去實驗室、VPN 通了，資料卻過不去、DNS 改了，為什麼還連到舊的、整層樓都慢了（廣播風暴與 Storm Control）、新交換器一插上去，整棟樓的 VLAN 都不見了（VTP）、會議室的電腦每隔一分鐘就斷一次（接觸不良的網路線與 PortFast）、大廳的電視一開，倉庫就傳不動檔案（多點傳送與 IGMP querier） |
 | 11 維運與管理 | 還好有備份、韌體升級、讓 SSH 能用、網路怎麼變慢了、是誰動了設定？、你的連線不是私人連線、專線被塞滿了，是誰？（NetFlow）、事件的先後兜不起來（NTP 與 service timestamps）、機櫃裡的線全部沒有標籤（看不到接線，用 CDP / LLDP 找）、外包工程師要能看設定但不能改（AAA 與 TACACS+）、SSH 被自己鎖在門外（Console 線）、核心交換器一出事，網管就連不進去（帶外管理與 Mgmt-vrf）、核心交換器要升級，flash 卻滿了（IOS XE 的 install 模式） |
 | 12 語音與 QoS | 電話接上了，然後呢？、語音斷斷續續、新的 AP 怎麼插都不亮（PoE 預算與 CDP 的電力協商）、專線一斷，電話就聽不清楚（雙 WAN 的 QoS）、監視器的錄影一卡一卡（網路攝影機、NVR 與上行頻寬） |
 | 13 進階路由 | 誰當 DR？、10G 和 1G 一樣快？、分公司自成一區、兩家 ISP 都要用、併購的工廠只會靜態路由（重分配）、備份走另一條線（PBR）、分公司的路由表太大了（stub）、工廠接了一條供應商專線（NSSA）、兩個出口，同一個 AS（iBGP）、共用服務放在全域的路由表（VRF 的 OSPF 與路由洩漏）、分公司的 EIGRP 鄰居起不來，訊務都擠在 4G（EIGRP 與 MD5 驗證）、舊工廠的 RIP：一半的機台連不到（版本與 auto-summary） |

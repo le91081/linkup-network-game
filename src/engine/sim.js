@@ -22,6 +22,8 @@ import { computeAuth } from './sim/auth.js';
 import { dnsList, hash, ifaceMac, isVlanSw, vrfOf } from './sim/core.js';
 import { flowsTick } from './sim/bandwidth.js';
 import { ifaceActive, isBridgePort, l2Explore, macAgeOf, prepL2Attacks } from './sim/l2.js';
+import { prepMcast } from './sim/mcast.js';
+export { isMcast, snoopOn, querierOf } from './sim/mcast.js';
 import { prepDtp, prepLag, prepPhysical, prepStp, prepStpTimers, prepVoice, stpTopologyChange } from './sim/phys.js';
 import { prepTunnels } from './sim/tunnels.js';
 import { sessionTtl } from './sim/forward.js';
@@ -210,6 +212,7 @@ function computePass(state, auth) {
   }
   haMacs(state); // HA 的主要機：介面用叢集的虛擬 MAC
   prepL2Attacks(state); // macof 把 MAC 位址表塞滿、狂送廣播佔掉整個 VLAN 的線路
+  prepMcast(state); // 多點傳送：沒有 IGMP snooping（或沒有 querier）就像廣播一樣送往整個 VLAN
   prepCloud(state); // 雲端：彈性 IP 掛到網際網路閘道上
   const old = state.leases || {};
   state.leases = {};

@@ -5236,6 +5236,31 @@ console.log('\nIOS XE 的 install 模式（Catalyst 9300）');
   ok(/IMG {3}C {4}17\.12\.04/.test(C('show install summary')) && /IMG {3}I {4}17\.09\.05/.test(C('show install summary')), 'install commit：變成 C，17.9.5 變成 I');
   ok(/install 指令只有 IOS XE 的 Catalyst 9300/.test(cli(settle(LEVELS.find((x) => x.id === 'l41').setup()), 'rt')('enable', 'install add file bootflash:x.bin')), '其他平台沒有 install 指令');
 }
+console.log('\n多點傳送與 IGMP snooping');
+{
+  const { iosSession, runningConfig } = await import('../src/engine/ios.js');
+  const { iosRun } = await import('../src/ui/cli.js');
+  const ok = (cond, title) => (cond ? console.log('  ✔ ' + title) : fail(title));
+  const cli = (s, id) => { const S = iosSession(() => s.devices[id], () => s); return (...lines) => { const out = []; for (const l of lines) { const r = iosRun({ state: s, showTrace() {}, refreshLive() {} }, id, S, l, (x) => out.push(x)); if (r.changed) settle(s); } return out.join('\n'); }; };
+  const lv = LEVELS.find((x) => x.id === 'l144');
+  const s = lv.setup(); settle(s);
+  const L = cli(s, 'lobby');
+  L('enable');
+  const wh = () => Object.entries(s.rt.mcast).filter(([k]) => k.endsWith('>wh')).reduce((a, [, v]) => a + v, 0);
+  ok(wh() === 90 && s.rt.mstreams.every((m) => m.flooded), '沒有 querier：三個頻道 (90 Mbps) 全部泛洪過 100 Mbps 的線路');
+  ok(/Querier\s+: none/.test(L('show ip igmp snooping')) && /IGMP snooping\s+: Enabled/.test(L('show ip igmp snooping')) && /表是空的/.test(L('show ip igmp snooping groups')), 'show ip igmp snooping：snooping 開著，但 Querier 是 none、表是空的');
+  L('configure terminal', 'ip igmp snooping querier', 'end');
+  ok(wh() === 0 && s.rt.mstreams.find((m) => m.group === '239.1.1.1').members.includes('tv') && !s.rt.mcast['c3>fs'], 'ip igmp snooping querier：只送往大廳電視的埠，倉庫與檔案伺服器的線路空出來');
+  ok(/^1 +239\.1\.1\.1 +igmp +v2 +Gi0\/2$/m.test(L('show ip igmp snooping groups')) && /^1 +10\.0\.0\.2 +v2 +Switch$/m.test(L('show ip igmp snooping querier')), 'show ip igmp snooping groups / querier');
+  // 倉庫的電腦也加入財經台：串流經過 SW-WH 送到它
+  s.devices.wpc.igmp = ['239.1.1.2'];
+  settle(s);
+  ok(wh() === 30 && s.rt.mstreams.find((m) => m.group === '239.1.1.2').members.includes('wpc'), '倉庫的電腦加入 239.1.1.2：只有那一個頻道 (30 Mbps) 送過去');
+  L('configure terminal', 'no ip igmp snooping', 'end');
+  ok(wh() === 90 && /^no ip igmp snooping$/m.test(runningConfig(s, s.devices.lobby).join('\n')), 'no ip igmp snooping：又變成泛洪；running-config 有 no ip igmp snooping');
+  L('configure terminal', 'ip igmp snooping', 'no ip igmp snooping vlan 1', 'end');
+  ok(wh() === 90 && /^no ip igmp snooping vlan 1$/m.test(runningConfig(s, s.devices.lobby).join('\n')), 'no ip igmp snooping vlan 1：這個 VLAN 不修剪');
+}
 console.log('\nNetFlow 與 QoS 的 police');
 {
   const sim = await import('../src/engine/sim.js');

@@ -44,3 +44,32 @@ export function nvrTab(ctx, body) {
   body.append(card);
   void fmtIp;
 }
+
+/** 多點傳送：來源送出哪些群組、送到了誰；接收端加入了哪些群組（IGMP）、有沒有收到 */
+export function mcastTab(ctx, body) {
+  const { dev, state } = ctx;
+  const streams = (state.rt && state.rt.mstreams) || [], nm = (id) => (state.devices[id] || {}).name || id;
+  if ((dev.mcastSrc || []).length) {
+    const card = h('div', { class: 'card' }, cardHead('送出的多點傳送串流'));
+    for (const s of streams.filter((x) => x.src === dev.id)) {
+      card.append(h('div', { class: 'line' }, h('b', { text: s.name }), h('span', { class: 'muted mono', text: `${s.group} · ${s.mbps} Mbps` }),
+        badge(s.flooded ? 'warn' : 'on', s.flooded ? '泛洪到整個 VLAN' : 'IGMP snooping 只送給有加入的')));
+      card.append(note('muted', `收看的：${s.members.map(nm).join('、') || '（沒有）'}${s.extra.length ? `；沒有加入也收到的：${s.extra.map(nm).join('、')}（網卡會丟掉，但線路的頻寬已經被佔掉了）` : ''}`));
+    }
+    card.append(note('muted', '多點傳送是固定速率的 UDP 串流：線路塞車時不會讓路，TCP 只能用剩下的頻寬。'));
+    body.append(card);
+  }
+  const card = h('div', { class: 'card' }, cardHead('加入的群組 (IGMP)'));
+  const list = (dev.igmp ||= []);
+  if (!list.length) card.append(note('muted', '沒有加入任何多點傳送群組。打開 IPTV 或數位看板的播放程式，電腦就會送出 IGMP Report 加入那個群組。'));
+  list.forEach((g, k) => {
+    const s = streams.find((x) => x.group === g && x.members.includes(dev.id)), miss = streams.find((x) => x.group === g && x.missed.includes(dev.id));
+    card.append(h('div', { class: 'line' }, h('b', { class: 'mono', text: g }),
+      s ? badge('on', `收看中 · ${s.name} ${s.mbps} Mbps`) : badge('off', miss ? '收不到' : '沒有這個群組的串流'),
+      h('button', { class: 'mini', type: 'button', title: '離開這個群組', onclick: () => { list.splice(k, 1); ctx.commit(true); } }, '離開')));
+  });
+  let draft = '';
+  card.append(h('div', { class: 'addrow' }, inp(ctx, () => draft, (v) => { draft = v; }, { ph: '例如 239.1.1.1' }),
+    h('button', { class: 'mini', type: 'button', onclick: () => { const g = String(draft).trim(); const ip = parseIp(g); if (ip != null && (ip >>> 28) === 14 && !list.includes(g)) { list.push(g); ctx.commit(true); } } }, '加入')));
+  body.append(card);
+}

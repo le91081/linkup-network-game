@@ -45,6 +45,7 @@ import { tunByName, tunnelDetail, dmvpnLines, nhrpLines, nhsLines, ipsecProfileL
 import { cacheFlowLines, flowMonitorLines, flowExporterLines } from './cli-flow.js';
 import { stpDetailLines } from './cli-stp.js';
 import { reflexLists } from '../engine/reflex.js';
+import { snoopOn, querierOf } from '../engine/sim.js';
 
 const pad = (s, n) => String(s).padEnd(n);
 const isTunIf = (i) => i.bind && i.bind.t === 'gre';
@@ -65,6 +66,30 @@ const SHOW = {
     return c ? c.filter((l) => l !== 'Building configuration...') : ['startup-config is not present'];
   },
   'show version': (st, d) => versionLines(st, d),
+  'show ip igmp snooping': (st, d) => {
+    if (!isSw(d)) return ['% 這個指令只適用於交換器'];
+    const on = snoopOn(d), g = d.sw.igmp || {}, o = ['Global IGMP Snooping configuration:', '-------------------------------------------', `IGMP snooping                : ${on ? 'Enabled' : 'Disabled'}`,
+      'IGMPv3 snooping (minimal)    : Enabled', 'Report suppression           : Enabled', 'TCN solicit query            : Disabled', 'TCN flood query count        : 2', 'Robustness variable          : 2', 'Last member query count      : 2', 'Last member query interval   : 1000', ''];
+    for (const v of d.sw.vlans) {
+      const vOn = on && !(g.vlanOff || []).includes(v.id), q = querierOf(st, v.id);
+      o.push(`Vlan ${v.id}:`, '--------', `IGMP snooping                       : ${vOn ? 'Enabled' : 'Disabled'}`, 'IGMPv2 immediate leave              : Disabled', 'Explicit host tracking              : Enabled',
+        'Multicast router learning mode      : pim-dvmrp', 'CGMP interoperability mode          : IGMP_ONLY', `Querier                             : ${q ? `${fmtIp(q.ip)}${q.dev === d.id ? '（這台）' : `（${st.devices[q.dev].name}）`}` : 'none（沒有 querier：表項大約 260 秒後過期，多點傳送又會泛洪到整個 VLAN）'}`, '');
+    }
+    return o;
+  },
+  'show ip igmp snooping groups': (st, d) => {
+    if (!isSw(d)) return ['% 這個指令只適用於交換器'];
+    const t = ((st.rt && st.rt.mgroups) || {})[d.id] || {}, lab = (pid) => (d.ports.find((p) => p.id === pid) || {}).label || pid;
+    const rows = Object.entries(t).map(([k, ports]) => { const [v, g] = k.split('|'); return pad(v, 10) + pad(g, 25) + pad('igmp', 12) + pad('v2', 12) + [...new Set(ports)].map(lab).join(', '); });
+    return ['Vlan      Group                    Type        Version     Port List', '-----------------------------------------------------------------------', ...rows,
+      ...(rows.length ? [] : ['（表是空的：沒有人加入多點傳送群組，或這個 VLAN 沒有 IGMP querier，Report 學到的表項已經過期）'])];
+  },
+  'show ip igmp snooping querier': (st, d) => {
+    if (!isSw(d)) return ['% 這個指令只適用於交換器'];
+    const rows = d.sw.vlans.map((v) => [v.id, querierOf(st, v.id)]).filter(([, q]) => q);
+    return ['Vlan      IP Address               IGMP Version   Port', '-------------------------------------------------------------',
+      ...rows.map(([v, q]) => pad(v, 10) + pad(fmtIp(q.ip), 25) + pad('v2', 15) + (q.dev === d.id ? 'Switch' : st.devices[q.dev].name)), ...(rows.length ? [] : ['（沒有任何 VLAN 有 IGMP querier）'])];
+  },
   'show install summary': (st, d) => {
     if (PLATFORM[d.model] !== 'cat9k') return ['% install 模式只有 IOS XE 的 Catalyst 9300 有'];
     ensureFlash(d);

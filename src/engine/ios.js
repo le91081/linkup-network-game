@@ -1922,6 +1922,13 @@ export function iosSession(getDev, getState, who = null) {
       return undefined;
     }],
     ['no spanning-tree mst <id> priority', ([id]) => { const m = ((dev().sw.stp || {}).mst || {}); if (m.prio) delete m.prio[+id]; return undefined; }],
+    // IGMP snooping：Catalyst 出廠就開著；querier 要這台在那個 VLAN 有 IP（SVI）
+    ['ip igmp snooping', () => needSw() || void (((dev().sw.igmp ||= {}).off = false))],
+    ['no ip igmp snooping', () => needSw() || void (((dev().sw.igmp ||= {}).off = true))],
+    ['ip igmp snooping querier', () => needSw() || void (((dev().sw.igmp ||= {}).querier = true))],
+    ['no ip igmp snooping querier', () => needSw() || void (((dev().sw.igmp ||= {}).querier = false))],
+    ['ip igmp snooping vlan <id>', ([v]) => needSw() || void ((dev().sw.igmp ||= {}).vlanOff = ((dev().sw.igmp.vlanOff || []).filter((x) => x !== +v)))],
+    ['no ip igmp snooping vlan <id>', ([v]) => { const e = needSw(); if (e) return e; if (!/^\d+$/.test(v)) return err('用法：no ip igmp snooping vlan <VLAN>'); const g = (dev().sw.igmp ||= {}); g.vlanOff = [...new Set([...(g.vlanOff || []), +v])]; return undefined; }],
     ['spanning-tree portfast default', () => needSw() || void ((dev().sw.stp ||= {}).portfastDefault = true)],
     ['no spanning-tree portfast default', () => needSw() || void ((dev().sw.stp ||= {}).portfastDefault = false)],
     // PortFast 的埠（接終端設備）預設開 BPDU Guard / BPDU Filter；Loop Guard 套在交換器之間的點對點線
@@ -4601,6 +4608,10 @@ export function runningConfig(state, dev) {
     }
     for (const [i, p] of Object.entries((stp.mst || {}).prio || {})) o.push(`spanning-tree mst ${i} priority ${p}`);
     if (stp.portfastDefault) o.push('spanning-tree portfast default');
+    const ig = sw.igmp || {};
+    if (ig.off) o.push('no ip igmp snooping');
+    for (const v of ig.vlanOff || []) o.push(`no ip igmp snooping vlan ${v}`);
+    if (ig.querier) o.push('ip igmp snooping querier');
     if (stp.bpduguardDefault) o.push('spanning-tree portfast bpduguard default');
     if (stp.bpdufilterDefault) o.push('spanning-tree portfast bpdufilter default');
     if (stp.loopguardDefault) o.push('spanning-tree loopguard default');

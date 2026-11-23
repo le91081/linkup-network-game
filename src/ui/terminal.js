@@ -340,6 +340,14 @@ export function buildTerminal(ctx, body) {
         else if (!mt) print('用法：netsh interface ipv4 set subinterface "乙太網路" mtu=9000 store=persistent', 'warn');
         else if (!(+mt[1] >= 576 && +mt[1] <= (jumboCapable(dev) && i.bind.t !== 'wlan' ? 9000 : 1500))) print(`設定 MTU 失敗：${i.bind.t === 'wlan' ? 'Wi-Fi 介面卡最大只有 1500' : '超過網路卡支援的最大值（Jumbo Packet 9014 Bytes = MTU 9000）'}`, 'bad');
         else { if (+mt[1] === 1500) delete i.mtu; else i.mtu = +mt[1]; print('確定。', 'ok'); ctx.commit(true); }
+      } else if (a[0] === 'interface' && /^ip(v4)?$/.test(a[1] || '') && a[2] === 'show' && a[3] === 'joins') {
+        // 加入的多點傳送群組（224.0.0.1 是每台主機都在的 all-hosts 群組）
+        print('');
+        print(`介面 ${dev.ifaces.findIndex((i) => i.rt && i.rt.ip != null) + 12}: ${ifName(dev.ifaces.find((i) => i.rt && i.rt.ip != null) || dev.ifaces[0])}`, 'pre');
+        print('');
+        print('範圍       參照  最後一個  位址', 'pre');
+        print('---------- ----- --------  ---------------------------------', 'pre');
+        for (const g of ['224.0.0.1', ...(dev.igmp || []), '239.255.255.250']) print(`0              ${g === '224.0.0.1' ? 0 : 1}  ${g === '224.0.0.1' ? '否' : '是'}       ${g}`, 'pre');
       } else if (a[0] === 'interface' && /^ip(v4)?$/.test(a[1] || '') && a[2] === 'show' && a[3] === 'destinationcache') {
         // 目的地快取：收到 ICMP Redirect 的目的地，下一個躍點不是預設閘道
         const rows = redirectRows(st(), dev);

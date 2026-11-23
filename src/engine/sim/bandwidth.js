@@ -28,9 +28,9 @@ export function linkCap(state, h, eff = 0.94) {
   // 光纖的光功率不夠：一部分訊框 CRC 錯誤被丟掉，TCP 一直以為塞車而降速（約 1% 的掉包就讓 TCP 只剩一百多 Mbps）
   else if (li.crcAt) c = { mbps: Math.min(li.speed * 0.94, 120), note: `${li.speed >= 1000 ? li.speed / 1000 + ' Gbps' : li.speed + ' Mbps'}，但${li.copperCrc ? '網路線接觸不良' : '光纖收到的光太弱'}，訊框有 CRC 錯誤、會掉封包`, loss: 2, retr: 400 };
   else c = { mbps: li.speed * eff, note: `${li.speed >= 1000 ? li.speed / 1000 + ' Gbps' : li.speed + ' Mbps'} 全雙工`, loss: 0, retr: 0 };
-  // 這段線路被廣播佔掉了（狂送廣播的設備）：TCP 只拿得到剩下的
+  // 這段線路被廣播或多點傳送佔掉了（狂送廣播的設備、泛洪的 IPTV 串流）：TCP 只拿得到剩下的
   const bc = ((state.rt && state.rt.bcast) || {})[h.cable + '>' + h.to] || 0;
-  if (bc > 0.5) c = { ...c, mbps: Math.max(1, c.mbps - bc), note: `${c.note}，但其中約 ${Math.round(Math.min(bc, c.mbps))} Mbps 被廣播封包佔掉`, loss: Math.max(c.loss, bc >= c.mbps * 0.8 ? 8 : 1), retr: Math.max(c.retr, bc >= c.mbps * 0.8 ? 300 : 20) };
+  if (bc > 0.5) c = { ...c, mbps: Math.max(1, c.mbps - bc), note: `${c.note}，但其中約 ${Math.round(Math.min(bc, c.mbps))} Mbps 被${((state.rt && state.rt.mcast) || {})[h.cable + '>' + h.to] >= bc * 0.5 ? '多點傳送的串流（沒有被 IGMP snooping 擋下）' : '廣播封包'}佔掉`, loss: Math.max(c.loss, bc >= c.mbps * 0.8 ? 8 : 1), retr: Math.max(c.retr, bc >= c.mbps * 0.8 ? 300 : 20) };
   // 整形 (shape)：自己把送出去的速率壓在設定值以下
   const eg = egressOf(state, h);
   if (eg && eg.shape != null && eg.shape * 0.95 < c.mbps) c = { ...c, mbps: eg.shape * 0.95, note: `${c.note}，整形 (shape) 到 ${eg.shape} Mbps` };
@@ -55,6 +55,8 @@ export function flowsTick(state) {
   dyn.flowT = now;
   const load = {}, count = {}, qload = {};
   state.rt.load = load; state.rt.loadN = count; state.rt.qload = qload;
+  // 多點傳送的串流（固定速率）：也算進每一段的負載（流量熱圖看得到）
+  for (const [k, v] of Object.entries(state.rt.mcast || {})) load[k] = (load[k] || 0) + v;
   const Q = (dk, h) => { const q = (qload[dk] ||= { offered: 0, fixed: 0, rate: 0, elastic: [], byCls: {} }); if (h && !q.h) q.h = h; return q; };
   // 網路攝影機的影像串流：每台往自己的 NVR 送（d.cam = { nvr, mbps }），結果記在 state.rt.cams[攝影機]
   const camFlows = Object.values(state.devices).filter((d) => d.cam && d.cam.nvr && +d.cam.mbps > 0 && !(state.down || {})[d.id] && !(state.rt.off || {})[d.id])
@@ -183,12 +185,13 @@ export function linkUtil(state, devId, pid) {
 
 /** TCP 的有效載荷佔線路上位元的比例：每個區段還有 40 位元組的 IP + TCP 標頭、38 位元組的乙太網路標頭、前導碼與訊框間隔 */
 const payloadRatio = (mss) => mss / (mss + 40 + 38);
-export function throughput(state, hops, mss = 1460) {
+export function throughput(state, hops, mss = 1460, down = false) {
   let best = Infinity, where = '', dev = null, loss = 0, retr = 0;
   const eff = 0.94 * (payloadRatio(mss) / payloadRatio(1460)); // MSS 1460（MTU 1500）跑得到 94%，Jumbo Frame 大約 98%
   const seen = new Set();
   for (const h of hops) {
-    if (h.wave || h.reply || h.proto === 'arp' || h.proto === 'dhcp') continue;
+    // down：資料從伺服器往用戶端送（下載），看回程那幾段
+    if (h.wave || (down ? !h.reply : h.reply) || h.proto === 'arp' || h.proto === 'dhcp') continue;
     let mbps, note;
     if (h.wifi) {
       const a = [state.devices[h.from], state.devices[h.to]].flatMap((d) => d.ifaces).map((i) => i.rt.assoc).find((x) => x && (x.ap === h.from || x.ap === h.to));
