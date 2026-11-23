@@ -112,8 +112,9 @@ export function runObjective(state, o) {
         ? `${d.name} 還連在 ${nm(a.ap)}（${a.rssi} dBm），旁邊的 ${nm(a.sticky.ap)} 有 ${a.sticky.rssi} dBm 卻不換：用戶端要等目前的訊號低於 -75 dBm 才會自己找新的基地台 (sticky client)。在 SSID 開啟 802.11k/v，基地台會建議它換過去`
         : `${d.name} 連到了 ${nm(a.ap)}，不是 ${nm(o.ap)}`;
     } else if (o.minRssi && a.rssi < o.minRssi) reason = `${d.name} 連在 ${nm(a.ap)}，訊號只有 ${a.rssi} dBm（要 ${o.minRssi} dBm 以上）`;
+    else if (o.maxRoamMs && a.roamed && a.roamed.ms > o.maxRoamMs) reason = `${d.name} 從 ${nm(a.roamed.from)} 換到 ${nm(a.ap)} 中斷了大約 ${a.roamed.ms} ms（要 ${o.maxRoamMs} ms 以內，語音和視訊才不會斷）：${a.roamed.parts.join('、')}`;
     else if (o.keepIp && ip0 != null && i.rt.ip !== ip0) reason = `${d.name} 換到 ${nm(a.ap)} 之後，IP 從 ${fmtIp(ip0)} 變成 ${i.rt.ip != null ? fmtIp(i.rt.ip) : '沒有 IP'}：兩台基地台把同一個 SSID 放進不同的 VLAN，換基地台就換了網段，進行中的連線全部會斷`;
-    if (a) log.push({ dev: d.id, kind: 'info', text: `連在 ${nm(a.ap)} · ${a.band} ${a.rssi} dBm${a.roamed ? `（從 ${nm(a.roamed.from)} 漫遊過來：${a.roamed.why}）` : ''}` });
+    if (a) log.push({ dev: d.id, kind: 'info', text: `連在 ${nm(a.ap)} · ${a.band} ${a.rssi} dBm${a.roamed ? `（從 ${nm(a.roamed.from)} 漫遊過來：${a.roamed.why}，中斷約 ${a.roamed.ms} ms）` : ''}` });
     if (!reason && o.test) {
       const r = runObjective(s2, o.test);
       return { ...r, log: [...log, ...r.log] };

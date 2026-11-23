@@ -42,6 +42,7 @@ export const wifiSignal = (ctx, i) => ctx.live(() => {
     a.walls && a.walls.length > 0 && note(a.wallDb >= 12 ? 'warn' : 'muted', `和基地台之間隔著 ${Object.entries(a.walls.reduce((m, w) => ((m[w] = (m[w] || 0) + 1), m), {})).map(([w, n]) => `${(WALL_MATS[w] || WALL_MATS.drywall).name}${n > 1 ? ' ×' + n : ''}`).join('、')}，訊號少了 ${a.wallDb} dB${a.band === '2.4GHz' ? '（5 GHz 穿牆更差，所以退回 2.4 GHz）' : ''}。`),
     bars === 1 && note('warn', `訊號很弱：${a.walls && a.walls.length ? '牆擋掉了不少訊號，' : '離基地台太遠，'}速率很低也容易斷線。把基地台移近、在這一側再加一台，或調高它的發射功率。`),
     a.noisy && note('warn', `基地台在 ${a.band} 與鄰近基地台的頻道重疊，速率只剩一半。`),
+    a.lastRoam && note(a.lastRoam.ms > 150 ? 'warn' : 'muted', `最近一次漫遊：從 ${nameOf(ctx, a.lastRoam.from)} 換過來（${a.lastRoam.why}），中斷約 ${a.lastRoam.ms} ms — ${a.lastRoam.parts.join('、')}${a.lastRoam.ms > 150 ? '。超過 150 ms，通話會聽到斷音' : ''}。`),
   ];
 });
 

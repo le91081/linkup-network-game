@@ -9,6 +9,25 @@ import { transact } from './transact.js';
 export const WIFI_SEC = { open: '開放（無加密）', wep: 'WEP', wpa2: 'WPA2-Personal', wpa2wpa3: 'WPA2 / WPA3 混合', wpa3: 'WPA3-Personal', wpa2ent: 'WPA2-Enterprise (802.1X)' };
 const SEC_MODES = { open: ['open'], wep: ['wep'], wpa2: ['wpa2'], wpa2wpa3: ['wpa3', 'wpa2'], wpa3: ['wpa3'], wpa2ent: ['wpa2'] };
 export const apRange = (d) => ({ low: 6, mid: 9, high: 12 })[(d.wifi && d.wifi.power) || 'mid'];
+
+/**
+ * 漫遊要中斷多久（毫秒）：找新的基地台（掃描）＋ 重新關聯 ＋ 金鑰交換。
+ * 802.11k 的鄰近基地台清單讓用戶端只掃清單上的頻道；802.11r (Fast Transition) 讓金鑰在重新關聯時一起帶過去，
+ * 不必重做四向交握，WPA2-Enterprise 更不必重做整個 802.1X（EAP 與 RADIUS 來回好幾趟）。
+ * 用戶端也要支援 802.11r（CATALOG 的 ft: false 是不支援的舊設備）
+ */
+export function roamTime(model, c, caps) {
+  const ft = c.ft && (CATALOG[model] || {}).ft !== false;
+  const scan = c.kv ? 20 : 120, parts = [`掃描 ${scan} ms${c.kv ? '（802.11k 的鄰近清單，只掃幾個頻道）' : '（沒有 802.11k，逐一掃描每個頻道）'}`, '重新關聯 5 ms'];
+  const sae = c.sec === 'wpa3' || (c.sec === 'wpa2wpa3' && (caps || []).includes('wpa3'));
+  let key = 0;
+  if (c.sec === 'open') key = 0;
+  else if (ft) { key = 5; parts.push('802.11r：金鑰在重新關聯時一起帶過去 5 ms'); }
+  else if (c.sec === 'wpa2ent') { key = 420; parts.push(`完整的 802.1X（EAP 與 RADIUS 來回好幾趟）＋ 四向交握 420 ms${c.ft ? '（這台用戶端不支援 802.11r）' : ''}`); }
+  else if (sae) { key = 60; parts.push('WPA3 的 SAE ＋ 四向交握 60 ms'); }
+  else { key = 25; parts.push('四向交握 25 ms'); }
+  return { ms: scan + 5 + key, parts };
+}
 const distOf = (a, b) => Math.hypot(a.pos[0] - b.pos[0], a.pos[1] - b.pos[1]);
 
 // ── 5 GHz 的頻道寬度與 DFS ──
@@ -225,7 +244,10 @@ export function prepWifi(state) {
         if (stay.kv && best.rssi >= stay.rssi + 8) best.roamed = { from: prev.ap, rssi: stay.rssi, why: '802.11v BSS Transition' };
         else { stay.sticky = { ap: best.ap, rssi: best.rssi }; best = stay; }
       } else if (prev && prev.ap !== best.ap) best.roamed = { from: prev.ap, rssi: stay ? stay.rssi : null, why: stay ? '原本的訊號低於 -75 dBm' : '原本的基地台收不到了' };
-      assocMem[memKey] = { ap: best.ap };
+      // 漫遊花了多久：記在用戶端的連線狀態上，下次重算還看得到最近一次漫遊
+      if (best.roamed) Object.assign(best.roamed, roamTime(d.model, best, caps), { at: state.clock });
+      assocMem[memKey] = { ap: best.ap, roam: best.roamed || (prev && prev.ap === best.ap ? prev.roam : null) };
+      best.lastRoam = assocMem[memKey].roam || null;
       // 訊號強度、頻段與速率（依距離與牆的衰減估算）：5GHz 比較快但傳不遠、穿牆也比較差，訊號弱時退回 2.4GHz
       const apd = state.devices[best.ap];
 

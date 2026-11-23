@@ -5069,6 +5069,26 @@ console.log('\nICMP Redirect：同一個介面進出的路由器告訴主機直�
   transact(u, 'pc', { proto: 'icmp', dst: parseIp('10.2.0.5') });
   ok(logRows(u, u.devices.r1).some((r) => /ICMP: redirect sent to 10\.1\.1\.10 for dest 10\.2\.0\.5, use gw 10\.1\.1\.2/.test(r.line)), 'debug ip icmp：ICMP: redirect sent to 10.1.1.10 for dest 10.2.0.5, use gw 10.1.1.2');
 }
+console.log('\nWi-Fi 漫遊的時間：掃描、重新關聯與金鑰');
+{
+  const { roamTime } = await import('../src/engine/sim/wifi.js');
+  const { CATALOG, cloneState } = await import('../src/engine/model.js');
+  const ok = (cond, title) => (cond ? console.log('  ✔ ' + title) : fail(title));
+  const T = (c, caps = ['wpa2', 'wpa3']) => roamTime('laptop', c, caps).ms;
+  ok(T({ sec: 'open' }) === 125 && T({ sec: 'wpa2' }) === 150 && T({ sec: 'wpa2', kv: true }) === 50 && T({ sec: 'wpa3' }) === 185 && T({ sec: 'wpa2wpa3' }, ['wpa2']) === 150, '開放 125 ms、WPA2 150 ms（有 802.11k 50 ms）、WPA3 185 ms、混合模式看用戶端');
+  ok(T({ sec: 'wpa2ent' }) === 545 && T({ sec: 'wpa2ent', kv: true }) === 445 && T({ sec: 'wpa2ent', kv: true, ft: true }) === 30, 'WPA2-Enterprise：545 ms，802.11k 445 ms，再加 802.11r 只要 30 ms');
+  CATALOG.laptop.ft = false;
+  const old = roamTime('laptop', { sec: 'wpa2ent', kv: true, ft: true }, ['wpa2']);
+  delete CATALOG.laptop.ft;
+  ok(old.ms === 445 && /不支援 802\.11r/.test(old.parts.join()), '用戶端不支援 802.11r：照樣重做 802.1X');
+  const lv = LEVELS.find((x) => x.id === 'l140');
+  const s = lv.setup(); lv.solve(s); settle(s);
+  const t = cloneState(s); settle(t); t.devices.nb.pos = [6, 5]; settle(t);
+  const a = t.devices.nb.ifaces.find((i) => i.bind.t === 'wlan').rt.assoc;
+  settle(t);
+  const a2 = t.devices.nb.ifaces.find((i) => i.bind.t === 'wlan').rt.assoc;
+  ok(a.ap === 'apb' && a.roamed && a.roamed.ms === 30 && a2.lastRoam && a2.lastRoam.from === 'apa' && !a2.roamed, '走到會議室：換到 AP-B、中斷 30 ms；之後重算還記得最近一次漫遊');
+}
 console.log('\nNetFlow 與 QoS 的 police');
 {
   const sim = await import('../src/engine/sim.js');
