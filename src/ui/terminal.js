@@ -903,7 +903,7 @@ export function buildTerminal(ctx, body) {
     if (!a.ok) { lost(r, a); draw(); return; }
     if ((r.kind !== 'ios' || r.monitor) && consoleFollow(app, r.conn.to, 'vty:' + r.conn.cid, print)) draw();
   });
-  const chips = dev.docker ? ['docker ps -a', 'docker port web', 'curl http://localhost:8080', 'ip addr', 'help'] : dev.tf ? ['ls', 'cat main.tf', 'terraform init', 'terraform plan', 'terraform apply', 'help'] : dev.git ? ['git log --oneline', 'git show HEAD', './backup.sh', 'git status', 'git diff', 'help'] : linux ? ['ls', 'cat inventory.ini', `ansible-playbook -i inventory.ini ${dev.ansible.file}`, `ansible-playbook -i inventory.ini ${dev.ansible.file} --check -v`, 'help']
+  const chips = dev.docker ? ['docker ps -a', 'docker port web', 'curl http://localhost:8080', 'ip addr', 'help'] : dev.tf ? ['ls', 'cat main.tf', 'terraform init', 'terraform plan', 'terraform apply', 'help'] : dev.git ? ['git log --oneline', 'git show HEAD', './backup.sh', 'git status', 'git diff', 'help'] : linux && !dev.ansible ? ['ip addr', 'ip route', 'ping -c 4 8.8.8.8', 'help'] : linux ? ['ls', 'cat inventory.ini', `ansible-playbook -i inventory.ini ${dev.ansible.file}`, `ansible-playbook -i inventory.ini ${dev.ansible.file} --check -v`, 'help']
     : ['ipconfig', 'ping 8.8.8.8', 'tracert 8.8.8.8', 'nslookup www.example.com', 'arp -a', 'help'];
   body.append(term, h('div', { class: 'chips' }, chips.map((x) =>
     h('button', { class: 'chip btnchip', type: 'button', title: x, onclick: () => { hist.push(x); hi = hist.length; run(x); } }, h('span', { class: 'ell', text: x })))));
