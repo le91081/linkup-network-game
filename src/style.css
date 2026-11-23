@@ -937,3 +937,11 @@ body.view2d #stage .scene-labels, body.view2d #stage canvas { visibility: hidden
 }
 /* 匯出：Artifact 裡不能下載，顯示內容讓人複製 */
 .save-text { width: 100%; min-height: 260px; resize: vertical; font-size: 12px; white-space: pre; }
+
+/* 文件產出：2D 拓撲圖上的工具列、IP 位址規劃表、匯出的圖片 */
+#topo2d .t2-tools { position: absolute; top: 112px; left: 50%; transform: translateX(-50%); display: flex; gap: 8px; z-index: 2; }
+.ipplan-wrap { max-height: 46vh; overflow: auto; border: 1px solid var(--line); border-radius: 8px; margin: 6px 0 12px; }
+table.ipplan { border-collapse: collapse; width: 100%; font-size: 12.5px; }
+table.ipplan th { position: sticky; top: 0; background: var(--panel-solid); color: var(--faint); font-weight: 700; text-align: left; padding: 6px 8px; white-space: nowrap; }
+table.ipplan td { padding: 5px 8px; border-top: 1px solid var(--line); white-space: nowrap; }
+.export-img { max-width: 100%; max-height: 60vh; display: block; margin: 8px auto; border-radius: 6px; }

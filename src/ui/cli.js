@@ -648,6 +648,8 @@ const SHOW = {
       + pad(p.state === 'Established' ? hms(p.up) : 'never', 9) + (p.state === 'Established' ? String(p.pfx) : p.state));
     const bad = b.peers.filter((p) => p.state !== 'Established' && p.why);
     if (bad.length) o.push('', ...bad.map((p) => `（${p.ip}：${p.why}）`));
+    const loop = b.peers.filter((p) => p.state === 'Established' && p.loops);
+    if (loop.length) o.push('', ...loop.map((p) => `（${p.ip} 送來的 ${p.loops} 筆路，AS_PATH 裡已經有自己的 AS ${b.asn}，當成迴圈丟掉了 (AS_PATH loop)。MPLS VPN 的據點用同一個 AS 時要 neighbor ${p.ip} allowas-in，或請業者 as-override）`));
     return o;
   },
   'show ip prefix-list': (st, d) => {

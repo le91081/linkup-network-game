@@ -81,6 +81,8 @@ export function bgpCard(ctx) {
         +n.remoteAs === +b.asn && toggle(ctx, () => !!n.nhSelf, (v) => { if (v) n.nhSelf = true; else delete n.nhSelf; }, '送給這個 iBGP 鄰居時，下一站改成自己 (next-hop-self)：不然下一站是 ISP 的位址，對方的路由表裡查不到'),
         +n.remoteAs === +b.asn && toggle(ctx, () => !!n.rrClient, (v) => { if (v) n.rrClient = true; else delete n.rrClient; }, '把它當成 route reflector 的 client (route-reflector-client)：從 iBGP 學到的路也轉送給它'),
         toggle(ctx, () => !!n.sendComm, (v) => { if (v) n.sendComm = 'standard'; else delete n.sendComm; }, '送出 community 屬性 (send-community)：沒有打開的話，路由上的 community 不會送給這個鄰居'),
+        +n.remoteAs !== +b.asn && toggle(ctx, () => !!n.allowAs, (v) => { if (v) n.allowAs = 3; else delete n.allowAs; }, '收到的路 AS_PATH 裡有自己的 AS 也接受 (allowas-in)：MPLS VPN 的每個據點用同一個 AS 時要打開'),
+        +n.remoteAs !== +b.asn && toggle(ctx, () => !!n.asOverride, (v) => { if (v) n.asOverride = true; else delete n.asOverride; }, '送給這個鄰居之前，把它的 AS 換成自己的 (as-override)：業者的 PE 對客戶的 CE 用'),
         +n.remoteAs !== +b.asn && toggle(ctx, () => n.plOut === OWN, (on) => {
           if (on) { n.plOut = OWN; syncOwn(dev); } else { delete n.plOut; }
           if (n.rmOut) setPrepend(dev, n, prependOf(dev, n));

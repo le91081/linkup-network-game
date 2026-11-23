@@ -4659,6 +4659,32 @@ console.log('\nFortiGate 的 DNS 過濾與防毒');
     '設定檔：政策的 dnsfilter-profile、av-profile 與兩種設定檔（印在政策前面）');
 }
 
+console.log('\nMPLS L3VPN：同一個 AS 的據點、allowas-in 與 as-override');
+{
+  const { iosSession, runningConfig } = await import('../src/engine/ios.js');
+  const { iosRun } = await import('../src/ui/cli.js');
+  const sim = await import('../src/engine/sim.js');
+  const ok = (cond, title) => (cond ? console.log('  ✔ ' + title) : fail(title));
+  const cli = (s, id) => { const S = iosSession(() => s.devices[id], () => s); return (...lines) => { const out = []; for (const l of lines) { const r = iosRun({ state: s, showTrace() {}, refreshLive() {} }, id, S, l, (x) => out.push(x)); if (r.changed) settle(s); } return out.join('\n'); }; };
+  const lv = LEVELS.find((x) => x.id === 'l134');
+  const s = lv.setup(); settle(s);
+  const has = (id, ip) => s.devices[id].rt.routes.some((r) => r.type === 'B' && r.net === parseIp(ip) && r.bits === 24);
+  ok(s.devices.br.rt.bgp.peers[0].state === 'Established' && has('pe', '10.1.0.0') && has('pe', '10.2.0.0') && !has('br', '10.1.0.0') && !has('hq', '10.2.0.0'), '開場：鄰居都起來了，業者兩個網段都有，兩個 CE 卻學不到對方');
+  const sm = cli(s, 'br')('show ip bgp summary');
+  ok(/172\.16\.2\.1 +4 +64500 .* 0$/m.test(sm) && /172\.16\.2\.1 送來的 1 筆路，AS_PATH 裡已經有自己的 AS 65010，當成迴圈丟掉了 \(AS_PATH loop\)/.test(sm), 'show ip bgp summary：PfxRcd 0，寫出被當成迴圈丟掉的筆數');
+  cli(s, 'br')('configure terminal', 'router bgp 65010', 'neighbor 172.16.2.1 allowas-in', 'end');
+  ok(has('br', '10.1.0.0') && !has('hq', '10.2.0.0'), 'BR-CE 加上 allowas-in：分公司學到總公司，總公司還學不到分公司');
+  ok(!sim.runObjective(s, lv.objectives[0]).pass, '單向還不夠：回程的路沒有，連線建立不起來');
+  cli(s, 'hq')('configure terminal', 'router bgp 65010', 'neighbor 172.16.1.1 allowas-in 2', 'end');
+  ok(lv.objectives.every((o) => sim.runObjective(s, o).pass), '兩邊都 allowas-in：三個目標都過');
+  ok(/neighbor 172\.16\.1\.1 allowas-in 2/.test(runningConfig(s, s.devices.hq).join('\n')) && /neighbor 172\.16\.2\.1 allowas-in$/m.test(runningConfig(s, s.devices.br).join('\n')), 'running-config：allowas-in（預設 3 次不寫數字）');
+  // 另一種做法：業者在 PE 上 as-override
+  const t = lv.setup(); settle(t);
+  cli(t, 'pe')('configure terminal', 'router bgp 64500', 'neighbor 172.16.1.2 as-override', 'neighbor 172.16.2.2 as-override', 'end');
+  const br = t.devices.br.rt.bgp.table.find((r) => r.net === parseIp('10.1.0.0'));
+  ok(br && br.aspath.join(' ') === '64500 64500' && lv.objectives.every((o) => sim.runObjective(t, o).pass), '業者 as-override：分公司收到的 AS_PATH 變成「64500 64500」，一樣互通');
+}
+
 console.log('\nNetFlow 與 QoS 的 police');
 {
   const sim = await import('../src/engine/sim.js');

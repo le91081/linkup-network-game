@@ -826,3 +826,48 @@ test('DNS 過濾與防毒：安全設定檔分頁建立兩種設定檔、掛到�
   await typeCmd(page, 'nslookup login.micr0soft-verify.example');
   await expect(page.locator('#panel .term-out')).toContainText('208.91.112.55');
 });
+
+test('文件產出：2D 拓撲圖的 IP 位址規劃表（下載 CSV）與匯出 SVG', async ({ page }) => {
+  const fs = await import('fs');
+  await boot(page);
+  await open(page, 'l10');
+  await page.evaluate(() => document.activeElement && document.activeElement.blur());
+  await page.keyboard.press('t');
+  await page.locator('#topo2d .t2-tools .btn', { hasText: 'IP 位址表' }).click();
+  const dlg = page.locator('#modal-root .dialog');
+  await expect(dlg).toContainText('IP 位址規劃表');
+  await expect(dlg.locator('table.ipplan').first()).toContainText('/24');
+  expect(await scan(page, '#modal-root', 'IP 位址規劃表')).toEqual([]);
+  const [csv] = await Promise.all([page.waitForEvent('download'), dlg.locator('.btn', { hasText: '下載 CSV' }).click()]);
+  expect(csv.suggestedFilename()).toBe('linkup-l10-ip.csv');
+  expect(fs.readFileSync(await csv.path(), 'utf8')).toMatch(/^﻿設備,型號,介面,IP 位址,網段,來源,預設閘道,VLAN,VRF,說明\r\n/);
+  await dlg.locator('.btn', { hasText: '關閉' }).click();
+  await page.locator('#topo2d .t2-tools .btn', { hasText: '匯出圖片' }).click();
+  const [svg] = await Promise.all([page.waitForEvent('download'), page.locator('#modal-root .btn', { hasText: 'SVG' }).click()]);
+  expect(svg.suggestedFilename()).toBe('linkup-l10.svg');
+  const text = fs.readFileSync(await svg.path(), 'utf8');
+  expect(text.startsWith('<svg') && /xmlns="http:\/\/www\.w3\.org\/2000\/svg"/.test(text) && !/class="/.test(text)).toBe(true);
+  expect(text).toContain(await page.evaluate(() => Object.values(window.linkup.state.devices)[0].name));
+  await page.keyboard.press('t');
+});
+
+test('MPLS L3VPN：BGP 卡片打開 allowas-in，分公司學到總公司的網段；show ip bgp summary 寫出 AS_PATH loop', async ({ page }) => {
+  await boot(page);
+  await open(page, 'l134');
+  await clickDevice(page, 'br');
+  await page.locator('#panel .tab', { hasText: 'CLI' }).click();
+  await typeCmd(page, 'show ip bgp summary');
+  await expect(page.locator('#panel .term-out')).toContainText('AS_PATH loop');
+  for (const id of ['br', 'hq']) {
+    await clickDevice(page, id);
+    await page.locator('#panel .tab', { hasText: '路由' }).click();
+    await page.locator('#panel label.switch', { hasText: 'allowas-in' }).click();
+    await expect(page.locator('#panel label.switch', { hasText: 'allowas-in' }).locator('input')).toBeChecked();
+  }
+  expect(await scan(page, '#panel', '路由分頁的 BGP 卡片（allowas-in）')).toEqual([]);
+  expect(await page.evaluate(() => ['br', 'hq'].map((id) => window.linkup.state.devices[id].rt.routes.some((r) => r.type === 'B' && r.bits === 24)).join())).toBe('true,true');
+  await clickDevice(page, 'pc');
+  await page.locator('#panel .tab', { hasText: '終端機' }).click();
+  await typeCmd(page, 'ping 10.1.0.10');
+  await expect(page.locator('#panel .term-out')).toContainText('回覆自 10.1.0.10');
+});

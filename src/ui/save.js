@@ -7,9 +7,13 @@ import { modal, closeModal } from './hud.js';
 export const IN_ARTIFACT = import.meta.env?.MODE === 'artifact';
 
 export function saveJson(name, data, okText) {
-  const text = JSON.stringify(data, null, 1);
+  saveText(name, JSON.stringify(data, null, 1), 'application/json', okText);
+}
+
+/** 任何文字檔（JSON、CSV、SVG…）：一般的瀏覽器直接下載，Artifact 裡改成顯示出來讓人複製 */
+export function saveText(name, text, type, okText) {
   if (!IN_ARTIFACT) {
-    const url = URL.createObjectURL(new Blob([text], { type: 'application/json' }));
+    const url = URL.createObjectURL(new Blob([text], { type }));
     const a = h('a', { href: url, download: name });
     document.body.append(a);
     a.click();
@@ -25,7 +29,7 @@ export function saveJson(name, data, okText) {
   };
   modal([
     h('h2', { text: '匯出' }),
-    h('p', { class: 'muted', text: `這個頁面不能下載檔案。把下面的內容複製起來，存成 ${name}；之後在「匯入」選這個檔案就能載回來。` }),
+    h('p', { class: 'muted', text: `這個頁面不能下載檔案。把下面的內容複製起來，存成 ${name}${/\.json$/.test(name) ? '；之後在「匯入」選這個檔案就能載回來' : ''}。` }),
     ta,
     h('div', { class: 'd-actions' }, button('關閉', { kind: 'ghost', onclick: closeModal }), button('複製全部', { ic: 'check', kind: 'primary', onclick: copy })),
   ], { wide: true });

@@ -10,13 +10,14 @@ import { installShortcuts } from './ui/keys.js';
 import { sfx } from './ui/sound.js';
 import * as hud from './ui/hud.js';
 import { renderDevicePanel } from './ui/panel.js';
-import { toast, sleep } from './ui/dom.js';
+import { toast, sleep, h, button } from './ui/dom.js';
 import { SANDBOX, installSandbox, sandboxObjectives } from './ui/sandbox.js';
 import { isIos, iosDirty, saveStartup, restoreStartup } from './engine/ios.js';
 import { makeDrill, openDrillComplete, fmtSecs } from './ui/drill.js';
 import { scoreOf } from './ui/score.js';
 import { customLevel } from './ui/editor.js';
 import { renderTopo, bindTopoView } from './ui/topo2d.js';
+import { exportTopoDialog, ipPlanDialog } from './ui/docexport.js';
 import { tutorialTick } from './ui/tutorial.js';
 
 // 網址加上 ?profile=名稱 就會用另一份獨立的進度（多人共用一台電腦，或測試時不想動到自己的存檔）
@@ -458,6 +459,10 @@ function topoEl() {
   const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
   svg.setAttribute('class', 't2');
   root.append(svg);
+  // 文件產出：拓撲圖匯出成圖片、IP 位址規劃表
+  root.append(h('div', { class: 't2-tools' },
+    button('匯出圖片', { ic: 'download', small: true, onclick: () => exportTopoDialog(app, svg) }),
+    button('IP 位址表', { ic: 'grid', small: true, onclick: () => ipPlanDialog(app) })));
   document.body.append(root);
   // 點設備：和 3D 場景一樣打開設定；點空白處取消選取（拖曳平移結束時的那一下不算）
   svg.addEventListener('click', (e) => {

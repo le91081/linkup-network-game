@@ -342,9 +342,13 @@ export function computeBgp(state, { transact, logEvent, ospfOn = () => false, lo
         // 送出去之前：eBGP 加上自己的 AS（再加上 route-map 指定的 prepend）；iBGP 不加
         const recv = [];
         const ridB = bgpRid(B);
+        (s.loops ||= {})[A.id] = 0; // 這一輪被當成迴圈丟掉的筆數（show ip bgp summary 會提到）
         for (const r of sent) {
-          const path = ib ? [...(r.prepend || []), ...r.aspath] : [cA.asn, ...(r.prepend || []), ...r.aspath];
-          if (!ib && path.includes(cB.asn)) continue; // 路徑裡已經有自己的 AS：迴圈，丟掉
+          let path = ib ? [...(r.prepend || []), ...r.aspath] : [cA.asn, ...(r.prepend || []), ...r.aspath];
+          // as-override（MPLS 業者的 PE）：送給客戶之前，把路徑裡客戶自己的 AS 換成業者的 AS
+          if (!ib && nA.asOverride) path = path.map((a) => (+a === +cB.asn ? cA.asn : a));
+          // 路徑裡已經有自己的 AS：迴圈，丟掉（allowas-in n：最多允許出現 n 次）
+          if (!ib && path.filter((a) => +a === +cB.asn).length > (+nB.allowAs || 0)) { (s.loops ||= {})[A.id] = (s.loops[A.id] || 0) + 1; continue; }
           if (ib && (r.originator === ridB || (r.cluster || []).includes(ridB))) continue; // 反射回來的：ORIGINATOR_ID 或 CLUSTER_LIST 裡有自己
           let x = { net: r.net, bits: r.bits, aspath: path, origin: r.origin, med: r.med, lp: ib ? r.lp ?? 100 : 100, weight: 0, nh: r.nh, from: A.id, peerRid: bgpRid(A), peerIp: aIp, comm: r.comm || [],
             ...(ib ? { ibgp: true, fromClient: !!nB.rrClient } : {}), ...(r.originator != null ? { originator: r.originator, cluster: r.cluster } : {}) };
@@ -389,6 +393,7 @@ export function computeBgp(state, { transact, logEvent, ospfOn = () => false, lo
       const o = s ? (s.a === d ? s.b : s.a) : null;
       p.pfx = o && p.state === 'Established' ? ((ribIn[d.id] || {})[o.id] || []).length : 0;
       p.sent = s && s.sent ? s.sent[d.id] || 0 : 0;
+      p.loops = o && s.loops ? s.loops[o.id] || 0 : 0;
       if (o) p.peerRid = bgpRid(o);
     }
   }

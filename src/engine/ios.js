@@ -3301,6 +3301,10 @@ export function iosSession(getDev, getState, who = null) {
       ['neighbor <ip> update-source <...>', ([ip, t]) => { const i = ifByName(t); if (isErr(i)) return i; return nb(ip, (n) => { n.updSrc = i.id; }); }],
       ['no neighbor <ip> update-source [...]', ([ip]) => nb(ip, (n) => { delete n.updSrc; })],
       ['neighbor <ip> next-hop-self [...]', ([ip]) => nb(ip, (n) => { n.nhSelf = true; })],
+      ['neighbor <ip> allowas-in [...]', ([ip, k]) => (k && !(/^\d+$/.test(k) && +k >= 1 && +k <= 10) ? err('allowas-in 後面的次數是 1 – 10（預設 3）') : nb(ip, (n) => { n.allowAs = k ? +k : 3; }))],
+      ['no neighbor <ip> allowas-in [...]', ([ip]) => nb(ip, (n) => { delete n.allowAs; })],
+      ['neighbor <ip> as-override', ([ip]) => nb(ip, (n) => { n.asOverride = true; })],
+      ['no neighbor <ip> as-override', ([ip]) => nb(ip, (n) => { delete n.asOverride; })],
       ['no neighbor <ip> next-hop-self [...]', ([ip]) => nb(ip, (n) => { delete n.nhSelf; })],
       ['neighbor <ip> route-reflector-client', ([ip]) => {
         const n = dev().bgp.neighbors.find((x) => x.ip === ip);
@@ -4723,6 +4727,8 @@ export function runningConfig(state, dev) {
     for (const n of b.neighbors) {
       if (n.rrClient) o.push(` neighbor ${n.ip} route-reflector-client`);
       if (n.nhSelf) o.push(` neighbor ${n.ip} next-hop-self`);
+      if (n.allowAs) o.push(` neighbor ${n.ip} allowas-in${+n.allowAs === 3 ? '' : ' ' + n.allowAs}`);
+      if (n.asOverride) o.push(` neighbor ${n.ip} as-override`);
       if (n.bfd) o.push(` neighbor ${n.ip} fall-over bfd`);
       if (n.sendComm) o.push(` neighbor ${n.ip} send-community${n.sendComm !== 'standard' ? ' ' + n.sendComm : ''}`);
       if (n.defOrig) o.push(` neighbor ${n.ip} default-originate`);
