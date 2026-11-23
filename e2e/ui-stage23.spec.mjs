@@ -125,3 +125,15 @@ test('配線架：配線分頁看得到哪一孔只接了一面', async ({ page 
   await expect(page.locator('#panel')).toContainText('只接一面');
   expect(await scan(page, '#panel', '配線架')).toEqual([]);
 });
+
+test('BIG-IP 的 tmsh：show ltm pool members、modify 之後生效', async ({ page }) => {
+  await boot(page);
+  await open(page, 'l152');
+  await clickDevice(page, 'lb');
+  await tab(page, 'tmsh');
+  await typeCmd(page, 'show ltm pool pool_erp members');
+  const out = page.locator('#panel .term-out');
+  await expect(out).toContainText('Ltm::Pool Member: 10.0.20.13:80');
+  await typeCmd(page, 'modify ltm virtual vs_erp_http source-address-translation { type automap }', 'list ltm virtual');
+  await expect(out).toContainText('type automap');
+});
