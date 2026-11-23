@@ -536,6 +536,17 @@ function forwardsTab(ctx, body) {
   if (npc) body.append(npc);
 }
 
+/** Metro Ethernet 專線：業者給的服務內容（EPL / EVPL、對應的 CE-VLAN、MTU）與兩端 UNI 的燈號 */
+function evcInfo(ctx, body) {
+  const { dev } = ctx, e = dev.evc;
+  body.append(note('warn', '這是電信業者的設備，看得到服務內容，不能改設定：要配合它設定自己的路由器。'),
+    h('div', { class: 'card' }, cardHead('服務內容 (EVC)'), h('div', { class: 'kv' },
+      kv('服務類型', e.type === 'EPL' ? 'EPL（Port-based）：整個埠透通，帶什麼標籤都過' : 'EVPL（VLAN-based）：只有指定的 CE-VLAN 會送到對面'),
+      kv('對應的 CE-VLAN', e.type === 'EPL' ? '全部（all-to-one bundling）' : (e.ceVlans || []).join('、') + '（要帶 802.1Q 標籤；不帶標籤的訊框丟掉）'),
+      kv('MTU', `${e.mtu || 1522} 位元組（含 802.1Q 標籤）`))),
+    h('div', { class: 'card' }, cardHead('UNI（接客戶的介面）'), dev.ports.map((p) => h('div', { class: 'line' }, h('b', { class: 'mono', text: p.label }), linkBadge(ctx, p.id)))));
+}
+
 function hrWan(ctx, body) {
   const i = ctx.dev.ifaces.find((x) => x.id === 'wan');
   // 光纖數據機：路由模式 / 橋接模式
@@ -676,6 +687,7 @@ function tabsFor(dev, state) {
   // 在機房裡、只能遠端管理的設備：沒有設定分頁（用 SSH 或 Console 線）
   if (dev.remoteOnly) return [['info', '設備資訊', remoteOnlyInfo]];
   if (dev.junos) return [['jcli', 'CLI (Junos)', buildJunosCli], T.status]; // Juniper：設定都用 Junos 的 CLI
+  if (dev.evc) return [['evc', '專線資訊', evcInfo]]; // 電信業者的 Metro Ethernet：只能看，不能改
   const t = baseTabs(dev);
   // 場景裡有只能遠端管理的設備時，筆電多一個 Console 分頁（接 Console 線）
   if (/^laptop/.test(dev.model) && state && needsConsole(state)) t.push(['con', 'Console', consoleTab]);

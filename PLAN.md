@@ -48,7 +48,7 @@ README 說明「現在有什麼、怎麼玩」，這份文件說明「整體應�
 | 16. 工程品質 | 6 | 3 | 1 | 0 |
 | **合計** | **194** | **10** | **2** | **6** |
 
-另外：關卡 162 關（第 17 節）、證照條目涵蓋情形（第 18 節）、建議的實作順序（第 19 節）。
+另外：關卡 163 關（第 17 節）、證照條目涵蓋情形（第 18 節）、建議的實作順序（第 19 節）。
 
 範圍的調整（2026-11-22）：第 14 節遊戲系統還沒做完的項目暫時不做（⏸）；第 15 節的手機與平板、多語系、無障礙、主題從規劃中移除，不做。
 
@@ -175,7 +175,7 @@ README 說明「現在有什麼、怎麼玩」，這份文件說明「整體應�
 | GRE、IOS VTI、DMVPN | ✅ | Tunnel 介面（`tunnel source / destination / mode / key`、keepalive）、line protocol 看外層的路由、recursive routing 的暫停與 flapping、OSPF 的 cost 1000 與 point-to-point；`tunnel protection ipsec profile`（GRE over IPsec、VTI 的 line protocol 跟著 SA）；DMVPN 的 NHRP 註冊、multicast 複製、phase 2 的解析與 spoke 之間的動態 IPsec、phase 3 的 redirect / shortcut（H 路由）（→ 7-7 到 7-10）。沒有 OSPF point-to-multipoint、FortiGate 的 IPsec 介面模式、DMVPN 在 NAT 後面 |
 | 多站台 | ✅ | Hub-and-Spoke（7-4：分公司之間在總公司解密再加密、VPN → VPN 政策、加密範圍與 NAT 例外）；DMVPN 的 spoke 之間動態建立通道（7-10） |
 | SD-WAN | ✅ | FortiGate：成員與 virtual-wan-link 區域（被政策使用中的介面不能加入、政策的目的介面要寫 virtual-wan-link）、效能 SLA（從 ISP 線路的延遲、抖動、遺失量測，線路斷了判定 dead）、SD-WAN 規則（手動、SLA、最佳品質；沒有符合的依來源分散）；圖形介面的「SD-WAN」分頁、`config system sdwan`（含巢狀的 sla）、`diagnose sys sdwan health-check / service`；ISP 線路的品質也算進語音的 MOS → 7-13 |
-| 專線、MPLS、Metro Ethernet | 🟡 | MPLS L3VPN 的觀念關卡：業者的 PE 與客戶的 CE 跑 eBGP，每個據點同一個 AS 被當成 AS_PATH 迴圈，`allowas-in` / `as-override` → 7-14；業者骨幹的 VRF、MPLS 標籤、VPNv4 與 Metro Ethernet（E-Line / E-LAN）還沒有 |
+| 專線、MPLS、Metro Ethernet | 🟡 | MPLS L3VPN 的觀念關卡：業者的 PE 與客戶的 CE 跑 eBGP，每個據點同一個 AS 被當成 AS_PATH 迴圈，`allowas-in` / `as-override` → 7-14；Metro Ethernet 的 E-Line（業者的設備，「專線資訊」：EPL 整個埠透通 / EVPL 依 CE-VLAN 對應 EVC、MTU 1522；EVPL 不帶標籤的訊框丟掉，路由器用 dot1Q 子介面）→ 7-16；業者骨幹的 VRF、MPLS 標籤、VPNv4、E-LAN 還沒有 |
 
 ## 7. 無線網路
 
@@ -295,7 +295,7 @@ README 說明「現在有什麼、怎麼玩」，這份文件說明「整體應�
 
 | 功能 | 狀態 | 說明 |
 | --- | --- | --- |
-| 關卡 | ✅ | 17 章 162 關（清單見第 17 節） |
+| 關卡 | ✅ | 17 章 163 關（清單見第 17 節） |
 | 任務目標 | ✅ | ping、TCP、UDP、DHCP、設定檢查、故障演練、IPv6 ping、傳輸速率、遠端登入（SSH / Telnet 帳號密碼）、IP 電話註冊、通話品質 (MOS)、HTTPS（連得上之後還要通過憑證驗證）、路徑（一定要經過 / 不能經過某台設備）；TCP 的目標交握完還會送一個裝滿的資料區段（設了 DF），MTU 的問題才看得出來 |
 | 提示與星等 | ✅ | 每關 3 個提示，看一個少一顆星 |
 | 學習卡 | ✅ | 每關 2 到 4 張觀念說明 |
@@ -354,7 +354,7 @@ README 說明「現在有什麼、怎麼玩」，這份文件說明「整體應�
 
 ## 17. 關卡規劃
 
-### 現有的 162 關
+### 現有的 163 關
 
 | 章 | 關卡 |
 | --- | --- |
@@ -364,7 +364,7 @@ README 說明「現在有什麼、怎麼玩」，這份文件說明「整體應�
 | 4 資料中心 | 機櫃上線、Spine-Leaf、跨棟連線、一開 Jumbo Frame，備份就卡住、光纖接好了，燈還是不亮（收發器）、A 路的電一跳，機房就全黑了（雙電源）、新的 GPU 伺服器接不上（breakout）、三台伺服器，有時候會壞掉（負載平衡器）、兩台 Nexus，一條線在睡覺（vPC）、停電了，UPS 撐不到發電機（UPS 的負載與過載） |
 | 5 無線網路 | 家裡的 Wi-Fi、辦公室基地台、訪客 Wi-Fi、下午的視訊會議一直斷（頻道寬度與 DFS）、新筆電明明支援 Wi-Fi 6E（6 GHz 與 WPA3）、訪客連上 Wi-Fi，卻沒有跳出登入頁面（Captive Portal）、倉庫拉不到線（Wi-Fi mesh） |
 | 6 網路安全 | 只開了 TCP、誰在發 IP？、不速之客、存取控制清單、管理介面加固、冒牌閘道、搶走根橋、你是誰？、偽裝成交換器、交換器變成了 Hub（MAC flooding）、跳進伺服器 VLAN 的封包（雙重標籤）、飯店的房間網路（Private VLAN）、星期一早上，有線網路全部登不進去（EAP-TLS）、分公司只有一台路由器，也要當防火牆（ZBF）、上班時間有人在玩線上博弈（網頁過濾與 SSL 檢查）、防火牆擋得住位址，擋不住應用程式（應用程式控管與 IPS）、同事點了釣魚信的連結（DNS 過濾與防毒）、午休才開放的影音網站，晚上八點才打得開（時間型 ACL 與時區）、網頁打得開，名稱卻查不到（established 與 Reflexive ACL）、稽核報告：設定檔裡的密碼看得一清二楚（enable secret 與 service password-encryption） |
-| 7 VPN 與廣域備援 | 站對站 VPN、在家上班、雙線路備援、三個據點，一個中心、線路燈還亮著（IP SLA）、小檔案可以，大檔案卡住（PMTUD 黑洞）、兩個分公司的連線一下通一下斷（GRE 與 recursive routing）、稽核報告（GRE over IPsec）、每加一個網段就要改兩邊的 ACL（VTI）、門市之間的監視器畫面（DMVPN）、新分公司在共享辦公室裡（NAT-T）、換了主機板電池，VPN 就起不來了（IKEv2 的憑證驗證）、下午一塞車電話就斷斷續續（SD-WAN）、換成 MPLS 專線之後互相看不到（MPLS L3VPN 與 allowas-in）、離職的同事還連得上 VPN（SSL-VPN 改用 AD 的帳號） |
+| 7 VPN 與廣域備援 | 站對站 VPN、在家上班、雙線路備援、三個據點，一個中心、線路燈還亮著（IP SLA）、小檔案可以，大檔案卡住（PMTUD 黑洞）、兩個分公司的連線一下通一下斷（GRE 與 recursive routing）、稽核報告（GRE over IPsec）、每加一個網段就要改兩邊的 ACL（VTI）、門市之間的監視器畫面（DMVPN）、新分公司在共享辦公室裡（NAT-T）、換了主機板電池，VPN 就起不來了（IKEv2 的憑證驗證）、下午一塞車電話就斷斷續續（SD-WAN）、換成 MPLS 專線之後互相看不到（MPLS L3VPN 與 allowas-in）、離職的同事還連得上 VPN（SSL-VPN 改用 AD 的帳號）、專線拉好了，兩邊卻不通（Metro Ethernet） |
 | 8 高可用與進階路由 | 迴圈與生成樹、EtherChannel、閘道備援、集中式 DHCP、OSPF 路徑選擇、切蛋糕、閘道還活著，但出不去（HSRP 追蹤）、主線斷了，電話斷了四十秒（BFD）、兩台閘道，只有一台在做事（GLBP）、防火牆一壞，全公司就斷網（FortiGate HA）、兩台核心說好分擔，結果全擠在 Core-1（MST）、備援線一接上，整棟樓斷網（BPDU Filter 與 Loop Guard）、兩台疊成一台，壞一台全公司斷線（交換器堆疊） |
 | 9 IPv6 | IPv6 初體驗、雙協定、位址從哪裡來？、IPv6 也要動態路由、封了 IPv4，忘了 IPv6、IPv6 的預設閘道被搶走了（RA Guard）、內部網站加了 IPv6 之後（AAAA 與 Happy Eyeballs）、IPv6 過不了 VPN（VTI 只載 IPv4）、換了 ISP，IPv6 就上不了網（DHCPv6 PD）、防火牆開了 IPv6，網站卻都打不開（FortiGate 的 IPv6 政策）、新大樓只有 IPv6，網站卻大多只有 IPv4（NAT64 與 DNS64） |
 | 10 故障排除 | 誰搶了我的 IP、樓層之間又斷了、分公司的求救電話、明明連得上，為什麼這麼慢、分公司的 OSPF 鄰居起不來、流量為什麼繞去實驗室、VPN 通了，資料卻過不去、DNS 改了，為什麼還連到舊的、整層樓都慢了（廣播風暴與 Storm Control）、新交換器一插上去，整棟樓的 VLAN 都不見了（VTP）、會議室的電腦每隔一分鐘就斷一次（接觸不良的網路線與 PortFast）、大廳的電視一開，倉庫就傳不動檔案（多點傳送與 IGMP querier）、換成 Juniper 之後，什麼都不通（Junos） |

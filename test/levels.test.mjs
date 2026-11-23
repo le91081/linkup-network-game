@@ -5776,6 +5776,19 @@ console.log('\nnmcli：Linux 伺服器改固定 IP');
   ok(lv.objectives.every((o) => (o.type === 'check' ? o.test(s) : runObjective(s, o).pass) === true), '10.0.20.15/24、閘道 10.0.20.1：兩個目標都通過');
 }
 
+console.log('\nMetro Ethernet：EVPL 與 CE-VLAN');
+{
+  const { runObjective } = await import('../src/engine/sim/objectives.js');
+  const ok = (cond, title) => (cond ? console.log('  ✔ ' + title) : fail(title));
+  const lv = LEVELS.find((x) => x.id === 'l163');
+  const s = lv.setup(); settle(s);
+  ok(!runObjective(s, lv.objectives[0]).pass, 'EVPL 只收 CE-VLAN 100：路由器送不帶標籤的訊框，被業者丟掉');
+  lv.solve(s); settle(s);
+  ok(lv.objectives.every((o) => (o.type === 'check' ? o.test(s) : runObjective(s, o).pass) === true), 'Gi0/0/0.100（dot1Q 100）：兩個目標都通過');
+  const s2 = lv.setup(); s2.devices.me.evc.type = 'EPL'; for (const p of ['uni-a', 'uni-b']) Object.assign(s2.devices.me.sw.ports[p], { mode: 'access', vlan: 1, native: 1, allowed: 'all' }); settle(s2);
+  ok(runObjective(s2, lv.objectives[0]).pass, '換成 EPL（整個埠透通）：不帶標籤也通');
+}
+
 console.log('\nNetFlow 與 QoS 的 police');
 {
   const sim = await import('../src/engine/sim.js');

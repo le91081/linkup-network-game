@@ -178,6 +178,10 @@ export const CATALOG = {
     ports: [...seq(8, (i) => rj('Gi0/' + i, 'Gi0/' + i, { poe: true })), rj('Gi0/9'), rj('Gi0/10'), sfp('Gi0/11'), sfp('Gi0/12')],
     poeBudget: 124, // PoE+ 的總預算（瓦）：每個埠最多 30 W，但八個埠加起來只有 124 W
   },
+  metroe: {
+    kind: 'mswitch', shape: 'switch-r', vendor: '電信業者', title: 'Metro Ethernet 專線（E-Line）', evc: true,
+    tagline: '電信業者的第二層專線：兩個據點之間的 EVC，客戶端的介面叫 UNI', ports: [rj('uni-a', 'UNI A'), rj('uni-b', 'UNI B')],
+  },
   ex2300: {
     kind: 'mswitch', shape: 'switch-r', vendor: 'Juniper', title: 'Juniper EX2300-24T', junos: true,
     tagline: '網管型 L2 交換器 · 24×GE + 4×10G SFP+ · Junos（commit 才生效、不會 DTP）',
