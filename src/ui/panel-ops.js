@@ -3,7 +3,7 @@ import { h, button, toast } from './dom.js';
 import { inp, sel, toggle, field, note, kv, del, cardHead, grid2, bind, isIp, isNum } from './form.js';
 import { fmtIp, parseIp } from '../engine/ip.js';
 import { fmtDur } from '../engine/sim.js';
-import { isTftp, isFtp, fmtBytes, isCiscoOs } from '../engine/files.js';
+import { isTftp, isFtp, isScp, fmtBytes, isCiscoOs } from '../engine/files.js';
 import { pcapBytes } from '../engine/pcap.js';
 import { SIM_EPOCH } from '../engine/ops.js';
 import { saveBinary } from './save.js';
@@ -20,6 +20,7 @@ const ROLES = [
   ['dns', 'DNS 伺服器', 'udp', 53, '把名稱翻譯成 IP 位址（A / CNAME / MX / PTR）'],
   ['tftp', 'TFTP 伺服器', 'udp', 69, '備份設定、放韌體。不用帳號密碼，任何人都能讀寫'],
   ['ftp', 'FTP 伺服器', 'tcp', 21, '要帳號密碼，但帳號密碼和檔案內容都是明文'],
+  ['scp', 'SCP / SFTP 伺服器', 'tcp', 22, '走 SSH：帳號密碼與檔案內容都加密。帳號和 FTP 共用'],
   ['syslog', 'Syslog 伺服器', 'udp', 514, '收集各設備送來的紀錄'],
   ['ntp', 'NTP 伺服器', 'udp', 123, '替其他設備報時'],
   ['nms', 'SNMP 網管 (NMS)', 'udp', 162, '定時向設備查詢流量與狀態，也接收設備送來的 Trap'],
@@ -33,8 +34,8 @@ export function serverRolesCard(ctx) {
     h('div', { class: 'toggles' }, ROLES.map(([id, label, proto, port, hint]) => toggle(ctx, () => hasRole(dev, proto, port), (on) => {
       dev.services = (dev.services || []).filter((s) => !(s.proto === proto && s.port === port));
       if (on) dev.services.push({ proto, port, name: label.replace(/ 伺服器| \(NMS\)/, '') });
-      if (id === 'tftp' || id === 'ftp') dev.files ||= {};
-      if (id === 'ftp' && on) dev.ftpUsers ||= [{ user: 'backup', pass: 'Backup#2026' }];
+      if (id === 'tftp' || id === 'ftp' || id === 'scp') dev.files ||= {};
+      if ((id === 'ftp' || id === 'scp') && on) dev.ftpUsers ||= [{ user: 'backup', pass: 'Backup#2026' }];
       if (id === 'nms') { if (on) dev.nms ||= { targets: [] }; else delete dev.nms; }
       if (id === 'dns') {
         dev.services = dev.services.filter((x) => !(x.proto === 'tcp' && x.port === 53));
@@ -72,9 +73,9 @@ export function filesTab(ctx, body) {
     if (f.kind === 'pcap' && (f.frames || []).length) card.append(h('div', { class: 'addrow' }, button(`下載 ${n}（${f.frames.length} 個封包，用 Wireshark 打開）`, { small: true, ic: 'download', onclick: () => saveBinary(n, pcapBytes(f.frames, Math.floor(SIM_EPOCH / 1000) + (f.t0 || 0)), 'application/vnd.tcpdump.pcap', `已下載 ${n}`) })));
   }
   body.append(card);
-  if (isFtp(dev)) {
+  if (isFtp(dev) || isScp(dev)) {
     const users = (dev.ftpUsers ||= []);
-    const c2 = h('div', { class: 'card' }, cardHead('FTP 帳號'), h('div', { class: 'thead c-user' }, h('span', { text: '帳號' }), h('span', { text: '密碼' }), h('span')));
+    const c2 = h('div', { class: 'card' }, cardHead(isScp(dev) && !isFtp(dev) ? 'SCP 帳號' : isScp(dev) ? 'FTP / SCP 帳號' : 'FTP 帳號'), h('div', { class: 'thead c-user' }, h('span', { text: '帳號' }), h('span', { text: '密碼' }), h('span')));
     users.forEach((u, n) => c2.append(h('div', { class: 'trow c-user' }, inp(ctx, ...bind(u, 'user'), { ph: '帳號', mono: false }), inp(ctx, ...bind(u, 'pass'), { ph: '密碼' }), del(() => { users.splice(n, 1); ctx.commit(true); }))));
     c2.append(h('div', { class: 'addrow' }, button('新增帳號', { ic: 'plus', small: true, onclick: () => { users.push({ user: '', pass: '' }); ctx.commit(true); } })),
       note('warn', 'FTP 的帳號密碼和 Telnet 一樣是明文：在線路上側錄就看得到。'));

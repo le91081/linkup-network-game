@@ -4838,6 +4838,26 @@ console.log('\nICMP Destination Unreachable：U.U.U、!A、!N、!H');
   ok(u2 && u2.code === 'H', '目的網段裡沒有這台主機（ARP 沒有回應）：host unreachable');
 }
 
+console.log('\nSCP：copy running-config scp://帳號@伺服器/檔名');
+{
+  const { iosSession } = await import('../src/engine/ios.js');
+  const { iosRun } = await import('../src/ui/cli.js');
+  const ok = (cond, title) => (cond ? console.log('  ✔ ' + title) : fail(title));
+  const cli = (s, id) => { const S = iosSession(() => s.devices[id], () => s); return (...lines) => { const out = []; for (const l of lines) { const r = iosRun({ state: s, showTrace() {}, refreshLive() {} }, id, S, l, (x) => out.push(x)); if (r.changed) settle(s); } return out.join('\n'); }; };
+  const lv = LEVELS.find((x) => x.id === 'l129');
+  const s = lv.setup(); lv.solve(s); settle(s);
+  const srv = s.devices.erp;
+  ok(/Connection refused|Timed out/.test(cli(s, 'hq')('enable', 'copy running-config scp://backup@10.1.0.10/hq.cfg', '', 'Backup#2026')), '伺服器沒有開 SSH：連不上');
+  srv.services.push({ proto: 'tcp', port: 22, name: 'SSH' }); srv.files = {}; srv.ftpUsers = [{ user: 'backup', pass: 'Backup#2026' }];
+  settle(s);
+  const H = cli(s, 'hq');
+  H('enable');
+  const out = H('copy running-config scp://backup@10.1.0.10/hq.cfg', '', 'Backup#2026');
+  ok(/Password:/.test(out) && /bytes copied in/.test(out) && srv.files['hq.cfg'] && srv.files['hq.cfg'].kind === 'config', '密碼另外問；設定檔傳到伺服器（kind config）');
+  ok(/Permission denied/.test(H('copy running-config scp://backup@10.1.0.10/x.cfg', '', 'wrong')), '密碼錯：Permission denied');
+  ok(/Destination username/.test(H('copy running-config scp://10.1.0.10/y.cfg', '')), '網址裡沒有帳號：問完檔名再問 Destination username');
+}
+
 console.log('\nNetFlow 與 QoS 的 police');
 {
   const sim = await import('../src/engine/sim.js');

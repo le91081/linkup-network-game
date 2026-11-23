@@ -4031,13 +4031,13 @@ export function iosSession(getDev, getState, who = null) {
     const t = String(s || '').trim(), low = t.toLowerCase();
     if (low.length >= 3 && ('running-config'.startsWith(low) || low === 'system:running-config')) return { kind: 'run' };
     if (low.length >= 3 && ('startup-config'.startsWith(low) || low === 'nvram:startup-config')) return { kind: 'start' };
-    const u = t.match(/^(tftp|ftp):(?:\/\/(?:([^:@/]+)(?::([^@/]*))?@)?([^/]+)(?:\/(.*))?)?$/i);
+    const u = t.match(/^(tftp|ftp|scp):(?:\/\/(?:([^:@/]+)(?::([^@/]*))?@)?([^/]+)(?:\/(.*))?)?$/i);
     if (u) return { kind: u[1].toLowerCase(), user: u[2] || null, pass: u[3] ?? null, host: u[4] || null, file: u[5] || null };
     const f = t.match(/^(boot)?flash:\/?(.*)$/i);
     if (f) return { kind: 'flash', file: f[2] || null };
     return null;
   }
-  const remoteKind = (x) => x.kind === 'tftp' || x.kind === 'ftp';
+  const remoteKind = (x) => x.kind === 'tftp' || x.kind === 'ftp' || x.kind === 'scp';
   const urlOf = (x, ip, file) => `${x.kind}://${ip}/${file}`;
   /** 問一個問題，答案交給 next；直接按 Enter 就用中括號裡的預設值 */
   const ask = (out, q, def, next) => {
@@ -4100,7 +4100,7 @@ export function iosSession(getDev, getState, who = null) {
       if (!src || !dst) return null;
       if (src.kind === 'run' && dst.kind === 'start') return null; // write memory，前面已經處理
       if ((remoteKind(src) && remoteKind(dst)) || (!remoteKind(src) && !remoteKind(dst))) {
-        out.push('% 這個模擬支援的 copy：running-config / startup-config / flash:檔案 ↔ tftp: / ftp:');
+        out.push('% 這個模擬支援的 copy：running-config / startup-config / flash:檔案 ↔ tftp: / ftp: / scp:');
         return { out, changed: false };
       }
       const job = { src, dst };
@@ -4141,7 +4141,10 @@ export function iosSession(getDev, getState, who = null) {
     const st = getState(), d = dev(), { src, dst } = job, rem = remoteKind(src) ? src : dst;
     const ip = parseIp(rem.host);
     if (ip == null) { out.push(`%Error parsing ${rem.kind}://${rem.host}/ (Invalid IP address)`); return { out, changed: false }; }
-    const creds = rem.kind === 'ftp' ? { user: rem.user || (d.ftpLogin || {}).user || '', pass: rem.pass ?? (d.ftpLogin || {}).pass ?? '' } : {};
+    // SCP：帳號寫在網址裡（scp://帳號@伺服器/檔名），密碼另外問，不會出現在設定或指令紀錄裡
+    if (rem.kind === 'scp' && !rem.user) return ask(out, `${job.dst === rem ? 'Destination' : 'Source'} username`, '', (v, o) => { rem.user = v; return copyStep(job, o); });
+    if (rem.kind === 'scp' && rem.pass == null) { out.push('Password: '); S.pending = { secret: true, fn: (text, o) => { S.pending = null; rem.pass = text; return copyStep(job, o) || { out: o, changed: false }; } }; return { out, changed: false }; }
+    const creds = rem.kind === 'ftp' ? { user: rem.user || (d.ftpLogin || {}).user || '', pass: rem.pass ?? (d.ftpLogin || {}).pass ?? '' } : rem.kind === 'scp' ? { user: rem.user, pass: rem.pass } : {};
     const url = urlOf(rem, rem.host, rem.file);
     const failed = (r, verb) => {
       out.push(`%Error ${verb} ${url} (${r.err})`);

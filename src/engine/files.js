@@ -107,6 +107,8 @@ export function bootPick(d) {
 
 export const isTftp = (d) => (d.services || []).some((s) => s.proto === 'udp' && s.port === 69);
 export const isFtp = (d) => (d.services || []).some((s) => s.proto === 'tcp' && s.port === 21);
+/** SCP / SFTP：跑 SSH（TCP 22）的伺服器，帳號和 FTP 共用 ftpUsers */
+export const isScp = (d) => (d.kind === 'host' || d.kind === 'server') && !!d.files && (d.services || []).some((s) => s.proto === 'tcp' && s.port === 22);
 export const configFile = (lines, t) => ({ size: lines.join('\n').length + 1, md5: md5Of(lines.join('\n')), kind: 'config', lines: lines.slice(), t });
 
 /** 設備自己的檔案寫入速度（位元組 / 秒）：小交換器的 flash 寫得很慢 */
@@ -119,13 +121,16 @@ const WRITE = { c2960cx: 2_200_000, isr4300: 28_000_000, cat9k: 45_000_000, n9k:
  */
 export function transfer(state, devId, o) {
   const d = state.devices[devId];
-  const tftp = o.proto === 'tftp';
-  const data = tftp ? { kind: 'tftp', op: o.dir === 'get' ? 'RRQ' : 'WRQ', file: o.file } : { kind: 'ftp', user: o.user || 'anonymous', pass: o.pass || '', cmd: `${o.dir === 'get' ? 'RETR' : 'STOR'} ${o.file}` };
-  const res = transact(state, devId, { proto: tftp ? 'udp' : 'tcp', dst: o.server, dport: tftp ? 69 : 21, data });
+  const tftp = o.proto === 'tftp', scp = o.proto === 'scp';
+  // SCP 走 SSH（TCP 22）：帳號、密碼與檔案內容都加密了，擷取只看得到 Encrypted packet
+  const data = tftp ? { kind: 'tftp', op: o.dir === 'get' ? 'RRQ' : 'WRQ', file: o.file } : scp ? { kind: 'out' } : { kind: 'ftp', user: o.user || 'anonymous', pass: o.pass || '', cmd: `${o.dir === 'get' ? 'RETR' : 'STOR'} ${o.file}` };
+  const res = transact(state, devId, { proto: tftp ? 'udp' : 'tcp', dst: o.server, dport: tftp ? 69 : scp ? 22 : 21, data });
   const fail = (err, reason) => ({ ok: false, err, reason, res, secs: tftp ? 30 : 0 });
   if (!res.ok) return fail(tftp ? 'Timed out' : /拒絕/.test(res.reason) ? 'Connection refused' : 'Timed out', res.reason);
   const srv = state.devices[res.responder];
-  if (!tftp) {
+  if (scp && !srv.files) return fail('Connection refused', `${srv.name} 有 SSH，但不是放檔案的伺服器（沒有開 SCP / SFTP 伺服器的角色）`);
+  if (scp && !(srv.ftpUsers || []).some((u) => u.user === o.user && u.pass === o.pass)) return fail('Permission denied', `${srv.name} 的 SSH 帳號或密碼錯誤（scp://帳號@伺服器/檔名；密碼會另外問）`);
+  if (!tftp && !scp) {
     const users = srv.ftpUsers || [];
     if (!users.some((u) => u.user === o.user && u.pass === o.pass)) return fail('Not logged in', `${srv.name} 的 FTP 帳號或密碼錯誤${o.user ? '' : '（還沒有設定 FTP 帳號：ip ftp username / ip ftp password，或寫在網址裡 ftp://帳號:密碼@伺服器/檔名）'}`);
   }

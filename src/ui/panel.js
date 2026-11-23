@@ -44,7 +44,7 @@ import { redistCard, pbrCard } from './panel-policy.js';
 import { tunnelCards } from './panel-tun.js';
 import { dockerTab } from './term-docker.js';
 import { isDnsServer } from '../engine/dns.js';
-import { isTftp, isFtp } from '../engine/files.js';
+import { isTftp, isFtp, isScp } from '../engine/files.js';
 import { buildCli } from './cli.js';
 import { buildFortiCli } from './forticli.js';
 import { isIos, iosDirty, saveStartup } from '../engine/ios.js';
@@ -671,7 +671,7 @@ function baseTabs(dev) {
       dev.radiusServer && ['radius', 'RADIUS', M.radiusServerTab], dev.tacacsServer && ['tacacs', 'TACACS+', M.tacacsServerTab], isDnsServer(dev) && ['dns', 'DNS', dnsTab],
       dev.web && ['web', '網站', webTab], dev.docker && ['docker', 'Docker', dockerTab],
       (dev.services || []).some((s) => s.proto === 'udp' && s.port === 514) && ['syslog', 'Syslog', M.syslogTab],
-      (isTftp(dev) || isFtp(dev)) && ['files', '檔案', OPS.filesTab], dev.nms && ['nms', '網管', OPS.nmsTab], dev.cucm && ['cucm', 'CUCM', V.cucmTab],
+      (isTftp(dev) || isFtp(dev) || isScp(dev)) && ['files', '檔案', OPS.filesTab], dev.nms && ['nms', '網管', OPS.nmsTab], dev.cucm && ['cucm', 'CUCM', V.cucmTab],
       (dev.apps || []).includes('api') && ['api', 'API', AUTO.apiTab], dev.dnac && ['dnac', 'Catalyst Center', AUTO.dnacTab], ((dev.apps || []).includes('ansible') || dev.ansible) && ['ansible', 'Ansible', AUTO.ansibleTab], dev.tf && ['tf', 'Terraform', AUTO.terraformTab],
       ['cap', '封包擷取', DG.captureTab], T.term].filter(Boolean);
     case 'hub': case 'switch': return [T.ports];

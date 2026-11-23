@@ -33,7 +33,7 @@ README 說明「現在有什麼、怎麼玩」，這份文件說明「整體應�
 | 1. 實體層與接線 | 12 | 1 | 1 | 0 |
 | 2. 第二層：交換 | 16 | 0 | 1 | 0 |
 | 3. 第三層：路由 | 15 | 1 | 1 | 0 |
-| 4. IP 服務 | 11 | 3 | 0 | 0 |
+| 4. IP 服務 | 12 | 2 | 0 | 0 |
 | 5. 網路安全 | 14 | 3 | 0 | 0 |
 | 6. VPN 與廣域網路 | 11 | 2 | 0 | 0 |
 | 7. 無線網路 | 6 | 3 | 1 | 0 |
@@ -46,7 +46,7 @@ README 說明「現在有什麼、怎麼玩」，這份文件說明「整體應�
 | 14. 遊戲系統 | 16 | 0 | 0 | 6 |
 | 15. 介面與體驗 | 10 | 0 | 0 | 0 |
 | 16. 工程品質 | 6 | 3 | 1 | 0 |
-| **合計** | **175** | **22** | **8** | **6** |
+| **合計** | **176** | **21** | **8** | **6** |
 
 另外：關卡 136 關（第 17 節）、證照條目涵蓋情形（第 18 節）、建議的實作順序（第 19 節）。
 
@@ -133,7 +133,7 @@ README 說明「現在有什麼、怎麼玩」，這份文件說明「整體應�
 | NTP | ✅ | 每台設備有自己的時鐘；每 64 秒輪詢，IOS 約四分鐘後才採信；`ntp master`、`clock set`、`clock timezone`；伺服器失聯八次輪詢後失去同步；`service timestamps log | debug`（datetime / msec / localtime / show-timezone / year、uptime，預設和 IOS 15 一樣用 UTC → 11-8） |
 | Syslog | ✅ | 設備記下介面、OSPF、VRRP、VPN、err-disabled 等事件，用 UDP 514 送到伺服器；`logging trap` 設定門檻；伺服器有收件畫面 |
 | SNMP | ✅ | v2c community（RO / RW、綁標準 ACL）、v3 的 group / user（SHA + AES）、Trap（linkUp / linkDown / coldStart / authenticationFailure）；網管伺服器每 60 秒輪詢、依計數器差值算使用率；FortiGate 的 sysinfo / community / hosts / user 與 allowaccess snmp；沒有 MIB 瀏覽器與 SET |
-| TFTP / FTP / SCP | 🟡 | TFTP（UDP 69，512 位元組區塊，速度看來回時間）與 FTP（帳號密碼、明文）：設定備份與還原、映像檔下載、伺服器的檔案分頁；沒有 SCP / SFTP |
+| TFTP / FTP / SCP | ✅ | TFTP（UDP 69，512 位元組區塊，速度看來回時間）與 FTP（帳號密碼、明文）：設定備份與還原、映像檔下載、伺服器的檔案分頁；SCP（`copy … scp://帳號@伺服器/檔名`，走 SSH TCP 22，密碼另外問、內容加密，伺服器的「SCP / SFTP 伺服器」角色，帳號和 FTP 共用）|
 | HTTP(S) 服務內容與憑證 | ✅ | 網站伺服器的「網站」分頁（標題、HTTP 301 轉到 HTTPS、目前的憑證、產生 CSR 交給 CA 簽發）；`curl` 會驗證憑證並給出和真的 curl 一樣的錯誤（`(60)` 過期 / 尚未生效 / 名稱不符 / 自簽 / 不信任的簽發者、`(35)` 沒有憑證），`-k`、`-v`、`-I`、`-L`；任務目標 `https`。網路設備的管理網頁出廠是自簽憑證 |
 
 ## 5. 網路安全
