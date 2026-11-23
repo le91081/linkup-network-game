@@ -95,3 +95,6 @@ export function setQuiet(v) { const p = QUIET; QUIET = v; return p; }
 /** 政策路由 (PBR) 每一條 route-map 符合了幾個封包、多少位元組（show route-map 的 Policy routing matches） */
 export const PBR_HITS = new WeakMap();
 export const pbrHits = (e) => PBR_HITS.get(e) || { pk: 0, by: 0 };
+
+/** 因為 time-range 現在不在時間內而暫時不生效的 ACL 規則（每次重算時由 timerange.js 更新） */
+export const TR_OFF = new WeakSet();

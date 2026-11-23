@@ -4785,6 +4785,35 @@ console.log('\nIOS 的 monitor capture（Embedded Packet Capture）');
   ok(R('no monitor capture CAP') === '' && /does not exist/.test(R('show monitor capture CAP')), 'no monitor capture CAP：刪掉');
 }
 
+console.log('\n時間型 ACL（time-range）與 archive 的 time-period');
+{
+  const { iosSession, runningConfig } = await import('../src/engine/ios.js');
+  const { iosRun } = await import('../src/ui/cli.js');
+  const ok = (cond, title) => (cond ? console.log('  ✔ ' + title) : fail(title));
+  const cli = (s, id) => { const S = iosSession(() => s.devices[id], () => s); return (...lines) => { const out = []; for (const l of lines) { const r = iosRun({ state: s, showTrace() {}, refreshLive() {} }, id, S, l, (x) => out.push(x)); if (r.changed) recomputeNow(s); } return out.join('\n'); }; };
+  const lv = LEVELS.find((x) => x.id === 'l136');
+  const s = lv.setup(); recomputeNow(s);
+  const R = cli(s, 'rt');
+  R('enable');
+  ok(/time-range entry: LUNCH \(inactive\)\n   periodic weekdays 12:00 to 13:00\n   used in: IP ACL entry/.test(R('show time-range')), 'show time-range：LUNCH、periodic、用在 ACL');
+  ok(/10 permit tcp any host 198\.51\.100\.50 eq 443 time-range LUNCH \(inactive\)/.test(R('show access-lists')), 'show access-lists：時段外標 (inactive)');
+  ok(/^time-range LUNCH\n periodic weekdays 12:00 to 13:00$/m.test(runningConfig(s, s.devices.rt).join('\n')) && / permit tcp any host 198\.51\.100\.50 eq 443 time-range LUNCH/.test(runningConfig(s, s.devices.rt).join('\n')), 'running-config：time-range 區塊與規則後面的 time-range');
+  ok(/結束時間要比開始時間晚/.test(R('configure terminal', 'time-range X', 'periodic daily 13:00 to 12:00', 'end')) && /看不懂「someday」/.test(R('configure terminal', 'time-range X', 'periodic someday 1:00 to 2:00', 'end')) && /只支援 periodic/.test(R('configure terminal', 'time-range X', 'absolute start 08:00 1 Jan 2026', 'end')), 'periodic 的錯誤：時間顛倒、看不懂的星期、absolute');
+  // 台北 12:30（UTC 04:30）：還沒設時區，規則不生效；設了時區之後生效
+  advance(s, 3.5 * 3600); recomputeNow(s);
+  ok(/UTC/.test(R('show clock')) && /LUNCH \(inactive\)/.test(R('show time-range')), '台北 12:30：路由器是 UTC 04:30，LUNCH 還是 inactive');
+  R('configure terminal', 'clock timezone CST 8 0', 'end');
+  ok(/LUNCH \(active\)/.test(R('show time-range')) && /time-range LUNCH \(active\)/.test(R('show access-lists')), 'clock timezone CST 8 0：LUNCH 變成 active');
+  ok(transact(s, 'pc', { proto: 'tcp', dst: parseIp('198.51.100.50'), dport: 443, quiet: true }).ok, '午休時段：影音網站打得開');
+  advance(s, 3600); recomputeNow(s);
+  ok(/LUNCH \(inactive\)/.test(R('show time-range')) && !transact(s, 'pc', { proto: 'tcp', dst: parseIp('198.51.100.50'), dport: 443, quiet: true }).ok, '13:30：時段一過自動失效（排了一次重算）');
+  // archive time-period：每 10 分鐘自動封存一份
+  R('configure terminal', 'archive', 'path flash:arch', 'time-period 10', 'end');
+  advance(s, 25 * 60); recomputeNow(s);
+  const files = Object.keys(s.devices.rt.flash.files).filter((n) => /^arch-\d+$/.test(n));
+  ok(files.length === 2, `archive time-period 10：25 分鐘自動封存了 ${files.length} 份`);
+}
+
 console.log('\nNetFlow 與 QoS 的 police');
 {
   const sim = await import('../src/engine/sim.js');

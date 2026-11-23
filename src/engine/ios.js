@@ -24,6 +24,7 @@ import { ZBF_PROTO, newZbf, zbfConfigLines } from './zbf.js';
 import { breakoutPort, unbreakoutPort, breakoutLines, BREAKOUT_MAPS } from './breakout.js';
 // EIGRP 的設定小工具（不從 eigrp.js 匯入：那邊會拉進整個模擬引擎，造成循環匯入）
 const eigrpOn = (d) => !!(d && d.eigrp && +d.eigrp.as > 0);
+import { parsePeriodic } from './timespec.js';
 const classBitsOf = (ip) => (ip == null ? null : (ip >>> 24) < 128 ? 8 : (ip >>> 24) < 192 ? 16 : 24);
 /** ip rip send / receive version 後面的「1」「2」「1 2」 */
 const ripVers = (v) => { const l = [...new Set(String(v || '').split(/\s+/).filter(Boolean))]; return l.length && l.every((x) => x === '1' || x === '2') ? l.map(Number).sort() : null; };
@@ -107,7 +108,7 @@ const isSw = (d) => !!d.sw && d.sw.mode === 'vlan';
 export const ERR_RECOVERY_CAUSES = ['arp-inspection', 'bpduguard', 'channel-misconfig', 'dhcp-rate-limit', 'dtp-flap', 'gbic-invalid', 'inline-power', 'link-flap', 'loopback', 'mac-limit', 'pagp-flap', 'port-mode-failure', 'psecure-violation', 'security-violation', 'sfp-config-mismatch', 'storm-control', 'udld', 'vmps'];
 const TYPES = { gi: 'gigabitethernet', te: 'tengigabitethernet', fa: 'fastethernet', eth: 'ethernet' };
 const PROMPT = {
-  eigrp: '(config-router)#', rip: '(config-router)#', keychain: '(config-keychain)#', kckey: '(config-keychain-key)#',
+  eigrp: '(config-router)#', rip: '(config-router)#', trange: '(config-time-range)#', keychain: '(config-keychain)#', kckey: '(config-keychain-key)#',
   zone: '(config-sec-zone)#', zpair: '(config-sec-zone-pair)#', icmap: '(config-cmap)#', ipmap: '(config-pmap)#', ipmapc: '(config-pmap-c)#',
   exec: '#', config: '(config)#', if: '(config-if)#', vlan: '(config-vlan)#', raguard: '(config-ra-guard)#', router: '(config-router)#', dhcp: '(dhcp-config)#',
   line: '(config-line)#', tacacs: '(config-server-tacacs)#', acl: '(config-ext-nacl)#', stdacl: '(config-std-nacl)#', radius: '(config-radius-server)#',
@@ -410,7 +411,16 @@ export function aclSeqs(list) {
 }
 const stripSeq = ({ seq, ...r }) => r;
 
-function parseAclRule(tok) {
+function parseAclRule(tok0) {
+  // 最後面的 time-range <名稱>：在那個時段才生效
+  const ti = tok0.findIndex((x) => String(x).toLowerCase() === 'time-range');
+  const tr = ti > 0 ? tok0[ti + 1] : null;
+  if (ti > 0 && !tr) return null;
+  const tok = ti > 0 ? [...tok0.slice(0, ti), ...tok0.slice(ti + 2)] : tok0;
+  const r = parseAclRule0(tok);
+  return r && tr ? { ...r, tr } : r;
+}
+function parseAclRule0(tok) {
   let n = 0;
   if (/^\d+$/.test(tok[0])) n++;
   const action = ['permit', 'deny'].find((a) => a.startsWith((tok[n] || ' ').toLowerCase()));
@@ -1747,6 +1757,9 @@ export function iosSession(getDev, getState, who = null) {
       return undefined;
     }],
     ['no router eigrp <as>', ([as]) => { const d = dev(); if (!eigrpOn(d) || +d.eigrp.as !== +as) return err(`% EIGRP AS ${as} 沒有在執行`); delete d.eigrp; return undefined; }],
+    // ── 時間型 ACL ──
+    ['time-range <name>', ([n]) => { const d = dev(); ((d.timeRanges ||= {})[n] ||= []); enter('trange', n); return undefined; }],
+    ['no time-range <name>', ([n]) => { const d = dev(); if (!(d.timeRanges || {})[n]) return err(`% time-range ${n} 不存在`); delete d.timeRanges[n]; if (!Object.keys(d.timeRanges).length) delete d.timeRanges; return undefined; }],
     // ── RIP ──
     ['router rip', () => {
       const d = dev();
@@ -3462,6 +3475,23 @@ export function iosSession(getDev, getState, who = null) {
       }],
       ['no redistribute <src> [...]', ([src]) => { const e = dev().eigrp, s = String(src).toLowerCase(); e.redist = (e.redist || []).filter((r) => !r.src.startsWith(s)); if (!e.redist.length) delete e.redist; return undefined; }],
     ],
+    trange: [
+      ['periodic <...>', ([rest]) => {
+        const p = parsePeriodic(String(rest).split(/\s+/));
+        if (typeof p === 'string') return err(p);
+        const l = dev().timeRanges[S.cur];
+        if (!l.some((x) => x.text === p.text)) l.push(p);
+        return undefined;
+      }],
+      ['no periodic <...>', ([rest]) => {
+        const p = parsePeriodic(String(rest).split(/\s+/));
+        if (typeof p === 'string') return err(p);
+        const tr = dev().timeRanges, n = tr[S.cur].length;
+        tr[S.cur] = tr[S.cur].filter((x) => x.text !== p.text);
+        return tr[S.cur].length < n ? undefined : err('沒有這一條 periodic');
+      }],
+      ['absolute [...]', () => err('這個模擬的 time-range 只支援 periodic（每週固定的時段）')],
+    ],
     rip: [
       ['version <v>', ([v]) => (v === '1' || v === '2' ? void (dev().rip.ver = +v) : err('version 1 或 version 2'))],
       ['no version [...]', () => { delete dev().rip.ver; }],
@@ -4248,7 +4278,7 @@ function aclAddr(spec) {
 }
 /** running-config 裡的 redistribute：metric、metric-type、subnets、tag、route-map 的順序和 IOS 一樣 */
 const redistLine = (r, into) => ` redistribute ${r.src}${r.as != null ? ' ' + r.as : ''}${r.metric != null ? ' metric ' + r.metric : ''}${r.type === 1 ? ' metric-type 1' : ''}${into === 'ospf' && r.src !== 'ospf' ? ' subnets' : ''}${r.tag ? ' tag ' + r.tag : ''}${r.rm ? ' route-map ' + r.rm : ''}`;
-export const aclLine = (r) => `${r.action} ${r.proto || 'ip'} ${aclAddr(r.src)}${r.sport ? ' eq ' + r.sport : ''} ${aclAddr(r.dst)}${r.port && r.proto !== 'ip' && r.proto !== 'icmp' ? ' eq ' + r.port : ''}${r.icmp ? ' ' + r.icmp : ''}`;
+export const aclLine = (r) => `${r.action} ${r.proto || 'ip'} ${aclAddr(r.src)}${r.sport ? ' eq ' + r.sport : ''} ${aclAddr(r.dst)}${r.port && r.proto !== 'ip' && r.proto !== 'icmp' ? ' eq ' + r.port : ''}${r.icmp ? ' ' + r.icmp : ''}${r.tr ? ' time-range ' + r.tr : ''}`;
 
 /** 產生等效的 running-config */
 /**
@@ -4782,6 +4812,7 @@ export function runningConfig(state, dev) {
     if (+nt[keys[0]] > 0) o.push(`ip nat translation ${name} ${+nt[keys[0]]}`);
   }
   if (out.some((i) => natList(i) === '1') && !(dev.aclDefs || {})['1']) o.push('access-list 1 permit any');
+  for (const [n, l] of Object.entries(dev.timeRanges || {})) o.push('!', `time-range ${n}`, ...l.map((p) => ` periodic ${p.text}`));
   for (const i of dev.ifaces) {
     for (const [key, dir] of [['aclIn', 'in'], ['aclOut', 'out']]) {
       if (!i[key] || !i[key].length) continue;

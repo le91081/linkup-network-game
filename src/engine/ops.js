@@ -6,7 +6,7 @@
 // state.dyn.ev[設備]    = 上一次看到的狀態，用來比對出「發生了什麼事」
 import { parseIp, fmtIp } from './ip.js';
 import { transact, macsBehind, closeFlow, poeTable } from './sim.js';
-import { isIos } from './ios.js';
+import { isIos, archiveRunning } from './ios.js';
 import { linkInfo, CATALOG } from './model.js';
 import { ensureFlash, bootPick, isCiscoOs, IMAGES } from './files.js';
 import { nmsTick, queueTrap, flushTraps } from './snmp.js';
@@ -636,9 +636,23 @@ function cdpNag(state, d, snap, at) {
 }
 
 /** 每次重新計算之後呼叫：NTP 輪詢、找出這一次發生的事件並記下來、把訊息送到 Syslog 伺服器 */
+/** archive 的 time-period：每隔幾分鐘自動封存一份 running-config（時間跳很多時一次最多補 20 份，反正只留 maximum 份） */
+function archiveTick(state, boot) {
+  const t = (state.dyn.archT ||= {}), down = state.down || {};
+  for (const d of Object.values(state.devices)) {
+    const a = d.archive;
+    if (!isIos(d) || !a || !a.path || !(+a.period > 0) || down[d.id]) { delete t[d.id]; continue; }
+    const per = +a.period * 60;
+    if (!t[d.id] || t[d.id].per !== per) t[d.id] = { per, next: state.clock + per };
+    if (!boot) for (let n = 0; state.clock >= t[d.id].next && n < 20; n++) { archiveRunning(state, d); t[d.id].next += per; }
+    while (state.clock >= t[d.id].next) t[d.id].next += per;
+    state.rt.pending.push({ at: t[d.id].next, dev: d.id, kind: 'archive', text: `${d.name}：archive time-period ${a.period} 分鐘，定時封存設定` });
+  }
+}
 export function opsAfter(state) {
   const dyn = state.dyn, boot = !!dyn.boot, down = state.down || {};
   ntpTick(state, boot);
+  archiveTick(state, boot);
   discTick(state);
   for (const d of Object.values(state.devices)) {
     if (!d.mgmt || !(isIos(d) || d.kind === 'firewall')) continue;

@@ -11,6 +11,7 @@ import { debugLog, longIf } from '../ops.js';
 import { dockerDeliver } from '../docker.js';
 import { fmtIp, isPrivate, parseIp, sameNet } from '../ip.js';
 import { aclRules } from '../policy.js';
+import { TR_OFF } from './core.js';
 import { PBR_HITS, PROTO_NUM, QUIET, cidrList, denyLog, fmtDur, hash, hit, ipLen, selMatch, sess, sessId, vrfOf, isVlanSw, isTrunk } from './core.js';
 import { VRRP_MAC, answerMac, arpTtl, floodPorts, l2Explore, learnPath, learns, macAgeOf, macKnown, reversed } from './l2.js';
 import { daiBlock } from './auth.js';
@@ -64,6 +65,7 @@ function aclCheck(list, pkt) {
   if (!list || !list.length) return null;
   for (let n = 0; n < list.length; n++) {
     const r = list[n];
+    if (r.tr && TR_OFF.has(r)) continue; // time-range 現在不在時間內：這條規則當作不存在
     if (r.proto && r.proto !== 'ip' && r.proto !== pkt.proto) continue;
     if (r.icmp && !icmpTypeMatch(r.icmp, pkt)) continue; // permit icmp any any packet-too-big
     if (!addrMatch(r.src, pkt.src) || !addrMatch(r.dst, pkt.dst)) continue;

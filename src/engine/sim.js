@@ -10,6 +10,7 @@ import { background } from './wire.js';
 import { cdpOn } from './disc.js';
 import { fmtIp, hostAddrProblem, netOf, parseIp, parseMask, sameNet } from './ip.js';
 import { phoneTick } from './voice.js';
+import { prepTimeRanges } from './timerange.js';
 import { prepCloud } from './cloud.js';
 import { recompute6 } from './sim6.js';
 import { setCdpCheck } from './qos.js';
@@ -153,6 +154,7 @@ function computePass(state, auth) {
       i.rt = { ip: null, bits: 0, gw: null, dns: [], src: null, note: '', active: ifaceActive(d, i), link: true, mac: ifaceMac(d, i), vips: [], assoc: null };
     }
   }
+  prepTimeRanges(state); // time-range：哪些 ACL 規則現在不在時間內
   prepPower(state); // 電源供應器全部沒電的設備：當作關機
   prepPhysical(state);
   prepDtp(state);

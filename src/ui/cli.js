@@ -32,6 +32,8 @@ import { envPowerLines } from '../engine/power.js';
 import { eigrpNeighborLines, eigrpTopoLines, eigrpIfLines, eigrpProtoLines, eigrpBw, eigrpDly } from '../engine/eigrp.js';
 import { ripDbLines, ripProtoLines } from '../engine/rip.js';
 import { epcCmd, epcDelete, epcShow } from '../engine/epc.js';
+import { timeRangeLines } from '../engine/timerange.js';
+import { TR_OFF } from '../engine/sim/core.js';
 import { CATALOG, MEDIA, peerOf, portOf, linkInfo, phyConfig, fiberLink } from '../engine/model.js';
 import { xcvrAt, xcvrSerial, MEDIA_TYPE } from '../engine/optics.js';
 import { PLATFORM as PID_OF } from '../engine/dnac.js';
@@ -544,12 +546,13 @@ const SHOW = {
     if (!rows.length) o.push('（緩衝區是空的：介面上線或斷線、鄰居關係改變、有人改設定時才會留下紀錄。重新開機之後這裡的內容會消失）');
     return o;
   },
+  'show time-range': (st, d) => timeRangeLines(st, d),
   'show access-lists': (st, d) => {
     const o = [];
     for (const i of d.ifaces) for (const [key, dir] of [['aclIn', 'in'], ['aclOut', 'out']]) {
       if (!i[key] || !i[key].length) continue;
       o.push(`Extended IP access list ${aclName(i, dir)}`);
-      { const qs = aclSeqs(i[key]); i[key].forEach((r, n) => o.push(`    ${qs[n]} ${aclLine(r)}${hitsOf(r) ? ` (${hitsOf(r)} matches)` : ''}`)); }
+      { const qs = aclSeqs(i[key]); i[key].forEach((r, n) => o.push(`    ${qs[n]} ${aclLine(r)}${r.tr ? (TR_OFF.has(r) ? ' (inactive)' : ' (active)') : ''}${hitsOf(r) ? ` (${hitsOf(r)} matches)` : ''}`)); }
     }
     return o.length ? o : ['沒有設定任何 ACL'];
   },
