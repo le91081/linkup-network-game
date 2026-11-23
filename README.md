@@ -87,7 +87,7 @@ npm run build    # 輸出到 dist/
 - **隱藏 SSID 與 MAC 過濾**：基地台的 SSID 可以不廣播名稱（掃描清單看不到，電腦的無線網路設定可以手動輸入名稱連線），也可以只允許或封鎖清單裡的 MAC 位址（不在清單裡的關聯不上，原因寫在網卡的狀態）。兩者都不是安全機制：名稱在 probe 裡照樣看得到、MAC 可以偽造。
 - **訪客碼**：訪客入口可以要求輸入訪客碼：在基地台的 SSID 設定按「產生訪客碼」（6 位數字，8 小時有效），訪客在電腦的無線網路設定輸入它才能上網；碼過期之後連線會被導回入口網頁。
 - **網路攝影機與 NVR**：攝影機（PoE Class 3）的「攝影機」分頁設定 NVR 的位址與畫質（1080p / 4MP / 4K，H.264 / H.265 的位元率），影像是固定位元率的背景流量，會和其他流量搶頻寬；NVR 的「錄影」分頁列出每一支攝影機實際收到多少、順不順（最多 8 路）。自由模式的設備清單多了「監控」。
-- **STP 的優先權與 MST**： 與  是每個 VLAN 各自設定（root primary 會設成比現在的根橋再小 4096）； 的優先權加上 sys-id-ext。、（、、）、、；所有交換器的區域設定完全一樣，各 instance 才照自己的優先權選根橋。
+- **STP 的優先權與 MST**：`spanning-tree vlan <清單> priority <n>` 與 `root primary | secondary` 是每個 VLAN 各自設定（root primary 會設成比現在的根橋再小 4096）；`show spanning-tree` 的優先權加上 sys-id-ext。`spanning-tree mode mst`、`spanning-tree mst configuration`（`name`、`revision`、`instance <id> vlan <清單>`）、`spanning-tree mst <id> priority | root`、`show spanning-tree mst [configuration]`；所有交換器的區域設定完全一樣，各 instance 才照自己的優先權選根橋。
 - **時間型 ACL**：`time-range <名稱>` → `periodic daily | weekdays | weekend | <星期幾…> <hh:mm> to <hh:mm>`，ACL 規則後面加 `time-range <名稱>`；時段外的規則當作不存在（`show access-lists` 標 (inactive)），`show time-range` 看現在是否生效。時間照設備自己的時鐘與時區（`clock timezone`），時段一到自動重算。只有 periodic，沒有 absolute。
 - **定時封存**：`archive` 底下的 `time-period <分鐘>` 每隔一段時間自動封存一份 running-config 到 path。
 - Cisco 的路由器與交換器有「CLI」分頁：IOS 風格的命令列。`show running-config`、`show startup-config`、`show ip route`、`show vlan brief`、`show interfaces trunk`、`show arp` 等四十多個 `show` 指令用來查看狀態；輸入 `configure terminal` 之後可以直接用指令設定（見下方「CLI 設定指令」），改的和圖形介面是同一份設定。
