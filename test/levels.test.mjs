@@ -5319,6 +5319,38 @@ console.log('\nPIM：跨網段的多點傳送');
   B('configure terminal', 'no ip route 10.1.10.0 255.255.255.0 10.0.12.1', 'ip route 10.1.10.0 255.255.255.0 10.2.20.254', 'end');
   ok(!st().members.includes('tvbr'), `往來源的路由改走 Gi0/0/1 的另一台：${why()}`);
 }
+console.log('\nLDAP / Active Directory：SSL-VPN 用 AD 的帳號登入');
+{
+  const { fortiSession } = await import('../src/engine/fortios.js');
+  const { vpnLogin, acctOf } = await import('../src/engine/ldap.js');
+  const ok = (cond, title) => (cond ? console.log('  ✔ ' + title) : fail(title));
+  const lv = LEVELS.find((x) => x.id === 'l146');
+  const s = lv.setup(); settle(s);
+  const fg = s.devices.hq, F = fortiSession(() => s.devices.hq, () => s);
+  const run = (...ls) => ls.map((l) => F.exec(l).out.join('\n')).join('\n');
+  const why = (u, p) => vpnLogin(s, fg, u, p).why;
+  ok(vpnLogin(s, fg, 'chen', 'Vpn#Chen2025').ok && /本機的帳號/.test(why('amy', 'Amy#AD2026')), '開場：本機帳號 chen 還能登入；amy 用 AD 的新密碼登入失敗');
+  ok(acctOf('CN=svc-fortigate,CN=Users,DC=corp,DC=local') === 'svc-fortigate' && acctOf('svc-fortigate@corp.local') === 'svc-fortigate' && acctOf('CORP\\svc-fortigate') === 'svc-fortigate', '服務帳號的寫法：DN、UPN、網域\\帳號都認得');
+  run('config user ldap', 'edit "AD"', 'set server "10.1.0.5"', 'set dn "DC=corp,DC=local"', 'set type regular', 'set username "svc-fortigate@corp.local"', 'set password Ldap#Bind2026', 'next', 'end',
+    'config user group', 'edit "vpn-users"', 'set member "AD"', 'config match', 'edit 1', 'set server-name "AD"', 'set group-name "CN=VPN-Users,OU=Groups,DC=corp,DC=local"', 'next', 'end', 'next', 'end',
+    'config user local', 'delete amy', 'delete chen', 'end');
+  ok(/找不到 amy（cnid 是 cn/.test(why('amy', 'Amy#AD2026')), 'cnid 沒改（預設 cn 比對顯示名稱）：AD 裡找不到 amy');
+  run('config user ldap', 'edit "AD"', 'set cnid "sAMAccountName"', 'next', 'end');
+  ok(vpnLogin(s, fg, 'amy', 'Amy#AD2026').ok && /停用/.test(why('chen', 'Chen#AD2025')) && /不在 AD 的 vpn-users 群組/.test(why('bob', 'Bob#AD2026')) && /密碼不對/.test(why('amy', 'wrong')), 'cnid sAMAccountName：amy 通過；chen 已停用、bob 不在群組、密碼錯誤各有原因');
+  run('config user ldap', 'edit "AD"', 'set dn "DC=corp,DC=com"', 'next', 'end');
+  ok(/在 dn「DC=corp,DC=com」底下找不到/.test(why('amy', 'Amy#AD2026')), 'dn 打錯：找不到使用者');
+  run('config user ldap', 'edit "AD"', 'set dn "DC=corp,DC=local"', 'set password Wrong', 'next', 'end');
+  ok(/bind 失敗/.test(why('amy', 'Amy#AD2026')), '服務帳號的密碼不對：bind 失敗');
+  run('config user ldap', 'edit "AD"', 'set password Ldap#Bind2026', 'set secure ldaps', 'next', 'end');
+  ok(vpnLogin(s, fg, 'amy', 'Amy#AD2026').ok, 'secure ldaps：改走 TCP 636，AD 有憑證，照樣通過');
+  s.devices.dc.ad.ldaps = false;
+  ok(/沒有 LDAPS 用的憑證/.test(why('amy', 'Amy#AD2026')), 'AD 沒有憑證：LDAPS 的 TLS 交握失敗');
+  s.devices.dc.ad.ldaps = true;
+  const cfg = run('show user ldap');
+  ok(/set cnid "sAMAccountName"/.test(cfg) && /set secure ldaps/.test(cfg) && /set password ENC /.test(cfg) && /set group-name "CN=VPN-Users,OU=Groups,DC=corp,DC=local"/.test(run('show user group')), 'show user ldap（密碼加密顯示）與 show user group 的 config match');
+  s.devices.dc.ad.users.find((u) => u.user === 'amy').disabled = true;
+  ok(/停用/.test(why('amy', 'Amy#AD2026')), '人資在 AD 停用 amy：VPN 立刻登不進去');
+}
 console.log('\nNetFlow 與 QoS 的 police');
 {
   const sim = await import('../src/engine/sim.js');

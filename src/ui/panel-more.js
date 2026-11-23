@@ -272,3 +272,20 @@ export function tacacsServerTab(ctx, body) {
   }));
   body.append(lc);
 }
+
+/** Active Directory（網域控制站）：帳號、群組、停用；LDAP (TCP 389 / LDAPS 636) 給防火牆等設備查詢 */
+export function adTab(ctx, body) {
+  const { dev } = ctx;
+  const ad = dev.ad;
+  body.append(h('p', { class: 'tip', text: `網域 ${ad.domain}（${ad.base}）。防火牆、VPN 用 LDAP 來查帳號：先用服務帳號登入 (bind)，再找使用者、檢查密碼與群組。帳號停用之後，所有用 AD 驗證的地方都會一起失效。` }));
+  const card = h('div', { class: 'card' }, cardHead(`使用者（${ad.users.length}）`),
+    h('div', { class: 'thead c-ad' }, h('span', { text: '登入名稱' }), h('span', { text: '密碼' }), h('span', { text: '群組（逗號分隔）' }), h('span', { text: '停用' }), h('span')));
+  ad.users.forEach((u, n) => card.append(h('div', { class: 'trow c-ad' },
+    inp(ctx, ...bind(u, 'user'), { ph: '例如 alice', mono: false }), inp(ctx, ...bind(u, 'pass'), { ph: '密碼' }),
+    inp(ctx, () => (u.groups || []).join(', '), (v) => { u.groups = String(v).split(/[,，]\s*/).map((x) => x.trim()).filter(Boolean); }, { ph: '例如 VPN-Users', mono: false }),
+    toggle(ctx, () => !!u.disabled, (v) => { u.disabled = v; }, ''),
+    del(() => { ad.users.splice(n, 1); ctx.commit(true); }))));
+  card.append(h('div', { class: 'addrow' }, button('新增使用者', { ic: 'plus', small: true, onclick: () => { ad.users.push({ user: '', pass: '', groups: [] }); ctx.commit(true); } })));
+  card.append(toggle(ctx, () => !!ad.ldaps, (v) => { ad.ldaps = v; }, 'LDAPS（TCP 636）：伺服器有憑證，查詢的內容加密'));
+  body.append(card);
+}

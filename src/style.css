@@ -950,3 +950,6 @@ table.ipplan td { padding: 5px 8px; border-top: 1px solid var(--line); white-spa
 .t2-link.heat { stroke-linecap: round; opacity: 0.95; }
 .t2-heat { font-size: 11px; font-weight: 700; text-anchor: middle; paint-order: stroke; stroke: #0a0f1f; stroke-width: 3px; }
 #topo2d .t2-tools .btn.on { background: rgba(245, 181, 71, 0.18); border-color: #f5b547; color: #f5b547; }
+
+/* Active Directory 的使用者表格 */
+.c-ad { grid-template-columns: minmax(70px, 1fr) minmax(70px, 1fr) minmax(90px, 1.4fr) 40px 28px; }

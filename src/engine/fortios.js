@@ -564,12 +564,38 @@ const SEC = {
     },
     remove(d, key) { const n = d.vpnServer.users.length; d.vpnServer.users = d.vpnServer.users.filter((u) => u.user !== key); return d.vpnServer.users.length < n ? undefined : notFound(`沒有 ${key} 這個使用者`); },
   },
+  // LDAP 伺服器（Active Directory）：SSL-VPN 的群組可以對應到 AD 的群組
+  'user ldap': {
+    only: (d) => !!d.vpnServer, fields: { server: 'q', port: 'b', cnid: 'q', dn: 'q', type: 'b', username: 'q', password: 'b', secure: 'b' },
+    read: (d) => Object.entries(d.ldap || {}).map(([k, c]) => ({ key: k, f: { server: [c.server], ...(c.port ? { port: [String(c.port)] } : {}), cnid: [c.cnid || 'cn'], dn: [c.dn || ''], type: ['regular'], ...(c.username ? { username: [c.username] } : {}), ...(c.password ? { password: ['ENC', encPw(c.password)] } : {}), ...(c.secure && c.secure !== 'disable' ? { secure: [c.secure] } : {}) } })),
+    write(d, key, f) {
+      const server = (f.server || [''])[0];
+      if (parseIp(server) == null) return ERR('還沒有 LDAP 伺服器的位址：set server "<IP>"');
+      const pw = f.password ? (f.password[0] === 'ENC' ? decPw(f.password[1] || '') : f.password.join(' ')) : '';
+      const sec = (f.secure || ['disable'])[0];
+      if (!['disable', 'ldaps', 'starttls'].includes(sec)) return ERR('secure 只能是 disable、ldaps 或 starttls');
+      (d.ldap ||= {})[key] = { server, port: f.port ? +f.port[0] : 0, cnid: (f.cnid || ['cn'])[0], dn: (f.dn || [''])[0], username: (f.username || [''])[0], password: pw, secure: sec === 'starttls' ? 'disable' : sec };
+      return undefined;
+    },
+    remove(d, key) { if (!(d.ldap || {})[key]) return notFound(`沒有名為 ${key} 的 LDAP 伺服器`); delete d.ldap[key]; return undefined; },
+  },
   'user group': {
     only: (d) => !!d.vpnServer, fields: { member: 'q' },
-    read: (d) => (d.vpnServer.users.some((u) => u.user) ? [{ key: d.vpnServer.group || 'vpn-users', f: { member: d.vpnServer.users.filter((u) => u.user).map((u) => u.user) } }] : []),
-    write(d, key, f) {
-      const bad = (f.member || []).find((m) => !d.vpnServer.users.some((u) => u.user === m));
-      if (bad) return notFound(`沒有 ${bad} 這個使用者，先用 config user local 建立`);
+    subs: { match: { numeric: true, fields: { 'server-name': 'q', 'group-name': 'q' } } },
+    read: (d) => (d.vpnServer.users.some((u) => u.user) || (d.vpnServer.ldapMatch || []).length ? [{ key: d.vpnServer.group || 'vpn-users',
+      f: { member: [...d.vpnServer.users.filter((u) => u.user && (!d.vpnServer.members || d.vpnServer.members.includes(u.user))).map((u) => u.user), ...new Set((d.vpnServer.ldapMatch || []).map((m) => m.server))] },
+      sub: { match: (d.vpnServer.ldapMatch || []).map((m, n) => ({ key: String(n + 1), f: { 'server-name': [m.server], 'group-name': [m.group] } })) } }] : []),
+    write(d, key, f, sub) {
+      const ldaps = Object.keys(d.ldap || {});
+      const bad = (f.member || []).find((m) => !d.vpnServer.users.some((u) => u.user === m) && !ldaps.includes(m));
+      if (bad) return notFound(`沒有 ${bad} 這個使用者或 LDAP 伺服器，先用 config user local 或 config user ldap 建立`);
+      // 群組的成員：列出來的本機使用者（帳號本身留著，只是不在群組裡就不能登入 VPN）；
+      // LDAP 伺服器要在 config match 指定 AD 的群組（沒有指定就是那台的所有使用者）
+      const keep = new Set(f.member || []);
+      d.vpnServer.members = d.vpnServer.users.filter((u) => keep.has(u.user)).map((u) => u.user);
+      const ms = ((sub && sub.match) || []).map((e) => ({ server: ((e.f || {})['server-name'] || [''])[0], group: ((e.f || {})['group-name'] || [''])[0] })).filter((m) => m.server);
+      for (const s of ldaps.filter((x) => keep.has(x))) if (!ms.some((m) => m.server === s)) ms.push({ server: s, group: '' });
+      if (ms.length) d.vpnServer.ldapMatch = ms; else delete d.vpnServer.ldapMatch;
       d.vpnServer.group = key;
       return undefined;
     },

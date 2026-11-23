@@ -7,6 +7,7 @@ import { leaseFrom, lookupRoute } from './l3.js';
 import { transact } from './transact.js';
 import { isTun, protPeers, tunMode } from './gre.js';
 import { tpOf, urlTarget, verifyPeer } from '../pki.js';
+import { vpnLogin } from '../ldap.js';
 
 // ───────────────────────────── VPN 通道 ─────────────────────────────
 
@@ -339,7 +340,9 @@ export function prepTunnels(state) {
     const res = transact(state, d.id, { proto: 'tcp', dst: server, dport: +c.port || 10443, quiet: true });
     if (!res.ok) { d.rt.vpn.why = '連不到 VPN 伺服器：' + res.reason; continue; }
     const vs = sd.vpnServer;
-    if (!c.user || !(vs.users || []).some((u) => u.user === c.user && u.pass === c.pass)) { d.rt.vpn.why = 'VPN 帳號或密碼錯誤'; continue; }
+    // 帳號：FortiGate 本機的使用者，或群組對應到的 LDAP (AD)
+    const auth = vpnLogin(state, sd, c.user, c.pass);
+    if (!auth.ok) { d.rt.vpn.why = auth.why; continue; }
     const subnets = cidrList(vs.subnets);
     if (!subnets.length) { d.rt.vpn.why = `${sd.name} 沒有設定 VPN 用戶可以存取的內部網段`; continue; }
     const key = sd.id;
