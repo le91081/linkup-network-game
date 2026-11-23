@@ -165,8 +165,9 @@ export const CATALOG = {
   },
   c9300: {
     kind: 'l3switch', shape: 'switch-r', vendor: 'Cisco', title: 'Cisco Catalyst 9300-24T',
-    tagline: '園區核心 L3 交換器 · 24×GE + 4×10G SFP+',
-    ports: [...seq(24, (i) => rj('Gi1/0/' + i)), ...seq(4, (i) => sfp('Te1/1/' + i))],
+    tagline: '園區核心 L3 交換器 · 24×GE + 4×10G SFP+ · 管理埠 Gi0/0',
+    // Gi0/0 是帶外管理埠：不是交換埠，出廠就在 Mgmt-vrf 裡（自己的路由表）
+    ports: [...seq(24, (i) => rj('Gi1/0/' + i)), ...seq(4, (i) => sfp('Te1/1/' + i)), rj('Gi0/0', 'Gi0/0', { mgmt: true })],
   },
   fg60f: {
     kind: 'firewall', shape: 'firewall', vendor: 'Fortinet', title: 'Fortinet FortiGate 60F',
@@ -303,6 +304,12 @@ export function makeDevice(model, id, o = {}) {
       d.radius = { ip: '', secret: '' };
       if (m.kind === 'l3switch') { d.routing = true; d.ospfDefault = false; }
       else d.ifaces = [iface('mgmt', '管理介面', { t: 'svi', vlan: 1 })];
+      // 帶外管理埠：Routed、在 Mgmt-vrf 裡（Catalyst 9300 的 Gi0/0）
+      for (const p of d.ports.filter((x) => x.mgmt)) {
+        d.sw.ports[p.id] = { ...d.sw.ports[p.id], mode: 'routed' };
+        d.vrfs = { ...(d.vrfs || {}), 'Mgmt-vrf': { style: 'def', af4: true, af6: true, mgmt: true } };
+        d.ifaces.push(iface(p.id, p.label, { t: 'port', port: p.id }, { vrf: 'Mgmt-vrf' }));
+      }
       break;
     case 'router':
       d.ifaces = d.ports.map((p) => iface(p.id, p.label, { t: 'port', port: p.id }));

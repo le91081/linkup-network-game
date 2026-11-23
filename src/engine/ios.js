@@ -1,6 +1,7 @@
 // IOS 風格的設定指令：把 configure terminal 之後輸入的指令套用到設備的設定物件上。
 // 不依賴瀏覽器，可以直接用 Node 測試。支援的範圍就是 show running-config 會印出來的那些指令，
 // 所以把一台設備的 running-config 整份貼到另一台同型號的設備上，會得到相同的設定。
+import { isMgmtPort } from './mgmtsrc.js';
 import { parseIp, fmtIp, parseMask, fmtMask, maskOf, netOf, bcastOf, parseVlanList } from './ip.js';
 import { parseCidr6, parseIp6, fmtIp6, net6, isLinkLocal } from './ip6.js';
 import { ICMP6_TYPES } from './sim6.js';
@@ -529,7 +530,9 @@ export function iosSession(getDev, getState, who = null) {
   const l3 = (t) => (t.iface && (!t.pc || t.pc.mode === 'routed') ? null : err(`${t.name} 是第二層的連接埠，不能設定 IP 相關的指令${dev().kind === 'l3switch' ? '（先下 no switchport）' : ''}`));
   const l2 = (t) => (t.pc ? null : err(`${t.name} 不是交換器的連接埠`));
   const onL3 = (fn) => each((t) => l3(t) || fn(t.iface, t));
-  const onL2 = (fn) => each((t) => l2(t) || fn(t.pc, t));
+  // 帶外管理埠（Gi0/0）不是交換埠
+  const mgmtL2 = (t) => (t.port && isMgmtPort(dev(), t.port.id) ? err(`% ${t.name} 是帶外管理埠（Mgmt-vrf），不能設定成交換埠`) : null);
+  const onL2 = (fn) => each((t) => l2(t) || mgmtL2(t) || fn(t.pc, t));
   /** 第三層介面能設定的最大 ip mtu：路由器看介面的 mtu、Catalyst 9300 看 system mtu */
   const l2Of = (i) => {
     const d = dev();
@@ -689,6 +692,7 @@ export function iosSession(getDev, getState, who = null) {
     }],
     ['no ip address', () => onL3((i) => { Object.assign(i, { mode: 'static', ip: '', mask: '' }); })],
     ...[['vrf forwarding <v>', 'def'], ['ip vrf forwarding <v>', 'ip']].map(([pat, style]) => [pat, ([v], out) => {
+      if (v !== 'Mgmt-vrf' && S.cur.some((t) => t.port && isMgmtPort(dev(), t.port.id))) return err('% 帶外管理埠只能在 Mgmt-vrf 裡');
       const vd = (dev().vrfs || {})[v];
       if (!vd) return err(`% VRF ${v} not configured.（先用 ${style === 'def' ? 'vrf definition' : 'ip vrf'} ${v} 建立）`);
       if (vd.style !== style) return err(`% ${v} 是用 ${vd.style === 'def' ? 'vrf definition' : 'ip vrf'} 建立的，介面上要用 ${vd.style === 'def' ? 'vrf forwarding' : 'ip vrf forwarding'}`);
@@ -773,6 +777,9 @@ export function iosSession(getDev, getState, who = null) {
     ['no ip policy route-map [...]', () => onL3((i) => { delete i.policyRm; })],
     ['ip tcp adjust-mss <n>', ([n]) => (/^\d+$/.test(n) && +n >= 500 && +n <= 1460 ? onL3((i) => { i.adjMss = +n; }) : err('% ip tcp adjust-mss 的範圍是 500 – 1460（IPsec 常用 1360、PPPoE 用 1452）'))],
     ['no ip tcp adjust-mss [...]', () => onL3((i) => { delete i.adjMss; })],
+    // 自動協商速率與雙工（帶外管理埠、路由器的 GE 埠預設就是這樣）：模擬裡沒有作用
+    ['negotiation auto', () => undefined],
+    ['no negotiation auto', () => undefined],
     // ICMP Redirect：預設開著
     ['ip redirects', () => onL3((i) => { delete i.redirects; })],
     ['no ip redirects', () => onL3((i) => { i.redirects = false; })],
@@ -1084,7 +1091,7 @@ export function iosSession(getDev, getState, who = null) {
       if (!t.iface) { t.iface = newIface(t.port.id, t.port.label, { t: 'port', port: t.port.id }); d.ifaces.push(t.iface); }
       return undefined;
     })],
-    ['switchport', () => onL2((pc) => { if (pc.mode === 'routed') pc.mode = defaultPortMode(dev().model); })],
+    ['switchport', () => onL2((pc) => { if (pc.mode === 'routed') pc.mode = defaultPortMode(dev().model); })], // onL2 擋掉帶外管理埠
     ['switchport port-security', () => onL2((pc) => { (pc.ps ||= { on: false, macs: '', mode: 'shutdown' }).on = true; })],
     ['no switchport port-security', () => onL2((pc) => { if (pc.ps) pc.ps.on = false; })],
     ['switchport port-security maximum <n> [...]', ([n]) => {
@@ -2161,6 +2168,11 @@ export function iosSession(getDev, getState, who = null) {
     ['ip ftp password <...>', ([p]) => { (dev().ftpLogin ||= {}).pass = readSecret(p.split(/\s+/)); }],
     ['no ip ftp username [...]', () => { if (dev().ftpLogin) delete dev().ftpLogin.user; }],
     ['no ip ftp password [...]', () => { if (dev().ftpLogin) delete dev().ftpLogin.pass; }],
+    // 管理流量從哪個介面送出去（帶外管理埠在 Mgmt-vrf：TFTP 伺服器只接在管理網路時一定要設）
+    ...['tftp', 'ftp'].flatMap((k) => [
+      [`ip ${k} source-interface <if>`, ([name]) => { const i = ifByName(name); if (isErr(i)) return i; (dev().srcIf ||= {})[k] = i.id; return undefined; }],
+      [`no ip ${k} source-interface [...]`, () => { const d = dev(); if (d.srcIf) { delete d.srcIf[k]; if (!Object.keys(d.srcIf).length) delete d.srcIf; } return undefined; }],
+    ]),
     ['ip tftp blocksize <n>', ([n]) => { if (!/^\d+$/.test(n) || +n < 512 || +n > 8192) return err('用法：ip tftp blocksize <512-8192>'); if (+n === 512) delete dev().tftpBlk; else dev().tftpBlk = +n; return undefined; }],
     ['no ip tftp blocksize [...]', () => { delete dev().tftpBlk; }],
     ['line vty [...]', () => { if (!dev().mgmt) return err('這台設備不支援'); enter('line', null); return undefined; }],
@@ -2227,8 +2239,14 @@ export function iosSession(getDev, getState, who = null) {
     ['no ip http server', () => void (dev().mgmt && (dev().mgmt.http = false))],
     ['ip http secure-server', () => void (dev().mgmt && (dev().mgmt.https = true))],
     ['no ip http secure-server', () => void (dev().mgmt && (dev().mgmt.https = false))],
+    ['ntp server vrf <v> <ip> [...]', ([v, ip]) => {
+      if (!(dev().vrfs || {})[v]) return err(`% VRF ${v} does not exist`);
+      if (parseIp(ip) == null) return err('IP 位址的格式不正確');
+      if (dev().mgmt) Object.assign(dev().mgmt, { ntp: ip, ntpVrf: v });
+      return undefined;
+    }],
     ['ntp server <ip> [...]', ([ip]) => (parseIp(ip) == null ? err('IP 位址的格式不正確') : void (dev().mgmt && (dev().mgmt.ntp = ip)))],
-    ['no ntp server [...]', () => void (dev().mgmt && (dev().mgmt.ntp = ''))],
+    ['no ntp server [...]', () => void (dev().mgmt && Object.assign(dev().mgmt, { ntp: '', ntpVrf: '' }))],
     // 把自己的時鐘當成時間來源，替其他設備報時（沒有上游可以對時的時候用）
     ['ntp master [...]', ([n]) => {
       const m = dev().mgmt, s = n ? +n : 8;
@@ -2348,9 +2366,15 @@ export function iosSession(getDev, getState, who = null) {
       if (d.natTimeout && !Object.keys(d.natTimeout).length) delete d.natTimeout;
       return undefined;
     }],
+    ['logging host <ip> vrf <v>', ([ip, v]) => {
+      if (!(dev().vrfs || {})[v]) return err(`% VRF ${v} does not exist`);
+      if (parseIp(ip) == null) return err('IP 位址的格式不正確');
+      if (dev().mgmt) Object.assign(dev().mgmt, { syslog: ip, syslogVrf: v });
+      return undefined;
+    }],
     ['logging host <ip>', ([ip]) => (parseIp(ip) == null ? err('IP 位址的格式不正確') : void (dev().mgmt && (dev().mgmt.syslog = ip)))],
     ['logging <ip>', ([ip]) => (parseIp(ip) == null ? err('用法：logging host <Syslog 伺服器 IP>') : void (dev().mgmt && (dev().mgmt.syslog = ip)))],
-    ['no logging [...]', () => void (dev().mgmt && (dev().mgmt.syslog = ''))],
+    ['no logging [...]', () => void (dev().mgmt && Object.assign(dev().mgmt, { syslog: '', syslogVrf: '' }))],
     // snmp-server community <字串> [RO|RW] [ACL]：ACL 限制只有哪些來源可以查詢
     ['snmp-server community <str> [...]', ([str, rest]) => {
       const m = dev().mgmt;
@@ -4426,6 +4450,7 @@ export function runningConfig(state, dev) {
   if ((dev.bootSys || []).length) o.push(...dev.bootSys.map((b) => `boot system ${b}`), '!');
   if (dev.ftpLogin && (dev.ftpLogin.user || dev.ftpLogin.pass)) o.push(...(dev.ftpLogin.user ? [`ip ftp username ${dev.ftpLogin.user}`] : []), ...(dev.ftpLogin.pass ? [`ip ftp password 7 ${hex(dev.ftpLogin.pass)}`] : []), '!');
   if (+dev.tftpBlk > 512) o.push(`ip tftp blocksize ${+dev.tftpBlk}`, '!');
+  for (const [k, id] of Object.entries(dev.srcIf || {})) { const i = dev.ifaces.find((x) => x.id === id); if (i) o.push(`ip ${k} source-interface ${longIf(i.label)}`); }
   const m = dev.mgmt;
   if (m && m.enableSecret) o.push(`enable secret 9 ${secret9(m.enableSecret)}`, '!');
   const aaa = aaaTop(dev) ? dev.aaa : null;
@@ -4767,7 +4792,7 @@ export function runningConfig(state, dev) {
       o.push(`interface ${longIf(p.label)}`, ...desc, ...phy, ...(+pc.mtu ? [` mtu ${+pc.mtu}`] : []));
       if (pc.mode === 'routed') {
         const i = dev.ifaces.find((x) => x.bind.t === 'port' && x.bind.port === p.id);
-        o.push(' no switchport', ...(i ? l3lines(i) : []), ...ndl);
+        o.push(...(p.mgmt ? [] : [' no switchport']), ...(i ? l3lines(i) : []), ...(p.mgmt ? [' negotiation auto'] : []), ...ndl); // 帶外管理埠本來就不是交換埠
       } else {
         // 真的 IOS 的順序：access vlan、trunk 的設定、mode、nonegotiate、voice vlan。出廠預設的模式不會印出來
         if (pc.vlan !== 1) o.push(` switchport access vlan ${pc.vlan}`);
@@ -5032,9 +5057,9 @@ export function runningConfig(state, dev) {
     if (dev.unsupportedXcvr) o.push('service unsupported-transceiver');
     if (m.tz && m.tz.name) o.push(`clock timezone ${m.tz.name} ${m.tz.off}`);
     if (+m.ntpMaster > 0) o.push(`ntp master ${+m.ntpMaster}`);
-    if (m.ntp) o.push(`ntp server ${m.ntp}`);
+    if (m.ntp) o.push(`ntp server ${m.ntpVrf ? `vrf ${m.ntpVrf} ` : ''}${m.ntp}`);
     if (m.logTrap != null && m.logTrap !== '' && +m.logTrap !== 6) o.push(`logging trap ${SEVERITY[+m.logTrap]}`);
-    if (m.syslog) o.push(`logging host ${m.syslog}`);
+    if (m.syslog) o.push(`logging host ${m.syslog}${m.syslogVrf ? ` vrf ${m.syslogVrf}` : ''}`);
     if (m.block && +m.block.sec > 0) o.push(`login block-for ${m.block.sec} attempts ${m.block.tries} within ${m.block.within}`);
     if (m.loginLog && m.loginLog.fail) o.push('login on-failure log');
     if (m.loginLog && m.loginLog.ok) o.push('login on-success log');

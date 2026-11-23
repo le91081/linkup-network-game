@@ -598,7 +598,8 @@ export function forward(state, ctx, startId, pkt) {
     }
 
     // 自己送出的封包：ping vrf X 指定的 VRF 只套用在發出 ping 的那一台（回應的那一台用它自己的全域路由表）
-    const vrfNow = inIf ? vrfOf(inIf) : dev.id === ctx.vrfDev ? ctx.vrf : '';
+    const srcIf = !inIf && dev.id !== ctx.vrfDev && dev.routing ? dev.ifaces.find((i) => i.rt && i.rt.ip === pkt.src && vrfOf(i)) : null;
+    const vrfNow = inIf ? vrfOf(inIf) : dev.id === ctx.vrfDev ? ctx.vrf : srcIf ? vrfOf(srcIf) : '';
     // 政策路由：介面上的 ip policy route-map（路由器自己送出的封包看 ip local policy route-map）先決定下一站，沒有符合才查路由表
     const pbrName = cloud ? null : inIf ? inIf.policyRm : dev.localPolicy;
     // 主機的目的地快取：之前收到 ICMP Redirect 的目的地，直接送給 Redirect 指定的下一站

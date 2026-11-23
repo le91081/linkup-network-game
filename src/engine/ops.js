@@ -4,6 +4,7 @@
 // state.dyn.log[設備]   = [{ n, t, sev, line }]       設備自己的紀錄緩衝區（RAM，重開機就沒了）
 // state.dyn.syslog[伺服器] = [{ n, t, ip, dev, sev, line }]   Syslog 伺服器收到的訊息
 // state.dyn.ev[設備]    = 上一次看到的狀態，用來比對出「發生了什麼事」
+import { mgmtSpec } from './mgmtsrc.js';
 import { parseIp, fmtIp } from './ip.js';
 import { transact, macsBehind, closeFlow, poeTable } from './sim.js';
 import { isIos, archiveRunning } from './ios.js';
@@ -172,7 +173,7 @@ function ntpRound(state, boot, round) {
     if (!n || n.srv !== srv) n = c.ntp = { srv, poll: -1e9, okSince: null, synced: false, reach: 0 };
     if (now - n.poll >= NTP_POLL || (boot && (round === 0 || n.okSince == null))) {
       n.poll = now;
-      const r = transact(state, d.id, { proto: 'udp', dst: srv, dport: 123, quiet: true });
+      const r = transact(state, d.id, { proto: 'udp', dst: srv, dport: 123, quiet: true, ...mgmtSpec(d, 'ntp') });
       if (r.ok) {
         n.ref = r.responder; n.why = '';
         n.stratum = stratumOf(state, state.devices[r.responder]) + 1;
@@ -238,7 +239,7 @@ function flushSyslog(state) {
     const d = state.devices[m.dev];
     if (!d) continue;
     const key = m.dev + '>' + m.srv;
-    reach[key] ??= transact(state, m.dev, { proto: 'udp', dst: m.srv, dport: 514, quiet: true });
+    reach[key] ??= transact(state, m.dev, { proto: 'udp', dst: m.srv, dport: 514, quiet: true, ...mgmtSpec(d, 'syslog') });
     const r = reach[key], c = (state.dyn.clk[m.dev] ||= {});
     if (!r.ok) { c.lost = (c.lost || 0) + 1; c.lostWhy = r.reason; continue; }
     c.sent = (c.sent || 0) + 1;

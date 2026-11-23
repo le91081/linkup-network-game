@@ -4,6 +4,7 @@
 //                 d.ftpUsers = [{ user, pass }]；services 裡有 UDP 69 是 TFTP、TCP 21 是 FTP
 // 網路設備：     d.flash = { size, files: { 檔名: { size, md5, kind, img?, t } } }   d.fw = { image, ver }
 //                 開機用哪一個映像檔：設定裡的 boot system（d.bootSys），沒有就用 flash 裡第一個能用的
+import { mgmtSpec } from './mgmtsrc.js';
 import { CATALOG } from './model.js';
 import { transact, throughput } from './sim.js';
 import { fmtIp } from './ip.js';
@@ -124,7 +125,8 @@ export function transfer(state, devId, o) {
   const tftp = o.proto === 'tftp', scp = o.proto === 'scp';
   // SCP 走 SSH（TCP 22）：帳號、密碼與檔案內容都加密了，擷取只看得到 Encrypted packet
   const data = tftp ? { kind: 'tftp', op: o.dir === 'get' ? 'RRQ' : 'WRQ', file: o.file } : scp ? { kind: 'out' } : { kind: 'ftp', user: o.user || 'anonymous', pass: o.pass || '', cmd: `${o.dir === 'get' ? 'RETR' : 'STOR'} ${o.file}` };
-  const res = transact(state, devId, { proto: tftp ? 'udp' : 'tcp', dst: o.server, dport: tftp ? 69 : scp ? 22 : 21, data });
+  // ip tftp | ftp source-interface：從那個介面（和它的 VRF，例如帶外管理埠的 Mgmt-vrf）送出去
+  const res = transact(state, devId, { proto: tftp ? 'udp' : 'tcp', dst: o.server, dport: tftp ? 69 : scp ? 22 : 21, data, ...mgmtSpec(d, tftp ? 'tftp' : scp ? 'scp' : 'ftp') });
   const fail = (err, reason) => ({ ok: false, err, reason, res, secs: tftp ? 30 : 0 });
   if (!res.ok) return fail(tftp ? 'Timed out' : /拒絕/.test(res.reason) ? 'Connection refused' : 'Timed out', res.reason);
   const srv = state.devices[res.responder];

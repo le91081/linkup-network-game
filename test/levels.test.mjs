@@ -5176,6 +5176,36 @@ console.log('\nFortiGate 的 VIP：extintf 與 hairpin');
   const g = transact(s, 'pc1', { proto: 'tcp', dst: WAN, dport: 3389 });
   ok(g.ok && g.log.some((l) => /來源位址 192\.168\.1\.21 換成 192\.168\.1\.1/.test(l.text)), '政策開 NAT：來源換成防火牆在 internal 的位址，hairpin 通了');
 }
+console.log('\n帶外管理：Catalyst 9300 的 Gi0/0 與 Mgmt-vrf');
+{
+  const { iosSession, runningConfig } = await import('../src/engine/ios.js');
+  const { iosRun } = await import('../src/ui/cli.js');
+  const ok = (cond, title) => (cond ? console.log('  ✔ ' + title) : fail(title));
+  const cli = (s, id) => { const S = iosSession(() => s.devices[id], () => s); return (...lines) => { const out = []; for (const l of lines) { const r = iosRun({ state: s, showTrace() {}, refreshLive() {} }, id, S, l, (x) => out.push(x)); if (r.changed) settle(s); } return out.join('\n'); }; };
+  const lv = LEVELS.find((x) => x.id === 'l142');
+  const s = lv.setup(); settle(s);
+  const C = cli(s, 'core');
+  C('enable');
+  const rc0 = runningConfig(s, s.devices.core).join('\n');
+  ok(/^vrf definition Mgmt-vrf$/m.test(rc0) && /interface GigabitEthernet0\/0\n( description .*\n)? vrf forwarding Mgmt-vrf/.test(rc0), '出廠：Gi0/0 在 Mgmt-vrf 裡（vrf definition Mgmt-vrf、vrf forwarding Mgmt-vrf）');
+  ok(/帶外管理埠/.test(C('configure terminal', 'interface Gi0/0', 'switchport', 'end')) && /只能在 Mgmt-vrf/.test(C('configure terminal', 'interface Gi0/0', 'vrf forwarding RED', 'end')), 'Gi0/0 不能當交換埠、不能換到別的 VRF');
+  C('configure terminal', 'interface Gi0/0', 'ip address 192.168.100.2 255.255.255.0', 'no shutdown', 'end');
+  const noc = () => transact(s, 'noc', { proto: 'tcp', dst: parseIp('192.168.100.2'), dport: 22 });
+  ok(!noc().ok && transact(s, 'ort', { proto: 'icmp', dst: parseIp('192.168.100.2') }).ok, '只有 IP：管理路由器 ping 得到，網管中心的 SSH 回不去（Mgmt-vrf 沒有往 192.168.200.0 的路由）');
+  C('configure terminal', 'ip route vrf Mgmt-vrf 0.0.0.0 0.0.0.0 192.168.100.1', 'end');
+  ok(noc().ok, 'ip route vrf Mgmt-vrf 0.0.0.0 0.0.0.0 192.168.100.1：網管中心連得上');
+  ok(/Success rate is 0 percent/.test(C('ping 192.168.200.10')) && /Success rate is 100 percent/.test(C('ping vrf Mgmt-vrf 192.168.200.10')), 'ping 走全域的路由表不通，ping vrf Mgmt-vrf 才通');
+  ok(!s.devices.core.rt.routes.some((r) => !r.vrf && r.net === 0), '全域的路由表沒有預設路由：使用者的網段碰不到管理網路');
+  const before = C('copy running-config tftp://192.168.200.20/core-sw-confg', '');
+  ok(!(s.devices.bk.files || {})['core-sw-confg'] && /Error|Timed out|失敗/.test(before), '沒有指定 source-interface：TFTP 照全域的路由表送，備份失敗');
+  C('configure terminal', 'ip tftp source-interface GigabitEthernet0/0', 'logging host 192.168.200.20 vrf Mgmt-vrf', 'ntp server vrf Mgmt-vrf 192.168.200.20', 'end');
+  C('copy running-config tftp://192.168.200.20/core-sw-confg', '');
+  ok(!!(s.devices.bk.files || {})['core-sw-confg'], 'ip tftp source-interface GigabitEthernet0/0：備份走管理網路');
+  const rc = runningConfig(s, s.devices.core).join('\n');
+  ok(/^ip tftp source-interface GigabitEthernet0\/0$/m.test(rc) && /^logging host 192\.168\.200\.20 vrf Mgmt-vrf$/m.test(rc) && /^ntp server vrf Mgmt-vrf 192\.168\.200\.20$/m.test(rc) && /^ip route vrf Mgmt-vrf 0\.0\.0\.0 0\.0\.0\.0 192\.168\.100\.1$/m.test(rc), 'running-config：ip tftp source-interface、logging host … vrf、ntp server vrf、ip route vrf');
+  const ntp = s.dyn.clk.core && s.dyn.clk.core.ntp;
+  ok(!ntp || ntp.srv === parseIp('192.168.200.20'), 'NTP 經由 Mgmt-vrf 送出');
+}
 console.log('\nNetFlow 與 QoS 的 police');
 {
   const sim = await import('../src/engine/sim.js');

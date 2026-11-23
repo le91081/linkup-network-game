@@ -33,7 +33,7 @@ export const CERTS = [
           ['2.5', 'Rapid PVST+ 生成樹（根橋、埠的角色與狀態、BPDU Guard）', ['l23', 'l32', 'l67', 'l135', 'l138', 'l139']],
           ['2.6', 'Cisco 無線架構與 AP 模式', ['l55', 'l56', 'l106', 'l107']],
           ['2.7', 'WLAN 元件的實體連接（AP、Access / Trunk 埠）', ['l14', 'l15', 'l55', 'l56', 'l106']],
-          ['2.8', '設備管理存取（Telnet、SSH、HTTP、HTTPS、Console、TACACS+ / RADIUS）', ['l19', 'l116']],
+          ['2.8', '設備管理存取（Telnet、SSH、HTTP、HTTPS、Console、TACACS+ / RADIUS）', ['l19', 'l116', 'l142']],
           ['2.9', '以圖形介面設定 WLAN（建立 WLAN、安全設定）', ['l13', 'l14', 'l15', 'l55', 'l57', 'l140']],
         ],
       },
@@ -116,7 +116,7 @@ export const CERTS = [
           ['3.2', '網路監控技術（SNMP、Syslog、NetFlow、控制器的 Assurance）', ['l19', 'l43', 'l62', 'l97']],
           ['3.3', '災難復原與高可用概念', ['l22', 'l25', 'l48', 'l50', 'l63', 'l64', 'l95', 'l96', 'l121', 'l125']],
           ['3.4', 'IPv4 / IPv6 網路服務（DHCP、DNS、NTP）', ['l03', 'l04', 'l19', 'l26', 'l36', 'l44', 'l51', 'l71', 'l74', 'l93', 'l99', 'l120']],
-          ['3.5', '網路存取與管理方式（VPN、SSH、Console、API、in-band 與 out-of-band）', ['l19', 'l20', 'l21', 'l42', 'l54', 'l58', 'l90', 'l91', 'l111', 'l126']],
+          ['3.5', '網路存取與管理方式（VPN、SSH、Console、API、in-band 與 out-of-band）', ['l19', 'l20', 'l21', 'l42', 'l54', 'l58', 'l90', 'l91', 'l111', 'l126', 'l142']],
         ],
       },
       {
