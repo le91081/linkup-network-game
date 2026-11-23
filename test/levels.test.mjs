@@ -4895,6 +4895,36 @@ console.log('\n訪客碼：入口網頁要輸入櫃台給的碼，碼過期就�
   ok(!web().ok && /已經過期/.test(sim.portalAccept(s, 'g1', sim.transact, c.code).why), '兩小時一到：連線被導回入口網頁，舊的碼也不能再用');
 }
 
+console.log('\nSTP：每個 VLAN 的優先權（PVST+）與 MST 區域');
+{
+  const { iosSession, runningConfig } = await import('../src/engine/ios.js');
+  const { iosRun } = await import('../src/ui/cli.js');
+  const ok = (cond, title) => (cond ? console.log('  ✔ ' + title) : fail(title));
+  const cli = (s, id) => { const S = iosSession(() => s.devices[id], () => s); return (...lines) => { const out = []; for (const l of lines) { const r = iosRun({ state: s, showTrace() {}, refreshLive() {} }, id, S, l, (x) => out.push(x)); if (r.changed) settle(s); } return out.join('\n'); }; };
+  const lv = LEVELS.find((x) => x.id === 'l138');
+  const s = lv.setup(); settle(s);
+  const root = (v) => ['core1', 'core2', 'swa', 'swb'].map((id) => s.devices[id].rt.stp.root[v]).join();
+  ok(root(10) === 'core1,core1,core1,core1' && root(20) === 'core1,core1,core1,core1' && s.devices.swb.rt.stp.region === 'boundary', '開場：區域不一致，各 instance 的優先權不生效，VLAN 20 也以 Core-1 為根');
+  const B = cli(s, 'swb');
+  B('enable');
+  const cfg = B('show spanning-tree mst configuration');
+  ok(/Name      \[CORP\]/.test(cfg) && /^1 +10$/m.test(cfg) && !/^2 +20$/m.test(cfg) && /^0 +1-9,11-4094$/m.test(cfg), 'show spanning-tree mst configuration：SW-B 只有 instance 1，VLAN 20 還在 instance 0');
+  ok(/Revision  2/.test(cli(s, 'core2')('enable', 'show spanning-tree mst configuration')), 'Core-2 的 revision 是 2');
+  lv.solve(s); settle(s);
+  ok(root(10) === 'core1,core1,core1,core1' && root(20) === 'core2,core2,core2,core2', '區域一致之後：VLAN 10 根在 Core-1、VLAN 20 根在 Core-2');
+  ok(/##### MST2 +vlans mapped: +20/.test(B('show spanning-tree mst')) && /Spanning tree enabled protocol mstp/.test(B('show spanning-tree')), 'show spanning-tree mst / show spanning-tree（mstp）');
+  const rc = runningConfig(s, s.devices.core1).join('\n');
+  ok(/spanning-tree mode mst/.test(rc) && /spanning-tree mst configuration\n name CORP\n revision 1\n instance 1 vlan 10\n instance 2 vlan 20/.test(rc) && /spanning-tree mst 2 priority 8192/.test(rc), 'running-config：mode mst、區域設定、instance 的優先權');
+  // Rapid PVST+：每個 VLAN 各自的優先權
+  const t = lv.setup(); settle(t);
+  for (const id of ['core1', 'core2', 'swa', 'swb']) cli(t, id)('enable', 'configure terminal', 'spanning-tree mode rapid-pvst', 'end');
+  cli(t, 'core1')('configure terminal', 'spanning-tree vlan 10 priority 4096', 'spanning-tree vlan 20 priority 8192', 'end');
+  cli(t, 'core2')('configure terminal', 'spanning-tree vlan 20 root primary', 'end');
+  const r2 = (v) => ['swa', 'swb'].map((id) => t.devices[id].rt.stp.root[v]).join();
+  ok(r2(10) === 'core1,core1' && r2(20) === 'core2,core2', 'PVST+：spanning-tree vlan 10 priority 4096 / vlan 20 root primary，兩個 VLAN 各自的根橋');
+  ok(/^spanning-tree vlan 10 priority 4096$/m.test(runningConfig(t, t.devices.core1).join('\n')) && /Bridge ID  Priority    4106  \(priority 4096 sys-id-ext 10\)/.test(cli(t, 'core1')('show spanning-tree')), 'running-config 寫成每個 VLAN 一行；show spanning-tree 的優先權加上 sys-id-ext');
+}
+
 console.log('\nNetFlow 與 QoS 的 police');
 {
   const sim = await import('../src/engine/sim.js');

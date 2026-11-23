@@ -33,6 +33,7 @@ import { eigrpNeighborLines, eigrpTopoLines, eigrpIfLines, eigrpProtoLines, eigr
 import { ripDbLines, ripProtoLines } from '../engine/rip.js';
 import { epcCmd, epcDelete, epcShow } from '../engine/epc.js';
 import { timeRangeLines } from '../engine/timerange.js';
+import { mstOf, isMst, stpPrio, vlanText } from '../engine/stpcfg.js';
 import { TR_OFF } from '../engine/sim/core.js';
 import { CATALOG, MEDIA, peerOf, portOf, linkInfo, phyConfig, fiberLink } from '../engine/model.js';
 import { xcvrAt, xcvrSerial, MEDIA_TYPE } from '../engine/optics.js';
@@ -349,6 +350,28 @@ const SHOW = {
       ...d.ports.filter((x) => d.sw.ports[x.id].raGuard === n).map((x) => pad(x.label, 18) + pad('PORT', 6) + pad(n, 16) + pad('RA guard', 12) + 'vlan all'), '']);
   },
   'show mac address-table aging-time': (st, d) => (isSw(d) ? [`Global Aging Time:  ${macAgeOf(d)}`] : ['% 這個指令只適用於交換器']),
+  'show spanning-tree mst configuration': (st, d) => {
+    if (!isSw(d)) return ['% 這個指令只適用於交換器'];
+    const m = mstOf(d), map = m.map || {};
+    const used = Object.values(map).flat();
+    const rest = vlanText([...Array(4094).keys()].map((k) => k + 1).filter((v) => !used.includes(v)));
+    return [`Name      [${m.name || ''}]`, `Revision  ${+m.rev || 0}     Instances configured ${Object.keys(map).length + 1}`, '', 'Instance  Vlans mapped', '--------  ---------------------------------------------------------------------',
+      `0         ${rest}`, ...Object.entries(map).map(([i, l]) => `${String(i).padEnd(10)}${vlanText(l)}`), '-------------------------------------------------------------------------------',
+      ...(isMst(d) ? [] : ['（這台的 spanning-tree mode 不是 mst：區域設定不會生效）']), ...(d.rt.stp && d.rt.stp.region === 'boundary' ? ['（和其他交換器的區域設定不一樣（名稱、revision 或 VLAN 對應）：在這個模擬裡各 instance 的優先權不生效，全部照 instance 0）'] : [])];
+  },
+  'show spanning-tree mst': (st, d) => {
+    if (!isSw(d) || !d.rt.stp) return ['% 這個指令只適用於交換器'];
+    if (!isMst(d)) return ['% 這台的 spanning-tree mode 不是 mst'];
+    const m = mstOf(d), s = d.rt.stp, o = [];
+    for (const i of [0, ...Object.keys(m.map || {}).map(Number)]) {
+      const vl = i === 0 ? null : (m.map || {})[i];
+      const v = vl ? vl[0] : 1, root = st.devices[s.root[v] || d.id];
+      o.push(`##### MST${i}    vlans mapped:   ${vl ? vlanText(vl) : '（其他所有 VLAN）'}`, `Bridge        address ${s.mac}  priority      ${(s.vp || {})[v] ?? stpPrio(d, v, s.region === 'same')} (${(s.vp || {})[v] ?? stpPrio(d, v, s.region === 'same')} sysid ${i})`,
+        root === d ? 'Root          this switch for ' + (i === 0 ? 'the CIST' : `MST${i}`) : `Root          address ${root.rt.stp.mac}  priority      ${(root.rt.stp.vp || {})[v] ?? root.rt.stp.prio}`, '');
+    }
+    if (s.region === 'boundary') o.push('（和其他交換器不在同一個 MST 區域：各 instance 的根橋沒有照設定分開）');
+    return o;
+  },
   'show spanning-tree': (st, d) => {
     const s = d.rt.stp;
     if (!isSw(d) || !s) return ['% 這個指令只適用於交換器'];
@@ -357,9 +380,9 @@ const SHOW = {
     const vl = Object.keys(s.root).length ? Object.keys(s.root) : ['1'];
     for (const v of vl) {
       const root = st.devices[s.root[v] || d.id];
-      o.push(`VLAN${String(v).padStart(4, '0')}`, '  Spanning tree enabled protocol rstp',
-        `  Root ID    Priority    ${root.rt.stp.prio}`, `             Address     ${root.rt.stp.mac}`, ...(root === d ? ['             This bridge is the root'] : []),
-        `  Bridge ID  Priority    ${s.prio}`, `             Address     ${s.mac}`, '', pad('Interface', 16) + pad('Role', 6) + pad('Sts', 5) + 'Type');
+      o.push(`VLAN${String(v).padStart(4, '0')}`, `  Spanning tree enabled protocol ${s.region ? 'mstp' : 'rstp'}`,
+        `  Root ID    Priority    ${((root.rt.stp.vp || {})[v] ?? root.rt.stp.prio) + (s.region ? 0 : +v)}`, `             Address     ${root.rt.stp.mac}`, ...(root === d ? ['             This bridge is the root'] : []),
+        `  Bridge ID  Priority    ${((s.vp || {})[v] ?? s.prio) + (s.region ? 0 : +v)}  (priority ${(s.vp || {})[v] ?? s.prio} sys-id-ext ${s.region ? 0 : v})`, `             Address     ${s.mac}`, '', pad('Interface', 16) + pad('Role', 6) + pad('Sts', 5) + 'Type');
       for (const [pid, roles] of Object.entries(s.roles)) {
         const r = roles[v];
         if (r) o.push(pad(pid, 16) + pad({ root: 'Root', desg: 'Desg', altn: 'Altn' }[r], 6) + pad(r === 'altn' ? 'BLK' : stpState(d, pid), 5) + 'P2p');

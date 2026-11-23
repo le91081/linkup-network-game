@@ -25,6 +25,7 @@ import { breakoutPort, unbreakoutPort, breakoutLines, BREAKOUT_MAPS } from './br
 // EIGRP 的設定小工具（不從 eigrp.js 匯入：那邊會拉進整個模擬引擎，造成循環匯入）
 const eigrpOn = (d) => !!(d && d.eigrp && +d.eigrp.as > 0);
 import { parsePeriodic } from './timespec.js';
+import { vlanNums, vlanText } from './stpcfg.js';
 const classBitsOf = (ip) => (ip == null ? null : (ip >>> 24) < 128 ? 8 : (ip >>> 24) < 192 ? 16 : 24);
 /** ip rip send / receive version 後面的「1」「2」「1 2」 */
 const ripVers = (v) => { const l = [...new Set(String(v || '').split(/\s+/).filter(Boolean))]; return l.length && l.every((x) => x === '1' || x === '2') ? l.map(Number).sort() : null; };
@@ -108,7 +109,7 @@ const isSw = (d) => !!d.sw && d.sw.mode === 'vlan';
 export const ERR_RECOVERY_CAUSES = ['arp-inspection', 'bpduguard', 'channel-misconfig', 'dhcp-rate-limit', 'dtp-flap', 'gbic-invalid', 'inline-power', 'link-flap', 'loopback', 'mac-limit', 'pagp-flap', 'port-mode-failure', 'psecure-violation', 'security-violation', 'sfp-config-mismatch', 'storm-control', 'udld', 'vmps'];
 const TYPES = { gi: 'gigabitethernet', te: 'tengigabitethernet', fa: 'fastethernet', eth: 'ethernet' };
 const PROMPT = {
-  eigrp: '(config-router)#', rip: '(config-router)#', trange: '(config-time-range)#', keychain: '(config-keychain)#', kckey: '(config-keychain-key)#',
+  eigrp: '(config-router)#', rip: '(config-router)#', trange: '(config-time-range)#', mstcfg: '(config-mst)#', keychain: '(config-keychain)#', kckey: '(config-keychain-key)#',
   zone: '(config-sec-zone)#', zpair: '(config-sec-zone-pair)#', icmap: '(config-cmap)#', ipmap: '(config-pmap)#', ipmapc: '(config-pmap-c)#',
   exec: '#', config: '(config)#', if: '(config-if)#', vlan: '(config-vlan)#', raguard: '(config-ra-guard)#', router: '(config-router)#', dhcp: '(dhcp-config)#',
   line: '(config-line)#', tacacs: '(config-server-tacacs)#', acl: '(config-ext-nacl)#', stdacl: '(config-std-nacl)#', radius: '(config-radius-server)#',
@@ -525,6 +526,18 @@ export function iosSession(getDev, getState, who = null) {
     if (vtpOf(dev()).mode === 'client') return; // VTP client 不能自己建 VLAN：埠會停在不存在的 VLAN 裡 (inactive)
     sw.vlans.push({ id, name: 'VLAN' + String(id).padStart(4, '0') });
     out.push(`% Access VLAN does not exist. Creating vlan ${id}`);
+  };
+  /** spanning-tree vlan <清單> priority：清單涵蓋全部 VLAN 時改預設值，否則只改那幾個 VLAN（n 是 null 就是取消） */
+  const setVlanPrio = (list, n) => {
+    const nums = vlanNums(list);
+    if (!nums) return err('VLAN 清單的格式：10,20 或 10-20 或 1-4094');
+    const s = (dev().sw.stp ||= {});
+    s.on = true;
+    if (nums === 'all') { s.prio = n == null ? 32768 : n; delete s.vprio; return undefined; }
+    s.vprio ||= {};
+    for (const v of nums) { if (n == null) delete s.vprio[v]; else s.vprio[v] = n; }
+    if (!Object.keys(s.vprio).length) delete s.vprio;
+    return undefined;
   };
   const syncNat = () => {
     for (const i of dev().ifaces) {
@@ -1846,21 +1859,55 @@ export function iosSession(getDev, getState, who = null) {
       return `Global Ethernet MTU is set to ${+n} bytes.`;
     }],
     ['no system mtu', () => { const d = dev(); if (!isCat9300(d)) return err('% 這台設備沒有 system mtu'); delete d.sw.sysMtu; for (const i of d.ifaces) if (+i.mtu > 1500) delete i.mtu; return 'Global Ethernet MTU is set to 1500 bytes.'; }],
-    ['spanning-tree mode <m>', () => needSw() || undefined],
+    ['spanning-tree mode <m>', ([m]) => {
+      const e = needSw(); if (e) return e;
+      const v = String(m).toLowerCase();
+      if (!['pvst', 'rapid-pvst', 'mst'].some((x) => x.startsWith(v))) return err('spanning-tree mode pvst | rapid-pvst | mst');
+      const s = (dev().sw.stp ||= {});
+      if ('mst'.startsWith(v)) s.mode = 'mst'; else delete s.mode;
+      return undefined;
+    }],
+    ['spanning-tree mst configuration', () => { const e = needSw(); if (e) return e; const s = (dev().sw.stp ||= {}); s.mst ||= {}; enter('mstcfg', null); return undefined; }],
+    ['spanning-tree mst <id> priority <n>', ([id, n]) => {
+      const e = needSw(); if (e) return e;
+      if (!/^\d+$/.test(id) || +id > 4094) return err('MST instance 是 0 – 4094');
+      if (!/^\d+$/.test(n) || +n > 61440 || +n % 4096) return err('priority 必須是 4096 的倍數（0、4096、8192 … 61440）');
+      const m = ((dev().sw.stp ||= {}).mst ||= {});
+      (m.prio ||= {})[+id] = +n;
+      return undefined;
+    }],
+    ['spanning-tree mst <id> root <which>', ([id, w]) => {
+      const e = needSw(); if (e) return e;
+      const m = ((dev().sw.stp ||= {}).mst ||= {});
+      (m.prio ||= {})[+id] = 'primary'.startsWith(w.toLowerCase()) ? 24576 : 28672;
+      return undefined;
+    }],
+    ['no spanning-tree mst <id> priority', ([id]) => { const m = ((dev().sw.stp || {}).mst || {}); if (m.prio) delete m.prio[+id]; return undefined; }],
     ['spanning-tree portfast default', () => needSw() || void ((dev().sw.stp ||= {}).portfastDefault = true)],
     ['no spanning-tree portfast default', () => needSw() || void ((dev().sw.stp ||= {}).portfastDefault = false)],
-    ['spanning-tree vlan <list> priority <n>', ([, n]) => {
+    // 每個 VLAN 各自的優先權（Rapid PVST+）；1-4094 就是全部的 VLAN
+    ['spanning-tree vlan <list> priority <n>', ([list, n]) => {
       const e = needSw(); if (e) return e;
       if (!/^\d+$/.test(n) || +n > 61440 || +n % 4096) return err('priority 必須是 4096 的倍數（0、4096、8192 … 61440）');
-      Object.assign((dev().sw.stp ||= {}), { on: true, prio: +n });
-      return undefined;
+      return setVlanPrio(list, +n);
     }],
-    ['spanning-tree vlan <list> root <which>', ([, w]) => {
+    ['spanning-tree vlan <list> root <which>', ([list, w]) => {
       const e = needSw(); if (e) return e;
-      Object.assign((dev().sw.stp ||= {}), { on: true, prio: 'primary'.startsWith(w.toLowerCase()) ? 24576 : 28672 });
+      if (!'primary'.startsWith(w.toLowerCase())) return setVlanPrio(list, 28672);
+      // root primary 是巨集：設成 24576；現在的根橋比 24576 還小的話，設成比它再小 4096
+      const nums = vlanNums(list);
+      if (!nums) return err('VLAN 清單的格式：10,20 或 10-20 或 1-4094');
+      const st = getState(), d = dev(), rs = (d.rt && d.rt.stp) || {};
+      const want = (v) => {
+        const r = st && st.devices[(rs.root || {})[v]];
+        const rp = r && r !== d && r.rt && r.rt.stp ? ((r.rt.stp.vp || {})[v] ?? r.rt.stp.prio) : null;
+        return rp != null && rp <= 24576 ? Math.max(0, rp - 4096) : 24576;
+      };
+      if (nums === 'all') return setVlanPrio(list, Math.min(...Object.keys(rs.root || { 1: 1 }).map(want)));
+      for (const v of nums) { const r = setVlanPrio(String(v), want(v)); if (r) return r; }
       return undefined;
     }],
-    ['no spanning-tree vlan <list> priority', () => needSw() || void ((dev().sw.stp ||= {}).prio = 32768)],
+    ['no spanning-tree vlan <list> priority', ([list]) => needSw() || setVlanPrio(list, null)],
     ['spanning-tree vlan <list>', () => needSw() || void ((dev().sw.stp ||= {}).on = true)],
     ['no spanning-tree vlan <list>', () => needSw() || void ((dev().sw.stp ||= {}).on = false)],
     ['ip nat inside source list <acl> interface <if> [...]', ([acl, name]) => {
@@ -3475,6 +3522,25 @@ export function iosSession(getDev, getState, who = null) {
       }],
       ['no redistribute <src> [...]', ([src]) => { const e = dev().eigrp, s = String(src).toLowerCase(); e.redist = (e.redist || []).filter((r) => !r.src.startsWith(s)); if (!e.redist.length) delete e.redist; return undefined; }],
     ],
+    mstcfg: [
+      ['name <n>', ([n]) => { dev().sw.stp.mst.name = n; }],
+      ['no name', () => { delete dev().sw.stp.mst.name; }],
+      ['revision <n>', ([n]) => (/^\d+$/.test(n) && +n <= 65535 ? void (dev().sw.stp.mst.rev = +n) : err('revision 是 0 – 65535'))],
+      ['no revision', () => { delete dev().sw.stp.mst.rev; }],
+      ['instance <id> vlan <list>', ([id, list]) => {
+        if (!/^\d+$/.test(id) || +id < 1 || +id > 4094) return err('instance 是 1 – 4094（instance 0 是 CIST，不用設定）');
+        const nums = vlanNums(list);
+        if (!nums || nums === 'all') return err('VLAN 清單的格式：10,20 或 10-20');
+        const m = dev().sw.stp.mst, map = (m.map ||= {});
+        for (const [k, l] of Object.entries(map)) map[k] = l.filter((v) => !nums.includes(v)); // 一個 VLAN 只能在一個 instance
+        map[+id] = [...new Set([...(map[+id] || []), ...nums])].sort((a, b) => a - b);
+        for (const k of Object.keys(map)) if (!map[k].length) delete map[k];
+        return undefined;
+      }],
+      ['no instance <id> [...]', ([id]) => { const map = dev().sw.stp.mst.map || {}; delete map[+id]; return undefined; }],
+      ['show current', () => undefined],
+      ['show pending', () => undefined],
+    ],
     trange: [
       ['periodic <...>', ([rest]) => {
         const p = parsePeriodic(String(rest).split(/\s+/));
@@ -4354,10 +4420,21 @@ export function runningConfig(state, dev) {
     if (isCat2960(dev) && +sw.jumbo) o.push('!', `system mtu jumbo ${+sw.jumbo}`);
     if (isCat9300(dev) && +sw.sysMtu) o.push('!', `system mtu ${+sw.sysMtu}`);
     if ((sw.staticMacs || []).length) o.push('!', ...sw.staticMacs.map((e) => `mac address-table static ${dotMac(e.mac)} vlan ${e.vlan} ${e.drop ? 'drop' : 'interface ' + longIf((dev.ports.find((p) => p.id === e.port) || { label: e.port }).label)}`));
-    o.push('!', 'spanning-tree mode rapid-pvst');
     const stp = sw.stp || {};
+    o.push('!', `spanning-tree mode ${stp.mode === 'mst' ? 'mst' : 'rapid-pvst'}`);
     if (stp.on === false) o.push('no spanning-tree vlan 1-4094');
     else if (stp.prio != null && stp.prio !== '' && +stp.prio !== 32768) o.push(`spanning-tree vlan 1-4094 priority ${+stp.prio}`);
+    // 個別 VLAN 的優先權：一樣的值寫成一行
+    const byP = {};
+    for (const [v, p] of Object.entries(stp.vprio || {})) (byP[p] ||= []).push(+v);
+    for (const [p, l] of Object.entries(byP)) o.push(`spanning-tree vlan ${vlanText(l)} priority ${p}`);
+    if (stp.mst && (stp.mst.name || stp.mst.rev || Object.keys(stp.mst.map || {}).length)) {
+      o.push('!', 'spanning-tree mst configuration');
+      if (stp.mst.name) o.push(` name ${stp.mst.name}`);
+      if (+stp.mst.rev) o.push(` revision ${+stp.mst.rev}`);
+      for (const [i, l] of Object.entries(stp.mst.map || {})) o.push(` instance ${i} vlan ${vlanText(l)}`);
+    }
+    for (const [i, p] of Object.entries((stp.mst || {}).prio || {})) o.push(`spanning-tree mst ${i} priority ${p}`);
     if (stp.portfastDefault) o.push('spanning-tree portfast default');
     if (+sw.macAge > 0 && +sw.macAge !== 300) o.push(`mac address-table aging-time ${+sw.macAge}`);
     for (const [n, s] of Object.entries(sw.span || {})) {

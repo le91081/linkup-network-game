@@ -31,7 +31,7 @@ README 說明「現在有什麼、怎麼玩」，這份文件說明「整體應�
 | 領域 | ✅ 已完成 | 🟡 部分完成 | ⬜ 尚未開始 | ⏸ 暫時不做 |
 | --- | --- | --- | --- | --- |
 | 1. 實體層與接線 | 12 | 1 | 1 | 0 |
-| 2. 第二層：交換 | 16 | 0 | 1 | 0 |
+| 2. 第二層：交換 | 16 | 1 | 0 | 0 |
 | 3. 第三層：路由 | 15 | 1 | 1 | 0 |
 | 4. IP 服務 | 12 | 2 | 0 | 0 |
 | 5. 網路安全 | 14 | 3 | 0 | 0 |
@@ -46,9 +46,9 @@ README 說明「現在有什麼、怎麼玩」，這份文件說明「整體應�
 | 14. 遊戲系統 | 16 | 0 | 0 | 6 |
 | 15. 介面與體驗 | 10 | 0 | 0 | 0 |
 | 16. 工程品質 | 6 | 3 | 1 | 0 |
-| **合計** | **178** | **19** | **8** | **6** |
+| **合計** | **178** | **20** | **7** | **6** |
 
-另外：關卡 137 關（第 17 節）、證照條目涵蓋情形（第 18 節）、建議的實作順序（第 19 節）。
+另外：關卡 138 關（第 17 節）、證照條目涵蓋情形（第 18 節）、建議的實作順序（第 19 節）。
 
 範圍的調整（2026-11-22）：第 14 節遊戲系統還沒做完的項目暫時不做（⏸）；第 15 節的手機與平板、多語系、無障礙、主題從規劃中移除，不做。
 
@@ -92,7 +92,7 @@ README 說明「現在有什麼、怎麼玩」，這份文件說明「整體應�
 | VTP | ✅ | 版本 1 / 2：server / client / transparent / off、網域名稱（NULL 的交換器加入收到的第一個網域）、密碼（不同就不同步）、configuration revision（server 每改一次加一，revision 比較大的通告整份取代 VLAN 資料庫、client 的通告也算；改網域名稱或切 transparent 歸零）；只同步 2 – 1001，通告經由 Trunk（transparent 轉送、off 不轉送）；client 不能建 VLAN；`show vtp status`、`show vtp password`；VLAN 分頁的 VTP 卡片 → 10-10。還沒有版本 3、VTP pruning |
 | Voice VLAN | ✅ | `switchport voice vlan`：資料不帶標籤、語音帶標籤；電話從 CDP 或 LLDP-MED 學到，也可以手動設定 |
 | Private VLAN、Storm Control | ✅ | Private VLAN（Catalyst 9300、Nexus）：primary / isolated / community、host 與 promiscuous 埠、SVI 的 `private-vlan mapping`、DHCP 照樣通、`show vlan private-vlan`；2960 只有 `switchport protected`。Storm Control：`storm-control broadcast level`（頻寬的百分比）與 `action shutdown \| trap`，狂送的廣播佔掉整個 VLAN 每一段線路的頻寬並算進 broadcasts 計數器，`show storm-control`、`%STORM_CONTROL-3-FILTERED / SHUTDOWN`、err-disabled 原因 storm-control |
-| STP 進階 | ⬜ | MST、Loop Guard、UDLD、拓撲變更通知、交換器不是直接相連的拓撲 |
+| STP 進階 | 🟡 | 每個 VLAN 各自的優先權（PVST+ 的負載分擔、root primary 巨集）、MST（mode mst、區域的 name / revision / instance 對應、instance 的優先權、區域不一致時退回 CIST）、show spanning-tree mst [configuration] → 8-11；還沒有 Loop Guard、UDLD、拓撲變更通知、交換器不是直接相連的拓撲 |
 | SPAN（連接埠鏡像） | ✅ | `monitor session` 與圖形介面；目的埠不轉送一般流量；搭配主機的封包擷取 |
 
 ## 3. 第三層：路由
@@ -294,7 +294,7 @@ README 說明「現在有什麼、怎麼玩」，這份文件說明「整體應�
 
 | 功能 | 狀態 | 說明 |
 | --- | --- | --- |
-| 關卡 | ✅ | 17 章 137 關（清單見第 17 節） |
+| 關卡 | ✅ | 17 章 138 關（清單見第 17 節） |
 | 任務目標 | ✅ | ping、TCP、UDP、DHCP、設定檢查、故障演練、IPv6 ping、傳輸速率、遠端登入（SSH / Telnet 帳號密碼）、IP 電話註冊、通話品質 (MOS)、HTTPS（連得上之後還要通過憑證驗證）、路徑（一定要經過 / 不能經過某台設備）；TCP 的目標交握完還會送一個裝滿的資料區段（設了 DF），MTU 的問題才看得出來 |
 | 提示與星等 | ✅ | 每關 3 個提示，看一個少一顆星 |
 | 學習卡 | ✅ | 每關 2 到 4 張觀念說明 |
@@ -353,7 +353,7 @@ README 說明「現在有什麼、怎麼玩」，這份文件說明「整體應�
 
 ## 17. 關卡規劃
 
-### 現有的 137 關
+### 現有的 138 關
 
 | 章 | 關卡 |
 | --- | --- |
@@ -364,7 +364,7 @@ README 說明「現在有什麼、怎麼玩」，這份文件說明「整體應�
 | 5 無線網路 | 家裡的 Wi-Fi、辦公室基地台、訪客 Wi-Fi、下午的視訊會議一直斷（頻道寬度與 DFS）、新筆電明明支援 Wi-Fi 6E（6 GHz 與 WPA3）、訪客連上 Wi-Fi，卻沒有跳出登入頁面（Captive Portal） |
 | 6 網路安全 | 只開了 TCP、誰在發 IP？、不速之客、存取控制清單、管理介面加固、冒牌閘道、搶走根橋、你是誰？、偽裝成交換器、交換器變成了 Hub（MAC flooding）、跳進伺服器 VLAN 的封包（雙重標籤）、飯店的房間網路（Private VLAN）、星期一早上，有線網路全部登不進去（EAP-TLS）、分公司只有一台路由器，也要當防火牆（ZBF）、上班時間有人在玩線上博弈（網頁過濾與 SSL 檢查）、防火牆擋得住位址，擋不住應用程式（應用程式控管與 IPS）、同事點了釣魚信的連結（DNS 過濾與防毒）、午休才開放的影音網站，晚上八點才打得開（時間型 ACL 與時區） |
 | 7 VPN 與廣域備援 | 站對站 VPN、在家上班、雙線路備援、三個據點，一個中心、線路燈還亮著（IP SLA）、小檔案可以，大檔案卡住（PMTUD 黑洞）、兩個分公司的連線一下通一下斷（GRE 與 recursive routing）、稽核報告（GRE over IPsec）、每加一個網段就要改兩邊的 ACL（VTI）、門市之間的監視器畫面（DMVPN）、新分公司在共享辦公室裡（NAT-T）、換了主機板電池，VPN 就起不來了（IKEv2 的憑證驗證）、下午一塞車電話就斷斷續續（SD-WAN）、換成 MPLS 專線之後互相看不到（MPLS L3VPN 與 allowas-in） |
-| 8 高可用與進階路由 | 迴圈與生成樹、EtherChannel、閘道備援、集中式 DHCP、OSPF 路徑選擇、切蛋糕、閘道還活著，但出不去（HSRP 追蹤）、主線斷了，電話斷了四十秒（BFD）、兩台閘道，只有一台在做事（GLBP）、防火牆一壞，全公司就斷網（FortiGate HA） |
+| 8 高可用與進階路由 | 迴圈與生成樹、EtherChannel、閘道備援、集中式 DHCP、OSPF 路徑選擇、切蛋糕、閘道還活著，但出不去（HSRP 追蹤）、主線斷了，電話斷了四十秒（BFD）、兩台閘道，只有一台在做事（GLBP）、防火牆一壞，全公司就斷網（FortiGate HA）、兩台核心說好分擔，結果全擠在 Core-1（MST） |
 | 9 IPv6 | IPv6 初體驗、雙協定、位址從哪裡來？、IPv6 也要動態路由、封了 IPv4，忘了 IPv6、IPv6 的預設閘道被搶走了（RA Guard）、內部網站加了 IPv6 之後（AAAA 與 Happy Eyeballs）、IPv6 過不了 VPN（VTI 只載 IPv4）、換了 ISP，IPv6 就上不了網（DHCPv6 PD）、防火牆開了 IPv6，網站卻都打不開（FortiGate 的 IPv6 政策）、新大樓只有 IPv6，網站卻大多只有 IPv4（NAT64 與 DNS64） |
 | 10 故障排除 | 誰搶了我的 IP、樓層之間又斷了、分公司的求救電話、明明連得上，為什麼這麼慢、分公司的 OSPF 鄰居起不來、流量為什麼繞去實驗室、VPN 通了，資料卻過不去、DNS 改了，為什麼還連到舊的、整層樓都慢了（廣播風暴與 Storm Control）、新交換器一插上去，整棟樓的 VLAN 都不見了（VTP）、會議室的電腦每隔一分鐘就斷一次（接觸不良的網路線與 PortFast） |
 | 11 維運與管理 | 還好有備份、韌體升級、讓 SSH 能用、網路怎麼變慢了、是誰動了設定？、你的連線不是私人連線、專線被塞滿了，是誰？（NetFlow）、事件的先後兜不起來（NTP 與 service timestamps）、機櫃裡的線全部沒有標籤（看不到接線，用 CDP / LLDP 找）、外包工程師要能看設定但不能改（AAA 與 TACACS+）、SSH 被自己鎖在門外（Console 線） |

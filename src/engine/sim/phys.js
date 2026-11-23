@@ -1,5 +1,6 @@
 // 供電與連線、err-disabled、DTP、語音 VLAN、LACP、STP 與連接埠的 STP 計時
 // （從 sim.js 拆出來的一部分；其他程式一律從 engine/sim.js 引入，不直接引入這裡）
+import { stpPrio, isMst, mstKey } from '../stpcfg.js';
 import { CABLES, CATALOG, DTP_MODELS, POE_CLASS_W, cableDist, cableKind, linkInfo, fiberLink, looseNext } from '../model.js';
 import { rejectsOptic } from '../optics.js';
 import { cdpOn, lldpRxOn, lldpTxOn, speaksCdp } from '../disc.js';
@@ -410,7 +411,11 @@ export function prepStp(state) {
     const s = d.sw.stp || {};
     d.rt.stp = { on: s.on !== false, prio: s.prio == null || s.prio === '' ? 32768 : +s.prio, mac: macOf(d.id, 'br'), blocked: new Set(), roles: {}, root: {} };
   }
-  const bid = (d) => [d.rt.stp.prio, d.rt.stp.mac];
+  // 優先權依 VLAN（PVST+）或 MST 的 instance；MST 要所有交換器都是同一個區域才照 instance 算
+  const stpSws = sws.filter((d) => d.rt.stp.on), region = stpSws.length > 0 && stpSws.every((d) => isMst(d) && mstKey(d) === mstKey(stpSws[0]));
+  for (const d of sws) d.rt.stp.region = isMst(d) ? (region ? 'same' : 'boundary') : null;
+  let curV = 1;
+  const bid = (d) => [((d.rt.stp.vp ||= {})[curV] = stpPrio(d, curV, region)), d.rt.stp.mac];
   const edges = [];
   for (const c of state.cables) {
     if (rt.cable[c.id] !== 'up') continue;
@@ -429,6 +434,7 @@ export function prepStp(state) {
   const pidx = (D, pid) => D.ports.findIndex((p) => p.id === pid);
   const role = (D, pid, v, r) => { (D.rt.stp.roles[pid] ||= {})[v] = r; };
   for (const v of vlans) {
+    curV = v;
     const es = edges.filter((e) => carries(e.A, e.pa, v) && carries(e.B, e.pb, v));
     if (!es.length) continue;
     const adj = new Map();

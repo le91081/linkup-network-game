@@ -30,7 +30,7 @@ export const CERTS = [
           ['2.2', '交換器之間的連線（Trunk、802.1Q、Native VLAN）', ['l07', 'l15', 'l37', 'l46', 'l122']],
           ['2.3', '第二層探索協定（CDP、LLDP）', ['l44', 'l46', 'l98', 'l103']],
           ['2.4', 'EtherChannel（LACP）', ['l24']],
-          ['2.5', 'Rapid PVST+ 生成樹（根橋、埠的角色與狀態、BPDU Guard）', ['l23', 'l32', 'l67', 'l135']],
+          ['2.5', 'Rapid PVST+ 生成樹（根橋、埠的角色與狀態、BPDU Guard）', ['l23', 'l32', 'l67', 'l135', 'l138']],
           ['2.6', 'Cisco 無線架構與 AP 模式', ['l55', 'l56', 'l106', 'l107']],
           ['2.7', 'WLAN 元件的實體連接（AP、Access / Trunk 埠）', ['l14', 'l15', 'l55', 'l56', 'l106']],
           ['2.8', '設備管理存取（Telnet、SSH、HTTP、HTTPS、Console、TACACS+ / RADIUS）', ['l19', 'l116']],
