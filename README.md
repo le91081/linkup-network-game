@@ -85,6 +85,7 @@ npm run build    # 輸出到 dist/
 - **ICMP 無法到達**：中途的路由器丟掉封包時會回 ICMP Destination Unreachable：被 ACL 擋掉是 administratively prohibited、沒有路由是 network unreachable、目的網段找不到主機是 host unreachable。IOS 的 ping 顯示 `U.U.U`（中間的 `.` 是 ICMP 錯誤訊息的速率限制）、traceroute 顯示 `!A` / `!N` / `!H`，Windows 顯示「回覆自 <路由器>: 目的地網路（主機）無法連線。」；被交換器默默丟掉、FortiGate 擋掉、回程斷掉的只會逾時（`.....`、要求等候逾時）。
 - **SCP**：`copy running-config scp://backup@10.1.0.10/r1.cfg`（或 `copy scp://… flash:`）走 SSH（TCP 22）：帳號寫在網址裡、密碼另外問，不會出現在設定與紀錄裡，擷取到的也只是加密的內容。伺服器要開「SCP / SFTP 伺服器」的角色，帳號和 FTP 共用；帳號密碼錯是 Permission denied。
 - **隱藏 SSID 與 MAC 過濾**：基地台的 SSID 可以不廣播名稱（掃描清單看不到，電腦的無線網路設定可以手動輸入名稱連線），也可以只允許或封鎖清單裡的 MAC 位址（不在清單裡的關聯不上，原因寫在網卡的狀態）。兩者都不是安全機制：名稱在 probe 裡照樣看得到、MAC 可以偽造。
+- **訪客碼**：訪客入口可以要求輸入訪客碼：在基地台的 SSID 設定按「產生訪客碼」（6 位數字，8 小時有效），訪客在電腦的無線網路設定輸入它才能上網；碼過期之後連線會被導回入口網頁。
 - **時間型 ACL**：`time-range <名稱>` → `periodic daily | weekdays | weekend | <星期幾…> <hh:mm> to <hh:mm>`，ACL 規則後面加 `time-range <名稱>`；時段外的規則當作不存在（`show access-lists` 標 (inactive)），`show time-range` 看現在是否生效。時間照設備自己的時鐘與時區（`clock timezone`），時段一到自動重算。只有 periodic，沒有 absolute。
 - **定時封存**：`archive` 底下的 `time-period <分鐘>` 每隔一段時間自動封存一份 running-config 到 path。
 - Cisco 的路由器與交換器有「CLI」分頁：IOS 風格的命令列。`show running-config`、`show startup-config`、`show ip route`、`show vlan brief`、`show interfaces trunk`、`show arp` 等四十多個 `show` 指令用來查看狀態；輸入 `configure terminal` 之後可以直接用指令設定（見下方「CLI 設定指令」），改的和圖形介面是同一份設定。

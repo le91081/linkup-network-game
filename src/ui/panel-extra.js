@@ -9,6 +9,7 @@ import {
   isIp, isMask, isIpList, isAddr, isCidrList, isMacList, isPortNo, isNum,
 } from './form.js';
 import { fmtIp } from '../engine/ip.js';
+import { newGuestCode } from '../engine/portal.js';
 import { CATALOG, peerOf, portOf, newSsid, cableAt, linkInfo } from '../engine/model.js';
 import { visibleSsids, WIFI_SEC, macsBehind, isBridgePort, hitsOf, P1, accessOf, portfastOn, macRows, clearMac, macAgeOf, saInfo, fmtDur, isTrunk, dtpSpeaker, WALL_MATS, errdisRows, bouncePort, ERR_CAUSES, ERR_RECOVERY_DEFAULT, CH5, DFS, blockOf, CH6, on6, has6, portalPending, portalAccept, transact } from '../engine/sim.js';
 import { cdpCfg, lldpCfg, cdpOn, lldpTxOn, lldpRxOn, portNd, setPortNd, neighbors, speaksCdp, speaksLldp } from '../engine/disc.js';
@@ -133,6 +134,7 @@ export function accessRow(ctx, i) {
     /^wan/.test(i.id) && cur.some((k) => k !== 'ping') && note('warn', '對外的介面開放了管理協定，任何人都能從網際網路嘗試登入。'));
 }
 
+const ui = {}; // 訪客碼輸入框（還沒送出的內容）
 export function wifiPicker(ctx, i) {
   const nets = visibleSsids(ctx.state, ctx.dev);
   const w = i.wifi;
@@ -144,8 +146,9 @@ export function wifiPicker(ctx, i) {
     const p = portalPending(ctx.state, ctx.dev);
     if (!p) return (i.rt.assoc && i.rt.assoc.portal) ? note('ok', '已經在訪客入口按過同意，可以上網了。') : null;
     return h('div', null, note('warn', `「${p.assoc.ssid}」有訪客入口：要先在入口網頁按下同意才能上網。`),
-      h('div', { class: 'addrow' }, button('打開瀏覽器、在入口網頁按同意', { ic: 'check', small: true, onclick: () => {
-        const r = portalAccept(ctx.state, ctx.dev.id, transact);
+      p.portal.needCode && field('訪客碼', inp({ commit() {} }, () => ui.guestCode || '', (v) => { ui.guestCode = v; }, { ph: '櫃台給的 6 位數字' })),
+      h('div', { class: 'addrow' }, button(p.portal.needCode ? '打開瀏覽器、輸入訪客碼登入' : '打開瀏覽器、在入口網頁按同意', { ic: 'check', small: true, onclick: () => {
+        const r = portalAccept(ctx.state, ctx.dev.id, transact, ui.guestCode);
         toast(r.ok ? '已同意使用條款，可以上網了' : r.why, r.ok ? 'ok' : 'bad', r.ok ? 3200 : 7000);
         ctx.commit(true);
       } })));
@@ -253,6 +256,10 @@ export function ssidTab(ctx, body) {
       s.sec !== 'wpa2ent' && toggle(ctx, () => !!(s.portal && s.portal.on), (v) => { s.portal = { ...(s.portal || {}), on: v }; }, '訪客入口 (Captive Portal)：連上之後要先在入口網頁按同意才能上網', { rerender: true }),
       s.portal && s.portal.on && grid2(field('入口網頁伺服器', inp(ctx, () => s.portal.ip || '', (v) => { s.portal.ip = v; }, { ph: '例如 192.168.50.5', check: isIp })),
         field('認證前允許的位址（pre-auth ACL）', inp(ctx, () => s.portal.preauth || '', (v) => { s.portal.preauth = v; }, { ph: '例如 DNS 伺服器 8.8.8.8', mono: true }))),
+      s.portal && s.portal.on && toggle(ctx, () => !!s.portal.needCode, (v) => { if (v) s.portal.needCode = true; else delete s.portal.needCode; }, '要輸入訪客碼才能上網（櫃台發給訪客，時間到自動失效）', { rerender: true }),
+      s.portal && s.portal.on && s.portal.needCode && h('div', { class: 'sub' },
+        ...(s.portal.codes || []).filter((c) => c.until > ctx.state.clock).map((c) => h('div', { class: 'line' }, h('b', { class: 'mono', text: c.code }), h('span', { class: 'muted', text: `還有 ${fmtDur(c.until - ctx.state.clock)} 失效` }))),
+        h('div', { class: 'addrow' }, button('產生訪客碼（8 小時）', { ic: 'plus', small: true, onclick: () => { const c = newGuestCode(ctx.state, s.portal, 8); toast(`訪客碼 ${c.code}，8 小時內有效`, 'ok'); ctx.commit(true); } }))),
       s.portal && s.portal.on && note('muted', '同意之前只能連入口網頁與認證前允許的位址。手機與電腦要先查 DNS（captive.apple.com）才會跳出登入頁面，所以 DNS 伺服器一定要在允許的清單裡。'),
       (!s.sec || s.sec === 'open') && note('warn', '開放網路沒有任何加密，任何人都能連線，也能側錄別人的流量。'),
       s.sec === 'wep' && note('warn', 'WEP 的加密早已被破解，幾分鐘內就能算出密碼，不應該再使用。'),

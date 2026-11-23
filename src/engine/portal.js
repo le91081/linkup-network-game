@@ -16,7 +16,7 @@ export function portalPending(state, d) {
     const a = i.rt && i.rt.assoc;
     if (!a || !a.portal || !a.portal.on) continue;
     const w = ((state.dyn && state.dyn.webauth) || {})[d.id];
-    if (w && w.ssid === a.ssid && state.clock - w.at < WEBAUTH_TTL) return null;
+    if (w && w.ssid === a.ssid && state.clock - w.at < WEBAUTH_TTL && (w.until == null || state.clock < w.until)) return null;
     return { assoc: a, iface: i, portal: a.portal };
   }
   return null;
@@ -39,9 +39,25 @@ export function portalGate(state, d, spec) {
  * 訪客在入口網頁按下同意（模擬用戶端的瀏覽器）：作業系統先查 DNS（captive.apple.com）偵測入口，
  * 再連到入口網頁。transactFn 由呼叫的人傳進來（避免互相引入）。回傳 { ok, why }
  */
-export function portalAccept(state, devId, transactFn) {
+/** 產生一組訪客碼：6 位數字，hours 小時後失效（從產生的時候算起） */
+export function newGuestCode(state, portal, hours = 8) {
+  const used = new Set((portal.codes || []).map((c) => c.code));
+  let n = 0, code;
+  do { code = String(100000 + (Math.imul(Math.floor(state.clock) + 17 + n++ * 40503 + used.size * 97, 2654435761) >>> 0) % 900000); } while (used.has(code));
+  const c = { code, until: state.clock + hours * 3600, hours };
+  portal.codes = [...(portal.codes || []).filter((x) => x.until > state.clock), c];
+  return c;
+}
+export function portalAccept(state, devId, transactFn, code) {
   const d = state.devices[devId], p = portalPending(state, d);
   if (!p) return { ok: true, already: true };
+  let until = null;
+  if (p.portal.needCode) {
+    const c = (p.portal.codes || []).find((x) => x.code === String(code || '').trim());
+    if (!c) return { ok: false, why: '入口網頁要輸入訪客碼：這個訪客碼不對（向櫃台索取）' };
+    if (c.until <= state.clock) return { ok: false, why: `訪客碼 ${c.code} 已經過期了（有效 ${c.hours} 小時）` };
+    until = c.until;
+  }
   const dns = (p.iface.rt.dns || [])[0];
   if (dns == null) return { ok: false, why: '這台設備沒有 DNS 伺服器，作業系統查不到 captive.apple.com，不會跳出登入頁面' };
   const q = transactFn(state, devId, { proto: 'udp', dst: dns, dport: 53, quiet: true });
@@ -50,6 +66,6 @@ export function portalAccept(state, devId, transactFn) {
   if (ip == null) return { ok: false, why: '訪客入口沒有設定入口網頁伺服器' };
   const r = transactFn(state, devId, { proto: 'tcp', dst: ip, dport: 80, quiet: true });
   if (!r.ok) return { ok: false, why: `入口網頁 http://${fmtIp(ip)}/ 打不開：${r.reason}` };
-  (state.dyn.webauth ||= {})[devId] = { at: state.clock, ssid: p.assoc.ssid };
+  (state.dyn.webauth ||= {})[devId] = { at: state.clock, ssid: p.assoc.ssid, ...(until != null ? { until } : {}) }; // 有訪客碼的話，碼過期了就要重新登入
   return { ok: true };
 }

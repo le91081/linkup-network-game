@@ -4878,6 +4878,23 @@ console.log('\n隱藏 SSID 與 MAC 過濾');
   ok(!wl(cl).rt.assoc && /封鎖清單/.test(wl(cl).rt.note), '封鎖清單裡的 MAC：連不上');
 }
 
+console.log('\n訪客碼：入口網頁要輸入櫃台給的碼，碼過期就要重新登入');
+{
+  const sim = await import('../src/engine/sim.js');
+  const { newGuestCode } = await import('../src/engine/portal.js');
+  const ok = (cond, title) => (cond ? console.log('  ✔ ' + title) : fail(title));
+  const lv = LEVELS.find((x) => x.id === 'l108');
+  const s = lv.setup(); settle(s);
+  const portal = s.devices.ap.wifi.ssids[0].portal;
+  portal.preauth = '8.8.8.8'; portal.needCode = true; settle(s);
+  const web = () => sim.transact(s, 'g1', { proto: 'tcp', dst: parseIp('93.184.216.34'), dport: 443, quiet: true });
+  ok(/訪客碼不對/.test(sim.portalAccept(s, 'g1', sim.transact, '').why), '沒有輸入訪客碼：登入不了');
+  const c = newGuestCode(s, portal, 2); settle(s);
+  ok(/^\d{6}$/.test(c.code) && sim.portalAccept(s, 'g1', sim.transact, c.code).ok && web().ok, `櫃台產生的訪客碼 ${c.code}（2 小時）：登入之後可以上網`);
+  sim.advance(s, 2 * 3600 + 5); settle(s);
+  ok(!web().ok && /已經過期/.test(sim.portalAccept(s, 'g1', sim.transact, c.code).why), '兩小時一到：連線被導回入口網頁，舊的碼也不能再用');
+}
+
 console.log('\nNetFlow 與 QoS 的 police');
 {
   const sim = await import('../src/engine/sim.js');
