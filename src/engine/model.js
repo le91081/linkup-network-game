@@ -201,11 +201,11 @@ export const CATALOG = {
   n93180: {
     kind: 'l3switch', shape: 'switch-dc', vendor: 'Cisco', title: 'Cisco Nexus 93180YC-FX',
     tagline: 'Leaf / ToR 交換器 · 48×25G SFP28 + 6×100G QSFP28',
-    ports: [...seq(48, (i) => sfp('Eth1/' + i)), ...seq(6, (i) => qsfp('Eth1/' + i), 49)],
+    ports: [...seq(48, (i) => sfp('Eth1/' + i)), ...seq(6, (i) => qsfp('Eth1/' + i), 49), rj('mgmt0', 'mgmt0', { mgmt: true })],
   },
   n9332: {
     kind: 'l3switch', shape: 'switch-dc', vendor: 'Cisco', title: 'Cisco Nexus 9332C',
-    tagline: 'Spine / 核心交換器 · 32×100G QSFP28', ports: seq(32, (i) => qsfp('Eth1/' + i)),
+    tagline: 'Spine / 核心交換器 · 32×100G QSFP28', ports: [...seq(32, (i) => qsfp('Eth1/' + i)), rj('mgmt0', 'mgmt0', { mgmt: true })],
   },
   c9800: {
     kind: 'wlc', shape: 'switch-r', vendor: 'Cisco', title: 'Cisco Catalyst 9800-L',
@@ -322,11 +322,12 @@ export function makeDevice(model, id, o = {}) {
       d.radius = { ip: '', secret: '' };
       if (m.kind === 'l3switch') { d.routing = true; d.ospfDefault = false; }
       else d.ifaces = [iface('mgmt', '管理介面', { t: 'svi', vlan: 1 })];
-      // 帶外管理埠：Routed、在 Mgmt-vrf 裡（Catalyst 9300 的 Gi0/0）
+      // 帶外管理埠：Routed、在管理用的 VRF 裡（Catalyst 9300 的 Gi0/0 在 Mgmt-vrf；Nexus 的 mgmt0 在 vrf context management）
       for (const p of d.ports.filter((x) => x.mgmt)) {
+        const nx = /^n9/.test(model), vn = nx ? 'management' : 'Mgmt-vrf';
         d.sw.ports[p.id] = { ...d.sw.ports[p.id], mode: 'routed' };
-        d.vrfs = { ...(d.vrfs || {}), 'Mgmt-vrf': { style: 'def', af4: true, af6: true, mgmt: true } };
-        d.ifaces.push(iface(p.id, p.label, { t: 'port', port: p.id }, { vrf: 'Mgmt-vrf' }));
+        d.vrfs = { ...(d.vrfs || {}), [vn]: nx ? { style: 'ctx', af4: true, mgmt: true } : { style: 'def', af4: true, af6: true, mgmt: true } };
+        d.ifaces.push(iface(p.id, p.label, { t: 'port', port: p.id }, { vrf: vn }));
       }
       break;
     case 'lb':

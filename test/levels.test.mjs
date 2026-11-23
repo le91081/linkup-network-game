@@ -5689,6 +5689,31 @@ console.log('\nvMotion：虛擬機器搬到另一台主機');
   ok(!c.ok && /沒有連接埠群組「Web」/.test(c.errors[0]), '目的主機沒有同名的連接埠群組：vCenter 擋下來');
 }
 
+console.log('\nNexus 的 mgmt0 與 vrf context management');
+{
+  const { runObjective } = await import('../src/engine/sim/objectives.js');
+  const { iosSession, runningConfig } = await import('../src/engine/ios.js');
+  const { iosRun } = await import('../src/ui/cli.js');
+  const ok = (cond, title) => (cond ? console.log('  ✔ ' + title) : fail(title));
+  const cli = (s, id) => { const S = iosSession(() => s.devices[id], () => s); return (...lines) => { const out = []; for (const l of lines) { const r = iosRun({ state: s, showTrace() {}, refreshLive() {} }, id, S, l, (x) => out.push(x)); if (r.changed) settle(s); } return out.join('\n'); }; };
+  const lv = LEVELS.find((x) => x.id === 'l159');
+  const s = lv.setup(); settle(s);
+  const leaf = s.devices.leaf, mg = leaf.ifaces.find((i) => i.id === 'mgmt0');
+  ok(leaf.ports.some((p) => p.id === 'mgmt0' && p.mgmt) && mg.vrf === 'management' && mg.rt.ip === parseIp('10.99.0.21'), 'Nexus 有 mgmt0，在 vrf management；ip address 10.99.0.21/24（NX-OS 的 /長度）');
+  ok(runObjective(s, lv.objectives[0]).pass && !runObjective(s, lv.objectives[1]).pass, '同網段的筆電通，另一個網段的網管工作站不通（vrf management 沒有預設路由）');
+  const R = cli(s, 'leaf'); R('enable');
+  R('configure terminal', 'ip route 0.0.0.0 0.0.0.0 10.99.0.1', 'end');
+  ok(!runObjective(s, lv.objectives[1]).pass, '全域的 ip route 進的是 default 的路由表：mgmt0 還是回不去');
+  R('configure terminal', 'no ip route 0.0.0.0 0.0.0.0 10.99.0.1', 'vrf context management', 'ip route 0.0.0.0/0 10.99.0.1', 'end');
+  ok(runObjective(s, lv.objectives[1]).pass, 'vrf context management → ip route 0.0.0.0/0 10.99.0.1：網管工作站連得到');
+  ok(lv.objectives[2].test(s) !== true, 'logging server 沒有 use-vrf：Syslog 還是送不到');
+  R('configure terminal', 'logging server 10.99.1.20 6 use-vrf management', 'end');
+  ok(lv.objectives.every((o) => (o.type === 'check' ? o.test(s) : runObjective(s, o).pass) === true), 'logging server … use-vrf management：四個目標都通過');
+  const rc = runningConfig(s, leaf).join('\n');
+  ok(/vrf context management\n ip route 0\.0\.0\.0\/0 10\.99\.0\.1/.test(rc) && /interface mgmt0\n( description .*\n)? vrf member management\n ip address 10\.99\.0\.21\/24/.test(rc) && /logging server 10\.99\.1\.20 6 use-vrf management/.test(rc) && !/negotiation auto/.test(rc), 'running-config 是 NX-OS 的寫法');
+  ok(/vrf member 是 NX-OS 的指令/.test(cli(s, 'ort')('enable', 'configure terminal', 'interface Gi0/0/1', 'vrf member management', 'end')), 'IOS 沒有 vrf member');
+}
+
 console.log('\nNetFlow 與 QoS 的 police');
 {
   const sim = await import('../src/engine/sim.js');

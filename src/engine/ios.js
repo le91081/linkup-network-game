@@ -2,7 +2,7 @@
 // 不依賴瀏覽器，可以直接用 Node 測試。支援的範圍就是 show running-config 會印出來的那些指令，
 // 所以把一台設備的 running-config 整份貼到另一台同型號的設備上，會得到相同的設定。
 import { isStack } from './stack.js';
-import { isMgmtPort } from './mgmtsrc.js';
+import { isMgmtPort, mgmtVrf } from './mgmtsrc.js';
 import { parseIp, fmtIp, parseMask, fmtMask, maskOf, netOf, bcastOf, parseVlanList } from './ip.js';
 import { parseCidr6, parseIp6, fmtIp6, net6, isLinkLocal } from './ip6.js';
 import { ICMP6_TYPES } from './sim6.js';
@@ -116,7 +116,7 @@ const PROMPT = {
   exec: '#', config: '(config)#', if: '(config-if)#', vlan: '(config-vlan)#', raguard: '(config-ra-guard)#', router: '(config-router)#', dhcp: '(dhcp-config)#',
   line: '(config-line)#', tacacs: '(config-server-tacacs)#', acl: '(config-ext-nacl)#', stdacl: '(config-std-nacl)#', radius: '(config-radius-server)#',
   isakmp: '(config-isakmp)#', tset: '(cfg-crypto-trans)#', cmap: '(config-crypto-map)#', ipsecprof: '(ipsec-profile)#', flowrec: '(config-flow-record)#', flowexp: '(config-flow-exporter)#', flowmon: '(config-flow-monitor)#', pkitp: '(ca-trustpoint)#', pkichain: '(config-cert-chain)#', pkicert: '(config-pubkey)#',
-  ikev2prop: '(config-ikev2-proposal)#', ikev2pol: '(config-ikev2-policy)#', ikev2kr: '(config-ikev2-keyring)#', ikev2peer: '(config-ikev2-keyring-peer)#', ikev2prof: '(config-ikev2-profile)#', track: '(config-track)#', vrfdef: '(config-vrf)#', vpcdom: '(config-vpc-domain)#', vrfaf: '(config-vrf-af)#', ipvrf: '(config-vrf)#', archive: '(config-archive)#', archlog: '(config-archive-log-cfg)#', ipsla: '(config-ip-sla)#', slaecho: '(config-ip-sla-echo)#', bgp: '(config-router)#', rmap: '(config-route-map)#', qcmap: '(config-cmap)#', pmap: '(config-pmap)#', pmapc: '(config-pmap-c)#',
+  ikev2prop: '(config-ikev2-proposal)#', ikev2pol: '(config-ikev2-policy)#', ikev2kr: '(config-ikev2-keyring)#', ikev2peer: '(config-ikev2-keyring-peer)#', ikev2prof: '(config-ikev2-profile)#', track: '(config-track)#', vrfdef: '(config-vrf)#', vpcdom: '(config-vpc-domain)#', vrfctx: '(config-vrf)#', vrfaf: '(config-vrf-af)#', ipvrf: '(config-vrf)#', archive: '(config-archive)#', archlog: '(config-archive-log-cfg)#', ipsla: '(config-ip-sla)#', slaecho: '(config-ip-sla-echo)#', bgp: '(config-router)#', rmap: '(config-route-map)#', qcmap: '(config-cmap)#', pmap: '(config-pmap)#', pmapc: '(config-pmap-c)#',
 };
 const SERVICE_PORT = { www: 80, http: 80, https: 443, domain: 53, dns: 53, ssh: 22, telnet: 23, ftp: 21, smtp: 25, ntp: 123, snmp: 161, snmptrap: 162, tftp: 69, bgp: 179, syslog: 514, isakmp: 500, bootps: 67, bootpc: 68, 'non500-isakmp': 4500 };
 
@@ -559,6 +559,7 @@ export function iosSession(getDev, getState, who = null) {
   // 帶外管理埠（Gi0/0）不是交換埠
   const mgmtL2 = (t) => (t.port && isMgmtPort(dev(), t.port.id) ? err(`% ${t.name} 是帶外管理埠（Mgmt-vrf），不能設定成交換埠`) : null);
   const onL2 = (fn) => each((t) => l2(t) || mgmtL2(t) || fn(t.pc, t));
+  let ipAddrCmd = null; // ip address <ip> <mask> 的處理函式（NX-OS 的 ip address <ip>/<長度> 轉過來用）
   // vpc N / vpc peer-link：要在 interface port-channel 底下、feature vpc 啟用之後
   const vpcIf = (fn) => (!(dev().features || {}).vpc ? err('% Invalid command at \'^\' marker.（先啟用 feature vpc）') : S.cur.some((t) => !t.po) ? err('% vpc 要在 interface port-channel <N> 底下設定') : onL2(fn));
   // 已經加密 / 雜湊過的輸入（type 5、7、9：貼回設定檔時）量不出長度，不檢查
@@ -700,7 +701,7 @@ export function iosSession(getDev, getState, who = null) {
     ['description <...>', ([t]) => each((x) => { if (x.pc) x.pc.desc = t; else if (x.iface) x.iface.desc = t; })],
     ['no description [...]', () => each((x) => { if (x.pc) delete x.pc.desc; else if (x.iface) delete x.iface.desc; })],
     ['ip address dhcp', () => onL3((i) => { i.mode = 'dhcp'; })],
-    ['ip address <ip> <mask>', ([ip, mask]) => {
+    ['ip address <ip> <mask>', ipAddrCmd = ([ip, mask]) => {
       if (parseIp(ip) == null) return err('IP 位址的格式不正確');
       if (maskBits(mask) == null) return err('子網路遮罩的格式不正確，例如 255.255.255.0');
       const r = onL3((i, t) => {
@@ -722,7 +723,7 @@ export function iosSession(getDev, getState, who = null) {
     }],
     ['no ip address', () => onL3((i) => { Object.assign(i, { mode: 'static', ip: '', mask: '' }); })],
     ...[['vrf forwarding <v>', 'def'], ['ip vrf forwarding <v>', 'ip']].map(([pat, style]) => [pat, ([v], out) => {
-      if (v !== 'Mgmt-vrf' && S.cur.some((t) => t.port && isMgmtPort(dev(), t.port.id))) return err('% 帶外管理埠只能在 Mgmt-vrf 裡');
+      if (v !== mgmtVrf(dev()) && S.cur.some((t) => t.port && isMgmtPort(dev(), t.port.id))) return err(`% 帶外管理埠只能在 ${mgmtVrf(dev())} 裡`);
       const vd = (dev().vrfs || {})[v];
       if (!vd) return err(`% VRF ${v} not configured.（先用 ${style === 'def' ? 'vrf definition' : 'ip vrf'} ${v} 建立）`);
       if (vd.style !== style) return err(`% ${v} 是用 ${vd.style === 'def' ? 'vrf definition' : 'ip vrf'} 建立的，介面上要用 ${vd.style === 'def' ? 'vrf forwarding' : 'ip vrf forwarding'}`);
@@ -740,6 +741,19 @@ export function iosSession(getDev, getState, who = null) {
       return undefined;
     })]),
     ['ip address negotiated', () => onL3((i) => { if (i.bind.t !== 'dialer') return err('ip address negotiated 用在 Dialer 介面（位址由 PPP 協商）'); i.dialer.negotiated = true; return undefined; })],
+    // NX-OS：ip address 10.0.0.11/24
+    ['ip address <cidr>', ([c]) => {
+      const mm = String(c).match(/^(\d+\.\d+\.\d+\.\d+)\/(\d+)$/);
+      if (!mm || +mm[2] > 32) return err('用法：ip address <IP> <遮罩>（NX-OS 也可以寫 ip address <IP>/<長度>）');
+      return ipAddrCmd([mm[1], fmtMask(+mm[2])]);
+    }],
+    // NX-OS：介面放進 VRF（會清掉介面上的第三層設定）
+    ['vrf member <v>', ([v], out) => {
+      if (!isNexus(dev())) return err('% Invalid input detected：vrf member 是 NX-OS 的指令（IOS 用 vrf forwarding）');
+      if (!(dev().vrfs || {})[v]) return err(`% VRF ${v} not configured.（先用 vrf context ${v} 建立）`);
+      if (v !== mgmtVrf(dev()) && S.cur.some((t) => t.port && isMgmtPort(dev(), t.port.id))) return err(`% mgmt0 只能在 vrf ${mgmtVrf(dev())} 裡`);
+      return onL3((i) => { if ((i.vrf || '') === v) return undefined; if (i.ip) out.push(`Warning: Deleted all L3 config on interface ${i.label}`); Object.assign(i, { vrf: v, ip: '', mask: '' }); return undefined; });
+    }],
     ['encapsulation ppp', () => onL3((i) => { if (i.bind.t !== 'dialer') return err('encapsulation ppp 用在 Dialer 介面'); i.dialer.ppp = true; return undefined; })],
     ['dialer pool <n>', ([n]) => (/^\d+$/.test(n) ? onL3((i) => { if (i.bind.t !== 'dialer') return err('dialer pool 用在 Dialer 介面'); i.dialer.pool = +n; return undefined; }) : err('用法：dialer pool <1-255>'))],
     ['ppp chap hostname <u>', ([u]) => onL3((i) => { if (i.bind.t !== 'dialer') return err('ppp chap 用在 Dialer 介面'); i.dialer.user = u; return undefined; })],
@@ -1729,6 +1743,14 @@ export function iosSession(getDev, getState, who = null) {
       return undefined;
     }],
     ['no feature <...>', ([f]) => { if (dev().features) delete dev().features[f.trim().toLowerCase()]; return undefined; }],
+    ['vrf context <v>', ([v]) => {
+      if (!isNexus(dev())) return err('% Invalid input detected：vrf context 是 NX-OS 的指令（IOS 用 vrf definition）');
+      const vs = (dev().vrfs ||= {});
+      if (vs[v] && vs[v].style !== 'ctx') return err(`% ${v} 已經用別的方式建立了`);
+      vs[v] ||= { style: 'ctx', af4: true };
+      enter('vrfctx', v);
+      return undefined;
+    }],
     ['vpc domain <n>', ([n]) => {
       if (!isNexus(dev())) return err('% Invalid input detected：vPC 是 Nexus 的功能');
       if (!(dev().features || {}).vpc) return err('% Invalid command at \'^\' marker.（先啟用 feature vpc）');
@@ -2340,7 +2362,14 @@ export function iosSession(getDev, getState, who = null) {
       if (dev().mgmt) Object.assign(dev().mgmt, { ntp: ip, ntpVrf: v });
       return undefined;
     }],
-    ['ntp server <ip> [...]', ([ip]) => (parseIp(ip) == null ? err('IP 位址的格式不正確') : void (dev().mgmt && (dev().mgmt.ntp = ip)))],
+    ['ntp server <ip> [...]', ([ip, rest]) => {
+      if (parseIp(ip) == null) return err('IP 位址的格式不正確');
+      // NX-OS：ntp server <IP> use-vrf management
+      const uv = /use-vrf\s+(\S+)/i.exec(rest || '');
+      if (uv && !(dev().vrfs || {})[uv[1]]) return err(`% VRF ${uv[1]} does not exist`);
+      if (dev().mgmt) Object.assign(dev().mgmt, { ntp: ip, ntpVrf: uv ? uv[1] : '' });
+      return undefined;
+    }],
     ['no ntp server [...]', () => void (dev().mgmt && Object.assign(dev().mgmt, { ntp: '', ntpVrf: '' }))],
     // 把自己的時鐘當成時間來源，替其他設備報時（沒有上游可以對時的時候用）
     ['ntp master [...]', ([n]) => {
@@ -2468,6 +2497,14 @@ export function iosSession(getDev, getState, who = null) {
       return undefined;
     }],
     ['logging host <ip>', ([ip]) => (parseIp(ip) == null ? err('IP 位址的格式不正確') : void (dev().mgmt && (dev().mgmt.syslog = ip)))],
+    // NX-OS：logging server <IP> [嚴重等級] use-vrf management
+    ['logging server <ip> [...]', ([ip, rest]) => {
+      if (parseIp(ip) == null) return err('用法：logging server <IP> [0-7] [use-vrf <VRF>]');
+      const uv = /use-vrf\s+(\S+)/i.exec(rest || '');
+      if (uv && !(dev().vrfs || {})[uv[1]]) return err(`% VRF ${uv[1]} does not exist`);
+      if (dev().mgmt) Object.assign(dev().mgmt, { syslog: ip, syslogVrf: uv ? uv[1] : '' });
+      return undefined;
+    }],
     ['logging <ip>', ([ip]) => (parseIp(ip) == null ? err('用法：logging host <Syslog 伺服器 IP>') : void (dev().mgmt && (dev().mgmt.syslog = ip)))],
     ['no logging [...]', () => void (dev().mgmt && Object.assign(dev().mgmt, { syslog: '', syslogVrf: '' }))],
     // snmp-server community <字串> [RO|RW] [ACL]：ACL 限制只有哪些來源可以查詢
@@ -3452,6 +3489,23 @@ export function iosSession(getDev, getState, who = null) {
       ['no notify syslog [...]', () => { delete dev().archive.log.notify; }],
       ['hidekeys', () => { dev().archive.log.hide = true; }],
       ['no hidekeys', () => { delete dev().archive.log.hide; }],
+    ],
+    vrfctx: [
+      ['ip route <cidr> <nh>', ([c, nh]) => {
+        const mm = String(c).match(/^(\d+\.\d+\.\d+\.\d+)\/(\d+)$/);
+        if (!mm || parseIp(nh) == null) return err('用法：ip route <網段>/<長度> <下一站>，例如 ip route 0.0.0.0/0 10.0.0.1');
+        const r = { dst: fmtIp(netOf(parseIp(mm[1]), +mm[2])), mask: fmtMask(+mm[2]), via: nh, ad: '', vrf: S.cur };
+        dev().routes = (dev().routes || []).filter((x) => !(x.vrf === r.vrf && x.dst === r.dst && x.mask === r.mask && x.via === r.via));
+        dev().routes.push(r);
+        return undefined;
+      }],
+      ['no ip route <cidr> <nh>', ([c, nh]) => {
+        const mm = String(c).match(/^(\d+\.\d+\.\d+\.\d+)\/(\d+)$/);
+        if (!mm) return err('用法：no ip route <網段>/<長度> <下一站>');
+        const dst = fmtIp(netOf(parseIp(mm[1]), +mm[2])), mask = fmtMask(+mm[2]);
+        dev().routes = (dev().routes || []).filter((x) => !(x.vrf === S.cur && x.dst === dst && x.mask === mask && x.via === nh));
+        return undefined;
+      }],
     ],
     vpcdom: [
       ['peer-keepalive destination <ip> [...]', ([ip, rest]) => {
@@ -4909,12 +4963,13 @@ export function runningConfig(state, dev) {
   const l3lines = (i) => {
     const l = [];
     if (+i.l2mtu) l.push(` mtu ${+i.l2mtu}`);
-    if (i.vrf) l.push(((dev.vrfs || {})[i.vrf] || {}).style === 'ip' ? ` ip vrf forwarding ${i.vrf}` : ` vrf forwarding ${i.vrf}`);
+    const vst = ((dev.vrfs || {})[i.vrf] || {}).style;
+    if (i.vrf) l.push(vst === 'ip' ? ` ip vrf forwarding ${i.vrf}` : vst === 'ctx' ? ` vrf member ${i.vrf}` : ` vrf forwarding ${i.vrf}`);
     if (i.mode === 'dhcp') l.push(' ip address dhcp');
     // PPPoE 的實體介面：位址、NAT、MTU 都在 Dialer 上
     else if (i.mode === 'pppoe' || i.dialPool != null) { l.push(' no ip address', ' pppoe enable group global', ` pppoe-client dial-pool-number ${i.dialPool ?? 1}`); return l; }
     else if (i.bind.t === 'dialer') l.push(...(i.dialer.negotiated ? [' ip address negotiated'] : [' no ip address']));
-    else if (i.ip && parseMask(i.mask) != null) l.push(` ip address ${i.ip} ${fmtMask(parseMask(i.mask))}`);
+    else if (i.ip && parseMask(i.mask) != null) l.push(vst === 'ctx' ? ` ip address ${i.ip}/${parseMask(i.mask)}` : ` ip address ${i.ip} ${fmtMask(parseMask(i.mask))}`);
     else l.push(' no ip address');
     if (i.nvi) l.push(' ip nat enable');
     else if (anyNat) l.push(natOut(i) ? ' ip nat outside' : i.ip || i.mode !== 'static' ? ' ip nat inside' : null);
@@ -4987,6 +5042,7 @@ export function runningConfig(state, dev) {
   };
   for (const [n, v] of Object.entries(dev.vrfs || {})) {
     if (v.style === 'ip') o.push(`ip vrf ${n}`, ...(v.desc ? [` description ${v.desc}`] : []), ...(v.rd ? [` rd ${v.rd}`] : []), '!');
+    else if (v.style === 'ctx') o.push(`vrf context ${n}`, ...(dev.routes || []).filter((r) => r.vrf === n && r.dst && r.via && parseMask(r.mask || '') != null).map((r) => ` ip route ${r.dst}/${parseMask(r.mask)} ${r.via}`), '!');
     else o.push(`vrf definition ${n}`, ...(v.desc ? [` description ${v.desc}`] : []), ...(v.rd ? [` rd ${v.rd}`] : []), ...(v.af4 ? [' !', ' address-family ipv4', ' exit-address-family'] : []), '!');
   }
   o.push(...archiveLines(dev));
@@ -5040,7 +5096,7 @@ export function runningConfig(state, dev) {
       o.push(`interface ${longIf(p.label)}`, ...desc, ...phy, ...(+pc.mtu ? [` mtu ${+pc.mtu}`] : []));
       if (pc.mode === 'routed') {
         const i = dev.ifaces.find((x) => x.bind.t === 'port' && x.bind.port === p.id);
-        o.push(...(p.mgmt ? [] : [' no switchport']), ...(i ? l3lines(i) : []), ...(p.mgmt ? [' negotiation auto'] : []), ...ndl); // 帶外管理埠本來就不是交換埠
+        o.push(...(p.mgmt ? [] : [' no switchport']), ...(i ? l3lines(i) : []), ...(p.mgmt && !isNexus(dev) ? [' negotiation auto'] : []), ...ndl); // 帶外管理埠本來就不是交換埠（Nexus 的 mgmt0 沒有 negotiation auto）
       } else {
         // 真的 IOS 的順序：access vlan、trunk 的設定、mode、nonegotiate、voice vlan。出廠預設的模式不會印出來
         if (pc.vlan !== 1) o.push(` switchport access vlan ${pc.vlan}`);
@@ -5202,6 +5258,7 @@ export function runningConfig(state, dev) {
   for (const r of dev.routes || []) {
     const oi = r.outIf && dev.ifaces.find((x) => x.id === r.outIf);
     if (!r.dst || (!r.via && !oi)) continue; // 沒有下一站的只有「ip route … Tunnel0」
+    if (r.vrf && ((dev.vrfs || {})[r.vrf] || {}).style === 'ctx') continue; // NX-OS：寫在 vrf context 底下
     o.push(`ip route ${r.vrf ? 'vrf ' + r.vrf + ' ' : ''}${r.dst} ${parseMask(r.mask || '') != null ? fmtMask(parseMask(r.mask)) : r.mask} ${oi ? longIf(oi.label) + (r.via ? ' ' : '') : ''}${r.via || ''}${r.global ? ' global' : ''}${+r.ad > 1 ? ' ' + r.ad : ''}${r.track != null && r.track !== '' ? ' track ' + r.track : ''}`);
   }
   { const X = (dev.nf || {}).export; if (X && X.ver) o.push(`ip flow-export version ${X.ver}`); if (X && X.src) { const x = dev.ifaces.find((y) => y.id === X.src); o.push(`ip flow-export source ${x ? longIf(x.label) : X.src}`); } if (X && X.ip) o.push(`ip flow-export destination ${X.ip} ${X.port}`); }
@@ -5313,9 +5370,9 @@ export function runningConfig(state, dev) {
     if (dev.unsupportedXcvr) o.push('service unsupported-transceiver');
     if (m.tz && m.tz.name) o.push(`clock timezone ${m.tz.name} ${m.tz.off}`);
     if (+m.ntpMaster > 0) o.push(`ntp master ${+m.ntpMaster}`);
-    if (m.ntp) o.push(`ntp server ${m.ntpVrf ? `vrf ${m.ntpVrf} ` : ''}${m.ntp}`);
+    if (m.ntp) o.push(isNexus(dev) ? `ntp server ${m.ntp}${m.ntpVrf ? ` use-vrf ${m.ntpVrf}` : ''}` : `ntp server ${m.ntpVrf ? `vrf ${m.ntpVrf} ` : ''}${m.ntp}`);
     if (m.logTrap != null && m.logTrap !== '' && +m.logTrap !== 6) o.push(`logging trap ${SEVERITY[+m.logTrap]}`);
-    if (m.syslog) o.push(`logging host ${m.syslog}${m.syslogVrf ? ` vrf ${m.syslogVrf}` : ''}`);
+    if (m.syslog) o.push(isNexus(dev) ? `logging server ${m.syslog} 6${m.syslogVrf ? ` use-vrf ${m.syslogVrf}` : ''}` : `logging host ${m.syslog}${m.syslogVrf ? ` vrf ${m.syslogVrf}` : ''}`);
     if (m.block && +m.block.sec > 0) o.push(`login block-for ${m.block.sec} attempts ${m.block.tries} within ${m.block.within}`);
     if (m.loginLog && m.loginLog.fail) o.push('login on-failure log');
     if (m.loginLog && m.loginLog.ok) o.push('login on-success log');

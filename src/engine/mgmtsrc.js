@@ -11,3 +11,5 @@ export function mgmtSpec(d, kind) {
 }
 /** 帶外管理埠：不是交換埠、只能在 Mgmt-vrf */
 export const isMgmtPort = (d, pid) => !!(d.ports || []).find((p) => p.id === pid && p.mgmt);
+/** 管理用的 VRF 叫什麼：Nexus 是 management，Catalyst 9300 是 Mgmt-vrf */
+export const mgmtVrf = (d) => (/^n9/.test(d.model) ? 'management' : 'Mgmt-vrf');
