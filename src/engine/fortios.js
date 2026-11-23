@@ -514,14 +514,18 @@ const SEC = {
     read: (d) => [
       ...(d.portForwards || []).filter((f) => f.port && f.toIp).map((f) => ({
         key: vipName(f),
-        f: { extip: [f.extIp || '0.0.0.0'], mappedip: [f.toIp], extintf: ['any'], portforward: ['enable'], protocol: [f.proto || 'tcp'], extport: [String(f.port)], mappedport: [String(f.toPort || f.port)] },
+        f: { extip: [f.extIp || '0.0.0.0'], mappedip: [f.toIp], extintf: [f.extIf || 'any'], portforward: ['enable'], protocol: [f.proto || 'tcp'], extport: [String(f.port)], mappedport: [String(f.toPort || f.port)] },
       })),
-      ...(d.staticNat || []).filter((n) => n.pub && n.priv).map((n) => ({ key: natName(n), f: { extip: [n.pub], mappedip: [n.priv], extintf: ['any'] } })),
+      ...(d.staticNat || []).filter((n) => n.pub && n.priv).map((n) => ({ key: natName(n), f: { extip: [n.pub], mappedip: [n.priv], extintf: [n.extIf || 'any'] } })),
     ],
     write(d, key, f) {
       const ext = (f.extip || ['0.0.0.0'])[0].split('-')[0], map = (f.mappedip || [''])[0].split('-')[0];
       if (parseIp(ext) == null) return ERR('extip 請填對外的 IP 位址');
       if (parseIp(map) == null) return ERR('還沒有 set mappedip "<內部伺服器 IP>"');
+      // extintf：只有從這個介面進來的封包才轉換（any = 每個介面，內部的人連公用位址 (hairpin) 也會轉換）
+      const xi = (f.extintf || ['any'])[0];
+      if (xi !== 'any' && !d.ifaces.some((i) => i.id === xi)) return ERR(`找不到介面 ${xi}（extintf 填 any 或介面名稱，例如 wan1）`);
+      const extIf = xi === 'any' ? '' : xi;
       const pf = (d.portForwards ||= []), drop = () => {
         d.portForwards = pf.filter((x) => vipName(x) !== key);
         if (d.staticNat) d.staticNat = d.staticNat.filter((x) => natName(x) !== key);
@@ -531,14 +535,14 @@ const SEC = {
         if (!['tcp', 'udp'].includes(proto)) return ERR('protocol 必須是 tcp 或 udp');
         if (!/^\d+$/.test(ep) || !/^\d+$/.test(mp)) return ERR('連接埠轉發需要 set extport <對外埠> 與 set mappedport <內部埠>');
         const cur = pf.find((x) => vipName(x) === key);
-        const val = { name: key, proto, port: ep, toIp: map, toPort: mp === ep ? '' : mp, extIp: ext === '0.0.0.0' ? '' : ext };
-        if (cur && !(d.staticNat || []).some((x) => natName(x) === key)) Object.assign(cur, val);
+        const val = { name: key, proto, port: ep, toIp: map, toPort: mp === ep ? '' : mp, extIp: ext === '0.0.0.0' ? '' : ext, ...(extIf ? { extIf } : {}) };
+        if (cur && !(d.staticNat || []).some((x) => natName(x) === key)) { Object.assign(cur, val); if (!extIf) delete cur.extIf; }
         else { drop(); d.portForwards.push(val); }
         return undefined;
       }
       if (ext === '0.0.0.0') return ERR('一對一的 VIP（沒有 portforward）必須指定對外的公用 IP：set extip <IP>');
       drop();
-      (d.staticNat ||= []).push({ name: key, pub: ext, priv: map });
+      (d.staticNat ||= []).push({ name: key, pub: ext, priv: map, ...(extIf ? { extIf } : {}) });
       return undefined;
     },
     remove(d, key) {

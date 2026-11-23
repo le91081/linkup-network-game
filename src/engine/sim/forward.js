@@ -255,6 +255,7 @@ function natPermits(dev, outIf, pkt) {
 function matchPortForward(dev, inIf, pkt) {
   for (const f of dev.portForwards || []) {
     if (f.off || (f.proto || 'tcp') !== pkt.proto || +f.port !== pkt.dport) continue;
+    if (f.extIf && (!inIf || inIf.id !== f.extIf)) continue; // FortiGate 的 extintf：只轉換從那個介面進來的
     const ext = parseIp(f.extIp || '');
     if (ext != null ? ext !== pkt.dst : pkt.dst !== inIf.rt.ip) continue;
     const ip = parseIp(f.toIp);
@@ -485,7 +486,7 @@ export function forward(state, ctx, startId, pkt) {
         pkt.src = e.dst; pkt.sport = e.dport; pkt.dst = e.src; pkt.dport = e.sport;
       } else if (!pkt.reply) {
         // NVI（ip nat source static）：從 ip nat enable 的介面進來就轉換，不分 inside / outside，所以 hairpin 也通
-        const sn = (dev.staticNat || []).find((x) => parseIp(x.pub || '') === pkt.dst && parseIp(x.priv || '') != null && (!x.nvi || (inIf && inIf.nvi)));
+        const sn = (dev.staticNat || []).find((x) => parseIp(x.pub || '') === pkt.dst && parseIp(x.priv || '') != null && (!x.nvi || (inIf && inIf.nvi)) && (!x.extIf || (inIf && inIf.id === x.extIf)));
         if (sn && !sn.nvi && dev.kind === 'router' && inIf && !inIf.nat && !inIf.natOut) {
           // 從 inside 進來、要找靜態 NAT 的公用位址（NAT hairpin / loopback）：IOS 不轉換，封包到不了伺服器
           return drop(`${dev.name} 從 inside 介面 ${inIf.label} 收到要給 ${sn.pub} 的封包：傳統的 inside / outside NAT 只轉換「從 outside 介面進來」的封包，這個位址只是路由器替靜態 NAT 回應 ARP 的別名，封包到不了伺服器（NAT hairpin 不通）。內部的人要用內部位址連（內部 DNS 回私有位址：split DNS），或改用 NVI（介面上 ip nat enable、ip nat source static），不分 inside / outside 都會轉換`);
@@ -665,7 +666,7 @@ export function forward(state, ctx, startId, pkt) {
         } else if (nviOn && dev.nviSrc && nviPermits(dev, pkt)) {
           const wi = dev.ifaces.find((x) => x.id === dev.nviSrc.iface);
           if (wi && wi.rt.ip != null) nSrc = wi.rt.ip;
-        } else if (v.nat && outIf !== inIf && outIf.rt.ip != null && natPermits(dev, outIf, pkt)) {
+        } else if (v.nat && (outIf !== inIf || dev.kind === 'firewall') && outIf.rt.ip != null && natPermits(dev, outIf, pkt)) {
           // ESP（IP 協定 50）沒有連接埠號碼：PAT（多對一）沒辦法替它轉換。家用路由器多半有「IPsec passthrough」可以讓一條通過
           if (pkt.proto === 'esp' && !pkt.ssl && dev.kind !== 'homerouter') return drop(`${dev.name} 做的是 PAT（多個位址共用 ${outIf.label} 的位址）：ESP 封包沒有連接埠號碼，PAT 沒辦法替它轉換，只好丟掉。中間有 NAT 時兩端都要用 NAT-T（ESP 包在 UDP 4500 裡）`);
           nSrc = outIf.rt.ip;

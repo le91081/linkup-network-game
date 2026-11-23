@@ -151,6 +151,12 @@ function transactInner(state, fromId, spec) {
     ctx.log.push({ dev: b.dev, kind: 'drop', text: reason });
     return done({ ok: false, reason, failDev: b.dev, phase: 'reply', responder: a.dev });
   }
+  // 回應的來源要是剛才連的那個位址：NAT 只轉了一個方向（例如同一個網段的 hairpin 沒有換來源），用戶端收到不認得的回應就丟掉（TCP 回 RST）
+  if (rp.src !== spec.dst) {
+    const reason = `${src.name} 連的是 ${fmtIp(spec.dst)}，回應卻來自 ${fmtIp(rp.src)}：回程沒有經過做 NAT 的那台設備（伺服器直接回給用戶端），用戶端不認得這個回應，丟掉${spec.proto === 'tcp' ? '（回一個 RST）' : ''}`;
+    ctx.log.push({ dev: fromId, kind: 'drop', text: reason });
+    return done({ ok: false, reason, failDev: fromId, phase: 'reply', responder: a.dev });
+  }
   const seenSrc = pkt.src;
   if (spec.proto === 'tcp') {
     // TCP 要三個封包才算建立連線：SYN → SYN-ACK → ACK

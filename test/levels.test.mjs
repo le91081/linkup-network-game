@@ -5143,6 +5143,39 @@ console.log('\nNAT NVI：ip nat enable 讓 hairpin 也轉換');
   settle(s);
   ok(!transact(s, 'pc1', { proto: 'tcp', dst: parseIp('93.184.216.34'), dport: 443 }).ok, '辦公室的介面拿掉 ip nat enable：不轉換，私有位址出不去');
 }
+console.log('\nFortiGate 的 VIP：extintf 與 hairpin');
+{
+  const { fortiSession } = await import('../src/engine/fortios.js');
+  const ok = (cond, title) => (cond ? console.log('  ✔ ' + title) : fail(title));
+  const allow = (name, srcIf, dstIf, o = {}) => ({ name, srcIf, dstIf, src: 'any', dst: 'any', service: 'ALL', action: 'accept', nat: false, ...o });
+  const lv = LEVELS.find((x) => x.id === 'l127');
+  const s = lv.setup(); settle(s);
+  const fg = s.devices.fg, F = fortiSession(() => s.devices.fg, () => s);
+  const run = (...lines) => lines.map((l) => F.exec(l).out.join('\n')).join('\n');
+  const WAN = parseIp('203.0.113.34');
+  fg.portForwards.length = 0;
+  run('config firewall vip', 'edit ORDER', 'set extip 203.0.113.34', 'set mappedip 172.16.1.10', 'set extintf wan1', 'set portforward enable', 'set extport 8080', 'set mappedport 8080', 'next', 'end');
+  fg.policies.push(allow('內部到訂單系統', 'internal', 'dmz', { dst: '172.16.1.10' }));
+  settle(s);
+  ok(transact(s, 'inet', { proto: 'tcp', dst: WAN, dport: 8080 }).ok && !transact(s, 'pc1', { proto: 'tcp', dst: WAN, dport: 8080 }).ok, 'extintf wan1：外面連得到，內部的人連公用位址 (hairpin) 不轉換');
+  ok(/set extintf "wan1"/.test(run('show firewall vip')), 'show firewall vip：set extintf "wan1"');
+  run('config firewall vip', 'edit ORDER', 'set extintf any', 'next', 'end');
+  settle(s);
+  const h = transact(s, 'pc1', { proto: 'tcp', dst: WAN, dport: 8080 });
+  ok(h.ok && h.log.some((l) => /連接埠轉發：203\.0\.113\.34:8080 → 172\.16\.1\.10:8080/.test(l.text)), 'extintf any + internal → dmz 的政策：內部連公用位址也轉到訂單系統');
+  ok(/不是 any 也不是介面|找不到介面 wan9/.test(run('config firewall vip', 'edit ORDER', 'set extintf wan9', 'next', 'end')), 'extintf 寫不存在的介面：錯誤');
+  // 伺服器和用戶端在同一個介面：政策 internal → internal 要開 NAT，伺服器的回應才會回到防火牆
+  s.devices.pc2.services = [{ proto: 'tcp', port: 3389, name: '遠端桌面' }];
+  run('config firewall vip', 'edit RDP', 'set extip 203.0.113.34', 'set mappedip 192.168.1.22', 'set extintf any', 'set portforward enable', 'set extport 3389', 'set mappedport 3389', 'next', 'end');
+  fg.policies.push(allow('內部 hairpin', 'internal', 'internal', { dst: '192.168.1.22' }));
+  settle(s);
+  ok(!transact(s, 'pc1', { proto: 'tcp', dst: WAN, dport: 3389 }).ok, '同一個介面的 hairpin 沒有 NAT：伺服器直接回給 PC，連線建立不起來');
+  fg.policies[fg.policies.length - 1].nat = true;
+  (await import('../src/engine/sim.js')).clearSessions(s, fg); // 改了政策：剛才那條沒建立起來的連線紀錄先清掉（diagnose sys session clear）
+  settle(s);
+  const g = transact(s, 'pc1', { proto: 'tcp', dst: WAN, dport: 3389 });
+  ok(g.ok && g.log.some((l) => /來源位址 192\.168\.1\.21 換成 192\.168\.1\.1/.test(l.text)), '政策開 NAT：來源換成防火牆在 internal 的位址，hairpin 通了');
+}
 console.log('\nNetFlow 與 QoS 的 police');
 {
   const sim = await import('../src/engine/sim.js');
