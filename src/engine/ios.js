@@ -475,7 +475,7 @@ const HELP = {
     'switchport trunk native vlan <ID> / allowed vlan <清單>', 'no switchport（L3 交換器改成 Routed 埠）', 'ip nat inside|outside', 'ip helper-address <IP>',
     'ip ospf cost <值>', 'ip access-group <名稱> in|out', 'encapsulation dot1q <VLAN>（子介面）', 'vrrp 1 ip <虛擬 IP> / vrrp 1 priority <值> / vrrp 1 track <物件> decrement <值>', 'standby 1 ip <虛擬 IP> / standby 1 priority <值> / standby 1 preempt / standby 1 track <物件> decrement <值>',
     'channel-group <編號> mode active|passive|on', 'switchport port-security [mac-address <MAC> | violation <模式>]',
-    'spanning-tree bpduguard enable / spanning-tree guard root', 'ip dhcp snooping trust', 'ipv6 address <位址/前綴>', 'speed 10|100|1000|auto、duplex auto|full|half'],
+    'spanning-tree bpduguard enable / bpdufilter enable / guard root | loop | none', 'ip dhcp snooping trust', 'ipv6 address <位址/前綴>', 'speed 10|100|1000|auto、duplex auto|full|half'],
   vlan: ['name <名稱>'],
   router: ['network <網段> <萬用遮罩> area 0', 'default-information originate', 'redistribute static | connected | bgp <AS> [subnets] [metric <n>] [metric-type 1|2] [route-map <名稱>]'],
   dhcp: ['network <網段> <遮罩>', 'default-router <IP>', 'dns-server <IP> [IP]', 'option 150 ip <TFTP 伺服器>（IP 電話下載設定檔）', 'option 43 hex f104.<WLC 的 IP（十六進位）>（Cisco AP 找無線控制器）', 'lease <天> [小時] [分鐘]', 'host <IP> <遮罩> 加上 hardware-address <MAC>（保留位址）'],
@@ -1141,8 +1141,16 @@ export function iosSession(getDev, getState, who = null) {
     ['no spanning-tree portfast', () => onL2((pc) => { delete pc.portfast; })],
     ['spanning-tree bpduguard <x>', ([x]) => onL2((pc) => { pc.bpduguard = 'enable'.startsWith(x.toLowerCase()); })],
     ['no spanning-tree bpduguard [...]', () => onL2((pc) => { pc.bpduguard = false; })],
-    ['spanning-tree guard root', () => onL2((pc) => { pc.rootguard = true; })],
-    ['no spanning-tree guard [...]', () => onL2((pc) => { pc.rootguard = false; })],
+    // BPDU Filter：這個埠不送也不收 BPDU（等於這個埠沒有 STP）
+    ['spanning-tree bpdufilter <x>', ([x]) => { const k = x.toLowerCase(); if (!'enable'.startsWith(k) && !'disable'.startsWith(k)) return err('% 用法：spanning-tree bpdufilter enable | disable'); return onL2((pc) => { pc.bpdufilter = 'enable'.startsWith(k); }); }],
+    ['no spanning-tree bpdufilter [...]', () => onL2((pc) => { delete pc.bpdufilter; })],
+    // guard root | loop | none：一個埠只能有一種
+    ['spanning-tree guard <x>', ([x]) => {
+      const k = x.toLowerCase(), w = ['root', 'loop', 'none'].find((o) => o.startsWith(k));
+      if (!w) return err('% 用法：spanning-tree guard root | loop | none');
+      return onL2((pc) => { pc.rootguard = w === 'root'; if (w === 'loop') pc.loopguard = true; else if (w === 'none') pc.loopguard = false; else delete pc.loopguard; });
+    }],
+    ['no spanning-tree guard [...]', () => onL2((pc) => { pc.rootguard = false; delete pc.loopguard; })],
     ['ip dhcp snooping trust', () => onL2((pc) => { pc.trust = true; })],
     ['no ip dhcp snooping trust', () => onL2((pc) => { pc.trust = false; })],
     ['ip arp inspection trust', () => onL2((pc) => { pc.trust = true; })],
@@ -1885,6 +1893,13 @@ export function iosSession(getDev, getState, who = null) {
     ['no spanning-tree mst <id> priority', ([id]) => { const m = ((dev().sw.stp || {}).mst || {}); if (m.prio) delete m.prio[+id]; return undefined; }],
     ['spanning-tree portfast default', () => needSw() || void ((dev().sw.stp ||= {}).portfastDefault = true)],
     ['no spanning-tree portfast default', () => needSw() || void ((dev().sw.stp ||= {}).portfastDefault = false)],
+    // PortFast 的埠（接終端設備）預設開 BPDU Guard / BPDU Filter；Loop Guard 套在交換器之間的點對點線
+    ['spanning-tree portfast bpduguard default', () => needSw() || void ((dev().sw.stp ||= {}).bpduguardDefault = true)],
+    ['no spanning-tree portfast bpduguard default', () => needSw() || void ((dev().sw.stp ||= {}).bpduguardDefault = false)],
+    ['spanning-tree portfast bpdufilter default', () => needSw() || void ((dev().sw.stp ||= {}).bpdufilterDefault = true)],
+    ['no spanning-tree portfast bpdufilter default', () => needSw() || void ((dev().sw.stp ||= {}).bpdufilterDefault = false)],
+    ['spanning-tree loopguard default', () => needSw() || void ((dev().sw.stp ||= {}).loopguardDefault = true)],
+    ['no spanning-tree loopguard default', () => needSw() || void ((dev().sw.stp ||= {}).loopguardDefault = false)],
     // 每個 VLAN 各自的優先權（Rapid PVST+）；1-4094 就是全部的 VLAN
     ['spanning-tree vlan <list> priority <n>', ([list, n]) => {
       const e = needSw(); if (e) return e;
@@ -4436,6 +4451,9 @@ export function runningConfig(state, dev) {
     }
     for (const [i, p] of Object.entries((stp.mst || {}).prio || {})) o.push(`spanning-tree mst ${i} priority ${p}`);
     if (stp.portfastDefault) o.push('spanning-tree portfast default');
+    if (stp.bpduguardDefault) o.push('spanning-tree portfast bpduguard default');
+    if (stp.bpdufilterDefault) o.push('spanning-tree portfast bpdufilter default');
+    if (stp.loopguardDefault) o.push('spanning-tree loopguard default');
     if (+sw.macAge > 0 && +sw.macAge !== 300) o.push(`mac address-table aging-time ${+sw.macAge}`);
     for (const [n, s] of Object.entries(sw.span || {})) {
       const lab = (pid) => (dev.ports.find((p) => p.id === pid) || {}).label || pid;
@@ -4697,7 +4715,7 @@ export function runningConfig(state, dev) {
     if (pc && isSw(dev)) {
       const phy = [pc.speed && pc.speed !== 'auto' ? ` speed ${pc.speed}` : null, pc.duplex && pc.duplex !== 'auto' ? ` duplex ${pc.duplex}` : null].filter(Boolean);
       const nd = portNd(dev, p.id), ndl = [nd.cdp === false ? ' no cdp enable' : null, nd.tx === false ? ' no lldp transmit' : null, nd.rx === false ? ' no lldp receive' : null].filter(Boolean);
-      const def = pc.mode === defaultPortMode(dev.model) && pc.vlan === 1 && pc.native === 1 && (!pc.allowed || pc.allowed === 'all') && !pc.voice && !pc.noneg && !pc.qosTrust && !pc.trustDevice && !pc.poe && !ndl.length && !pc.shut && !peer && !pc.trust && !(+pc.lag > 0) && !(pc.ps && pc.ps.on) && !pc.storm && !pc.protected && !pc.raGuard && !pc.pvHost && !pc.pvMap && !/^pvlan/.test(pc.mode) && !pc.bpduguard && !pc.rootguard && !pc.dot1x && !phy.length && pc.portfast == null && !pc.desc && !pc.mtu;
+      const def = pc.mode === defaultPortMode(dev.model) && pc.vlan === 1 && pc.native === 1 && (!pc.allowed || pc.allowed === 'all') && !pc.voice && !pc.noneg && !pc.qosTrust && !pc.trustDevice && !pc.poe && !ndl.length && !pc.shut && !peer && !pc.trust && !(+pc.lag > 0) && !(pc.ps && pc.ps.on) && !pc.storm && !pc.protected && !pc.raGuard && !pc.pvHost && !pc.pvMap && !/^pvlan/.test(pc.mode) && !pc.bpduguard && !pc.rootguard && pc.bpdufilter == null && pc.loopguard == null && !pc.dot1x && !phy.length && pc.portfast == null && !pc.desc && !pc.mtu;
       if (def) continue;
       o.push(`interface ${longIf(p.label)}`, ...desc, ...phy, ...(+pc.mtu ? [` mtu ${+pc.mtu}`] : []));
       if (pc.mode === 'routed') {
@@ -4737,8 +4755,10 @@ export function runningConfig(state, dev) {
       if (pc.storm && pc.storm.action) o.push(` storm-control action ${pc.storm.action}`);
       if (pc.raGuard) o.push(` ipv6 nd raguard attach-policy ${pc.raGuard}`);
       if (pc.trust) o.push(' ip dhcp snooping trust', ...(dev.sw.dai && dev.sw.dai.on ? [' ip arp inspection trust'] : []));
+      if (pc.bpdufilter != null) o.push(` spanning-tree bpdufilter ${pc.bpdufilter ? 'enable' : 'disable'}`);
       if (pc.bpduguard) o.push(' spanning-tree bpduguard enable');
       if (pc.rootguard) o.push(' spanning-tree guard root');
+      else if (pc.loopguard != null) o.push(` spanning-tree guard ${pc.loopguard ? 'loop' : 'none'}`);
       if (pc.dot1x) o.push(' authentication port-control auto', ' dot1x pae authenticator');
       if (pc.shut) o.push(' shutdown');
       o.push('!');

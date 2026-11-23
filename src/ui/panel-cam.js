@@ -15,11 +15,11 @@ export function camTab(ctx, body) {
   const f = ((state.rt && state.rt.cams) || {})[dev.id], r = f && f.rt;
   const off = (state.rt.off || {})[dev.id];
   const card = h('div', { class: 'card' }, cardHead('影像串流', off ? badge('off', '沒有電') : !c.nvr ? badge('off', '沒有設定 NVR') : r && r.mbps >= +c.mbps - 0.5 ? badge('on', '錄影正常') : badge('warn', r && r.mbps > 0 ? '畫面會卡' : '送不到 NVR')));
-  card.append(
+  card.append(...[
     field('NVR 的位址', inp(ctx, () => c.nvr || '', (v) => { c.nvr = v; }, { ph: '例如 10.10.50.10', check: isIp })),
     field('畫質（位元率）', sel(ctx, () => String(c.mbps), (v) => { c.mbps = +v; }, CAM_PROFILES, { rerender: true }), '影像是固定的位元率：線路剩下的頻寬比它少，畫面就會卡、掉格'),
     off ? note('warn', '攝影機沒有電：要接在有 PoE 的交換器埠上（Class 3，大約 6.5 W）。') : null,
-    r ? (r.mbps >= +c.mbps - 0.5 ? note('ok', `NVR 收到 ${r.mbps} Mbps，錄影正常。`) : note('warn', r.mbps > 0 ? `只送得出 ${r.mbps} Mbps（需要 ${c.mbps} Mbps）：${r.where || '線路的頻寬不夠'}` : `影像送不到 NVR：${r.why || '連不上'}`)) : null);
+    r ? (r.mbps >= +c.mbps - 0.5 ? note('ok', `NVR 收到 ${r.mbps} Mbps，錄影正常。`) : note('warn', r.mbps > 0 ? `只送得出 ${r.mbps} Mbps（需要 ${c.mbps} Mbps）：${r.where || '線路的頻寬不夠'}` : `影像送不到 NVR：${r.why || '連不上'}`)) : null].filter(Boolean)); // DOM 的 append 會把 null 印成字
   body.append(card);
 }
 

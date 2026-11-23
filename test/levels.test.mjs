@@ -4955,6 +4955,47 @@ console.log('\nping 的往返時間：設備處理、線路速率、距離、排
   const txt = out.join('\n');
   ok(/round-trip min\/avg\/max = (9|1\d)\/(9|1\d)\/(9|1\d) ms/.test(txt) && /^  1 8\.8\.8\.8 (9|1\d) msec (9|1\d) msec (9|1\d) msec$/m.test(txt), 'IOS 的 ping 與 traceroute 印出算出來的時間');
 }
+console.log('\nSTP：BPDU Filter、Loop Guard 與 BPDU Guard 的預設');
+{
+  const { iosSession, runningConfig } = await import('../src/engine/ios.js');
+  const { iosRun } = await import('../src/ui/cli.js');
+  const { logRows } = await import('../src/engine/ops.js');
+  const ok = (cond, title) => (cond ? console.log('  ✔ ' + title) : fail(title));
+  const cli = (s, id) => { const S = iosSession(() => s.devices[id], () => s); return (...lines) => { const out = []; for (const l of lines) { const r = iosRun({ state: s, showTrace() {}, refreshLive() {} }, id, S, l, (x) => out.push(x)); if (r.changed) settle(s); } return out.join('\n'); }; };
+  const lv = LEVELS.find((x) => x.id === 'l139');
+  const s = lv.setup(); settle(s);
+  const ping = (t, from) => transact(t, from, { proto: 'icmp', dst: parseIp('10.10.10.10') });
+  const c = s.cables.find((x) => [x.a.dev, x.b.dev].sort().join() === 'sw2,sw3');
+  ok(!ping(s, 'pc3').ok && /廣播風暴/.test(ping(s, 'pc3').reason) && s.rt.cable[c.id] === 'up', '開場：SW-2F 的 Gi0/10 開了 BPDU Filter，備援線兩端都在轉送，廣播風暴');
+  const B3 = cli(s, 'sw3');
+  B3('enable');
+  ok(/^Gi0\/10 +Desg +FWD +P2p$/m.test(B3('show spanning-tree')), 'SW-3F 的 show spanning-tree：Gi0/10 是 Desg FWD（收不到 BPDU）');
+  // 只在 SW-3F 開 Loop Guard：原本是 Alternate 的 Gi0/10 進入 loop-inconsistent
+  B3('configure terminal', 'spanning-tree loopguard default', 'end');
+  ok(ping(s, 'pc3').ok && s.rt.cable[c.id] === 'blocked' && (s.devices.sw3.rt.stp.loopinc || {})['Gi0/10'], 'SW-3F 開 spanning-tree loopguard default：Gi0/10 被擋下 (loop-inconsistent)，網路恢復');
+  const sp = B3('show spanning-tree');
+  ok(/Gi0\/10 +Desg +BKN\* +P2p \*LOOP_Inc/.test(sp) && /VLAN0010 +GigabitEthernet0\/10 +Loop Inconsistent/.test(B3('show spanning-tree inconsistentports')), 'show spanning-tree 是 BKN* *LOOP_Inc；show spanning-tree inconsistentports 列出 VLAN0010 Gi0/10');
+  ok(logRows(s, s.devices.sw3).some((r) => /%SPANTREE-2-LOOPGUARD_BLOCK: Loop guard blocking port GigabitEthernet0\/10 on VLAN0010\./.test(r.line)), '紀錄：%SPANTREE-2-LOOPGUARD_BLOCK');
+  ok(/Loopguard Default +is enabled/.test(B3('show spanning-tree summary')) && /^spanning-tree loopguard default$/m.test(runningConfig(s, s.devices.sw3).join('\n')), 'show spanning-tree summary 與 running-config 有 loopguard default');
+  // 拿掉 BPDU Filter：BPDU 回來，Loop Guard 自動解除，變回 Alternate
+  const B2 = cli(s, 'sw2');
+  B2('enable', 'configure terminal', 'interface Gi0/10', 'no spanning-tree bpdufilter', 'no spanning-tree portfast', 'end');
+  ok(!(s.devices.sw3.rt.stp.loopinc || {})['Gi0/10'] && s.devices.sw3.rt.stp.roles['Gi0/10'][10] === 'altn' && logRows(s, s.devices.sw3).some((r) => /LOOPGUARD_UNBLOCK: Loop guard unblocking port GigabitEthernet0\/10 on VLAN0010/.test(r.line)), 'SW-2F 拿掉 bpdufilter：BPDU 回來，Loop Guard 解除（LOOPGUARD_UNBLOCK），Gi0/10 變回 Alternate');
+  // BPDU Filter 開在 Alternate 那一端（SW-3F）：對面是 Designated，Loop Guard 擋不住
+  const t = lv.setup(); settle(t);
+  cli(t, 'sw2')('enable', 'configure terminal', 'interface Gi0/10', 'no spanning-tree bpdufilter', 'end');
+  for (const id of ['sw2', 'sw3']) cli(t, id)('enable', 'configure terminal', 'spanning-tree loopguard default', 'end');
+  cli(t, 'sw3')('configure terminal', 'interface Gi0/10', 'spanning-tree bpdufilter enable', 'end');
+  ok(!ping(t, 'pc3').ok, 'BPDU Filter 開在原本 Alternate 的那一端：對面是 Designated，Loop Guard 幫不上忙，還是迴圈');
+  // BPDU Guard 的全域預設：只套在 PortFast 的埠上；介面上的 BPDU Filter 優先
+  const u = lv.setup(); settle(u);
+  const U2 = cli(u, 'sw2');
+  U2('enable', 'configure terminal', 'spanning-tree portfast bpduguard default', 'interface Gi0/10', 'no spanning-tree bpdufilter', 'end');
+  ok(u.devices.sw2.rt.err['Gi0/10'] === 'bpdu', 'portfast bpduguard default：Gi0/10 還有 PortFast，拿掉 bpdufilter 之後一收到 BPDU 就 err-disabled');
+  const rc = runningConfig(u, u.devices.sw2).join('\n');
+  ok(/^spanning-tree portfast bpduguard default$/m.test(rc) && /interface GigabitEthernet0\/2\n spanning-tree portfast\n spanning-tree bpdufilter enable/.test(rc), 'running-config：portfast bpduguard default、介面的 spanning-tree bpdufilter enable');
+  ok(/% 用法：spanning-tree guard root \| loop \| none/.test(U2('configure terminal', 'interface Gi0/2', 'spanning-tree guard xyz', 'end')), 'spanning-tree guard 只能是 root、loop、none');
+}
 console.log('\nNetFlow 與 QoS 的 police');
 {
   const sim = await import('../src/engine/sim.js');

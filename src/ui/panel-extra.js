@@ -10,6 +10,7 @@ import {
 } from './form.js';
 import { fmtIp } from '../engine/ip.js';
 import { newGuestCode } from '../engine/portal.js';
+import { loopGuardOn } from '../engine/stpcfg.js';
 import { CATALOG, peerOf, portOf, newSsid, cableAt, linkInfo } from '../engine/model.js';
 import { visibleSsids, WIFI_SEC, macsBehind, isBridgePort, hitsOf, P1, accessOf, portfastOn, macRows, clearMac, macAgeOf, saInfo, fmtDur, isTrunk, dtpSpeaker, WALL_MATS, errdisRows, bouncePort, ERR_CAUSES, ERR_RECOVERY_DEFAULT, CH5, DFS, blockOf, CH6, on6, has6, portalPending, portalAccept, transact } from '../engine/sim.js';
 import { cdpCfg, lldpCfg, cdpOn, lldpTxOn, lldpRxOn, portNd, setPortNd, neighbors, speaksCdp, speaksLldp } from '../engine/disc.js';
@@ -320,6 +321,8 @@ export function portAdvanced(ctx, p, pc) {
       toggle(ctx, () => portfastOn(dev, pc, p.id), (v) => { pc.portfast = v; }, 'PortFast（接終端設備的埠：連線後立刻轉送，不等 30 秒）'),
       toggle(ctx, ...bind(pc, 'bpduguard'), 'BPDU Guard（對面是交換器就關閉此埠）'),
       toggle(ctx, ...bind(pc, 'rootguard'), 'Root Guard（不允許這個埠後面的交換器成為根橋）'),
+      toggle(ctx, () => loopGuardOn(dev, p.id), (v) => { pc.loopguard = v; if (v) pc.rootguard = false; }, 'Loop Guard（原本的 Root / Alternate 埠收不到 BPDU 時擋下來，不會變成 Designated）'),
+      toggle(ctx, () => pc.bpdufilter === true, (v) => { if (v) pc.bpdufilter = true; else delete pc.bpdufilter; }, 'BPDU Filter（不送也不收 BPDU，等於這個埠沒有 STP：接到交換器會形成迴圈）'),
       toggle(ctx, ...bind(pc, 'dot1x'), '802.1X（通過 RADIUS 驗證才放行）'),
       toggle(ctx, ...bind(ps, 'on'), 'Port Security（限制這個埠後面最多幾個 MAC）', { rerender: true })),
     ctx.live(() => [
@@ -362,7 +365,10 @@ export function secTab(ctx, body) {
   body.append(h('div', { class: 'card' }, cardHead('生成樹協定 (STP)'),
     h('div', { class: 'toggles' },
       toggle(ctx, ...bind(stp, 'on'), '啟用 STP（偵測並封鎖第二層的迴圈）'),
-      toggle(ctx, () => !!stp.portfastDefault, (v) => { stp.portfastDefault = v; }, 'PortFast 預設啟用（所有 Access 埠連線後立刻轉送）')),
+      toggle(ctx, () => !!stp.portfastDefault, (v) => { stp.portfastDefault = v; }, 'PortFast 預設啟用（所有 Access 埠連線後立刻轉送）'),
+      toggle(ctx, () => !!stp.bpduguardDefault, (v) => { stp.bpduguardDefault = v; }, 'PortFast 的埠預設開 BPDU Guard（portfast bpduguard default）'),
+      toggle(ctx, () => !!stp.bpdufilterDefault, (v) => { stp.bpdufilterDefault = v; }, 'PortFast 的埠不送 BPDU（portfast bpdufilter default：收到 BPDU 就恢復正常）'),
+      toggle(ctx, () => !!stp.loopguardDefault, (v) => { stp.loopguardDefault = v; }, 'Loop Guard 預設啟用（交換器之間的線：收不到 BPDU 就擋下，不會形成迴圈）')),
     note('muted', '沒有 PortFast 的埠，連線後要先經過 listening 與 learning 各 15 秒才會轉送資料。交換器之間的連線用 RSTP 協商，大約 2 秒。'),
     field('橋接器優先權', sel(ctx, ...bind(stp, 'prio', Number), Array.from({ length: 16 }, (_, n) => [n * 4096, `${n * 4096}${n === 8 ? '（預設）' : ''}`])), '數字越小越優先，最小的那一台會成為根橋 (Root Bridge)'),
     ctx.live(() => {

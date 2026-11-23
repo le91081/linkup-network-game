@@ -1,6 +1,6 @@
 // 供電與連線、err-disabled、DTP、語音 VLAN、LACP、STP 與連接埠的 STP 計時
 // （從 sim.js 拆出來的一部分；其他程式一律從 engine/sim.js 引入，不直接引入這裡）
-import { stpPrio, isMst, mstKey } from '../stpcfg.js';
+import { stpPrio, isMst, mstKey, bpduFilterIf, bpduGuardOn, loopGuardOn } from '../stpcfg.js';
 import { CABLES, CATALOG, DTP_MODELS, POE_CLASS_W, cableDist, cableKind, linkInfo, fiberLink, looseNext } from '../model.js';
 import { rejectsOptic } from '../optics.js';
 import { cdpOn, lldpRxOn, lldpTxOn, speaksCdp } from '../disc.js';
@@ -123,9 +123,9 @@ export function prepPhysical(state) {
   const stormBad = (d, pid) => { const pc = d.sw.ports[pid]; return !!(pc.storm && pc.storm.action === 'shutdown' && stormSrc(d, pid)); };
   const bpduBad = (d, pid) => {
     const pc = d.sw.ports[pid], l = rt.links[d.id + ':' + pid];
-    if (!l || !pc.bpduguard) return false;
+    if (!l || !bpduGuardOn(d, pid, portfastOn(d, pc, pid)) || bpduFilterIf(d, pid)) return false;
     const x = state.devices[l.dev];
-    return isVlanSw(x) && !(x.sw.stp && x.sw.stp.on === false) && isBridgePort(x, l.port);
+    return isVlanSw(x) && !(x.sw.stp && x.sw.stp.on === false) && isBridgePort(x, l.port) && !bpduFilterIf(x, l.port);
   };
   // 第三方的收發器：Cisco 的交換器不接受（gbic-invalid），除非 service unsupported-transceiver
   const gbicPn = (d, pid) => {
@@ -422,7 +422,7 @@ export function prepStp(state) {
     const A = state.devices[c.a.dev], B = state.devices[c.b.dev];
     if (!isVlanSw(A) || !isVlanSw(B) || !A.rt.stp.on || !B.rt.stp.on) continue;
     if (!isBridgePort(A, c.a.port) || !isBridgePort(B, c.b.port)) continue;
-    edges.push({ c, A, B, pa: c.a.port, pb: c.b.port });
+    edges.push({ c, A, B, pa: c.a.port, pb: c.b.port, filt: bpduFilterIf(A, c.a.port) || bpduFilterIf(B, c.b.port) });
   }
   if (!edges.length) return;
   const vlans = new Set();
@@ -432,11 +432,45 @@ export function prepStp(state) {
     return vlanExists(D, v) && (isTrunk(D, pid) ? vlanAllowed(pc, v) : pc.vlan === v || pc.voice === v);
   };
   const pidx = (D, pid) => D.ports.findIndex((p) => p.id === pid);
-  const role = (D, pid, v, r) => { (D.rt.stp.roles[pid] ||= {})[v] = r; };
+  let role = (D, pid, v, r) => { (D.rt.stp.roles[pid] ||= {})[v] = r; };
+  /**
+   * 一個 VLAN 的生成樹。apply 為 false 時只回傳每個埠的角色（給 Loop Guard 判斷「BPDU 正常的話這個埠應該是什麼」）
+   */
+  const tree = (v, es, apply) => {
+    const R = new Map();
+    if (!apply) {
+      const r0 = role;
+      role = (D, pid, vv, r) => R.set(D.id + ':' + pid, r);
+      try { solve(v, es, false); } finally { role = r0; }
+      return R;
+    }
+    solve(v, es, true);
+    return R;
+  };
   for (const v of vlans) {
     curV = v;
-    const es = edges.filter((e) => carries(e.A, e.pa, v) && carries(e.B, e.pb, v));
-    if (!es.length) continue;
+    const all = edges.filter((e) => carries(e.A, e.pa, v) && carries(e.B, e.pb, v));
+    const es = all.filter((e) => !e.filt);
+    if (es.length) tree(v, es, true);
+    // BPDU Filter 的線：開 filter 的那一端不送 BPDU，對面收不到，以為自己是 Designated 也開始轉送（迴圈）。
+    // 對面開了 Loop Guard：原本應該是 Root / Alternate 的埠收不到 BPDU，就擋下來 (loop-inconsistent)
+    const filt = all.filter((e) => e.filt);
+    if (!filt.length) continue;
+    let healthy = null;
+    for (const e of filt) {
+      for (const [O, op, F, fp] of [[e.A, e.pa, e.B, e.pb], [e.B, e.pb, e.A, e.pa]]) {
+        if (bpduFilterIf(O, op) || !bpduFilterIf(F, fp) || !loopGuardOn(O, op)) continue;
+        healthy ||= tree(v, all, false);
+        const r = healthy.get(O.id + ':' + op);
+        if (r !== 'root' && r !== 'altn') continue;
+        role(O, op, v, 'loopinc');
+        O.rt.stp.blocked.add(op + '|' + v);
+        (O.rt.stp.loopinc ||= {})[op] = [...(O.rt.stp.loopinc[op] || []), v];
+        rt.cable[e.c.id] = 'blocked';
+      }
+    }
+  }
+  function solve(v, es, apply) {
     const adj = new Map();
     const add = (x, a) => { if (!adj.has(x)) adj.set(x, []); adj.get(x).push(a); };
     for (const e of es) {
@@ -462,7 +496,7 @@ export function prepStp(state) {
       }
       const rootEdge = new Map();
       for (const x of comp) {
-        x.rt.stp.root[v] = root.id;
+        if (apply) x.rt.stp.root[v] = root.id;
         if (x === root) continue;
         let best = null;
         for (const a of adj.get(x)) {
@@ -480,6 +514,7 @@ export function prepStp(state) {
         const [D, dp, X, xp] = aWins ? [e.A, e.pa, e.B, e.pb] : [e.B, e.pb, e.A, e.pa];
         role(D, dp, v, 'desg');
         role(X, xp, v, 'altn');
+        if (!apply) continue;
         X.rt.stp.blocked.add(xp + '|' + v);
         rt.cable[e.c.id] = 'blocked';
       }

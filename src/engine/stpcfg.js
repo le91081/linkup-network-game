@@ -33,6 +33,20 @@ export function mstInst(d, v) {
 }
 /** MST 區域的設定（拿來比對是不是同一個區域） */
 export const mstKey = (d) => { const m = mstOf(d); return JSON.stringify([m.name || '', +m.rev || 0, Object.entries(m.map || {}).filter(([, l]) => l && l.length).map(([i, l]) => [+i, [...l].sort((a, b) => a - b)]).sort((a, b) => a[0] - b[0])]); };
+// ── 連接埠的保護功能 ──
+// pc.bpdufilter：true（spanning-tree bpdufilter enable）| false（disable）| 沒設定
+// pc.bpduguard：true | false | 沒設定；pc.loopguard：true（guard loop）| false（guard none）| 沒設定
+// d.sw.stp.bpdufilterDefault / bpduguardDefault（spanning-tree portfast bpdufilter | bpduguard default）、loopguardDefault
+const stpOf = (d) => (d.sw && d.sw.stp) || {};
+/** 介面上的 spanning-tree bpdufilter enable：這個埠不送也不收 BPDU，等於這個埠沒有 STP（接到交換器就可能形成迴圈） */
+export const bpduFilterIf = (d, pid) => !!(d.sw && d.sw.ports[pid] && d.sw.ports[pid].bpdufilter === true);
+/** 會不會送 BPDU：介面的 bpdufilter，或全域的 portfast bpdufilter default 套在 PortFast 的埠上（收到 BPDU 就失去 PortFast，所以不影響交換器之間的線） */
+export const bpduSilent = (d, pid, edge) => bpduFilterIf(d, pid) || (!!edge && stpOf(d).bpdufilterDefault && (d.sw.ports[pid] || {}).bpdufilter !== false);
+/** BPDU Guard：介面上設定的，或全域的 portfast bpduguard default 套在 PortFast 的埠上 */
+export const bpduGuardOn = (d, pid, edge) => { const pc = (d.sw && d.sw.ports[pid]) || {}; return pc.bpduguard === true || (pc.bpduguard == null && !!edge && !!stpOf(d).bpduguardDefault); };
+/** Loop Guard：介面上的 spanning-tree guard loop，或全域的 loopguard default（交換器之間的點對點線） */
+export const loopGuardOn = (d, pid) => { const pc = (d.sw && d.sw.ports[pid]) || {}; return pc.loopguard === true || (pc.loopguard == null && !pc.rootguard && !!stpOf(d).loopguardDefault); };
+
 /** 這台在這個 VLAN 的優先權；sameRegion：所有跑 STP 的交換器都是同一個 MST 區域 */
 export function stpPrio(d, v, sameRegion) {
   const s = (d.sw && d.sw.stp) || {}, base = s.prio == null || s.prio === '' ? 32768 : +s.prio;

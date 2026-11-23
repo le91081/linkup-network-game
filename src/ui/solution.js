@@ -14,7 +14,7 @@ const LABEL = {
   ifaces: '介面', routes: '靜態路由', policies: '防火牆政策', portForwards: '連接埠轉發', staticNat: '靜態 NAT', vpns: 'VPN', sw: '交換', vlans: 'VLAN', stp: 'STP',
   prio: '優先權', dhcp: 'DHCP', start: '起始位址', end: '結束位址', on: '啟用', nat: 'NAT', ospf: 'OSPF', vrrp: 'VRRP / HSRP', vip: '虛擬 IP', wifi: 'Wi-Fi',
   ssids: 'SSID', sec: '加密', pass: '密碼', user: '帳號', mgmt: '管理', ssh: 'SSH', telnet: 'Telnet', allow: '允許的管理來源', dnsZone: 'DNS', records: '記錄', ttl: 'TTL',
-  track: '追蹤', sla: 'IP SLA', vsw: '虛擬交換器', pgs: '連接埠群組', vmkPg: 'vmk0 的連接埠群組', ps: 'Port Security', bpduguard: 'BPDU Guard', rootguard: 'Root Guard',
+  track: '追蹤', sla: 'IP SLA', vsw: '虛擬交換器', pgs: '連接埠群組', vmkPg: 'vmk0 的連接埠群組', ps: 'Port Security', bpduguard: 'BPDU Guard', bpdufilter: 'BPDU Filter', loopguard: 'Loop Guard', bpduguardDefault: 'BPDU Guard 預設', bpdufilterDefault: 'BPDU Filter 預設', loopguardDefault: 'Loop Guard 預設', rootguard: 'Root Guard',
   trust: 'DHCP Snooping 信任埠', lag: 'Port-channel', lagMode: 'LACP 模式', ad: '管理距離', dst: '目的', via: '下一站', services: '服務', name: '名稱', psk: '預先共用金鑰',
   peer: '對端', local: '本地網段', remote: '遠端網段', enc: '加密', hash: '雜湊', dh: 'DH 群組', snoop: 'DHCP Snooping', dai: 'DAI', aclIn: 'ACL（進）', aclOut: 'ACL（出）',
   preempt: 'preempt', group: '群組', proto: '協定', portfast: 'PortFast', voice: '語音 VLAN', ch24: '2.4 GHz 頻道', ch5: '5 GHz 頻道', power: '發射功率', radius: 'RADIUS',

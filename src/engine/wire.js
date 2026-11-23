@@ -11,6 +11,9 @@ import { cdpOn, lldpTxOn, cdpCfg, lldpCfg, deviceIdOf } from './disc.js';
 import { fmtIp, parseIp, parseCidr, netOf } from './ip.js';
 import { isIos } from './ios.js';
 import { epcRecord } from './epc.js';
+import { bpduSilent } from './stpcfg.js';
+/** 接終端設備的 PortFast 埠（不是交換器之間跑 STP 的線） */
+const edgePort = (d, pc, pid) => !(d.rt.stp && d.rt.stp.roles[pid]) && (pc.portfast != null ? !!pc.portfast : !!(d.sw.stp && d.sw.stp.portfastDefault) && pc.mode !== 'trunk');
 
 export const BCAST = 'ff:ff:ff:ff:ff:ff';
 const STP_MAC = '01:80:c2:00:00:00', CDP_MAC = '01:00:0c:cc:cc:cc', LLDP_MAC = '01:80:c2:00:00:0e';
@@ -349,7 +352,7 @@ export function background(state, { isBridge, ospfOn, uptime0 }) {
     if (d.sw && d.sw.mode === 'vlan' && !(d.sw.stp && d.sw.stp.on === false) && d.rt.stp) {
       const s = d.rt.stp, n = ticks(2);
       for (const [pid, pc] of Object.entries(d.sw.ports)) {
-        if (!isBridge(d, pid) || spanDest(d, pid) || pc.bpdufilter) continue;
+        if (!isBridge(d, pid) || spanDest(d, pid) || bpduSilent(d, pid, edgePort(d, pc, pid))) continue;
         const roles = Object.values(s.roles[pid] || {});
         if (roles.length && roles.every((r) => r === 'root' || r === 'altn')) continue;
         const trunk = d.rt.dtp && d.rt.dtp[pid] ? d.rt.dtp[pid].oper === 'trunk' : pc.mode === 'trunk';

@@ -5,7 +5,7 @@ import { fmtIp6, parseIp6, parseCidr6, net6 } from '../engine/ip6.js';
 import { dhcp6Bindings, hits6Of, ACL6_IMPLICIT, DHCP6_PREF, DHCP6_VALID, duidOf } from '../engine/sim6.js';
 import { ospf6Area, ospf6Cost, ospf6Dead, ospf6Hello, ospf6Passive, ospf6Prio, ospf6NetType } from '../engine/ospf.js';
 import { acl6Text, up6 } from '../engine/ios.js';
-import { transact, routeRows, isBridgePort, arpRows, clearArp, hitsOf, fmtDur, portfastOn, macRows, clearMac, macAgeOf, sessionRows, clearSessions, saInfo, isTrunk, dtpSpeaker, unreachOf } from '../engine/sim.js';
+import { vlanAllowed as vlanOk, transact, routeRows, isBridgePort, arpRows, clearArp, hitsOf, fmtDur, portfastOn, macRows, clearMac, macAgeOf, sessionRows, clearSessions, saInfo, isTrunk, dtpSpeaker, unreachOf } from '../engine/sim.js';
 import { rttSamples, pingStats, iosMs } from '../engine/latency.js';
 import { cdpCfg, lldpCfg, cdpOn, lldpTxOn, lldpRxOn, neighbors, ndCounters, cdpCapText, speaksCdp, speaksLldp } from '../engine/disc.js';
 import { dscpName, COS_DSCP_DEFAULT, portTrust, egressOf, classify, QLIMIT } from '../engine/qos.js';
@@ -34,7 +34,7 @@ import { eigrpNeighborLines, eigrpTopoLines, eigrpIfLines, eigrpProtoLines, eigr
 import { ripDbLines, ripProtoLines } from '../engine/rip.js';
 import { epcCmd, epcDelete, epcShow } from '../engine/epc.js';
 import { timeRangeLines } from '../engine/timerange.js';
-import { mstOf, isMst, stpPrio, vlanText } from '../engine/stpcfg.js';
+import { mstOf, isMst, stpPrio, vlanText, loopGuardOn } from '../engine/stpcfg.js';
 import { TR_OFF } from '../engine/sim/core.js';
 import { CATALOG, MEDIA, peerOf, portOf, linkInfo, phyConfig, fiberLink } from '../engine/model.js';
 import { xcvrAt, xcvrSerial, MEDIA_TYPE } from '../engine/optics.js';
@@ -386,7 +386,8 @@ const SHOW = {
         `  Bridge ID  Priority    ${((s.vp || {})[v] ?? s.prio) + (s.region ? 0 : +v)}  (priority ${(s.vp || {})[v] ?? s.prio} sys-id-ext ${s.region ? 0 : v})`, `             Address     ${s.mac}`, '', pad('Interface', 16) + pad('Role', 6) + pad('Sts', 5) + 'Type');
       for (const [pid, roles] of Object.entries(s.roles)) {
         const r = roles[v];
-        if (r) o.push(pad(pid, 16) + pad({ root: 'Root', desg: 'Desg', altn: 'Altn' }[r], 6) + pad(r === 'altn' ? 'BLK' : stpState(d, pid), 5) + 'P2p');
+        // loop-inconsistent：收不到 BPDU、本來要變成 Designated，被 Loop Guard 擋下
+        if (r) o.push(pad(pid, 16) + pad({ root: 'Root', desg: 'Desg', altn: 'Altn', loopinc: 'Desg' }[r], 6) + pad(r === 'altn' ? 'BLK' : r === 'loopinc' ? 'BKN*' : stpState(d, pid), 5) + (r === 'loopinc' ? 'P2p *LOOP_Inc' : 'P2p'));
       }
       // 接終端設備的埠：一律是 Designated；還沒走完 listening / learning 的會顯示 LSN / LRN
       for (const p of d.ports) {
@@ -395,8 +396,48 @@ const SHOW = {
         if (!isTrunk(d, p.id) && pc.vlan !== +v && pc.voice !== +v) continue;
         o.push(pad(p.label, 16) + pad('Desg', 6) + pad(stpState(d, p.id), 5) + (portfastOn(d, pc, p.id) ? 'P2p Edge' : 'P2p'));
       }
+      // Root Guard 擋下的埠
+      for (const p of d.ports) if (d.rt.err[p.id] === 'root' && stpVlans(d, p.id).includes(+v)) o.push(pad(p.label, 16) + pad('Desg', 6) + pad('BKN*', 5) + 'P2p *ROOT_Inc');
       o.push('');
     }
+    return o;
+  },
+  'show spanning-tree inconsistentports': (st, d) => {
+    if (!isSw(d) || !d.rt.stp) return ['% 這個指令只適用於交換器'];
+    const rows = [], lab = (pid) => longIf((d.ports.find((p) => p.id === pid) || {}).label || pid);
+    for (const [pid, vl] of Object.entries(d.rt.stp.loopinc || {})) for (const v of vl) rows.push([v, lab(pid), 'Loop Inconsistent']);
+    for (const p of d.ports) if (d.rt.err[p.id] === 'root') for (const v of stpVlans(d, p.id)) rows.push([v, lab(p.id), 'Root Inconsistent']);
+    rows.sort((a, b) => a[0] - b[0]);
+    return [pad('Name', 21) + pad('Interface', 25) + 'Inconsistency', '-------------------- ------------------------ ------------------',
+      ...rows.map(([v, i, w]) => pad('VLAN' + String(v).padStart(4, '0'), 21) + pad(i, 25) + w), '', `Number of inconsistent ports (segments) in the system : ${rows.length}`];
+  },
+  'show spanning-tree summary': (st, d) => {
+    const s = d.rt.stp;
+    if (!isSw(d) || !s) return ['% 這個指令只適用於交換器'];
+    if (!s.on) return ['No spanning tree instance exists.（STP 已關閉）'];
+    const c = d.sw.stp || {}, en = (x) => (x ? 'enabled' : 'disabled');
+    const vl = Object.keys(s.root).length ? Object.keys(s.root).map(Number) : [1];
+    const mine = vl.filter((v) => s.root[v] === d.id);
+    const o = [`Switch is in ${isMst(d) ? 'mst' : 'rapid-pvst'} mode`, `Root bridge for: ${mine.length ? mine.map((v) => 'VLAN' + String(v).padStart(4, '0')).join(', ') : 'none'}`,
+      'Extended system ID                      is enabled', `Portfast Default                        is ${en(c.portfastDefault)}`, `Portfast Edge BPDU Guard Default        is ${en(c.bpduguardDefault)}`,
+      `Portfast Edge BPDU Filter Default       is ${en(c.bpdufilterDefault)}`, `Loopguard Default                       is ${en(c.loopguardDefault)}`, 'EtherChannel misconfig guard            is enabled',
+      'Configured Pathcost method used is short', 'UplinkFast                              is disabled', 'BackboneFast                            is disabled', '',
+      pad('Name', 23) + 'Blocking Listening Learning Forwarding STP Active', '---------------------- -------- --------- -------- ---------- ----------'];
+    const tot = [0, 0, 0, 0];
+    for (const v of vl) {
+      const n = [0, 0, 0, 0];
+      for (const p of d.ports) {
+        if (!st.rt.links[d.id + ':' + p.id] && d.rt.err[p.id] !== 'root') continue;
+        if (d.sw.ports[p.id].mode === 'routed' || !stpVlans(d, p.id).includes(v)) continue;
+        const blk = d.rt.err[p.id] === 'root' || s.blocked.has(p.id + '|' + v), w = stpState(d, p.id);
+        n[blk ? 0 : w === 'LSN' ? 1 : w === 'LRN' ? 2 : 3]++;
+      }
+      n.forEach((x, k) => { tot[k] += x; });
+      o.push(pad('VLAN' + String(v).padStart(4, '0'), 22) + n.map((x, k) => String(x).padStart([9, 10, 9, 11][k])).join('') + String(n.reduce((a, b) => a + b, 0)).padStart(11));
+    }
+    o.push('---------------------- -------- --------- -------- ---------- ----------', pad(`${vl.length} vlan${vl.length > 1 ? 's' : ''}`, 22) + tot.map((x, k) => String(x).padStart([9, 10, 9, 11][k])).join('') + String(tot.reduce((a, b) => a + b, 0)).padStart(11));
+    const lg = d.ports.filter((p) => isBridgePort(d, p.id) && loopGuardOn(d, p.id) && st.rt.links[d.id + ':' + p.id]).map((p) => p.label);
+    if (lg.length) o.push('', `（Loop Guard 開著的埠：${lg.join('、')}）`);
     return o;
   },
   'show etherchannel summary': (st, d) => {
@@ -1827,6 +1868,8 @@ function fhrpView(st, d, i) {
   return { active: act && act.ip, standby: sb && sb.ip, hsrpState, odd };
 }
 const stpState = (d, pid) => (d.rt.wait && d.rt.wait[pid] > 15 ? 'LSN' : d.rt.wait && d.rt.wait[pid] > 0 ? 'LRN' : 'FWD');
+/** 這個埠帶著哪些 VLAN（Trunk 是允許的、這台也有的 VLAN） */
+const stpVlans = (d, pid) => { const pc = d.sw.ports[pid]; return isTrunk(d, pid) ? d.sw.vlans.map((v) => v.id).filter((v) => vlanOk(pc, v)) : [pc.vlan, ...(pc.voice ? [pc.voice] : [])]; };
 const CMDS = Object.keys(SHOW).filter((k) => !k.startsWith('_'));
 const match = (tokens, cmd) => {
   const w = cmd.split(' ');

@@ -420,7 +420,9 @@ export function routerId(d) {
 }
 
 function snapshot(state, d) {
-  const s = { port: {}, errN: {}, nbr: {}, nbr6: {}, norid6: false, vrrp: {}, tun: {}, gre: {}, dup: {}, dupIp: {}, pool: [], auth: {}, psv: {}, stormF: {}, poe: {} };
+  const s = { port: {}, errN: {}, nbr: {}, nbr6: {}, norid6: false, vrrp: {}, tun: {}, gre: {}, dup: {}, dupIp: {}, pool: [], auth: {}, psv: {}, stormF: {}, poe: {}, loopinc: {} };
+  // Loop Guard 擋下的埠（每個 VLAN 各記一筆）
+  for (const [pid, vl] of Object.entries((d.rt.stp && d.rt.stp.loopinc) || {})) for (const v of vl) s.loopinc[pid + '|' + v] = true;
   const shutIf = (pid) => d.ifaces.some((i) => i.shut && i.bind.t === 'port' && i.bind.port === pid);
   for (const p of d.ports) {
     const pc = d.sw && d.sw.ports[p.id], err = d.rt.err && d.rt.err[p.id];
@@ -535,6 +537,10 @@ function diffDevice(state, d, a, b) {
   // Port Security 的 restrict、storm-control 的過濾
   const dot = (m) => m.replace(/:/g, '').replace(/(.{4})(?=.)/g, '$1.');
   for (const [pid, mac] of Object.entries(b.psv || {})) if ((a.psv || {})[pid] !== mac) ev(2, 'PORT_SECURITY-2-PSECURE_VIOLATION', `Security violation occurred, caused by MAC address ${mac === 'macof' ? '00ff.1a2b.3c4d' : dot(mac)} on port ${longIf(label(pid))}.`);
+  // Loop Guard：原本的 Root / Alternate 埠收不到 BPDU
+  const vName = (v) => 'VLAN' + String(v).padStart(4, '0');
+  for (const k of Object.keys(b.loopinc || {})) if (a.loopinc && !a.loopinc[k]) { const [pid, v] = k.split('|'); ev(2, 'SPANTREE-2-LOOPGUARD_BLOCK', `Loop guard blocking port ${longIf(label(pid))} on ${vName(v)}.`); }
+  for (const k of Object.keys(a.loopinc || {})) if (!(b.loopinc || {})[k]) { const [pid, v] = k.split('|'); ev(2, 'SPANTREE-2-LOOPGUARD_UNBLOCK', `Loop guard unblocking port ${longIf(label(pid))} on ${vName(v)}.`); }
   for (const pid of Object.keys(b.stormF || {})) if (!(a.stormF || {})[pid]) ev(3, 'STORM_CONTROL-3-FILTERED', `A packet storm was detected on ${label(pid)}. A packet filter action has been applied on the interface.`);
   // PoE：受電設備插上之後偵測、分配電力；預算不夠就拒絕；拔掉
   if (ios && a.poe) for (const pid of new Set([...Object.keys(a.poe), ...Object.keys(b.poe || {})])) {

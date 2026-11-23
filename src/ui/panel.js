@@ -221,7 +221,7 @@ function swPorts(ctx, body) {
   const pinned = (app.pinned[dev.id] ||= new Set());
   body.append(faceplate(state, dev, { onPick: (p) => { pinned.add(p.id); app.renderPanel(); } }),
     h('p', { class: 'tip', text: '下方列出已接線或已調整過的連接埠；點面板上的埠可以把它加入清單預先設定。' }));
-  const adv = (pc) => pc.shut || pc.trust || +pc.lag > 0 || (pc.ps && pc.ps.on) || pc.bpduguard || pc.rootguard || pc.dot1x || (pc.speed && pc.speed !== 'auto') || (pc.duplex && pc.duplex !== 'auto');
+  const adv = (pc) => pc.shut || pc.trust || +pc.lag > 0 || (pc.ps && pc.ps.on) || pc.bpduguard || pc.rootguard || pc.bpdufilter != null || pc.loopguard != null || pc.dot1x || (pc.speed && pc.speed !== 'auto') || (pc.duplex && pc.duplex !== 'auto');
   const isDefault = (pc) => pc.mode === defaultPortMode(dev.model) && pc.vlan === 1 && !pc.voice && !adv(pc);
   const shown = dev.ports.filter((p) => peerOf(state, dev.id, p.id) || !isDefault(sw.ports[p.id]) || pinned.has(p.id));
   if (!shown.length) body.append(note('muted', `所有連接埠都是預設值（${defaultPortMode(dev.model) === 'access' ? 'Access' : 'Dynamic Auto'} · VLAN 1）。`));
