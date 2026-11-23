@@ -4,6 +4,9 @@ import { inp, sel, toggle, field, note, kv, del, cardHead, grid2, bind, isIp, is
 import { fmtIp, parseIp } from '../engine/ip.js';
 import { fmtDur } from '../engine/sim.js';
 import { isTftp, isFtp, fmtBytes, isCiscoOs } from '../engine/files.js';
+import { pcapBytes } from '../engine/pcap.js';
+import { SIM_EPOCH } from '../engine/ops.js';
+import { saveBinary } from './save.js';
 import { nmsOf, pollOne } from '../engine/snmp.js';
 import { nfTop } from '../engine/netflow.js';
 import { genKey, vtyMode, hostKey } from '../engine/remote.js';
@@ -63,9 +66,10 @@ export function filesTab(ctx, body) {
   for (const n of names) {
     const f = files[n];
     card.append(h('div', { class: 'line' }, h('b', { class: 'mono', text: n }),
-      h('span', { class: 'mono muted', style: { marginLeft: 'auto' }, text: `${fmtBytes(f.size)} · ${f.kind === 'config' ? '設定檔' : f.kind === 'image' ? '韌體' : '其他'}${f.t >= 0 ? ` · ${fmtDur(state.clock - f.t)}前` : ''}` }),
+      h('span', { class: 'mono muted', style: { marginLeft: 'auto' }, text: `${fmtBytes(f.size)} · ${f.kind === 'config' ? '設定檔' : f.kind === 'image' ? '韌體' : f.kind === 'pcap' ? '封包擷取' : '其他'}${f.t >= 0 ? ` · ${fmtDur(state.clock - f.t)}前` : ''}` }),
       del(() => { delete files[n]; ctx.commit(true); })));
     if (f.kind === 'image') card.append(h('div', { class: 'mono muted', style: { fontSize: '11px', paddingLeft: '4px' }, text: `MD5 ${f.md5}` }));
+    if (f.kind === 'pcap' && (f.frames || []).length) card.append(h('div', { class: 'addrow' }, button(`下載 ${n}（${f.frames.length} 個封包，用 Wireshark 打開）`, { small: true, ic: 'download', onclick: () => saveBinary(n, pcapBytes(f.frames, Math.floor(SIM_EPOCH / 1000) + (f.t0 || 0)), 'application/vnd.tcpdump.pcap', `已下載 ${n}`) })));
   }
   body.append(card);
   if (isFtp(dev)) {

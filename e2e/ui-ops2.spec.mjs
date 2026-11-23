@@ -907,3 +907,22 @@ test('封包擷取匯出 .pcap：開始擷取、ping、下載的檔案是 libpca
   expect(b.readUInt32LE(0)).toBe(0xa1b2c3d4);
   expect(b.length).toBeGreaterThan(24 + 16 + 60);
 });
+
+test('IOS 的 monitor capture：擷取經過介面的 ICMP、show buffer brief、export 到 flash', async ({ page }) => {
+  await boot(page);
+  await open(page, 'l129');
+  await page.evaluate(() => { const app = window.linkup; app.level.solve(app.state); app.changed(); });
+  await clickDevice(page, 'br');
+  await page.locator('#panel .tab', { hasText: 'CLI' }).click();
+  await typeCmd(page, 'enable', 'monitor capture CAP interface Gi0/0/0 both', 'monitor capture CAP match ipv4 protocol icmp any any', 'monitor capture CAP start');
+  const out = page.locator('#panel .term-out');
+  await expect(out).toContainText('Started capture point : CAP');
+  await page.evaluate(() => window.linkup.tick(1));
+  await typeCmd(page, 'ping 10.1.0.10', 'monitor capture CAP stop', 'show monitor capture CAP buffer brief');
+  await expect(out).toContainText('Stopped capture point : CAP');
+  await expect(out).toContainText('ICMP');
+  await typeCmd(page, 'monitor capture CAP export flash:cap.pcap', 'dir flash:');
+  await expect(out).toContainText('Exported Successfully');
+  await expect(out).toContainText('cap.pcap');
+  expect(await scan(page, '#panel', 'CLI（monitor capture）')).toEqual([]);
+});

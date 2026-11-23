@@ -4757,6 +4757,34 @@ console.log('\n封包擷取匯出成 .pcap');
   ok(new TextDecoder().decode(new Uint8Array(tel)).includes('admin\r\ncisco123'), 'Telnet 的帳號密碼是明文（在 Wireshark 的 Follow TCP Stream 看得到）');
 }
 
+console.log('\nIOS 的 monitor capture（Embedded Packet Capture）');
+{
+  const { iosSession } = await import('../src/engine/ios.js');
+  const { iosRun } = await import('../src/ui/cli.js');
+  const sim = await import('../src/engine/sim.js');
+  const ok = (cond, title) => (cond ? console.log('  ✔ ' + title) : fail(title));
+  const cli = (s, id) => { const S = iosSession(() => s.devices[id], () => s); return (...lines) => { const out = []; for (const l of lines) { const r = iosRun({ state: s, showTrace() {}, refreshLive() {} }, id, S, l, (x) => out.push(x)); if (r.changed) settle(s); } return out.join('\n'); }; };
+  const lv = LEVELS.find((x) => x.id === 'l129');
+  const s = lv.setup(); lv.solve(s); settle(s);
+  const R = cli(s, 'br');
+  R('enable');
+  ok(R('monitor capture CAP interface Gi0/0/0 both') === '' && /還沒有指定擷取的條件/.test(R('monitor capture CAP start')), '只指定介面、沒有 match：不能開始');
+  ok(/% 用法/.test(R('monitor capture CAP match ipv4 protocol gre any any')), 'match 的協定只認得 tcp / udp / icmp');
+  R('monitor capture CAP match ipv4 protocol icmp any host 10.1.0.10');
+  ok(/Started capture point : CAP/.test(R('monitor capture CAP start')), 'start：Started capture point : CAP');
+  sim.transact(s, 'pc', { proto: 'icmp', dst: parseIp('10.1.0.10') });
+  sim.transact(s, 'pc', { proto: 'tcp', dst: parseIp('10.1.0.10'), dport: 443 });
+  const st = R('monitor capture CAP stop');
+  ok(/Packets received - 1\b/.test(st) && /Stopped capture point : CAP/.test(st), 'stop：只收到符合條件的 1 個封包（往 ERP 的 ICMP，不含 HTTPS、不含回程）');
+  const br = R('show monitor capture CAP buffer brief');
+  ok(/^ +0 +\d+ +0\.\d{6} +10\.2\.0\.50 +-> +10\.1\.0\.10 +0 +BE +ICMP$/m.test(br), 'show monitor capture CAP buffer brief：來源、目的、協定');
+  const sh = R('show monitor capture CAP');
+  ok(/Interface: GigabitEthernet0\/0\/0, Direction: BOTH/.test(sh) && /Status : Inactive/.test(sh) && /Destination IP:  host 10\.1\.0\.10/.test(sh) && /Protocol: icmp/.test(sh), 'show monitor capture CAP：介面、方向、狀態、條件');
+  ok(/Exported Successfully/.test(R('monitor capture CAP export flash:cap1.pcap')) && s.devices.br.flash.files['cap1.pcap'].kind === 'pcap' && s.devices.br.flash.files['cap1.pcap'].frames.length === 1, 'export flash:cap1.pcap：存進 flash');
+  ok(/cap1\.pcap/.test(R('dir flash:')), 'dir flash: 看得到匯出的檔案');
+  ok(R('no monitor capture CAP') === '' && /does not exist/.test(R('show monitor capture CAP')), 'no monitor capture CAP：刪掉');
+}
+
 console.log('\nNetFlow 與 QoS 的 police');
 {
   const sim = await import('../src/engine/sim.js');

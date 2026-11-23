@@ -443,7 +443,7 @@ function saveOf(st) {
   s.ver = SAVE_VER; // 存檔格式的版本（engine/migrate.js）
   if (d) {
     delete d.mac; delete d.ct; delete d.outbox;
-    for (const k of ['cap', 'con', 'sniff', 'dflow', 'dbg', 'dbgSeen', 'vty', 'bgAcc', 'ifcAcc']) delete d[k];
+    for (const k of ['cap', 'epc', 'con', 'sniff', 'dflow', 'dbg', 'dbgSeen', 'vty', 'bgAcc', 'ifcAcc']) delete d[k];
     for (const k of Object.keys(d.log || {})) d.log[k] = d.log[k].slice(-15);
     for (const k of Object.keys(d.syslog || {})) d.syslog[k] = d.syslog[k].slice(-40);
   }

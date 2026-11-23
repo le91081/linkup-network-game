@@ -31,6 +31,7 @@ import { zbfActive } from '../engine/zbf.js';
 import { envPowerLines } from '../engine/power.js';
 import { eigrpNeighborLines, eigrpTopoLines, eigrpIfLines, eigrpProtoLines, eigrpBw, eigrpDly } from '../engine/eigrp.js';
 import { ripDbLines, ripProtoLines } from '../engine/rip.js';
+import { epcCmd, epcDelete, epcShow } from '../engine/epc.js';
 import { CATALOG, MEDIA, peerOf, portOf, linkInfo, phyConfig, fiberLink } from '../engine/model.js';
 import { xcvrAt, xcvrSerial, MEDIA_TYPE } from '../engine/optics.js';
 import { PLATFORM as PID_OF } from '../engine/dnac.js';
@@ -1882,6 +1883,21 @@ function showOrPing(app, devId, line, print) {
     if (!isUndebug && (what === 'dhcpPkt' || what === 'dhcpEv') && !had.dhcpPkt && !had.dhcpEv) print('（這台路由器發出或續約租約的時候會印出 DISCOVER / OFFER / REQUEST / ACK。用戶端 ipconfig /renew 或重新接線就看得到）', 'hint');
     if (!isUndebug && ['isakmp', 'ikev2', 'ipsec'].includes(what) && !had.isakmp && !had.ikev2 && !had.ipsec) print('（通道協商的過程與失敗的原因會印在這裡。IKEv1 看 debug crypto isakmp，IKEv2 看 debug crypto ikev2，第二階段看 debug crypto ipsec）', 'hint');
     return true;
+  }
+  // IOS XE 的 Embedded Packet Capture：monitor capture …、no monitor capture <名稱>、show monitor capture [<名稱>] [buffer brief | detailed]
+  {
+    const raw = line.trim().split(/\s+/), isNo = tok[0] === 'no', mi = isNo ? 1 : 0;
+    const isMon = (k) => (tok[k] || '').length >= 3 && 'monitor'.startsWith(tok[k]) && (tok[k + 1] || '').length >= 3 && 'capture'.startsWith(tok[k + 1]);
+    if (isMon(mi) && isIos(d)) {
+      for (const l of isNo ? epcDelete(st, d, raw[mi + 2]) : epcCmd(st, d, raw.slice(mi + 2))) print(l, l.startsWith('%') ? 'warn' : undefined);
+      return true;
+    }
+    if (tok[0].length >= 2 && 'show'.startsWith(tok[0]) && isMon(1) && isIos(d)) {
+      const bi = tok.findIndex((x, k) => k > 2 && x.length >= 3 && 'buffer'.startsWith(x));
+      const name = raw[3] && bi !== 3 ? raw[3] : null;
+      for (const l of epcShow(st, d, name, bi > 0 ? ((tok[bi + 1] || 'brief').startsWith('d') ? 'detailed' : 'brief') : null)) print(l);
+      return true;
+    }
   }
   // show archive config differences [A [B]]、show archive log config all | user <名稱>
   if (tok[0].length >= 2 && 'show'.startsWith(tok[0]) && (tok[1] || '').length >= 3 && 'archive'.startsWith(tok[1]) && tok[2] && tok[2].length >= 3) {

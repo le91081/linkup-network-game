@@ -40,13 +40,13 @@ README 說明「現在有什麼、怎麼玩」，這份文件說明「整體應�
 | 8. IPv6 | 8 | 0 | 0 | 0 |
 | 9. 高可用 | 10 | 0 | 1 | 0 |
 | 10. 時間、效能與流量 | 9 | 2 | 0 | 0 |
-| 11. 設備管理與維運 | 15 | 2 | 1 | 0 |
+| 11. 設備管理與維運 | 16 | 1 | 1 | 0 |
 | 12. 自動化、雲端與虛擬化 | 5 | 1 | 0 | 0 |
 | 13. 設備型錄 | 10 | 2 | 1 | 0 |
 | 14. 遊戲系統 | 16 | 0 | 0 | 6 |
 | 15. 介面與體驗 | 10 | 0 | 0 | 0 |
 | 16. 工程品質 | 6 | 3 | 1 | 0 |
-| **合計** | **174** | **23** | **8** | **6** |
+| **合計** | **175** | **22** | **8** | **6** |
 
 另外：關卡 135 關（第 17 節）、證照條目涵蓋情形（第 18 節）、建議的實作順序（第 19 節）。
 
@@ -248,7 +248,7 @@ README 說明「現在有什麼、怎麼玩」，這份文件說明「整體應�
 | FortiOS CLI | ✅ | `config` / `edit` / `set` / `next` / `end`、`show`、`get`、`diagnose`、`execute ping` |
 | 主機終端機 | ✅ | `ping`、`ipconfig`、`arp`、`tracert`、`nslookup`、`curl`、`iperf3` |
 | 封包追蹤 | ✅ | 每一段的 MAC、IP、TTL、埠號、TCP 旗標都可以打開看 |
-| 封包擷取 | 🟡 | 主機上的 Wireshark：顯示篩選、逐層標頭；FortiGate 的 `diagnose sniffer packet`；匯出 .pcap（真正的封包位元組與檢查碼，用 Wireshark 打得開）；沒有 IOS 的 `monitor capture` |
+| 封包擷取 | ✅ | 主機上的 Wireshark：顯示篩選、逐層標頭；FortiGate 的 `diagnose sniffer packet`；匯出 .pcap（真正的封包位元組與檢查碼，用 Wireshark 打得開）；IOS XE 的 Embedded Packet Capture（`monitor capture <名稱> interface … both | in | out`、`match any | ipv4 [protocol] <來源> <目的>`、`start` / `stop`、`show monitor capture [<名稱>] [buffer brief | detailed]`、`export flash:<檔名>.pcap` 再 `copy` 到 TFTP 伺服器，伺服器的檔案分頁可以下載） |
 | FortiGate 的 debug flow | ✅ | `diagnose debug flow`：收到封包、找路由、符合哪一條政策、SNAT / DNAT、進 VPN、沒有符合的連線 |
 | 遠端登入 | ✅ | 主機 `ssh` / `telnet` 進 IOS 與 FortiGate 的命令列；金鑰指紋、密碼錯誤次數、閒置登出、`terminal monitor`；RSA 金鑰的產生與重建、vty 的 `login` / `login local` / 線路密碼 |
 | IOS 的診斷指令 | ✅ | `traceroute`、`show interfaces`、`show ip protocols`、`show ip ospf interface brief`；`debug ip packet` / `icmp`、`debug ip ospf adj` / `hello`（區域、計時器、遮罩、驗證、MTU 的 IOS 15 訊息）、`debug ip dhcp server packet` / `events`（DORA、續約）、`debug crypto isakmp` / `ikev2` / `ipsec`（重送、金鑰、提案、proxy ID）；Router ID 重複記 `%OSPF-4-DUP_RTRID_NBR` |

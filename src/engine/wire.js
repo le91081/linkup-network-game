@@ -10,6 +10,7 @@ import { linkInfo, DTP_MODELS } from './model.js';
 import { cdpOn, lldpTxOn, cdpCfg, lldpCfg, deviceIdOf } from './disc.js';
 import { fmtIp, parseIp, parseCidr, netOf } from './ip.js';
 import { isIos } from './ios.js';
+import { epcRecord } from './epc.js';
 
 export const BCAST = 'ff:ff:ff:ff:ff:ff';
 const STP_MAC = '01:80:c2:00:00:00', CDP_MAC = '01:00:0c:cc:cc:cc', LLDP_MAC = '01:80:c2:00:00:0e';
@@ -234,6 +235,8 @@ export function onHop(state, h, frame, leak) {
   record(state, h.to, f);
   sniff(state, h.from, h.fromPort, 'out', f);
   sniff(state, h.to, h.toPort, 'in', f);
+  epcRecord(state, h.from, h.fromPort, 'out', f); // IOS 的 monitor capture
+  epcRecord(state, h.to, h.toPort, 'in', f);
   for (const x of leak || []) {
     const fp = portAt(state, x.cable, x.from), tp = portAt(state, x.cable, x.to);
     countFrame(state, x.from, fp, x.to, tp, f);
