@@ -777,6 +777,15 @@ export function iosSession(getDev, getState, who = null) {
     ['no ip policy route-map [...]', () => onL3((i) => { delete i.policyRm; })],
     ['ip tcp adjust-mss <n>', ([n]) => (/^\d+$/.test(n) && +n >= 500 && +n <= 1460 ? onL3((i) => { i.adjMss = +n; }) : err('% ip tcp adjust-mss 的範圍是 500 – 1460（IPsec 常用 1360、PPPoE 用 1452）'))],
     ['no ip tcp adjust-mss [...]', () => onL3((i) => { delete i.adjMss; })],
+    // PIM：多點傳送路由（介面上開了 PIM，也就是這個網段的 IGMP querier）
+    ['ip pim <mode>', ([m], out) => {
+      const w = ['sparse-mode', 'dense-mode', 'sparse-dense-mode'].find((x) => x.startsWith(m.toLowerCase()));
+      if (!w) return err('% 用法：ip pim sparse-mode | dense-mode | sparse-dense-mode');
+      const r = onL3((i) => { i.pim = w.replace('-mode', ''); });
+      if (!r && !dev().mcastRouting) out.push('WARNING: "ip multicast-routing" is not configured, IP Multicast packets will not be forwarded');
+      return r;
+    }],
+    ['no ip pim [...]', () => onL3((i) => { delete i.pim; })],
     // 自動協商速率與雙工（帶外管理埠、路由器的 GE 埠預設就是這樣）：模擬裡沒有作用
     ['negotiation auto', () => undefined],
     ['no negotiation auto', () => undefined],
@@ -2066,6 +2075,10 @@ export function iosSession(getDev, getState, who = null) {
       return undefined;
     }],
     ['no access-list <n>', ([n]) => { const d = dev(); if (d.aclDefs) delete d.aclDefs[n]; }],
+    ['ip multicast-routing [...]', () => { const e = needRouting(); if (e) return e; dev().mcastRouting = true; return undefined; }],
+    ['no ip multicast-routing [...]', () => { delete dev().mcastRouting; }],
+    ['ip pim rp-address <ip> [...]', ([ip]) => { const e = needRouting(); if (e) return e; if (parseIp(ip) == null) return err('% 用法：ip pim rp-address <RP 的 IP>'); dev().pimRp = ip; return undefined; }],
+    ['no ip pim rp-address [...]', () => { delete dev().pimRp; }],
     // Reflexive ACL 暫時規則的預設逾時（每一條 reflect 也可以自己寫 timeout）
     ['ip reflexive-list timeout <n>', ([n]) => (/^\d+$/.test(n) && +n >= 1 ? void (dev().reflexTimeout = +n) : err('% 用法：ip reflexive-list timeout <秒>（預設 300）'))],
     ['no ip reflexive-list timeout [...]', () => { delete dev().reflexTimeout; }],
@@ -4777,6 +4790,7 @@ export function runningConfig(state, dev) {
     if (i.mtu) l.push(isNexus(dev) ? ` mtu ${i.mtu}` : ` ip mtu ${i.mtu}`);
     if (+i.adjMss) l.push(` ip tcp adjust-mss ${+i.adjMss}`);
     if (i.redirects === false) l.push(' no ip redirects');
+    if (i.pim) l.push(` ip pim ${i.pim}-mode`);
     if (i.ospfAuth) l.push(i.ospfAuth === 'md5' ? ' ip ospf authentication message-digest' : i.ospfAuth === 'null' ? ' ip ospf authentication null' : ' ip ospf authentication');
     if (i.ospfKey && i.ospfKey.id !== '' && i.ospfKey.id != null) l.push(` ip ospf message-digest-key ${i.ospfKey.id} md5 7 ${hex(i.ospfKey.key || '')}`);
     else if (i.ospfKey) l.push(` ip ospf authentication-key 7 ${hex(i.ospfKey.key || '')}`);
@@ -5078,6 +5092,8 @@ export function runningConfig(state, dev) {
   if (out.some((i) => natList(i) === '1') && !(dev.aclDefs || {})['1']) o.push('access-list 1 permit any');
   for (const [n, l] of Object.entries(dev.timeRanges || {})) o.push('!', `time-range ${n}`, ...l.map((p) => ` periodic ${p.text}`));
   if (+dev.reflexTimeout) o.push(`ip reflexive-list timeout ${+dev.reflexTimeout}`);
+  if (dev.mcastRouting) o.push(PLATFORM[dev.model] === 'isr4300' || PLATFORM[dev.model] === 'cat9k' ? 'ip multicast-routing distributed' : 'ip multicast-routing');
+  if (dev.pimRp) o.push(`ip pim rp-address ${dev.pimRp}`);
   for (const i of dev.ifaces) {
     for (const [key, dir] of [['aclIn', 'in'], ['aclOut', 'out']]) {
       if (!i[key] || !i[key].length) continue;

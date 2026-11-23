@@ -67,6 +67,7 @@ export function mcastTab(ctx, body) {
     card.append(h('div', { class: 'line' }, h('b', { class: 'mono', text: g }),
       s ? badge('on', `收看中 · ${s.name} ${s.mbps} Mbps`) : badge('off', miss ? '收不到' : '沒有這個群組的串流'),
       h('button', { class: 'mini', type: 'button', title: '離開這個群組', onclick: () => { list.splice(k, 1); ctx.commit(true); } }, '離開')));
+    if (miss && miss.why && miss.why[dev.id]) card.append(note('warn', miss.why[dev.id]));
   });
   let draft = '';
   card.append(h('div', { class: 'addrow' }, inp(ctx, () => draft, (v) => { draft = v; }, { ph: '例如 239.1.1.1' }),

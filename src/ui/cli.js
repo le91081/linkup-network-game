@@ -66,6 +66,40 @@ const SHOW = {
     return c ? c.filter((l) => l !== 'Building configuration...') : ['startup-config is not present'];
   },
   'show version': (st, d) => versionLines(st, d),
+  'show ip pim interface': (st, d) => {
+    const ifs = d.ifaces.filter((i) => i.pim && i.rt && i.rt.ip != null);
+    return ['Address          Interface                Ver/   Nbr    Query  DR         DR', '                                          Mode   Count  Intvl  Prior',
+      ...ifs.map((i) => { const nb = pimNbrs(st, d, i); const dr = [i.rt.ip, ...nb.map((n) => n.ip)].reduce((a, b) => (b > a ? b : a)); return pad(fmtIp(i.rt.ip), 17) + pad(longIf(i.label), 25) + pad('v2/' + i.pim[0].toUpperCase(), 7) + pad(nb.length, 7) + pad(30, 7) + pad(1, 11) + fmtIp(dr); }),
+      ...(ifs.length ? [] : ['（沒有任何介面開 PIM：interface … → ip pim sparse-mode）']), ...(!d.mcastRouting && ifs.length ? ['（沒有 ip multicast-routing：PIM 不會轉送多點傳送）'] : [])];
+  },
+  'show ip pim neighbor': (st, d) => {
+    const rows = d.ifaces.filter((i) => i.pim && i.rt && i.rt.ip != null).flatMap((i) => pimNbrs(st, d, i).map((n) => pad(fmtIp(n.ip), 17) + pad(longIf(i.label), 25) + pad('00:12:41/00:01:33', 18) + pad('v2', 5) + '1 / DR S P G'));
+    return ['PIM Neighbor Table', 'Mode: B - Bidir Capable, DR - Designated Router, N - Default DR Priority,', '      P - Proxy Capable, S - State Refresh Capable, G - GenID Capable', 'Neighbor          Interface                Uptime/Expires    Ver   DR', 'Address                                                            Prio/Mode', ...rows];
+  },
+  'show ip pim rp mapping': (st, d) => (d.pimRp ? ['PIM Group-to-RP Mappings', '', 'Group(s): 224.0.0.0/4, Static', `    RP: ${d.pimRp} (?)`] : ['PIM Group-to-RP Mappings', '', '（沒有設定 RP：sparse-mode 的群組加入不了）']),
+  'show ip mroute': (st, d) => {
+    if (!d.mcastRouting) return ['% 這台沒有 ip multicast-routing：沒有多點傳送路由表'];
+    const l = ((st.rt && st.rt.mroutes) || {})[d.id] || [];
+    const o = ['IP Multicast Routing Table', 'Flags: D - Dense, S - Sparse, B - Bidir Group, s - SSM Group, C - Connected,', '       L - Local, P - Pruned, R - RP-bit set, F - Register flag,', '       T - SPT-bit set, J - Join SPT, M - MSDP created entry', 'Outgoing interface flags: H - Hardware switched, A - Assert winner', ' Timers: Uptime/Expires', ' Interface state: Interface, Next-Hop or VCD, State/Mode', ''];
+    for (const m of l) {
+      const mode = m.mode === 'D' ? 'Dense' : 'Sparse', oil = m.oil.map((x) => `    ${longIf(x)}, Forward/${mode}, 00:05:12/00:02:40`);
+      if (m.mode !== 'D' && d.pimRp) o.push(`(*, ${m.group}), 00:05:12/stopped, RP ${d.pimRp}, flags: S${m.oil.length ? 'C' : 'P'}`, `  Incoming interface: ${m.iif ? longIf(m.iif) : 'Null'}, RPF nbr ${m.rpf != null ? fmtIp(m.rpf) : '0.0.0.0'}`, '  Outgoing interface list:', ...(oil.length ? oil : ['    Null']), '');
+      o.push(`(${fmtIp(m.src)}, ${m.group}), 00:05:10/00:02:58, flags: ${m.mode === 'D' ? '' : 'T'}`, `  Incoming interface: ${m.iif ? longIf(m.iif) : 'Null'}, RPF nbr ${m.rpf != null ? fmtIp(m.rpf) : '0.0.0.0'}`, '  Outgoing interface list:', ...(oil.length ? oil : ['    Null']), '');
+    }
+    if (!l.length) o.push('（沒有任何串流經過這台：接收端的閘道要往來源一站一站加入，路上每一台都要 ip multicast-routing 與 ip pim）');
+    return o;
+  },
+  'show ip igmp groups': (st, d) => {
+    const rows = [];
+    for (const i of d.ifaces) {
+      if (!i.pim || !i.rt || i.rt.ip == null) continue;
+      for (const h of Object.values(st.devices)) for (const hi of (h.kind === 'host' ? h.ifaces : [])) {
+        if (!hi.rt || hi.rt.ip == null || netOf(hi.rt.ip, i.rt.bits) !== netOf(i.rt.ip, i.rt.bits) || hi.rt.ip === i.rt.ip) continue;
+        for (const g of h.igmp || []) rows.push(pad(g, 17) + pad(longIf(i.label), 25) + pad('00:03:11', 10) + pad('00:02:49', 10) + fmtIp(hi.rt.ip));
+      }
+    }
+    return ['IGMP Connected Group Membership', 'Group Address    Interface                Uptime    Expires   Last Reporter', ...rows, ...(rows.length ? [] : ['（開了 PIM 的介面上沒有人加入任何群組）'])];
+  },
   'show ip igmp snooping': (st, d) => {
     if (!isSw(d)) return ['% 這個指令只適用於交換器'];
     const on = snoopOn(d), g = d.sw.igmp || {}, o = ['Global IGMP Snooping configuration:', '-------------------------------------------', `IGMP snooping                : ${on ? 'Enabled' : 'Disabled'}`,
@@ -1909,6 +1943,8 @@ function fhrpView(st, d, i) {
   const odd = r.odd ? `（同一個網段上的 ${st.devices[r.odd.dev] ? st.devices[r.odd.dev].name : r.odd.dev} 用的是 ${r.odd.proto === 'hsrp' ? 'HSRP' : 'VRRP'} 群組 ${r.odd.grp}：協定或群組號碼不同，彼此不會協調，各自都當 Active）` : '';
   return { active: act && act.ip, standby: sb && sb.ip, hsrpState, odd };
 }
+/** 這個介面上的 PIM 鄰居：同一個網段、也開了 PIM 的其他路由器 */
+const pimNbrs = (st, d, i) => Object.values(st.devices).filter((x) => x !== d && x.routing && x.mcastRouting && !(st.down || {})[x.id]).flatMap((x) => x.ifaces.filter((y) => y.pim && y.rt && y.rt.ip != null && netOf(y.rt.ip, i.rt.bits) === netOf(i.rt.ip, i.rt.bits)).map((y) => ({ dev: x.id, ip: y.rt.ip })));
 const stpState = (d, pid) => (d.rt.wait && d.rt.wait[pid] > 15 ? 'LSN' : d.rt.wait && d.rt.wait[pid] > 0 ? 'LRN' : 'FWD');
 /** 這個埠帶著哪些 VLAN（Trunk 是允許的、這台也有的 VLAN） */
 const stpVlans = (d, pid) => { const pc = d.sw.ports[pid]; return isTrunk(d, pid) ? d.sw.vlans.map((v) => v.id).filter((v) => vlanOk(pc, v)) : [pc.vlan, ...(pc.voice ? [pc.voice] : [])]; };

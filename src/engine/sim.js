@@ -130,6 +130,8 @@ export function recompute(state) {
     Object.assign(state.dyn, side);
     phoneTick(state); // IP 電話的註冊（通話要用到）
     // 背景流量先算進計數器，網管伺服器這一輪的輪詢才看得到
+    // 多點傳送：要等路由算好（PIM 的 RPF 檢查看單點傳送的路由表）
+    prepMcast(state);
     background(state, { isBridge: isBridgePort, ospfOn, uptime0: UPTIME0 });
     flowsTick(state);
     opsAfter(state);
@@ -212,7 +214,6 @@ function computePass(state, auth) {
   }
   haMacs(state); // HA 的主要機：介面用叢集的虛擬 MAC
   prepL2Attacks(state); // macof 把 MAC 位址表塞滿、狂送廣播佔掉整個 VLAN 的線路
-  prepMcast(state); // 多點傳送：沒有 IGMP snooping（或沒有 querier）就像廣播一樣送往整個 VLAN
   prepCloud(state); // 雲端：彈性 IP 掛到網際網路閘道上
   const old = state.leases || {};
   state.leases = {};

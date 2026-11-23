@@ -5286,6 +5286,39 @@ console.log('\n多點傳送到基地台：最低速率吃掉空中時間');
   s.devices.ap.wifi.m2u = false; (s.devices.sw.sw.igmp ||= {}).querier = true; s.devices.tv.igmp = []; settle(s);
   ok(!s.rt.mair.ap && !st().extra.length, 'IGMP snooping 有 querier、沒有人收看：串流根本不送到基地台');
 }
+console.log('\nPIM：跨網段的多點傳送');
+{
+  const { iosSession, runningConfig } = await import('../src/engine/ios.js');
+  const { iosRun } = await import('../src/ui/cli.js');
+  const ok = (cond, title) => (cond ? console.log('  ✔ ' + title) : fail(title));
+  const cli = (s, id) => { const S = iosSession(() => s.devices[id], () => s); return (...lines) => { const out = []; for (const l of lines) { const r = iosRun({ state: s, showTrace() {}, refreshLive() {} }, id, S, l, (x) => out.push(x)); if (r.changed) settle(s); } return out.join('\n'); }; };
+  const lv = LEVELS.find((x) => x.id === 'l145');
+  const s = lv.setup(); settle(s);
+  const st = () => s.rt.mstreams[0], why = () => st().why.tvbr || '';
+  const H = cli(s, 'hq'), B = cli(s, 'br');
+  H('enable'); B('enable');
+  ok(st().members.includes('tvhq') && /R-BR 沒有 ip multicast-routing/.test(why()), '開場：總部的電視收得到；分公司的閘道沒有 ip multicast-routing');
+  ok(s.rt.mgroups.swhq && /Gi0\/2/.test(JSON.stringify(s.rt.mgroups.swhq)) && !s.rt.mcast[s.cables.find((c) => [c.a.dev, c.b.dev].sort().join() === 'br,hq').id + '>br'], 'R-HQ 的 Gi0/0/1 開了 PIM，就是總部網段的 querier：SW-HQ 只送給電視，專線上沒有串流');
+  B('configure terminal', 'ip multicast-routing distributed', 'end');
+  ok(/R-BR 的 Gi0\/0\/1|RPF 失敗：R-BR/.test(why()) || /RP/.test(why()), `R-BR 開了 multicast-routing：${why()}`);
+  B('configure terminal', 'interface Gi0/0/0', 'ip pim sparse-mode', 'end');
+  ok(/sparse-mode，但沒有設定 RP/.test(why()), 'sparse-mode 沒有 RP：加入不了');
+  B('configure terminal', 'ip pim rp-address 10.9.9.9', 'end');
+  ok(/R-HQ 的 Gi0\/0\/0 沒有 PIM/.test(why()), 'R-HQ 的專線介面沒有 PIM：不是 PIM 鄰居');
+  H('configure terminal', 'interface Gi0/0/0', 'ip pim sparse-mode', 'end');
+  ok(/RP 不一樣/.test(why()), 'RP 設得不一樣（10.9.9.9 與 10.1.10.1）：樹接不起來');
+  B('configure terminal', 'ip pim rp-address 10.1.10.1', 'end');
+  const wan = s.cables.find((c) => [c.a.dev, c.b.dev].sort().join() === 'br,hq').id;
+  ok(st().members.includes('tvbr') && s.rt.mcast[wan + '>br'] === 8, '都設好了：分公司的電視收得到，專線上有一份 8 Mbps 的串流');
+  const mr = B('show ip mroute');
+  ok(/\(10\.1\.10\.20, 239\.1\.1\.1\)/.test(mr) && /Incoming interface: GigabitEthernet0\/0\/0, RPF nbr 10\.0\.12\.1/.test(mr) && /GigabitEthernet0\/0\/1, Forward\/Sparse/.test(mr), 'show ip mroute：從 Gi0/0/0 進（RPF nbr 10.0.12.1）、Gi0/0/1 出');
+  ok(/10\.0\.12\.2 +GigabitEthernet0\/0\/0/.test(H('show ip pim neighbor')) && /239\.1\.1\.1 +GigabitEthernet0\/0\/1 .*10\.2\.20\.30/.test(B('show ip igmp groups')) && /RP: 10\.1\.10\.1/.test(B('show ip pim rp mapping')), 'show ip pim neighbor、show ip igmp groups、show ip pim rp mapping');
+  ok(/^ip multicast-routing distributed$/m.test(runningConfig(s, s.devices.br).join('\n')) && /^ip pim rp-address 10\.1\.10\.1$/m.test(runningConfig(s, s.devices.br).join('\n')) && /^ ip pim sparse-mode$/m.test(runningConfig(s, s.devices.br).join('\n')), 'running-config：ip multicast-routing distributed、ip pim rp-address、ip pim sparse-mode');
+  ok(/WARNING: "ip multicast-routing" is not configured/.test(cli(lv.setup(), 'br')('enable', 'configure terminal', 'interface Gi0/0/0', 'ip pim dense-mode', 'end')), '沒有 multicast-routing 就開 PIM：IOS 的警告');
+  // RPF：往來源的路由改走沒有 PIM 的介面
+  B('configure terminal', 'no ip route 10.1.10.0 255.255.255.0 10.0.12.1', 'ip route 10.1.10.0 255.255.255.0 10.2.20.254', 'end');
+  ok(!st().members.includes('tvbr'), `往來源的路由改走 Gi0/0/1 的另一台：${why()}`);
+}
 console.log('\nNetFlow 與 QoS 的 police');
 {
   const sim = await import('../src/engine/sim.js');
