@@ -343,8 +343,9 @@ export class Scene3D {
     const hit = e.button === 0 ? this.pick(e) : {};
     this.down = {
       x: e.clientX, y: e.clientY, lx: e.clientX, ly: e.clientY, moved: false,
-      mode: e.button === 2 ? 'rotate' : hit.dev ? (e.shiftKey && this.h.canMove && this.h.canMove() ? 'move' : 'dev') : 'pan', dev: hit.dev, cable: hit.cable,
+      mode: e.button === 2 ? 'rotate' : hit.dev ? (e.shiftKey && this.h.canMove && this.h.canMove() ? 'move' : 'dev') : this.wallMat && e.button === 0 ? 'wall' : 'pan', dev: hit.dev, cable: hit.cable,
     };
+    if (this.down.mode === 'wall') { const p = this.groundAt(e); this.down.from = p ? [Math.round(p.x * 2) / 2, Math.round(p.z * 2) / 2] : null; }
     try { this.canvas.setPointerCapture(e.pointerId); } catch { /* 合成事件沒有真正的指標，可以忽略 */ }
   }
 
@@ -390,6 +391,12 @@ export class Scene3D {
         this.placeRing(this.selRing, this.selected);
       }
       this.canvas.style.cursor = 'move';
+    } else if (d.mode === 'wall') {
+      const r = this.canvas.getBoundingClientRect();
+      this.linkPath.setAttribute('d', `M${d.x - r.left},${d.y - r.top} L${e.clientX - r.left},${e.clientY - r.top}`);
+      this.linkPath.style.display = 'block';
+      this.linkPath.classList.add('ok');
+      this.canvas.style.cursor = 'crosshair';
     } else if (d.mode === 'dev') {
       const g = this.devices.get(d.dev);
       const s = this.toScreen(new THREE.Vector3(g.position.x, g.userData.h * 0.5, g.position.z));
@@ -420,6 +427,9 @@ export class Scene3D {
     } else if (d.mode === 'move') {
       if (d.moved) this.h.onMoved?.(d.dev);
       else this.h.onSelect?.(d.dev);
+    } else if (d.mode === 'wall') {
+      const p = this.groundAt(e);
+      if (d.moved && d.from && p) this.h.onWall?.(d.from, [Math.round(p.x * 2) / 2, Math.round(p.z * 2) / 2], this.wallMat);
     } else if (d.mode === 'pan' && !d.moved) {
       if (d.cable) this.h.onCable?.(d.cable, e.clientX, e.clientY);
       else this.h.onSelect?.(null);

@@ -120,6 +120,7 @@ npm run build    # 輸出到 dist/
 - **Metro Ethernet 專線**：電信業者的設備只能看「專線資訊」（EPL / EVPL、對應的 CE-VLAN、MTU、兩端 UNI 的燈號）。EVPL 依 802.1Q 標籤決定送到哪一條 EVC，不帶標籤的訊框丟掉。
 - **配線架**：24 埠 Cat6 配線架是被動元件，前面第 n 孔和後面第 n 孔直接相通：交換器經過它直接連到另一面的設備（燈號、鄰居都是那台）；只接一面就沒有燈號；整條通道超過 100 公尺不通。「配線」分頁替每一孔貼標籤（牆上網路孔的編號）。
 - **訊號量測**：上方的閃電按鈕打開量測模式，滑鼠移到地板上就顯示那個位置收到每台基地台的 5 GHz / 2.4 GHz 訊號強度（含牆的衰減），像現場勘測的 App。
+- **自由模式畫牆**：左側的「牆與訊號」選一種材質（石膏板、玻璃、磚牆、混凝土、金屬…），在地板上拖曳就畫出一道牆；有牆的時候基地台的訊號畫成熱力圖。
 - **定時封存**：`archive` 底下的 `time-period <分鐘>` 每隔一段時間自動封存一份 running-config 到 path。
 - Cisco 的路由器與交換器有「CLI」分頁：IOS 風格的命令列。`show running-config`、`show startup-config`、`show ip route`、`show vlan brief`、`show interfaces trunk`、`show arp` 等四十多個 `show` 指令用來查看狀態；輸入 `configure terminal` 之後可以直接用指令設定（見下方「CLI 設定指令」），改的和圖形介面是同一份設定。
 - FortiGate 防火牆也有「CLI」分頁，用的是 FortiOS 的階層式語法（`config firewall policy` → `edit 1` → `set …` → `next` → `end`）。

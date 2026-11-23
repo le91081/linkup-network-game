@@ -1,4 +1,5 @@
 // 自由模式：自己擺設備、自由接線、任意測試連線
+import { WALL_MATS } from '../engine/sim/wifi.js';
 import { h, icon, button, toast } from './dom.js';
 import { saveJson } from './save.js';
 import { CATALOG, makeDevice, makeState, setLine, uniqueId, cloneState } from '../engine/model.js';
@@ -136,6 +137,13 @@ export function renderSandbox(app) {
           h('button', { class: 'mini danger', type: 'button', title: '移除這個目標', onclick: () => app.sandboxDropGoal(i) }, icon('x', 13)));
       }))
       : h('p', { class: 'tip', text: '還沒有目標。存幾個「應該要通」與「應該不通」的測試，改設定之後就能一鍵驗證。' }),
+    h('h3', { class: 'sec', text: '牆與訊號' }),
+    h('div', { class: 'sbx-row' },
+      h('select', { class: 'inp sel', onchange: (e) => { app.scene.wallMat = e.target.value || null; app.scene.canvas.style.cursor = app.scene.wallMat ? 'crosshair' : ''; } },
+        h('option', { value: '', text: '不畫牆（一般操作）', selected: !app.scene.wallMat }),
+        ...Object.entries(WALL_MATS).map(([k, m]) => h('option', { value: k, text: `畫牆：${m.name}（5 GHz −${m.db5} dB）`, selected: app.scene.wallMat === k }))),
+      button('清除所有的牆', { small: true, onclick: () => { if (!(app.state.walls || []).length) return; app.state.walls = []; app.changed(); app.scene.load(app.state, { keep: true }); toast('已清除所有的牆', 'ok'); } })),
+    h('p', { class: 'tip', text: '選一種材質，在地板上拖曳就畫出一道牆（對齊 0.5 格）。有牆的時候基地台的訊號會畫成熱力圖；上方的閃電按鈕可以量測任何位置的訊號。' }),
     h('h3', { class: 'sec', text: '關卡設計' }),
     editorSection(app),
     h('h3', { class: 'sec', text: '儲存與分享' }),

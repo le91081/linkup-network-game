@@ -499,6 +499,12 @@ app.scene = new Scene3D(app.el.stage, {
   onCable: (id, x, y) => hud.openCableMenu(app, id, x, y),
   canMove: () => !!app.level.sandbox,
   onMoved: () => app.sandboxMoved(),
+  onWall: (a, b, mat) => {
+    if (!app.level.sandbox || (a[0] === b[0] && a[1] === b[1])) return;
+    (app.state.walls ||= []).push({ a, b, mat });
+    app.changed();
+    app.scene.load(app.state, { keep: true });
+  },
   onSurvey: (x, z) => {
     const aps = apsOf(app.state).filter((ap) => meshServes(app.state, ap)); // 回程沒連上的 mesh 基地台不廣播，量不到
     if (!aps.length) return ['訊號量測', '（場景裡沒有正在發射的基地台）'];
