@@ -17,6 +17,7 @@ export const DEBUG_KINDS = {
   ipsec: 'Crypto IPSEC debugging is',
   dhcpPkt: 'DHCP server packet debugging is',
   dhcpEv: 'DHCP server event debugging is',
+  rip: 'RIP protocol debugging is',
 };
 
 const ridTxt = (r) => (r != null ? fmtIp(r) : '0.0.0.0');
@@ -128,6 +129,39 @@ function ikeTick(state, d, f) {
   }
 }
 
+// ── debug ip rip：每個更新週期印一次收到、丟掉、送出的更新 ──
+function ripTick(state, d) {
+  const r = d.rt.rip;
+  if (!r) return;
+  const per = +((d.rip && d.rip.timers) || [])[0] || 30;
+  const pf = (n, b) => `${fmtIp(n)}/${b}`;
+  const lbl = (id) => longIf((d.ifaces.find((x) => x.id === id) || { label: id }).label);
+  for (const [id, f] of Object.entries(r.ifs)) {
+    for (const b of f.bad || []) {
+      const line = b.code === 'ver' ? `RIP: ignored v${b.ver} packet from ${fmtIp(b.ip)} (illegal version)`
+        : b.code === 'auth' ? `RIP: ignored v${b.ver} packet from ${fmtIp(b.ip)} (invalid authentication)`
+          : `RIP: ignored v${b.ver} update from bad source ${fmtIp(b.ip)} on ${lbl(id)}`;
+      emit(state, d, `rip|bad|${id}|${b.ip}|${b.code}`, per, [line]);
+    }
+  }
+  for (const s of r.srcs) {
+    if (s.stale) continue;
+    const rec = Object.entries(state.dyn.ripSrc || {}).find(([k]) => k.startsWith(s.dev + '/') && k.endsWith('>' + d.id + '/' + s.iface));
+    const list = (rec && rec[1].snap) || [];
+    emit(state, d, `rip|rx|${s.iface}|${s.ip}`, per, [`RIP: received v${s.ver} update from ${fmtIp(s.ip)} on ${lbl(s.iface)}`,
+      ...list.map((v) => (s.ver === 1 ? `     ${fmtIp(v.net)} in ${v.metric} hops` : `     ${pf(v.net, v.bits)} via 0.0.0.0 in ${v.metric} hops`))]);
+  }
+  for (const [id, f] of Object.entries(r.ifs)) {
+    for (const x of f.sent || []) {
+      const i = d.ifaces.find((y) => y.id === id);
+      const head = `RIP: sending v${x.ver} update to ${x.ver === 1 ? '255.255.255.255' : '224.0.0.9'} via ${lbl(id)} (${fmtIp(i.rt.ip)})`;
+      const cls = (v) => ((v.net >>> 24) < 128 ? 8 : (v.net >>> 24) < 192 ? 16 : 24);
+      const ent = x.list.map((v) => (x.ver === 1 ? `\t${v.bits === cls(v) || v.bits === 0 ? 'network' : 'subnet'} ${fmtIp(v.net)} metric ${v.metric}` : `\t${pf(v.net, v.bits)} via 0.0.0.0, metric ${v.metric}, tag 0`));
+      emit(state, d, `rip|tx|${id}|${x.ver}`, per, ent.length ? [head, 'RIP: build update entries', ...ent] : [head, 'RIP: Update contains 0 routes']);
+    }
+  }
+}
+
 // ── DHCP 伺服器：debug ip dhcp server packet / events ──
 const hex12 = (mac) => String(mac || '').replace(/[^0-9a-f]/gi, '').toLowerCase();
 const dotted = (h) => (h.match(/.{1,4}/g) || []).join('.');
@@ -201,6 +235,7 @@ export function debugTick(state) {
     if (!f) continue;
     if (f.ospfAdj || f.ospfHello) ospfTick(state, d, f);
     if (f.isakmp || f.ikev2 || f.ipsec) ikeTick(state, d, f);
+    if (f.rip) ripTick(state, d);
   }
   pkiFail(state);
   dhcpTick(state);

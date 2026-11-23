@@ -375,7 +375,7 @@ console.log('\nCLI 設定指令');
     const many = sess.complete('show ip ', shows);
     ok(many.line === null && many.options.join() === 'interface,route', '補齊：有多個候選時列出來');
     sess.exec('conf t'); sess.exec('int gi0/0/1');
-    ok(sess.complete('ip na').line === 'ip nat ' && sess.complete('ip nat ').options.join() === 'inside,outside,translation' && sess.complete('do sh', shows).line === 'do show ', '補齊：介面模式與 do show');
+    ok(sess.complete('ip na').line === 'ip nat ' && sess.complete('ip nat ').options.join() === 'inside,outside,pool,translation' && sess.complete('do sh', shows).line === 'do show ', '補齊：介面模式與 do show');
   }
 
   // 站對站 VPN：分公司換成 Cisco 路由器，整台用指令設定，和總公司的 FortiGate 互通
@@ -4470,6 +4470,137 @@ console.log('\nEIGRP 與 OSPF 雙向重分配');
   ok(transact(s, 'p1', { proto: 'icmp', dst: parseIp('10.3.0.10'), quiet: true }).ok, '兩邊的電腦互相 ping 得到');
   const rc = runningConfig(s, s.devices.r2).join('\n');
   ok(/router eigrp 100\n network 10\.0\.12\.0 0\.0\.0\.3\n redistribute ospf 1 metric 100000 100 255 1 1500/.test(rc) && / redistribute eigrp 100 subnets/.test(rc), 'running-config：兩個方向的 redistribute');
+}
+
+console.log('\nRIP：版本、auto-summary、跳數上限、計時器與驗證');
+{
+  const { iosSession, runningConfig } = await import('../src/engine/ios.js');
+  const { iosRun } = await import('../src/ui/cli.js');
+  const { makeDevice: D, makeState } = await import('../src/engine/model.js');
+  const ops = await import('../src/engine/ops.js');
+  const sim = await import('../src/engine/sim.js');
+  const ok = (cond, title) => (cond ? console.log('  ✔ ' + title) : fail(title));
+  const cli = (s, id) => { const S = iosSession(() => s.devices[id], () => s); return (...lines) => { const out = []; for (const l of lines) { const r = iosRun({ state: s, showTrace() {}, refreshLive() {} }, id, S, l, (x) => out.push(x)); if (r.changed) settle(s); } return out.join('\n'); }; };
+  const rt = (s, id, ip, bits) => s.devices[id].rt.routes.filter((r) => r.net === parseIp(ip) && r.bits === bits);
+  const lv = LEVELS.find((x) => x.id === 'l130');
+  const s = lv.setup(); settle(s);
+  const C = cli(s, 'core'), A = cli(s, 'fa'), B = cli(s, 'fb');
+  const sum0 = rt(s, 'core', '172.16.0.0', 16);
+  ok(sum0.length === 1 && sum0[0].type === 'R' && sum0[0].metric === 1 && sum0[0].iface.id === 'Gi0/0/1' && !sim.runObjective(s, lv.objectives[0]).pass && sim.runObjective(s, lv.objectives[1]).pass,
+    '開場：Core-RT 只從 B 廠學到 172.16.0.0/16，A 廠的 MES 連不到');
+  ok(/^R {5}172\.16\.0\.0\/16 \[120\/1\] via 10\.0\.2\.2, 00:00:\d\d, GigabitEthernet0\/0\/1$/m.test(C('show ip route rip')), 'show ip route rip：R [120/1]，時間是距離上次更新幾秒');
+  ok(/Default version control: send version 1, receive any version/.test(A('show ip protocols')) && /Automatic network summarization is in effect/.test(A('show ip protocols')), 'FAC-A 沒設 version：送 v1、收任何版本，auto-summary 開著');
+  ok(rt(s, 'fa', '10.1.0.0', 24).length === 1, '單向：FAC-A 收得到 Core-RT 的 v2，學到辦公室的網段');
+  ok(/RIP protocol debugging is on/.test(C('debug ip rip')) && /IP routing:\n  RIP protocol debugging is on/.test(C('show debugging')), 'debug ip rip：show debugging 列在 IP routing 底下');
+  sim.advance(s, 31);
+  const log = ops.logRows(s, s.devices.core).map((x) => x.line);
+  const then = (a, ...b) => { const k = log.findIndex((l) => l.includes(a)); return k >= 0 && b.every((x, n) => (log[k + 1 + n] || '').includes(x)); };
+  ok(then('RIP: ignored v1 packet from 10.0.1.2 (illegal version)') && then('RIP: received v2 update from 10.0.2.2 on GigabitEthernet0/0/1', '     172.16.0.0/16 via 0.0.0.0 in 1 hops')
+    && then('RIP: sending v2 update to 224.0.0.9 via GigabitEthernet0/0/0 (10.0.1.1)', 'RIP: build update entries', '\t10.0.2.0/30 via 0.0.0.0, metric 1, tag 0'),'debug ip rip：ignored v1 packet (illegal version)、received / sending v2 update（split horizon：不送出去介面自己的網段）');
+  C('undebug all');
+  ok(/記成 network 172\.16\.0\.0/.test(A('configure terminal', 'router rip', 'network 172.16.1.0', 'end')), 'network 只能寫主網段：172.16.1.0 記成 172.16.0.0');
+  A('configure terminal', 'router rip', 'version 2', 'end');
+  const sum1 = rt(s, 'core', '172.16.0.0', 16);
+  ok(sum1.length === 2 && new Set(sum1.map((r) => r.iface.id)).size === 2, 'A 廠改成 version 2：兩邊都報 172.16.0.0/16，Core-RT 等價分流（不連續的網段）');
+  ok(/^172\.16\.0\.0\/16    auto-summary$/m.test(A('show ip rip database')) && /^172\.16\.1\.0\/24    directly connected, GigabitEthernet0\/0\/1$/m.test(A('show ip rip database')), 'show ip rip database：auto-summary 的那一筆');
+  ok(/有類別網段|172\.16\.0\.0\/16/.test(lv.objectives[2].test(s)), '目標：Core-RT 的路是合成的 /16 → 不過');
+  A('configure terminal', 'router rip', 'no auto-summary', 'end'); B('configure terminal', 'router rip', 'no auto-summary', 'end');
+  ok(lv.objectives.every((o) => (o.type === 'check' ? o.test(s) === true : sim.runObjective(s, o).pass)), '兩台都 no auto-summary：三個目標都過');
+  const rr = C('show ip route rip');
+  ok(/172\.16\.0\.0\/24 is subnetted, 2 subnets\nR {8}172\.16\.1\.0 \[120\/1\] via 10\.0\.1\.2, /.test(rr) && /^R {8}172\.16\.2\.0 \[120\/1\] via 10\.0\.2\.2, /m.test(rr), 'Core-RT：172.16.1.0/24 與 172.16.2.0/24 各自一筆');
+  const rc = runningConfig(s, s.devices.fa).join('\n');
+  ok(/router rip\n version 2\n passive-interface GigabitEthernet0\/0\/1\n network 10\.0\.0\.0\n network 172\.16\.0\.0\n no auto-summary\n!/.test(rc), 'running-config：router rip 的順序和 IOS 一樣');
+  const pr = C('show ip protocols');
+  ok(/Routing Protocol is "rip"/.test(pr) && /Sending updates every 30 seconds, next due in \d+ seconds/.test(pr) && /Invalid after 180 seconds, hold down 180, flushed after 240/.test(pr)
+    && /Default version control: send version 2, receive version 2/.test(pr) && /^ {4}10\.0\.1\.2 +120 /m.test(pr) && /Distance: \(default is 120\)/.test(pr), 'show ip protocols：計時器、版本、路由來源');
+  // 介面上的版本：ip rip receive version 1 2 也能收 v1
+  A('configure terminal', 'router rip', 'no version', 'end');
+  ok(!rt(s, 'core', '172.16.1.0', 24).length, 'FAC-A 改回沒設 version：Core-RT 又收不到');
+  C('configure terminal', 'interface Gi0/0/0', 'ip rip receive version 1 2', 'end');
+  const v1 = rt(s, 'core', '172.16.0.0', 16);
+  ok(v1.length === 1 && v1[0].iface.id === 'Gi0/0/0', 'ip rip receive version 1 2：收得到 v1，可是 v1 不帶遮罩，送過來的是有類別的 172.16.0.0/16');
+  C('configure terminal', 'interface Gi0/0/0', 'no ip rip receive version', 'end');
+  A('configure terminal', 'router rip', 'version 2', 'end');
+  // 驗證
+  A('configure terminal', 'key chain RIP', 'key 1', 'key-string Fact0ry', 'exit', 'exit', 'interface Gi0/0/0', 'ip rip authentication mode md5', 'ip rip authentication key-chain RIP', 'end');
+  ok(!rt(s, 'core', '172.16.1.0', 24).length && s.devices.core.rt.rip.ifs['Gi0/0/0'].why.some((w) => /invalid authentication/.test(w)), '只有一邊做驗證：更新被丟掉 (invalid authentication)');
+  C('configure terminal', 'key chain RIP', 'key 1', 'key-string Fact0ry', 'exit', 'exit', 'interface Gi0/0/0', 'ip rip authentication mode md5', 'ip rip authentication key-chain RIP', 'end');
+  ok(rt(s, 'core', '172.16.1.0', 24).length === 1 && /ip rip authentication mode md5\n ip rip authentication key-chain RIP/.test(runningConfig(s, s.devices.core).join('\n')), '兩邊一樣的 MD5 金鑰：又學得到');
+  // OSPF 收進 RIP 的路
+  ok(/redistribute rip subnets/.test((C('configure terminal', 'router ospf 1', 'redistribute rip subnets', 'end'), runningConfig(s, s.devices.core).join('\n'))), 'router ospf 的 redistribute rip');
+  ok(/16（到不了）/.test(C('configure terminal', 'router rip', 'redistribute ospf 1', 'end')), 'OSPF 重分配進 RIP 沒有給 metric：提示預設是 16');
+
+  // 跳數上限：17 台排成一列，第 16 台還學得到（15 跳），第 17 台學不到
+  const devs = [], cables = [];
+  for (let k = 0; k <= 16; k++) devs.push(D('isr4331', 'r' + k, { name: 'R' + k }));
+  devs.push(D('pc', 'pc0', { name: 'PC0', ip: '192.168.0.10', gw: '192.168.0.1' }));
+  for (let k = 0; k < 16; k++) cables.push([`r${k}:Gi0/0/1`, `r${k + 1}:Gi0/0/0`]);
+  cables.push(['r0:Gi0/0/2', 'pc0:eth0']);
+  const L = makeState(devs, cables); settle(L);
+  for (let k = 0; k <= 16; k++) {
+    const lines = ['configure terminal'];
+    if (k > 0) lines.push('interface Gi0/0/0', `ip address 10.0.${k - 1}.2 255.255.255.0`, 'no shutdown');
+    if (k < 16) lines.push('interface Gi0/0/1', `ip address 10.0.${k}.1 255.255.255.0`, 'no shutdown');
+    if (k === 0) lines.push('interface Gi0/0/2', 'ip address 192.168.0.1 255.255.255.0', 'no shutdown');
+    lines.push('router rip', 'version 2', 'network 10.0.0.0', ...(k === 0 ? ['network 192.168.0.0'] : []), 'end');
+    cli(L, 'r' + k)(...lines);
+  }
+  settle(L);
+  const r15 = rt(L, 'r15', '192.168.0.0', 24), r16 = rt(L, 'r16', '192.168.0.0', 24);
+  ok(r15.length === 1 && r15[0].metric === 15 && !r16.length, '跳數上限：15 跳還學得到，第 16 跳就是 16（到不了）');
+
+  // 計時：隔著交換器，對方的介面斷了 → 180 秒 invalid、possibly down、240 秒 flush 之後才改走別條路
+  const T = makeState([D('isr4331', 'r1', { name: 'R1' }), D('isr4331', 'r2', { name: 'R2' }), D('isr4331', 'r3', { name: 'R3' }), D('sw8', 'sw', { name: 'SW' }), D('pc', 'p2', { name: 'P2', ip: '10.2.0.10', gw: '10.2.0.1' })],
+    [['r1:Gi0/0/0', 'sw:1'], ['r2:Gi0/0/0', 'sw:2'], ['r1:Gi0/0/1', 'r3:Gi0/0/0'], ['r3:Gi0/0/1', 'r2:Gi0/0/1'], ['r2:Gi0/0/2', 'p2:eth0']]);
+  settle(T);
+  cli(T, 'r1')('configure terminal', 'interface Gi0/0/0', 'ip address 10.0.12.1 255.255.255.0', 'no shutdown', 'interface Gi0/0/1', 'ip address 10.0.13.1 255.255.255.0', 'no shutdown', 'router rip', 'version 2', 'network 10.0.0.0', 'end');
+  cli(T, 'r3')('configure terminal', 'interface Gi0/0/0', 'ip address 10.0.13.3 255.255.255.0', 'no shutdown', 'interface Gi0/0/1', 'ip address 10.0.23.3 255.255.255.0', 'no shutdown', 'router rip', 'version 2', 'network 10.0.0.0', 'end');
+  cli(T, 'r2')('configure terminal', 'interface Gi0/0/0', 'ip address 10.0.12.2 255.255.255.0', 'no shutdown', 'interface Gi0/0/1', 'ip address 10.0.23.2 255.255.255.0', 'no shutdown', 'interface Gi0/0/2', 'ip address 10.2.0.1 255.255.255.0', 'no shutdown', 'router rip', 'version 2', 'network 10.0.0.0', 'end');
+  settle(T); advance(T, 60); settle(T);
+  const via = () => rt(T, 'r1', '10.2.0.0', 24).map((r) => `${r.metric}@${r.iface.id}${r.staleNbr ? '*' : ''}`).join();
+  ok(via() === '1@Gi0/0/0', '平常：R1 經過交換器直接到 R2（1 跳）');
+  { const S2 = iosSession(() => T.devices.r2, () => T); for (const l of ['configure terminal', 'interface Gi0/0/0', 'shutdown', 'end']) S2.exec(l); recomputeNow(T); } // settle 會把計時器一路快轉，這裡不用
+  advance(T, 10); recomputeNow(T);
+  ok(via() === '1@Gi0/0/0*', 'R2 那一端 shutdown：R1 的介面還亮著，路還指向 R2（等 invalid timer）');
+  advance(T, 180); recomputeNow(T);
+  ok(via() === '' && /10\.2\.0\.0\/24    is possibly down/.test(cli(T, 'r1')('show ip rip database')), '180 秒：possibly down，holddown 不接受經過 R3 的 2 跳');
+  advance(T, 60); recomputeNow(T);
+  ok(via() === '2@Gi0/0/1', '240 秒 flush 之後：改走 R3（2 跳）');
+}
+
+console.log('\nNAT 位址池：一對一的動態 NAT 被借光、overload、逾時與 clear');
+{
+  const { iosSession, runningConfig } = await import('../src/engine/ios.js');
+  const { iosRun } = await import('../src/ui/cli.js');
+  const sim = await import('../src/engine/sim.js');
+  const ok = (cond, title) => (cond ? console.log('  ✔ ' + title) : fail(title));
+  const cli = (s, id) => { const S = iosSession(() => s.devices[id], () => s); return (...lines) => { const out = []; for (const l of lines) { const r = iosRun({ state: s, showTrace() {}, refreshLive() {} }, id, S, l, (x) => out.push(x)); if (r.changed) settle(s); } return out.join('\n'); }; };
+  const lv = LEVELS.find((x) => x.id === 'l131');
+  const s = lv.setup(); settle(s);
+  const R = cli(s, 'rt');
+  const o = lv.objectives.map((x) => sim.runObjective(s, x));
+  ok(!o[0].pass && /NAT 位址池 PUB 的 4 個位址都被別的內部主機佔走了/.test(o[0].reason), '開場：PC-5 借不到位址池的位址，封包被丟掉');
+  const st = R('show ip nat statistics');
+  ok(/Outside interfaces:\n  Gi0\/0\/0/.test(st) && /\[Id: 1\] access-list 10 pool PUB refcount 4/.test(st) && /start 203\.0\.113\.11 end 203\.0\.113\.14/.test(st) && /total addresses 4, allocated 4 \(100%\), misses [1-9]/.test(st),
+    'show ip nat statistics：pool PUB 的 4 個位址 allocated 100%，misses 在增加');
+  const tr = R('show ip nat translations');
+  ok([1, 2, 3, 4].every((k) => new RegExp(`^---  203\\.0\\.113\\.1${k} +10\\.10\\.0\\.10${k} +--- +---$`, 'm').test(tr)), 'show ip nat translations：每台電腦各佔一個公用位址');
+  ok(/%Dynamic mapping in use, cannot change/.test(R('configure terminal', 'ip nat inside source list 10 pool PUB overload', 'end')), '還有轉換在用：IOS 不讓你改規則');
+  ok(/%Pool PUB in use, cannot destroy/.test(R('configure terminal', 'no ip nat pool PUB', 'end')), '規則還在用位址池：不能刪');
+  ok(/%End address less than start address/.test(R('configure terminal', 'ip nat pool X 203.0.113.14 203.0.113.11 netmask 255.255.255.248', 'end'))
+    && /%Start and end addresses on different subnets/.test(R('configure terminal', 'ip nat pool X 203.0.113.11 203.0.113.20 netmask 255.255.255.248', 'end')), 'ip nat pool：起訖顛倒、跨網段都拒絕');
+  R('clear ip nat translation *');
+  ok(sim.runObjective(s, lv.objectives[0]).pass && sim.runObjective(s, lv.objectives[1]).pass && /PC-[1-6] 上不了網：.*位址池 PUB/.test(lv.objectives[2].test(s)), 'clear ip nat translation *：今天 PC-5、PC-6 借得到，可是明天早上又不夠');
+  ok(/total addresses 4, allocated 2 \(50%\)/.test(R('show ip nat statistics')), '借出去的只剩剛剛上網的兩台');
+  R('configure terminal', 'ip nat translation timeout 60', 'end');
+  advance(s, 61); recomputeNow(s);
+  ok(/allocated 0 \(0%\)/.test(R('show ip nat statistics')), 'ip nat translation timeout 60：閒置 60 秒就還回位址池');
+  R('configure terminal', 'no ip nat translation timeout', 'ip nat inside source list 10 pool PUB overload', 'end');
+  ok(lv.objectives.every((x) => sim.runObjective(s, x).pass), 'overload：六台共用位址池的第一個位址，全部都上得了網');
+  ok(/^tcp  203\.0\.113\.11:\d+ +10\.10\.0\.10[56]:\d+ +93\.184\.216\.34:443/m.test(R('show ip nat translations')), 'PAT：Inside global 都是 203.0.113.11，用埠號區分');
+  const rc = runningConfig(s, s.devices.rt).join('\n');
+  ok(/^ip nat pool PUB 203\.0\.113\.11 203\.0\.113\.14 netmask 255\.255\.255\.248\nip nat inside source list 10 pool PUB overload$/m.test(rc), 'running-config：ip nat pool 與 pool … overload');
+  ok(transact(s, 'inet', { proto: 'icmp', dst: parseIp('203.0.113.12'), quiet: true }).hops.some((h) => h.to === 'rt'), '位址池的位址由 Edge-RT 回應 ARP（ISP 送得到路由器）');
 }
 
 console.log('\nNetFlow 與 QoS 的 police');

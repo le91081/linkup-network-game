@@ -25,6 +25,8 @@ import { breakoutPort, unbreakoutPort, breakoutLines, BREAKOUT_MAPS } from './br
 // EIGRP 的設定小工具（不從 eigrp.js 匯入：那邊會拉進整個模擬引擎，造成循環匯入）
 const eigrpOn = (d) => !!(d && d.eigrp && +d.eigrp.as > 0);
 const classBitsOf = (ip) => (ip == null ? null : (ip >>> 24) < 128 ? 8 : (ip >>> 24) < 192 ? 16 : 24);
+/** ip rip send / receive version 後面的「1」「2」「1 2」 */
+const ripVers = (v) => { const l = [...new Set(String(v || '').split(/\s+/).filter(Boolean))]; return l.length && l.every((x) => x === '1' || x === '2') ? l.map(Number).sort() : null; };
 
 // ───────────────────────── running-config 與 startup-config ─────────────────────────
 // IOS 設備改的是記憶體裡的 running-config；要下 write memory 才會存進 startup-config。
@@ -105,7 +107,7 @@ const isSw = (d) => !!d.sw && d.sw.mode === 'vlan';
 export const ERR_RECOVERY_CAUSES = ['arp-inspection', 'bpduguard', 'channel-misconfig', 'dhcp-rate-limit', 'dtp-flap', 'gbic-invalid', 'inline-power', 'link-flap', 'loopback', 'mac-limit', 'pagp-flap', 'port-mode-failure', 'psecure-violation', 'security-violation', 'sfp-config-mismatch', 'storm-control', 'udld', 'vmps'];
 const TYPES = { gi: 'gigabitethernet', te: 'tengigabitethernet', fa: 'fastethernet', eth: 'ethernet' };
 const PROMPT = {
-  eigrp: '(config-router)#', keychain: '(config-keychain)#', kckey: '(config-keychain-key)#',
+  eigrp: '(config-router)#', rip: '(config-router)#', keychain: '(config-keychain)#', kckey: '(config-keychain-key)#',
   zone: '(config-sec-zone)#', zpair: '(config-sec-zone-pair)#', icmap: '(config-cmap)#', ipmap: '(config-pmap)#', ipmapc: '(config-pmap-c)#',
   exec: '#', config: '(config)#', if: '(config-if)#', vlan: '(config-vlan)#', raguard: '(config-ra-guard)#', router: '(config-router)#', dhcp: '(dhcp-config)#',
   line: '(config-line)#', tacacs: '(config-server-tacacs)#', acl: '(config-ext-nacl)#', stdacl: '(config-std-nacl)#', radius: '(config-radius-server)#',
@@ -521,6 +523,8 @@ export function iosSession(getDev, getState, who = null) {
     }
   };
   const setNat = (i) => { i.nat = !!(i.natOut && i.natRule); };
+  /** 這個位址池還有一對一的轉換在用（沒有 overload 的動態 NAT） */
+  const natInUse = (d, pool) => { const st = getState() || {}, ttl = +((d.natTimeout || {}).simple) || 86400; return Object.values((((st.dyn || {}).natPool || {})[d.id] || {})[pool] || {}).some((v) => st.clock - v.t <= ttl); };
   const bindAcl = (i, name, dir) => {
     const d = dev(), key = dir === 'in' ? 'aclIn' : 'aclOut';
     const def = (d.aclDefs || {})[name];
@@ -664,7 +668,7 @@ export function iosSession(getDev, getState, who = null) {
     ['ip nat outside', () => {
       syncNat();
       const r = onL3((i) => { i.natOut = true; setNat(i); });
-      return r || (S.cur.some((t) => t.iface && !t.iface.nat) ? '（還要在設定模式下 ip nat inside source list 1 interface <這個介面> overload，才會開始轉換位址）' : undefined);
+      return r || (S.cur.some((t) => t.iface && !t.iface.nat) && !(dev().natPoolRules || []).length ? '（還要在設定模式下 ip nat inside source list 1 interface <這個介面> overload，才會開始轉換位址）' : undefined);
     }],
     ['no ip nat outside', () => { syncNat(); return onL3((i) => { i.natOut = false; setNat(i); }); }],
     ['ip nat inside', () => onL3(() => {})],
@@ -839,6 +843,30 @@ export function iosSession(getDev, getState, who = null) {
     }],
     ['no ip split-horizon eigrp <as>', () => onL3((i) => { i.eigrpNoSplit = true; })],
     ['ip split-horizon eigrp <as>', () => onL3((i) => { delete i.eigrpNoSplit; })],
+    ['ip rip send version <...>', ([v]) => { const l = ripVers(v); return l ? onL3((i) => { i.ripSend = l; }) : err('用法：ip rip send version 1 | 2 | 1 2'); }],
+    ['no ip rip send version [...]', () => onL3((i) => { delete i.ripSend; })],
+    ['ip rip receive version <...>', ([v]) => { const l = ripVers(v); return l ? onL3((i) => { i.ripRecv = l; }) : err('用法：ip rip receive version 1 | 2 | 1 2'); }],
+    ['no ip rip receive version [...]', () => onL3((i) => { delete i.ripRecv; })],
+    ['ip rip authentication key-chain <chain>', ([c]) => onL3((i) => { i.ripAuth = { ...(i.ripAuth || {}), chain: c }; })],
+    ['no ip rip authentication key-chain [...]', () => onL3((i) => { if (i.ripAuth) { delete i.ripAuth.chain; if (!i.ripAuth.md5) delete i.ripAuth; } })],
+    ['ip rip authentication mode <m>', ([m]) => {
+      const v = String(m).toLowerCase();
+      if (!['md5', 'text'].includes(v)) return err('用法：ip rip authentication mode md5 | text');
+      return onL3((i) => { i.ripAuth = { ...(i.ripAuth || {}) }; if (v === 'md5') i.ripAuth.md5 = true; else delete i.ripAuth.md5; if (!i.ripAuth.chain && !i.ripAuth.md5) delete i.ripAuth; });
+    }],
+    ['no ip rip authentication mode [...]', () => onL3((i) => { if (i.ripAuth) { delete i.ripAuth.md5; if (!i.ripAuth.chain) delete i.ripAuth; } })],
+    ['ip summary-address rip <net> <mask>', ([n, m]) => {
+      const net = parseIp(n), bits = parseMask(m);
+      if (net == null || bits == null) return err('用法：ip summary-address rip <網段> <遮罩>');
+      return onL3((i) => { const s = { net: netOf(net, bits), bits }; i.ripSum = [...(i.ripSum || []).filter((x) => !(x.net === s.net && x.bits === s.bits)), s]; });
+    }],
+    ['no ip summary-address rip <net> <mask>', ([n, m]) => {
+      const net = parseIp(n), bits = parseMask(m);
+      if (net == null || bits == null) return err('用法：no ip summary-address rip <網段> <遮罩>');
+      return onL3((i) => { i.ripSum = (i.ripSum || []).filter((x) => !(x.net === netOf(net, bits) && x.bits === bits)); if (!i.ripSum.length) delete i.ripSum; });
+    }],
+    ['no ip split-horizon', () => onL3((i) => { i.ripNoSplit = true; })],
+    ['ip split-horizon', () => onL3((i) => { delete i.ripNoSplit; })],
     ['zone-member security <z>', ([z]) => {
       const Z = dev().zbf;
       if (!Z || !Z.zones[z]) return err(`Zone ${z} does not exist（先用 zone security ${z} 建立）`);
@@ -1127,8 +1155,8 @@ export function iosSession(getDev, getState, who = null) {
    */
   function redistArgs(src, rest, into) {
     const t = String(rest || '').split(/\s+/).filter(Boolean);
-    const S2 = ['static', 'connected', ...(into === 'ospf' ? ['bgp', 'eigrp'] : ['ospf'])].find((x) => x.startsWith(String(src).toLowerCase()) && String(src).length >= 2);
-    if (!S2) return err(into === 'ospf' ? '用法：redistribute static | connected | bgp <AS> | eigrp <AS> [subnets] [metric <n>] [metric-type 1|2] [route-map <名稱>]' : '用法：redistribute static | connected | ospf <程序> [metric <n>] [route-map <名稱>]');
+    const S2 = ['static', 'connected', ...(into === 'ospf' ? ['bgp', 'eigrp', 'rip'] : ['ospf'])].find((x) => x.startsWith(String(src).toLowerCase()) && String(src).length >= 2);
+    if (!S2) return err(into === 'ospf' ? '用法：redistribute static | connected | rip | bgp <AS> | eigrp <AS> [subnets] [metric <n>] [metric-type 1|2] [route-map <名稱>]' : '用法：redistribute static | connected | ospf <程序> [metric <n>] [route-map <名稱>]');
     const o = { src: S2 };
     let k = 0;
     if (S2 === 'bgp' || S2 === 'ospf' || S2 === 'eigrp') {
@@ -1719,6 +1747,15 @@ export function iosSession(getDev, getState, who = null) {
       return undefined;
     }],
     ['no router eigrp <as>', ([as]) => { const d = dev(); if (!eigrpOn(d) || +d.eigrp.as !== +as) return err(`% EIGRP AS ${as} 沒有在執行`); delete d.eigrp; return undefined; }],
+    // ── RIP ──
+    ['router rip', () => {
+      const d = dev();
+      if (!('ospfDefault' in d)) return err('這台設備不支援 RIP');
+      d.rip ||= { nets: [] };
+      enter('rip', null);
+      return undefined;
+    }],
+    ['no router rip', () => { const d = dev(); if (!d.rip) return err('% RIP 沒有在執行'); delete d.rip; return undefined; }],
     ['key chain <name>', ([n]) => { const d = dev(); ((d.keyChains ||= {})[n] ||= []); enter('keychain', n); return undefined; }],
     ['no key chain <name>', ([n]) => { const d = dev(); if (!(d.keyChains || {})[n]) return err(`% key chain ${n} 不存在`); delete d.keyChains[n]; if (!Object.keys(d.keyChains).length) delete d.keyChains; return undefined; }],
     ['router ospf <pid>', ([pid]) => {
@@ -1822,6 +1859,45 @@ export function iosSession(getDev, getState, who = null) {
       return i.nat ? undefined : `（${i.label} 還要在介面模式下 ip nat outside，才會開始轉換位址）`;
     }],
     ['no ip nat inside source list <acl> interface <if> [...]', ([, name]) => { const i = ifByName(name); if (isErr(i)) return i; syncNat(); i.natRule = false; setNat(i); return undefined; }],
+    ['ip nat pool <name> <start> <end> <...>', ([name, a, b, rest]) => {
+      const d = dev();
+      if (!d.portForwards) return err('這台設備不支援 NAT');
+      const t = String(rest || '').trim().split(/\s+/), s = parseIp(a), e = parseIp(b);
+      const bits = t[0] === 'netmask' ? parseMask(t[1] || '') : t[0] === 'prefix-length' && /^\d+$/.test(t[1] || '') && +t[1] <= 32 ? +t[1] : null;
+      if (s == null || e == null || bits == null) return err('用法：ip nat pool <名稱> <起始 IP> <結束 IP> netmask <遮罩> | prefix-length <長度>');
+      if ((s >>> 0) > (e >>> 0)) return err('%End address less than start address');
+      if (netOf(s, bits) !== netOf(e, bits)) return err('%Start and end addresses on different subnets');
+      (d.natPools ||= {})[name] = { start: a, end: b, bits };
+      return undefined;
+    }],
+    ['no ip nat pool <name>', ([name]) => {
+      const d = dev();
+      if (!(d.natPools || {})[name]) return err(`%Pool ${name} not found`);
+      if ((d.natPoolRules || []).some((r) => r.pool === name)) return err(`%Pool ${name} in use, cannot destroy`);
+      delete d.natPools[name];
+      if (!Object.keys(d.natPools).length) delete d.natPools;
+      return undefined;
+    }],
+    ['ip nat inside source list <acl> pool <name> [...]', ([acl, name, rest]) => {
+      const d = dev();
+      if (!d.portForwards) return err('這台設備不支援 NAT');
+      const ov = /^overload$/i.test(String(rest || '').trim());
+      if (rest && !ov) return err('用法：ip nat inside source list <ACL> pool <名稱> [overload]');
+      const old = (d.natPoolRules || []).find((r) => r.acl === acl.toUpperCase());
+      if (old && (old.pool !== name || !!old.overload !== ov) && natInUse(d, old.pool)) return err('%Dynamic mapping in use, cannot change（這條規則還有轉換在用：先 clear ip nat translation *）');
+      d.natPoolRules =[...(d.natPoolRules || []).filter((r) => r.acl !== acl.toUpperCase()), { acl: acl.toUpperCase(), pool: name, ...(ov ? { overload: true } : {}) }];
+      const notes = [];
+      if (!(d.natPools || {})[name]) notes.push(`位址池 ${name} 還不存在（ip nat pool ${name} …）`);
+      if (!d.ifaces.some((i) => i.natOut)) notes.push('還沒有介面設 ip nat outside');
+      return notes.length ? `（${notes.join('；')}：在那之前不會轉換）` : undefined;
+    }],
+    ['no ip nat inside source list <acl> pool <name> [...]', ([acl]) => {
+      const d = dev(), n = (d.natPoolRules || []).length, old = (d.natPoolRules || []).find((r) => r.acl === acl.toUpperCase());
+      if (old && natInUse(d, old.pool)) return err('%Dynamic mapping in use, do you want to delete all entries? [no]: （這個模擬請先 clear ip nat translation *，再刪掉規則）');
+      d.natPoolRules =(d.natPoolRules || []).filter((r) => r.acl !== acl.toUpperCase());
+      if (!d.natPoolRules.length) delete d.natPoolRules;
+      return (d.natPoolRules || []).length < n ? undefined : err('%Dynamic mapping not found');
+    }],
     ['ip nat inside source static <proto> <ip> <port> interface <if> <eport>', ([proto, ip, port, , eport]) => {
       const d = dev(), p = proto.toLowerCase();
       if (!d.portForwards) return err('這台設備不支援 NAT');
@@ -2144,12 +2220,14 @@ export function iosSession(getDev, getState, who = null) {
       if (!k) return err('用法：ip nat translation timeout | tcp-timeout | udp-timeout | icmp-timeout | dns-timeout | syn-timeout | finrst-timeout <秒>');
       if (!/^\d+$/.test(n) || +n < 1 || +n > 536870) return err('秒數必須是 1 – 536870');
       for (const x of k) (d.natTimeout ||= {})[x] = +n;
+      if (kind.toLowerCase() === 'timeout') d.natTimeout.simple = +n; // 位址池一對一轉換（不含埠號）的逾時
       return undefined;
     }],
     ['no ip nat translation <kind> [...]', ([kind]) => {
       const d = dev(), k = NAT_TIMER[kind.toLowerCase()];
       if (!k) return err('沒有這個計時器');
       for (const x of k) if (d.natTimeout) delete d.natTimeout[x];
+      if (d.natTimeout && kind.toLowerCase() === 'timeout') delete d.natTimeout.simple;
       if (d.natTimeout && !Object.keys(d.natTimeout).length) delete d.natTimeout;
       return undefined;
     }],
@@ -3380,6 +3458,77 @@ export function iosSession(getDev, getState, who = null) {
       }],
       ['no redistribute <src> [...]', ([src]) => { const e = dev().eigrp, s = String(src).toLowerCase(); e.redist = (e.redist || []).filter((r) => !r.src.startsWith(s)); if (!e.redist.length) delete e.redist; return undefined; }],
     ],
+    rip: [
+      ['version <v>', ([v]) => (v === '1' || v === '2' ? void (dev().rip.ver = +v) : err('version 1 或 version 2'))],
+      ['no version [...]', () => { delete dev().rip.ver; }],
+      ['network <ip>', ([ip]) => {
+        const a = parseIp(ip);
+        if (a == null) return err('用法：network <主網段>，例如 network 10.0.0.0');
+        const n = netOf(a, classBitsOf(a)), r = dev().rip;
+        r.nets = [...new Set([...(r.nets || []), n])];
+        const hit = dev().ifaces.filter((i) => { const s = staticNet(i), x = s ? s.ip : i.rt && i.rt.ip; return !i.vrf && x != null && netOf(x, classBitsOf(n)) === n; });
+        const note = n !== a ? `（RIP 的 network 只能寫有類別的主網段：記成 network ${fmtIp(n)}）` : '';
+        return (note + (hit.length ? `RIP 已在 ${hit.map((i) => i.label).join('、')} 啟用` : '')) || undefined;
+      }],
+      ['no network <ip>', ([ip]) => {
+        const a = parseIp(ip);
+        if (a == null) return err('用法：no network <主網段>');
+        const n = netOf(a, classBitsOf(a)), r = dev().rip, had = (r.nets || []).length;
+        r.nets = (r.nets || []).filter((x) => x !== n);
+        return r.nets.length < had ? undefined : err('沒有這一條 network 敘述');
+      }],
+      ['passive-interface default', () => { const r = dev().rip; r.passiveDefault = true; delete r.passive; return undefined; }],
+      ['no passive-interface default', () => { const r = dev().rip; delete r.passiveDefault; delete r.noPassive; return undefined; }],
+      ['passive-interface <if>', ([t]) => {
+        const x = resolveIf(dev(), t); if (isErr(x)) return x;
+        const r = dev().rip, id = (x.iface || {}).id;
+        if (!id) return err('這個介面沒有 IP（不能當 L3 介面）');
+        if (r.passiveDefault) r.noPassive = (r.noPassive || []).filter((y) => y !== id); else r.passive = [...new Set([...(r.passive || []), id])];
+        return undefined;
+      }],
+      ['no passive-interface <if>', ([t]) => {
+        const x = resolveIf(dev(), t); if (isErr(x)) return x;
+        const r = dev().rip, id = (x.iface || {}).id;
+        if (!id) return err('這個介面沒有 IP');
+        if (r.passiveDefault) r.noPassive = [...new Set([...(r.noPassive || []), id])]; else r.passive = (r.passive || []).filter((y) => y !== id);
+        return undefined;
+      }],
+      ['auto-summary', () => { delete dev().rip.auto; }],
+      ['no auto-summary', () => { dev().rip.auto = false; }],
+      ['default-information originate [...]', () => { dev().rip.defOrig = true; }],
+      ['no default-information originate [...]', () => { delete dev().rip.defOrig; }],
+      ['default-metric <n>', ([n]) => (/^\d+$/.test(n) && +n >= 1 && +n <= 16 ? void (dev().rip.defMetric = +n) : err('RIP 的 default-metric 是跳數 1 – 16'))],
+      ['no default-metric [...]', () => { delete dev().rip.defMetric; }],
+      ['maximum-paths <n>', ([n]) => (/^\d+$/.test(n) && +n >= 1 && +n <= 32 ? void (+n === 4 ? delete dev().rip.maxPaths : (dev().rip.maxPaths = +n)) : err('maximum-paths 是 1 – 32'))],
+      ['no maximum-paths [...]', () => { delete dev().rip.maxPaths; }],
+      ['timers basic <u> <i> <h> <f>', (a) => {
+        const v = a.map(Number);
+        if (v.some((x, k) => !/^\d+$/.test(a[k]) || x < 1)) return err('用法：timers basic <更新> <invalid> <holddown> <flush>（秒），預設 30 180 180 240');
+        if (v.join() === '30,180,180,240') delete dev().rip.timers; else dev().rip.timers = v;
+        return undefined;
+      }],
+      ['no timers basic [...]', () => { delete dev().rip.timers; }],
+      ['redistribute <src> [...]', ([src, rest]) => {
+        const s = String(src).toLowerCase(), t = String(rest || '').split(/\s+/).filter(Boolean);
+        const kind = ['static', 'connected', 'ospf', 'eigrp'].find((k) => k.startsWith(s) && s.length >= 2);
+        if (!kind) return err('這個模擬的 RIP 可以重分配 static、connected、ospf <程序>、eigrp <AS>');
+        const o = { src: kind };
+        let k = 0;
+        if (kind === 'ospf' || kind === 'eigrp') {
+          if (!/^\d+$/.test(t[0] || '')) return err(`用法：redistribute ${kind} <${kind === 'ospf' ? '程序號碼' : 'AS 號碼'}> [metric <跳數>]`);
+          o.as = +t[0]; k = 1;
+        }
+        for (; k < t.length; k++) {
+          if (t[k] === 'metric' && /^\d+$/.test(t[k + 1] || '') && +t[k + 1] >= 1 && +t[k + 1] <= 16) { o.metric = +t[++k]; continue; }
+          if (t[k] === 'metric' && t[k + 1] === 'transparent') { k++; continue; }
+          return err(`% 看不懂「${t[k]}」：redistribute 後面可以接 metric <跳數 1 – 16>`);
+        }
+        const r = dev().rip;
+        r.redist = [...(r.redist || []).filter((x) => x.src !== kind), o];
+        return (kind === 'ospf' || kind === 'eigrp') && o.metric == null && r.defMetric == null ? '（沒有給 metric：從 OSPF / EIGRP 重分配進 RIP 的路預設是 16（到不了），要加 metric <跳數> 或 default-metric）' : undefined;
+      }],
+      ['no redistribute <src> [...]', ([src]) => { const r = dev().rip, s = String(src).toLowerCase(); r.redist = (r.redist || []).filter((x) => !x.src.startsWith(s)); if (!r.redist.length) delete r.redist; return undefined; }],
+    ],
     keychain: [
       ['key <id>', ([id]) => {
         if (!/^\d+$/.test(id) || +id > 2147483647) return err('key 的編號是 0 – 2147483647');
@@ -4368,6 +4517,12 @@ export function runningConfig(state, dev) {
       if (i.eigrpHold) l.push(` ip hold-time eigrp ${as} ${i.eigrpHold}`);
       if (i.eigrpNoSplit) l.push(` no ip split-horizon eigrp ${as}`);
       for (const s of i.eigrpSum || []) l.push(` ip summary-address eigrp ${as} ${fmtIp(s.net)} ${fmtMask(s.bits)}`); }
+    if (i.ripSend) l.push(` ip rip send version ${i.ripSend.join(' ')}`);
+    if (i.ripRecv) l.push(` ip rip receive version ${i.ripRecv.join(' ')}`);
+    if (i.ripAuth && i.ripAuth.md5) l.push(' ip rip authentication mode md5');
+    if (i.ripAuth && i.ripAuth.chain) l.push(` ip rip authentication key-chain ${i.ripAuth.chain}`);
+    for (const s of i.ripSum || []) l.push(` ip summary-address rip ${fmtIp(s.net)} ${fmtMask(s.bits)}`);
+    if (i.ripNoSplit) l.push(' no ip split-horizon');
     if (i.nat64) l.push(' nat64 enable');
     if (i.dhcp6) l.push(` ipv6 dhcp server ${i.dhcp6}`);
     if (i.relay6) l.push(` ipv6 dhcp relay destination ${i.relay6.toUpperCase()}`);
@@ -4535,6 +4690,21 @@ export function runningConfig(state, dev) {
     if (c.ospfDefault) o.push(' default-information originate');
     o.push('!');
   }
+  if (dev.rip) {
+    const r = dev.rip, ifl = (id) => longIf((dev.ifaces.find((x) => x.id === id) || { label: id }).label);
+    o.push('router rip');
+    if (r.ver) o.push(` version ${r.ver}`);
+    if (r.timers) o.push(` timers basic ${r.timers.join(' ')}`);
+    for (const x of r.redist || []) o.push(` redistribute ${x.src}${x.as != null ? ' ' + x.as : ''}${x.metric != null ? ' metric ' + x.metric : ''}`);
+    if (r.passiveDefault) { o.push(' passive-interface default'); for (const id of r.noPassive || []) o.push(` no passive-interface ${ifl(id)}`); }
+    else for (const id of r.passive || []) o.push(` passive-interface ${ifl(id)}`);
+    for (const n of (r.nets || []).slice().sort((a, b) => (a >>> 0) - (b >>> 0))) o.push(` network ${fmtIp(n)}`);
+    if (r.defOrig) o.push(' default-information originate');
+    if (r.defMetric != null) o.push(` default-metric ${r.defMetric}`);
+    if (r.maxPaths) o.push(` maximum-paths ${r.maxPaths}`);
+    if (r.auto === false) o.push(' no auto-summary');
+    o.push('!');
+  }
   if (dev.bgp && dev.bgp.asn) {
     const b = dev.bgp;
     o.push(`router bgp ${b.asn}`, ...(b.rid ? [` bgp router-id ${b.rid}`] : []), ' bgp log-neighbor-changes');
@@ -4593,6 +4763,8 @@ export function runningConfig(state, dev) {
   // NAT 的範圍：指定的 ACL、圖形介面填的「NAT 例外」（轉成一份 ACL），或預設的 list 1（全部轉換）
   const natList = (i) => i.natAcl || (splitList(i.natSkip).length ? 'NAT-' + i.label.replace(/[^\w.]+/g, '_').toUpperCase() : '1');
   for (const i of out) o.push(`ip nat inside source list ${natList(i)} interface ${longIf(i.label)} overload`);
+  for (const [name, p] of Object.entries(dev.natPools || {})) o.push(`ip nat pool ${name} ${p.start} ${p.end} netmask ${fmtMask(p.bits)}`);
+  for (const r of dev.natPoolRules || []) o.push(`ip nat inside source list ${r.acl} pool ${r.pool}${r.overload ? ' overload' : ''}`);
   for (const n of dev.staticNat || []) if (n.pub && n.priv) o.push(`ip nat inside source static ${n.priv} ${n.pub}`);
   for (const f of dev.portForwards || []) {
     if (f.port && f.toIp && out[0]) o.push(`ip nat inside source static ${f.proto || 'tcp'} ${f.toIp} ${f.toPort || f.port} interface ${longIf(out[0].label)} ${f.port}`);

@@ -5,6 +5,7 @@ import { HSRP_HOLD, fhrpDecrement, fhrpGroup, fhrpPreempt, fhrpProto, trackUp } 
 import { computeBgp } from '../bgp.js';
 import { computeOspf, ospfArea } from '../ospf.js';
 import { computeEigrp } from '../eigrp.js';
+import { computeRip } from '../rip.js';
 import { fmtIp, netOf, parseIp, parseMask, sameNet } from '../ip.js';
 import { logEvent } from '../ops.js';
 import { buildWave } from './forward.js';
@@ -421,19 +422,20 @@ function routesOnce(state, quiet) {
   }
   computeOspf(state, ospfOn);
   computeEigrp(state, { ospfOn, log: quiet ? () => {} : (d, msg) => logEvent(state, d, 5, 'DUAL-5-NBRCHANGE', msg) });
+  computeRip(state, { ospfOn });
   computeBgp(state, { transact, logEvent: quiet ? () => {} : logEvent, ospfOn, lookupRoute });
   // OSPF 先算的時候還沒有 BGP / EIGRP 的路：有設備把它們重分配進 OSPF，就留著那些路、把 OSPF 的路拿掉再算一次
   const devs = Object.values(state.devices);
-  if (devs.some((d) => d.rt && (d.ospfRedist || []).some((r) => (r.src === 'bgp' && d.rt.routes.some((x) => x.type === 'B')) || (r.src === 'eigrp' && d.rt.eigrp)))) {
+  if (devs.some((d) => d.rt && (d.ospfRedist || []).some((r) => (r.src === 'bgp' && d.rt.routes.some((x) => x.type === 'B')) || (r.src === 'eigrp' && d.rt.eigrp) || (r.src === 'rip' && d.rt.rip)))) {
     for (const d of devs) if (d.rt && d.rt.routes) d.rt.routes = d.rt.routes.filter((r) => r.type !== 'O');
     computeOspf(state, ospfOn);
   }
 }
 
 // OSPF / BGP 跨次計算的狀態：試算之前先存起來，試算完還原（不然鄰居的計時會被試算打斷）
-const dynSnap = (state) => Object.fromEntries(Object.keys(state.dyn).filter((k) => /^(adj|seg|lsa|rid|bgp|eigrp)/.test(k)).map((k) => [k, JSON.stringify(state.dyn[k])]));
+const dynSnap = (state) => Object.fromEntries(Object.keys(state.dyn).filter((k) => /^(adj|seg|lsa|rid|bgp|eigrp|rip)/.test(k)).map((k) => [k, JSON.stringify(state.dyn[k])]));
 function dynRestore(state, snap) {
-  for (const k of Object.keys(state.dyn)) if (/^(adj|seg|lsa|rid|bgp|eigrp)/.test(k) && !(k in snap)) delete state.dyn[k];
+  for (const k of Object.keys(state.dyn)) if (/^(adj|seg|lsa|rid|bgp|eigrp|rip)/.test(k) && !(k in snap)) delete state.dyn[k];
   for (const [k, v] of Object.entries(snap)) state.dyn[k] = JSON.parse(v);
 }
 
@@ -470,7 +472,7 @@ export function routesAll(state) {
   for (const d of Object.values(state.devices)) {
     const old = since[d.id] || {}, now = {};
     for (const r of d.rt.routes || []) {
-      if (r.type !== 'O' && r.type !== 'B' && r.type !== 'E') continue;
+      if (r.type !== 'O' && r.type !== 'B' && r.type !== 'E' && r.type !== 'R') continue;
       const k = r.type + '|' + r.net + '/' + r.bits + '|' + r.via;
       r.since = now[k] = old[k] ?? state.clock;
     }
@@ -515,7 +517,7 @@ export function dhcpTrace(state, devId) {
 }
 /** 給「狀態」分頁用的路由表文字 */
 export function routeRows(dev, vrf = '') {
-  const name = { C: '直連', S: '靜態', D: '自動', O: 'OSPF', B: 'BGP', H: 'NHRP 捷徑', E: 'EIGRP' };
+  const name = { C: '直連', S: '靜態', D: '自動', O: 'OSPF', B: 'BGP', H: 'NHRP 捷徑', E: 'EIGRP', R: 'RIP' };
   return dev.rt.routes
     .filter((r) => (r.vrf || '') === vrf)
     .sort((a, b) => a.ad - b.ad || a.net - b.net)

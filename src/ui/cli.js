@@ -30,6 +30,7 @@ import { vtpCapable, vtpOf, vtpStatusLines } from '../engine/vtp.js';
 import { zbfActive } from '../engine/zbf.js';
 import { envPowerLines } from '../engine/power.js';
 import { eigrpNeighborLines, eigrpTopoLines, eigrpIfLines, eigrpProtoLines, eigrpBw, eigrpDly } from '../engine/eigrp.js';
+import { ripDbLines, ripProtoLines } from '../engine/rip.js';
 import { CATALOG, MEDIA, peerOf, portOf, linkInfo, phyConfig, fiberLink } from '../engine/model.js';
 import { xcvrAt, xcvrSerial, MEDIA_TYPE } from '../engine/optics.js';
 import { PLATFORM as PID_OF } from '../engine/dnac.js';
@@ -123,6 +124,8 @@ const SHOW = {
   'show ip route ospf': (st, d) => routeLines(st, d, (r) => r.type === 'O'),
   'show ip route bgp': (st, d) => routeLines(st, d, (r) => r.type === 'B'),
   'show ip route eigrp': (st, d) => routeLines(st, d, (r) => r.type === 'E'),
+  'show ip route rip': (st, d) => routeLines(st, d, (r) => r.type === 'R'),
+  'show ip rip database': (st, d) => ripDbLines(st, d, longIf, hms),
   'show ip eigrp neighbors': (st, d) => eigrpNeighborLines(st, d, longIf, hms),
   'show ip eigrp topology': (st, d) => eigrpTopoLines(st, d, longIf),
   'show ip eigrp topology all-links': (st, d) => eigrpTopoLines(st, d, longIf, true),
@@ -583,8 +586,19 @@ const SHOW = {
   'show ip nat statistics': (st, d) => {
     const dyn = sessionRows(st, d).filter((e) => e.nSrc !== e.src || e.nDst !== e.dst).length;
     const stat = (d.staticNat || []).filter((n) => n.pub && n.priv).length + (d.portForwards || []).filter((f) => f.port && f.toIp && !f.off).length;
-    const outIf = d.ifaces.filter((i) => i.nat).map((i) => i.label), inIf = d.ifaces.filter((i) => !i.nat && i.rt && i.rt.ip != null).map((i) => i.label);
-    return [`Total active translations: ${dyn + stat} (${stat} static, ${dyn} dynamic; ${dyn} extended)`, 'Outside interfaces:', '  ' + (outIf.join(', ') || '(none)'), 'Inside interfaces:', '  ' + (inIf.join(', ') || '(none)')];
+    const outIf = d.ifaces.filter((i) => i.nat || i.natOut).map((i) => i.label), inIf = d.ifaces.filter((i) => !i.nat && !i.natOut && i.rt && i.rt.ip != null).map((i) => i.label);
+    natPoolGc(st, d);
+    const alloc = ((st.dyn.natPool || {})[d.id]) || {}, miss = ((st.dyn.natMiss || {})[d.id]) || {};
+    const one = Object.values(alloc).reduce((n, t) => n + Object.keys(t).length, 0);
+    const pools = (d.natPoolRules || []).flatMap((r, k) => {
+      const p = (d.natPools || {})[r.pool];
+      if (!p) return [`[Id: ${k + 1}] access-list ${r.acl} pool ${r.pool} refcount 0`, ` pool ${r.pool}: id 0, not found`];
+      const tot = (parseIp(p.end) >>> 0) - (parseIp(p.start) >>> 0) + 1, used = r.overload ? (sessionRows(st, d).some((e) => e.nSrc === parseIp(p.start)) ? 1 : 0) : Object.keys(alloc[r.pool] || {}).length;
+      return [`[Id: ${k + 1}] access-list ${r.acl} pool ${r.pool}${r.overload ? ' overload' : ''} refcount ${used}`, ` pool ${r.pool}: netmask ${fmtIp(p.bits ? (0xffffffff << (32 - p.bits)) >>> 0 : 0)}`, `\tstart ${p.start} end ${p.end}`,
+        `\ttype generic, total addresses ${tot}, allocated ${used} (${Math.round((used * 100) / tot)}%), misses ${miss[r.pool] || 0}`];
+    });
+    return [`Total active translations: ${dyn + stat + one} (${stat} static, ${dyn + one} dynamic; ${dyn} extended)`, 'Outside interfaces:', '  ' + (outIf.join(', ') || '(none)'), 'Inside interfaces:', '  ' + (inIf.join(', ') || '(none)'),
+      ...(pools.length ? ['Dynamic mappings:', '-- Inside Source', ...pools] : [])];
   },
   'show interfaces counters errors': (st, d) => {
     const ports = d.ports.filter((p) => st.rt.links[d.id + ':' + p.id] || ((st.dyn.ifc || {})[d.id] || {})[p.id]);
@@ -599,13 +613,13 @@ const SHOW = {
     const x = debugOf(st, d.id);
     if (!x) return ['（目前沒有開啟任何 debug）'];
     const grp = (title, keys) => (keys.some((k) => x[k]) ? [title, ...keys.filter((k) => x[k]).map((k) => `  ${DEBUG_KINDS[k]} on`)] : []);
-    return [...grp('IP:', ['packet', 'icmp']), ...grp('OSPF:', ['ospfAdj', 'ospfHello']), ...grp('DHCP server:', ['dhcpPkt', 'dhcpEv']),...grp('Cryptographic Subsystem:', ['isakmp', 'ipsec']), ...grp('IKEv2:', ['ikev2']),
+    return [...grp('IP:', ['packet', 'icmp']), ...grp('OSPF:', ['ospfAdj', 'ospfHello']), ...grp('IP routing:', ['rip']), ...grp('DHCP server:', ['dhcpPkt', 'dhcpEv']),...grp('Cryptographic Subsystem:', ['isakmp', 'ipsec']), ...grp('IKEv2:', ['ikev2']),
       '','（debug 的輸出會出現在 console 上，也會進紀錄緩衝區 (show logging)。用 SSH 登入的話，要先輸入 terminal monitor 才看得到）'];
   },
   'show ip protocols': (st, d) => {
-    const o = protocolLines(st, d, ''), e = eigrpProtoLines(st, d, longIf, hms);
+    const o = protocolLines(st, d, ''), e = [...eigrpProtoLines(st, d, longIf, hms), ...(eigrpProtoLines(st, d, longIf, hms).length && ripProtoLines(st, d, longIf, hms).length ? [''] : []), ...ripProtoLines(st, d, longIf, hms)];
     if (!e.length) return o;
-    return o.length === 1 && o[0].startsWith('（') ? ['*** IP Routing is NSF aware ***', '', ...e] : [...o, '', ...e]; // OSPF 在前、EIGRP 在後
+    return o.length === 1 && o[0].startsWith('（') ? ['*** IP Routing is NSF aware ***', '', ...e] : [...o, '', ...e]; // OSPF 在前，接著 EIGRP、RIP
   },
   'show ip ospf interface brief': (st, d) => {
     const rows = [];
@@ -1159,6 +1173,7 @@ const routeTail = (st, r) => {
   if (r.type === 'E') return `[${r.ad}/${r.real ?? r.metric}] via ${fmtIp(r.via)}, ${rtAge(st, r)}, ${longIf(r.iface.label)}`; // variance 的路：路由表照最佳的分流，顯示自己的 metric
   if (r.type === 'B') return `[${r.ad}/${r.metric}] via ${fmtIp(r.bnh ?? r.via)}, ${rtAge(st, r)}`; // BGP 的下一站要再查一次路由表（遞迴），所以不寫介面
   if (r.type === 'H') return `${m}, ${rtAge(st, r)}, ${longIf(r.iface.label)}`;
+  if (r.type === 'R') return `${m}, ${hms(r.ripAge || 0)}, ${longIf(r.iface.label)}`; // RIP：距離上一次收到更新的時間（每 30 秒歸零）
   if (r.via == null && r.iface) return `is directly connected, ${longIf(r.iface.label)}`; // ip route … Tunnel0：只寫出口介面
   return r.exitIf && r.iface ? `${m}, ${longIf(r.iface.label)}` : m; // 靜態路由只寫下一站；有寫出口介面的才印介面
 };
@@ -1717,6 +1732,11 @@ function zbfSessions(st, d, counts) {
   return o;
 }
 
+/** 位址池的一對一轉換閒置超過 ip nat translation timeout（預設 24 小時）就還回去 */
+function natPoolGc(st, d) {
+  const ttl = +((d.natTimeout || {}).simple) || 86400;
+  for (const tbl of Object.values(((st.dyn.natPool || {})[d.id]) || {})) for (const [k, v] of Object.entries(tbl)) if (st.clock - v.t > ttl) delete tbl[k];
+}
 function natTable(st, d, verbose) {
   const W = 22;
   const o = [pad('Pro', 5) + pad('Inside global', W) + pad('Inside local', W) + pad('Outside local', W) + 'Outside global'];
@@ -1734,6 +1754,14 @@ function natTable(st, d, verbose) {
     o.push(pad(f.proto || 'tcp', 5) + pad(`${f.extIp || fmtIp(pub.rt.ip)}:${f.port}`, W) + pad(`${f.toIp}:${f.toPort || f.port}`, W) + pad('---', W) + '---');
   }
   for (const n of d.staticNat || []) if (n.pub && n.priv) o.push(pad('---', 5) + pad(n.pub, W) + pad(n.priv, W) + pad('---', W) + '---');
+  // 位址池的一對一轉換（沒有 overload）：連線結束了也還留著，閒置到逾時才釋放
+  natPoolGc(st, d);
+  for (const tbl of Object.values(((st.dyn.natPool || {})[d.id]) || {})) {
+    for (const [src, v] of Object.entries(tbl)) {
+      o.push(pad('---', 5) + pad(fmtIp(v.ip), W) + pad(fmtIp(+src), W) + pad('---', W) + '---');
+      if (verbose) o.push(`    create ${hms(st.clock - (v.t0 ?? v.t))}, use ${hms(st.clock - v.t)}, timeout: ${+((d.natTimeout || {}).simple) || 86400}`);
+    }
+  }
   if (o.length === 1) return ['目前沒有任何 NAT 轉換（先讓流量經過這台設備，例如從內部的電腦 ping 外面。動態的轉換閒置一段時間就會從表裡移除：ICMP 60 秒、UDP 5 分鐘、TCP 連線關閉後 60 秒）'];
   return o;
 }
@@ -1837,8 +1865,9 @@ function showOrPing(app, devId, line, print) {
       : a0 === 'ip' && pre(a1, 'packet') ? 'packet' : a0 === 'ip' && pre(a1, 'icmp') ? 'icmp'
       : a0 === 'ip' && pre(a1, 'ospf') && pre(a2, 'adjacency', 1) ? 'ospfAdj' : a0 === 'ip' && pre(a1, 'ospf') && pre(a2, 'hello', 1) ? 'ospfHello'
       : a0 === 'ip' && pre(a1, 'dhcp') && pre(a2, 'server', 1) && pre(rest[3], 'packet', 1) ? 'dhcpPkt' : a0 === 'ip' && pre(a1, 'dhcp') && pre(a2, 'server', 1) && pre(rest[3], 'events', 1) ? 'dhcpEv'
+      : a0 === 'ip' && pre(a1, 'rip', 2) ? 'rip'
       : pre(a0, 'crypto') && pre(a1, 'isakmp', 1) ? 'isakmp' : pre(a0, 'crypto') && pre(a1, 'ipsec', 2) ? 'ipsec' : pre(a0, 'crypto') && pre(a1, 'ikev2', 2) ? 'ikev2' : null;
-    const SUPPORTED = 'debug ip packet、debug ip icmp、debug ip ospf adj、debug ip ospf hello、debug ip dhcp server packet、debug ip dhcp server events、debug crypto isakmp、debug crypto ikev2、debug crypto ipsec、undebug all';
+    const SUPPORTED = 'debug ip packet、debug ip icmp、debug ip ospf adj、debug ip ospf hello、debug ip rip、debug ip dhcp server packet、debug ip dhcp server events、debug crypto isakmp、debug crypto ikev2、debug crypto ipsec、undebug all';
     if (!what) { print(`% 這個模擬支援：${SUPPORTED}`, 'warn'); return true; }
     if (what === 'all' && !isUndebug) { print(`% debug all 會把設備塞爆，真的設備上請不要這樣做。這個模擬支援：${SUPPORTED}`, 'warn'); return true; }
     const had = { ...(debugOf(st, d.id) || {}) };
@@ -1847,6 +1876,7 @@ function showOrPing(app, devId, line, print) {
     else print(`${DEBUG_KINDS[what]} ${isUndebug ? 'off' : 'on'}`);
     if (!isUndebug && what === 'packet') print('（只看得到給這台路由器自己、或它自己送出的封包，以及它丟掉的封包；經過它轉送的封包由 CEF 處理，不會出現在這裡）', 'hint');
     if (!isUndebug && (what === 'ospfAdj' || what === 'ospfHello') && !had.ospfAdj && !had.ospfHello) print('（鄰居建不起來的話，每個 Hello 間隔就會印出原因：區域、計時器、遮罩、驗證、MTU。讓時間前進就看得到；建好的鄰居不會一直印）', 'hint');
+    if (!isUndebug && what === 'rip') print('（每 30 秒印一次送出、收到、被丟掉的 RIP 更新：版本不對是 illegal version、驗證不對是 invalid authentication。讓時間前進就看得到）', 'hint');
     if (!isUndebug && (what === 'dhcpPkt' || what === 'dhcpEv') && !had.dhcpPkt && !had.dhcpEv) print('（這台路由器發出或續約租約的時候會印出 DISCOVER / OFFER / REQUEST / ACK。用戶端 ipconfig /renew 或重新接線就看得到）', 'hint');
     if (!isUndebug && ['isakmp', 'ikev2', 'ipsec'].includes(what) && !had.isakmp && !had.ikev2 && !had.ipsec) print('（通道協商的過程與失敗的原因會印在這裡。IKEv1 看 debug crypto isakmp，IKEv2 看 debug crypto ikev2，第二階段看 debug crypto ipsec）', 'hint');
     return true;
@@ -2113,7 +2143,7 @@ function showOrPing(app, devId, line, print) {
     const rest = tok.slice(1).join(' ');
     if (rest.startsWith('arp')) clearArp(st, d);
     else if (/^mac/.test(rest)) clearMac(st, d);
-    else if (/^ip nat tr/.test(rest)) clearSessions(st, d);
+    else if (/^ip nat tr/.test(rest)) { clearSessions(st, d); if (st.dyn.natPool) delete st.dyn.natPool[d.id]; }
     else if (/^nat64 tr/.test(rest)) clearNat64(st, d);
     else if (/^log/.test(rest)) clearLog(st, d);
     else if (/^cou/.test(rest)) {

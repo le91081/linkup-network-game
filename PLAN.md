@@ -32,7 +32,7 @@ README 說明「現在有什麼、怎麼玩」，這份文件說明「整體應�
 | --- | --- | --- | --- | --- |
 | 1. 實體層與接線 | 11 | 2 | 1 | 0 |
 | 2. 第二層：交換 | 16 | 0 | 1 | 0 |
-| 3. 第三層：路由 | 14 | 2 | 1 | 0 |
+| 3. 第三層：路由 | 15 | 1 | 1 | 0 |
 | 4. IP 服務 | 11 | 3 | 0 | 0 |
 | 5. 網路安全 | 13 | 4 | 0 | 0 |
 | 6. VPN 與廣域網路 | 11 | 1 | 1 | 0 |
@@ -46,9 +46,9 @@ README 說明「現在有什麼、怎麼玩」，這份文件說明「整體應�
 | 14. 遊戲系統 | 16 | 0 | 0 | 6 |
 | 15. 介面與體驗 | 10 | 0 | 0 | 0 |
 | 16. 工程品質 | 6 | 3 | 1 | 0 |
-| **合計** | **170** | **25** | **10** | **6** |
+| **合計** | **171** | **24** | **10** | **6** |
 
-另外：關卡 129 關（第 17 節）、證照條目涵蓋情形（第 18 節）、建議的實作順序（第 19 節）。
+另外：關卡 131 關（第 17 節）、證照條目涵蓋情形（第 18 節）、建議的實作順序（第 19 節）。
 
 範圍的調整（2026-11-22）：第 14 節遊戲系統還沒做完的項目暫時不做（⏸）；第 15 節的手機與平板、多語系、無障礙、主題從規劃中移除，不做。
 
@@ -111,9 +111,9 @@ README 說明「現在有什麼、怎麼玩」，這份文件說明「整體應�
 | IOS 的 `traceroute` | ✅ | 逐站顯示，每一站三個探測封包；ECMP 時跟著雜湊走 |
 | BGP（eBGP） | ✅ | TCP 179 的鄰居狀態（Idle / Active / OpenSent / Established）、remote-as 寫錯 (Bad Peer AS)、hold time 180 秒、路徑向量與迴圈偵測、最佳路徑（weight、local-preference、AS path、origin、MED）、route-map / prefix-list / as-path ACL、`default-originate`；雙 ISP 的轉運站問題 |
 | iBGP 與 BGP 進階 | ✅ | iBGP（AD 200、可以隔多台路由器、Loopback 與 `update-source`，一個方向對得上就能建立）、下一站不變與 `next-hop-self`、inaccessible 的路不能當最佳路徑、遞迴查下一站、iBGP split horizon 與 BGP 黑洞、route reflector（Originator、Cluster list）、最佳路徑補上 eBGP 優先與 IGP metric、MED 只比同一個鄰居 AS、`network` 的 MED 是 IGP metric、RIB-failure、`ebgp-multihop`（真的看 TTL）與 `disable-connected-check`、community（`set community … additive`、`ip community-list standard`、`match community`、`send-community`、no-export / no-advertise、`ip bgp-community new-format`）、`redistribute bgp` 不含 iBGP 的路（`bgp redistribute-internal`）、`show ip bgp <網段>`；BGP 還不分 VRF |
-| EIGRP、RIP | 🟡 | EIGRP（傳統模式 `router eigrp <AS>`）：`network` 與萬用遮罩、passive-interface、鄰居條件（AS、K 值、同一個子網路、MD5 驗證與 key chain；Hello / Hold 不用一致）、介面斷線立刻拆鄰居、隔著交換器要等 Hold time；metric（最小頻寬 + 延遲總和，`bandwidth` / `delay`）、DUAL 的 successor 與 feasible successor、`variance` 不等價分擔、`maximum-paths`、split horizon、`ip summary-address eigrp`、`redistribute static \| connected \| ospf`（D EX、種子 metric 與 `default-metric`）；`show ip eigrp neighbors \| topology [all-links] \| interfaces`、`show ip protocols`、DUAL-5-NBRCHANGE 紀錄；路由分頁的 EIGRP 卡片 → 13-11。還沒有 RIP、named mode、stub、EIGRP for IPv6，Query / Reply 沒有時間 |
+| EIGRP、RIP | ✅ | EIGRP（傳統模式 `router eigrp <AS>`）：`network` 與萬用遮罩、passive-interface、鄰居條件（AS、K 值、同一個子網路、MD5 驗證與 key chain；Hello / Hold 不用一致）、介面斷線立刻拆鄰居、隔著交換器要等 Hold time；metric（最小頻寬 + 延遲總和，`bandwidth` / `delay`）、DUAL 的 successor 與 feasible successor、`variance` 不等價分擔、`maximum-paths`、split horizon、`ip summary-address eigrp`、`redistribute static \| connected \| ospf`（D EX、種子 metric 與 `default-metric`）；`show ip eigrp neighbors \| topology [all-links] \| interfaces`、`show ip protocols`、DUAL-5-NBRCHANGE 紀錄；路由分頁的 EIGRP 卡片 → 13-11。RIP：v1 / v2（沒有設 version 送 v1、收兩種；介面的 send / receive version）、有類別的 `network`、auto-summary 與不連續的網段、RIPv1 不帶遮罩、跳數上限 15、split horizon、invalid / holddown / flush 計時（隔著交換器失聯要 240 秒才改走別條路）、text / MD5 驗證、`default-information originate`、重分配（進 RIP 用跳數，`redistribute rip` 進 OSPF）、`show ip rip database`、`debug ip rip`、RIP 卡片 → 13-12。還沒有 EIGRP named mode、stub、EIGRP for IPv6 / RIPng，Query / Reply 沒有時間 |
 | VRF（VRF-Lite） | ✅ | `vrf definition`（`rd`、`address-family ipv4`）與舊式的 `ip vrf`；介面的 `vrf forwarding` 會清掉原本的 IP；同一個路由表裡網段重疊會被拒絕（`% … overlaps with …`），不同 VRF 可以重疊；`ip route vrf`、`show vrf`、`show ip route vrf`、`ping vrf`；圖形介面的 VRF 卡片與介面的 VRF 選單；每個 VRF 自己的 OSPF 程序（`router ospf <pid> vrf <名稱>`，每個（路由器, VRF）是各自的節點，和 CE 的全域程序成為鄰居）；用靜態路由洩漏（`ip route vrf X … global`、出口介面在另一個 VRF）。BGP 還不分 VRF，沒有 MP-BGP 的 route-target 匯入匯出 |
-| 路由重分配、PBR | ✅ | `redistribute static \| connected \| bgp <AS>` 進 OSPF（ASBR、Type-5 LSA、O E2 固定 metric 與 O E1 加上內部 cost、種子 metric 20 / 1、預設路由不會跟著出去、IOS XE 自動補 subnets、`metric` / `metric-type` / `tag` / `route-map`）；`redistribute static \| connected \| ospf` 進 BGP（origin ?、MED 是原本的 cost、跑 OSPF 的直連網段也算）；route-map 的 `match ip address prefix-list \| <ACL>`、`match tag`、`set metric \| metric-type \| tag`；政策路由 `ip policy route-map`、`ip local policy route-map`、`set ip next-hop`（不通就照路由表）、`set ip default next-hop`；`show route-map`（Policy routing matches）、`show ip policy`、`show ip ospf database` 的 Type-5；路由分頁的重分配卡片與政策路由卡片。OSPF ↔ EIGRP 的雙向重分配（`redistribute eigrp <AS>` 連同跑 EIGRP 的直連網段、`redistribute ospf <程序> metric …`，重分配卡片也可以設定）；還沒有 RIP，也沒有模擬兩個地方雙向重分配造成的迴圈 |
+| 路由重分配、PBR | ✅ | `redistribute static \| connected \| bgp <AS>` 進 OSPF（ASBR、Type-5 LSA、O E2 固定 metric 與 O E1 加上內部 cost、種子 metric 20 / 1、預設路由不會跟著出去、IOS XE 自動補 subnets、`metric` / `metric-type` / `tag` / `route-map`）；`redistribute static \| connected \| ospf` 進 BGP（origin ?、MED 是原本的 cost、跑 OSPF 的直連網段也算）；route-map 的 `match ip address prefix-list \| <ACL>`、`match tag`、`set metric \| metric-type \| tag`；政策路由 `ip policy route-map`、`ip local policy route-map`、`set ip next-hop`（不通就照路由表）、`set ip default next-hop`；`show route-map`（Policy routing matches）、`show ip policy`、`show ip ospf database` 的 Type-5；路由分頁的重分配卡片與政策路由卡片。OSPF ↔ EIGRP 的雙向重分配（`redistribute eigrp <AS>` 連同跑 EIGRP 的直連網段、`redistribute ospf <程序> metric …`，重分配卡片也可以設定）；RIP 重分配進 OSPF（`redistribute rip`），靜態、直連、OSPF、EIGRP 重分配進 RIP（`metric <跳數>`，OSPF / EIGRP 沒有給就是 16）；還沒有模擬兩個地方雙向重分配造成的迴圈 |
 | IP SLA 與物件追蹤 | ✅ | 見第 9 節 |
 | 多播 | ⬜ | IGMP、PIM |
 
@@ -128,7 +128,7 @@ README 說明「現在有什麼、怎麼玩」，這份文件說明「整體應�
 | APIPA | ✅ | 拿不到租約時退回 169.254.x.x |
 | DNS 查詢 | ✅ | 自己架的 DNS 伺服器（A / CNAME / MX / PTR、每筆的 TTL）、用戶端依 TTL 快取（`ipconfig /displaydns` / `/flushdns`）、`nslookup` 直接問伺服器不看快取、`-type=mx` 與反查、家用路由器的 DNS 代理；還沒有 AAAA、轉送器與遞迴伺服器的快取、區域轉送 |
 | NAT | ✅ | PAT、一對一靜態 NAT、連接埠轉發、用 ACL 指定範圍、NAT 例外；可以查看轉換表 |
-| NAT 進階 | 🟡 | 轉換表的閒置逾時已完成（依協定不同，可以用 `ip nat translation` 調整）；還沒有位址池 (pool)、Hairpin NAT |
+| NAT 進階 | 🟡 | 轉換表的閒置逾時已完成（依協定不同，可以用 `ip nat translation` 調整）；位址池已完成（`ip nat pool`、`ip nat inside source list … pool … [overload]`、一對一的動態 NAT 借光了就丟封包、閒置到 `ip nat translation timeout` 才釋放、`show ip nat statistics` 的 allocated / misses、規則還有轉換在用時不能改 → 3-4）；還沒有 Hairpin NAT（NVI 的 `ip nat enable`） |
 | PPPoE | 🟡 | 帳號密碼驗證與撥接；IOS 沒有 Dialer 介面，只能在圖形介面設定 |
 | NTP | ✅ | 每台設備有自己的時鐘；每 64 秒輪詢，IOS 約四分鐘後才採信；`ntp master`、`clock set`、`clock timezone`；伺服器失聯八次輪詢後失去同步；`service timestamps log | debug`（datetime / msec / localtime / show-timezone / year、uptime，預設和 IOS 15 一樣用 UTC → 11-8） |
 | Syslog | ✅ | 設備記下介面、OSPF、VRRP、VPN、err-disabled 等事件，用 UDP 514 送到伺服器；`logging trap` 設定門檻；伺服器有收件畫面 |
@@ -294,7 +294,7 @@ README 說明「現在有什麼、怎麼玩」，這份文件說明「整體應�
 
 | 功能 | 狀態 | 說明 |
 | --- | --- | --- |
-| 關卡 | ✅ | 17 章 129 關（清單見第 17 節） |
+| 關卡 | ✅ | 17 章 131 關（清單見第 17 節） |
 | 任務目標 | ✅ | ping、TCP、UDP、DHCP、設定檢查、故障演練、IPv6 ping、傳輸速率、遠端登入（SSH / Telnet 帳號密碼）、IP 電話註冊、通話品質 (MOS)、HTTPS（連得上之後還要通過憑證驗證）、路徑（一定要經過 / 不能經過某台設備）；TCP 的目標交握完還會送一個裝滿的資料區段（設了 DF），MTU 的問題才看得出來 |
 | 提示與星等 | ✅ | 每關 3 個提示，看一個少一顆星 |
 | 學習卡 | ✅ | 每關 2 到 4 張觀念說明 |
@@ -353,13 +353,13 @@ README 說明「現在有什麼、怎麼玩」，這份文件說明「整體應�
 
 ## 17. 關卡規劃
 
-### 現有的 129 關
+### 現有的 131 關
 
 | 章 | 關卡 |
 | --- | --- |
 | 1 家用網路 | 第一條網路線、換上交換器、自動發 IP、連上網際網路 |
 | 2 小型辦公室 | 辦公室開張、部門隔離、跨樓層、跨 VLAN 路由 |
-| 3 企業網路 | 守門員、總公司與分公司、對外伺服器群 |
+| 3 企業網路 | 守門員、總公司與分公司、對外伺服器群、十點以後進公司的人都上不了網（NAT 位址池與 overload） |
 | 4 資料中心 | 機櫃上線、Spine-Leaf、跨棟連線、一開 Jumbo Frame，備份就卡住、光纖接好了，燈還是不亮（收發器）、A 路的電一跳，機房就全黑了（雙電源）、新的 GPU 伺服器接不上（breakout） |
 | 5 無線網路 | 家裡的 Wi-Fi、辦公室基地台、訪客 Wi-Fi、下午的視訊會議一直斷（頻道寬度與 DFS）、新筆電明明支援 Wi-Fi 6E（6 GHz 與 WPA3）、訪客連上 Wi-Fi，卻沒有跳出登入頁面（Captive Portal） |
 | 6 網路安全 | 只開了 TCP、誰在發 IP？、不速之客、存取控制清單、管理介面加固、冒牌閘道、搶走根橋、你是誰？、偽裝成交換器、交換器變成了 Hub（MAC flooding）、跳進伺服器 VLAN 的封包（雙重標籤）、飯店的房間網路（Private VLAN）、星期一早上，有線網路全部登不進去（EAP-TLS）、分公司只有一台路由器，也要當防火牆（ZBF）、上班時間有人在玩線上博弈（網頁過濾與 SSL 檢查）、防火牆擋得住位址，擋不住應用程式（應用程式控管與 IPS） |
@@ -369,7 +369,7 @@ README 說明「現在有什麼、怎麼玩」，這份文件說明「整體應�
 | 10 故障排除 | 誰搶了我的 IP、樓層之間又斷了、分公司的求救電話、明明連得上，為什麼這麼慢、分公司的 OSPF 鄰居起不來、流量為什麼繞去實驗室、VPN 通了，資料卻過不去、DNS 改了，為什麼還連到舊的、整層樓都慢了（廣播風暴與 Storm Control）、新交換器一插上去，整棟樓的 VLAN 都不見了（VTP） |
 | 11 維運與管理 | 還好有備份、韌體升級、讓 SSH 能用、網路怎麼變慢了、是誰動了設定？、你的連線不是私人連線、專線被塞滿了，是誰？（NetFlow）、事件的先後兜不起來（NTP 與 service timestamps）、機櫃裡的線全部沒有標籤（看不到接線，用 CDP / LLDP 找）、外包工程師要能看設定但不能改（AAA 與 TACACS+）、SSH 被自己鎖在門外（Console 線） |
 | 12 語音與 QoS | 電話接上了，然後呢？、語音斷斷續續、新的 AP 怎麼插都不亮（PoE 預算與 CDP 的電力協商）、專線一斷，電話就聽不清楚（雙 WAN 的 QoS） |
-| 13 進階路由 | 誰當 DR？、10G 和 1G 一樣快？、分公司自成一區、兩家 ISP 都要用、併購的工廠只會靜態路由（重分配）、備份走另一條線（PBR）、分公司的路由表太大了（stub）、工廠接了一條供應商專線（NSSA）、兩個出口，同一個 AS（iBGP）、共用服務放在全域的路由表（VRF 的 OSPF 與路由洩漏）、分公司的 EIGRP 鄰居起不來，訊務都擠在 4G（EIGRP 與 MD5 驗證） |
+| 13 進階路由 | 誰當 DR？、10G 和 1G 一樣快？、分公司自成一區、兩家 ISP 都要用、併購的工廠只會靜態路由（重分配）、備份走另一條線（PBR）、分公司的路由表太大了（stub）、工廠接了一條供應商專線（NSSA）、兩個出口，同一個 AS（iBGP）、共用服務放在全域的路由表（VRF 的 OSPF 與路由洩漏）、分公司的 EIGRP 鄰居起不來，訊務都擠在 4G（EIGRP 與 MD5 驗證）、舊工廠的 RIP：一半的機台連不到（版本與 auto-summary） |
 | 14 無線控制器與無線環境 | AP 找不到控制器、牆後面收不到、走到另一頭就斷線、控制器重開機，整棟的 Wi-Fi 斷了六分鐘（N+1）、分公司的專線一斷，Wi-Fi 也跟著斷（FlexConnect） |
 | 15 網路自動化 | 用 API 管理路由器、一次設定四台交換器、控制器說哪裡有問題、資安說 HTTPS 管理要關掉，自動化要改用 NETCONF、三台新交換器用控制器的範本一次設好、昨晚有人改了 Core（用 Git 找出變更） |
 | 16 雲端網路 | 把網站搬上雲端、私有子網路與混合雲、加了負載平衡器，網站反而打不開（ALB）、兩條 peering 接好了，開發環境還是連不到正式環境（Transit Gateway）、昨晚有人在主控台改了安全群組（Terraform） |
@@ -431,7 +431,7 @@ CCNA v2.0 預計在 2027 年 2 月取代 v1.1，改版後整張對照表要重�
 | 19（已完成） | 維運與語音補充：NetFlow 與 QoS 的 police（已完成 → 11-7）、OSPF / DHCP / crypto 的 `debug`（已完成）、NTP + Syslog 對時與 `service timestamps`（已完成 → 11-8）、PoE 預算與 Cisco AP 的 CDP / LLDP 電力協商（已完成 → 12-3）、IKEv2 的憑證驗證（PKI、時鐘不對讓憑證「尚未生效」→ 7-12）、802.1X 的 EAP-TLS（伺服器憑證、電腦憑證、用戶端的時鐘 → 6-13）、看不到接線的關卡模式與用 CDP / LLDP 畫拓撲（→ 11-9）、雙 WAN 的 QoS 與排程事件（已完成 → 12-4） → 第 11、12 章補充關卡 | 讓故障排除的工具與劇本更完整 |
 | 20（已完成） | 無線補充：頻道寬度與 DFS（已完成 → 5-4）、6 GHz（已完成 → 5-5）、控制器 N+1（已完成 → 14-4）、FlexConnect 分公司（已完成 → 14-5）、訪客入口 (Captive Portal → 5-6) | 第 7 節剩下的項目 |
 | 21（已完成） | 自動化與雲端補充：負載平衡器（已完成 → 16-3）、VPC peering 與 Transit Gateway（已完成 → 16-4）、NETCONF（已完成 → 15-4）、Terraform（已完成 → 16-5）、Catalyst Center 範本（已完成 → 15-5）、用 Git 管理設定（已完成 → 15-6） | 第 12 節的延伸 |
-| 22（進行中） | FortiGate HA（已完成 → 8-10）、堆疊 / vPC、電力備援（已完成 → 4-6）；IPv6 的網際網路與 DHCPv6-PD（已完成 → 9-9）、FortiGate 的 IPv6 政策（已完成 → 9-10）、NAT64 / DNS64（已完成 → 9-11）；實體層與其他：收發器不相容（已完成 → 4-5）、breakout（已完成 → 4-7）、Console 與帶外管理（Console 線已完成 → 11-11）、STP 進階、VTP（已完成 → 10-10）、EIGRP（已完成 → 13-11；RIP 還沒做）、多播、TACACS+ 與權限等級（已完成 → 11-10）、ZBF（已完成 → 6-14）、NGFW（網頁過濾與 SSL 檢查 → 6-15、應用程式控管與 IPS → 6-16 已完成）、SD-WAN（已完成 → 7-13）、其他設備與廠牌 | 剩下的引擎項目 |
+| 22（進行中） | FortiGate HA（已完成 → 8-10）、堆疊 / vPC、電力備援（已完成 → 4-6）；IPv6 的網際網路與 DHCPv6-PD（已完成 → 9-9）、FortiGate 的 IPv6 政策（已完成 → 9-10）、NAT64 / DNS64（已完成 → 9-11）；實體層與其他：收發器不相容（已完成 → 4-5）、breakout（已完成 → 4-7）、Console 與帶外管理（Console 線已完成 → 11-11）、STP 進階、VTP（已完成 → 10-10）、EIGRP / RIP（已完成 → 13-11、13-12）、多播、TACACS+ 與權限等級（已完成 → 11-10）、ZBF（已完成 → 6-14）、NGFW（網頁過濾與 SSL 檢查 → 6-15、應用程式控管與 IPS → 6-16 已完成）、SD-WAN（已完成 → 7-13）、NAT 位址池（已完成 → 3-4）、其他設備與廠牌 | 剩下的引擎項目 |
 | 23 | 介面與體驗（第 15 節：鍵盤操作、標註、音效、離線使用）、工程品質（第 16 節：CI、靜態檢查、存檔格式遷移、大型拓撲效能、部署） | 引擎穩定之後再整理介面與工程 |
 | 暫停 | 遊戲系統（第 14 節）：成就、預算與採購、名詞表、帳號與雲端存檔、多人、關卡編輯器補齊（學習卡、已知資訊、設定檢查目標） | 依使用者的決定暫時不做 |
 | 隨時 | CI、存檔格式遷移（`sim.js` 的拆分與分塊載入已完成） | CI 要遠端儲存庫，要另外決定 |

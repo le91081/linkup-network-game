@@ -11,6 +11,7 @@ import { hasPsuSlots } from '../engine/power.js';
 import { breakoutCard } from './panel-breakout.js';
 import { openAnnot } from './annot.js';
 import { eigrpCard } from './panel-eigrp.js';
+import { ripCard } from './panel-rip.js';
 import { ZONE, sdwanOn } from '../engine/sdwan.js';
 import * as CL from './panel-cloud.js';
 import * as W from './panel-wlc.js';
@@ -437,6 +438,8 @@ function routesTab(ctx, body) {
     body.append(ospfCard(ctx));
     const ec = eigrpCard(ctx);
     if (ec) body.append(ec);
+    const rc = ripCard(ctx);
+    if (rc) body.append(rc);
   }
   const bc = bgpCard(ctx);
   if (bc) body.append(bc);
@@ -516,6 +519,8 @@ function forwardsTab(ctx, body) {
   })));
   body.append(card);
   if (dev.staticNat) body.append(M.staticNatCard(ctx));
+  const npc = M.natPoolCard(ctx);
+  if (npc) body.append(npc);
 }
 
 function hrWan(ctx, body) {

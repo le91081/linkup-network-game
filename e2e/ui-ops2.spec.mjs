@@ -734,3 +734,49 @@ test('EIGRP：路由分頁的 EIGRP 卡片讓光纖介面加入，看到驗證�
   expect(await page.evaluate(() => JSON.stringify(window.linkup.state.devices.br.eigrp.redist))).toBe('[{"src":"static","metric":[10000,100,255,1,1500]}]');
   expect(await page.evaluate(() => window.linkup.state.devices.br.rt.routes.find((r) => r.type === 'E' && r.bits === 24 && r.iface.id === 'Gi0/0/0') != null)).toBe(true);
 });
+
+test('RIP：路由分頁的 RIP 卡片改版本、關掉 auto-summary，Core-RT 學到兩個廠區各自的網段', async ({ page }) => {
+  await boot(page);
+  await open(page, 'l130');
+  await clickDevice(page, 'core');
+  await page.locator('#panel .tab', { hasText: '路由' }).click();
+  const card = page.locator('#panel .card.rip');
+  await expect(card).toContainText('RIP · v2');
+  await expect(card).toContainText('172.16.0.0/16');
+  await expect(card.locator('.note.warn')).toContainText('illegal version');
+  expect(await scan(page, '#panel', '路由分頁的 RIP 卡片')).toEqual([]);
+  for (const id of ['fa', 'fb']) {
+    await clickDevice(page, id);
+    await page.locator('#panel .tab', { hasText: '路由' }).click();
+    if (id === 'fa') await card.locator('label.field', { hasText: '版本' }).locator('select').selectOption('2');
+    await card.locator('label.switch', { hasText: 'auto-summary' }).click();
+    await expect(card.locator('label.switch', { hasText: 'auto-summary' }).locator('input')).not.toBeChecked();
+  }
+  expect(await page.evaluate(() => window.linkup.state.devices.core.rt.routes.filter((r) => r.type === 'R').map((r) => `${r.net >>> 24}.${(r.net >>> 16) & 255}.${(r.net >>> 8) & 255}/${r.bits}`).sort().join())).toBe('172.16.1/24,172.16.2/24');
+  await page.locator('#panel .tab', { hasText: 'CLI' }).click();
+  await typeCmd(page, 'enable', 'show running-config | section rip');
+  await expect(page.locator('#panel .term-out')).toContainText('no auto-summary');
+});
+
+test('NAT 位址池：show ip nat statistics 看到位址借光，clear 之後改成 overload，晚到的 PC-5 上得了網', async ({ page }) => {
+  await boot(page);
+  await open(page, 'l131');
+  await clickDevice(page, 'rt');
+  await page.locator('#panel .tab', { hasText: 'NAT / 轉發' }).click();
+  const pc = page.locator('#panel .card', { hasText: 'NAT 位址池' });
+  await expect(pc).toContainText('借出 4 / 4');
+  expect(await scan(page, '#panel', 'NAT / 轉發分頁（位址池）')).toEqual([]);
+  await page.locator('#panel .tab', { hasText: 'CLI' }).click();
+  await typeCmd(page, 'enable', 'show ip nat statistics');
+  const out = page.locator('#panel .term-out');
+  await expect(out).toContainText('total addresses 4, allocated 4 (100%)');
+  await typeCmd(page, 'configure terminal', 'ip nat inside source list 10 pool PUB overload');
+  await expect(out).toContainText('%Dynamic mapping in use');
+  await typeCmd(page, 'end', 'clear ip nat translation *', 'configure terminal', 'ip nat inside source list 10 pool PUB overload', 'end', 'show running-config | include pool');
+  await expect(out).toContainText('ip nat inside source list 10 pool PUB overload');
+  expect(await scan(page, '#panel', 'CLI（NAT 位址池）')).toEqual([]);
+  await clickDevice(page, 'pc5');
+  await page.locator('#panel .tab', { hasText: '終端機' }).click();
+  await typeCmd(page, 'ping 8.8.8.8');
+  await expect(page.locator('#panel .term-out')).toContainText('回覆自 8.8.8.8');
+});

@@ -196,6 +196,15 @@ function computePass(state, auth) {
       const i = pub != null && d.ifaces.find((x) => x.rt.ip != null && x.rt.ip !== pub && sameNet(pub, x.rt.ip, x.rt.bits));
       if (i) i.rt.vips.push(pub); // 讓這個介面替靜態 NAT 的公用 IP 回應 ARP
     }
+    // NAT 位址池：落在 ip nat outside 介面網段裡的位址，也由那個介面回應 ARP
+    for (const p of Object.values(d.natPools || {})) {
+      const a = parseIp(p.start), b = parseIp(p.end);
+      if (a == null || b == null || (b >>> 0) - (a >>> 0) > 4096) continue;
+      for (let x = a >>> 0; x <= b >>> 0; x++) {
+        const i = d.ifaces.find((y) => y.natOut && y.rt.ip != null && y.rt.ip !== x && sameNet(x, y.rt.ip, y.rt.bits));
+        if (i && !i.rt.vips.includes(x)) i.rt.vips.push(x);
+      }
+    }
   }
   haMacs(state); // HA 的主要機：介面用叢集的虛擬 MAC
   prepL2Attacks(state); // macof 把 MAC 位址表塞滿、狂送廣播佔掉整個 VLAN 的線路

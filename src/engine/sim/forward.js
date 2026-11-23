@@ -203,6 +203,33 @@ function pbrRoute(dev, name, pkt, vrf, log) {
   return null;
 }
 
+/** NAT 位址池：ip nat inside source list <ACL> pool <名稱> [overload]。回傳 { ip } 或 { drop }，不適用時是 null */
+export function natPoolPick(state, dev, outIf, pkt) {
+  if (!(dev.natPoolRules || []).length || !outIf.natOut || outIf.rt.ip == null) return null;
+  for (const r of dev.natPoolRules) {
+    const acl = (dev.aclDefs || {})[r.acl];
+    if (!acl || !acl.length || aclCheck(acl, pkt) !== null) continue; // ACL 不存在或不符合：這條不轉換
+    const p = (dev.natPools || {})[r.pool];
+    if (!p) return null; // 位址池不存在：IOS 不轉換，封包帶著私有位址出去
+    const a = parseIp(p.start) >>> 0, b = parseIp(p.end) >>> 0;
+    if (r.overload) return { ip: a, pool: r.pool, pat: true };
+    const tbl = (((state.dyn.natPool ||= {})[dev.id] ||= {})[r.pool] ||= {});
+    const ttl = +((dev.natTimeout || {}).simple) || 86400;
+    for (const [k, v] of Object.entries(tbl)) if (state.clock - v.t > ttl) delete tbl[k]; // 閒置太久的轉換到期
+    const mine = tbl[pkt.src];
+    if (mine) { if (!QUIET) mine.t = state.clock; return { ip: mine.ip, pool: r.pool }; }
+    const used = new Set(Object.values(tbl).map((v) => v.ip));
+    for (let x = a; x <= b; x++) {
+      if (used.has(x)) continue;
+      if (!QUIET) tbl[pkt.src] = { ip: x, t: state.clock, t0: state.clock };
+      return { ip: x, pool: r.pool, fresh: true };
+    }
+    if (!QUIET) { const m = ((state.dyn.natMiss ||= {})[dev.id] ||= {}); m[r.pool] = (m[r.pool] || 0) + 1; }
+    return { drop: `${dev.name} 的 NAT 位址池 ${r.pool} 的 ${b - a + 1} 個位址都被別的內部主機佔走了（沒有 overload：一個內部位址佔用一個公用位址，閒置 ${Math.round(ttl / 3600)} 小時才釋放），${fmtIp(pkt.src)} 轉換不了，封包被丟掉` };
+  }
+  return null;
+}
+
 function natPermits(dev, outIf, pkt) {
   if (selMatch(cidrList(outIf.natSkip), pkt.dst)) return false;
   const rules = outIf.natAcl && (dev.aclDefs || {})[outIf.natAcl];
@@ -591,8 +618,13 @@ export function forward(state, ctx, startId, pkt) {
       if (!pkt.reply) {
         let nSrc = pkt.src;
         const st = (dev.staticNat || []).find((x) => parseIp(x.priv || '') === pkt.src && outIf.rt.vips.includes(parseIp(x.pub || '')));
+        const pp = !st && outIf !== inIf ? natPoolPick(state, dev, outIf, pkt) : null;
+        if (pp && pp.drop) return drop(pp.drop);
         if (st) nSrc = parseIp(st.pub); // 靜態 NAT 的主機固定用自己的公用 IP 出去
-        else if (v.nat && outIf !== inIf && outIf.rt.ip != null && natPermits(dev, outIf, pkt)) {
+        else if (pp) {
+          if (pp.pat && pkt.proto === 'esp' && !pkt.ssl) return drop(`${dev.name} 用位址池 ${pp.pool} 做 PAT（overload）：ESP 封包沒有連接埠號碼，沒辦法轉換。兩端要用 NAT-T`);
+          nSrc = pp.ip;
+        } else if (v.nat && outIf !== inIf && outIf.rt.ip != null && natPermits(dev, outIf, pkt)) {
           // ESP（IP 協定 50）沒有連接埠號碼：PAT（多對一）沒辦法替它轉換。家用路由器多半有「IPsec passthrough」可以讓一條通過
           if (pkt.proto === 'esp' && !pkt.ssl && dev.kind !== 'homerouter') return drop(`${dev.name} 做的是 PAT（多個位址共用 ${outIf.label} 的位址）：ESP 封包沒有連接埠號碼，PAT 沒辦法替它轉換，只好丟掉。中間有 NAT 時兩端都要用 NAT-T（ESP 包在 UDP 4500 裡）`);
           nSrc = outIf.rt.ip;

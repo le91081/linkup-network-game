@@ -3,7 +3,7 @@ import { h, button } from './dom.js';
 import { sessionLog, clearSessionLog, arpRows, sessionRows, clearSessions, fmtDur } from '../engine/sim.js';
 import { syslogRows, clearSyslog, SIM_EPOCH } from '../engine/ops.js';
 import { inp, sel, toggle, field, note, kv, del, cardHead, grid2, bind, isIp } from './form.js';
-import { fmtIp } from '../engine/ip.js';
+import { fmtIp, parseIp } from '../engine/ip.js';
 import { CORP_CA, fmtDate, certDaysLeft, issueCert } from '../engine/web.js';
 import { deviceTime } from '../engine/ops.js';
 
@@ -93,6 +93,28 @@ export function staticNatCard(ctx) {
       const bad = list.find((n) => isIp(n.pub || '') && !dev.ifaces.some((i) => i.rt && i.rt.vips.length && i.rt.vips.some((v) => fmtIp(v) === n.pub.trim())));
       return bad ? note('warn', `${bad.pub} 不在任何介面的網段內，ISP 的封包送不到這台路由器。`) : null;
     }));
+  return card;
+}
+
+/** NAT 位址池（CLI 設定）：範圍、哪一條規則在用、借出去幾個，overload 開關 */
+export function natPoolCard(ctx) {
+  const { dev, state } = ctx;
+  const rules = dev.natPoolRules || [], pools = dev.natPools || {};
+  if (!rules.length && !Object.keys(pools).length) return null;
+  const card = h('div', { class: 'card' }, cardHead('NAT 位址池'));
+  for (const [name, p] of Object.entries(pools)) {
+    const tot = (parseIp(p.end) >>> 0) - (parseIp(p.start) >>> 0) + 1;
+    const used = Object.keys((((state.dyn || {}).natPool || {})[dev.id] || {})[name] || {}).length;
+    card.append(h('div', { class: 'trow' }, h('b', { class: 'mono', text: name }), h('span', { class: 'mono', text: `${p.start} – ${p.end}（${tot} 個）` }),
+      h('span', { class: used >= tot ? 'bad' : 'muted', text: `借出 ${used} / ${tot}` })));
+  }
+  for (const r of rules) {
+    card.append(h('div', { class: 'sub' }, h('span', { class: 'mono', text: `ip nat inside source list ${r.acl} pool ${r.pool}${r.overload ? ' overload' : ''}` }),
+      toggle(ctx, () => !!r.overload, (v) => { if (v) r.overload = true; else delete r.overload; }, 'overload（PAT：大家共用位址池的第一個位址）', { rerender: true }),
+      !pools[r.pool] ? note('warn', `位址池 ${r.pool} 不存在：符合 ACL ${r.acl} 的封包不會被轉換`) : null,
+      !r.overload ? note('muted', '沒有 overload 是一對一的動態 NAT：一台主機佔一個公用位址，閒置 24 小時才還回去，位址借光了晚到的人就上不了網。') : null));
+  }
+  card.append(note('muted', '位址池在 CLI 設定：ip nat pool <名稱> <起> <迄> netmask <遮罩>；show ip nat statistics 看借出狀況。'));
   return card;
 }
 
