@@ -5441,6 +5441,32 @@ console.log('\nIOS 的 PPPoE：Dialer 介面');
   const rc = runningConfig(s, s.devices.rt).join('\n');
   ok(/interface Dialer1\n mtu 1492\n ip address negotiated\n ip nat outside\n encapsulation ppp\n dialer pool 1\n ppp chap hostname 81234567@hinet\.net\n ppp chap password 0 q8w3e7r2/.test(rc) && /interface GigabitEthernet0\/0\/0\n( description .*\n)? no ip address\n pppoe enable group global\n pppoe-client dial-pool-number 1/.test(rc) && /^ip route 0\.0\.0\.0 0\.0\.0\.0 Dialer1$/m.test(rc), 'running-config：Dialer1 的區塊、實體介面只有 pppoe 的設定、ip route … Dialer1');
 }
+console.log('\nESXi 的 NIC teaming：兩張上行');
+{
+  const { runObjective } = await import('../src/engine/sim/objectives.js');
+  const { pinnedUplink, teamUplinks } = await import('../src/engine/virt.js');
+  const sim = await import('../src/engine/sim.js');
+  const ok = (cond, title) => (cond ? console.log('  ✔ ' + title) : fail(title));
+  const lv = LEVELS.find((x) => x.id === 'l151');
+  const s = lv.setup(); settle(s);
+  const esx = s.devices.esx, pin = (p) => pinnedUplink(s, esx, p);
+  const res = (t) => lv.objectives.map((o) => { const r = o.type === 'check' ? o.test(t) : runObjective(t, o); return r === true || r.pass; });
+  ok(pin('vp1') === 'vmnic1' && pin('vp2') === 'vmnic0' && pin('vp3') === 'vmnic1' && pin('vmk0') === 'vmnic0', '依虛擬埠輪流分配：vp1、vp3 走 vmnic1，vp2 與 vmk0 走 vmnic0');
+  const st = res(s);
+  ok(!st[0] && !st[1] && !st[2] && !st[3] && !st[5], '開場：app-vm 不通、兩個 vmnic0 的故障演練失敗、SW-B 的設定不對');
+  ok(runObjective(s, { type: 'tcp', from: 'web', to: 'db', port: 3306 }).pass && runObjective(s, { type: 'tcp', from: 'adm', ip: '10.0.99.11', port: 443 }).pass, '同一個 VLAN 的 db-vm（走 vmnic0）是通的，vmk0 也是');
+  ok(!sim.l2Explore(s, 'pc', s.devices.pc.ifaces[0]).storm && !sim.l2Explore(s, 'rt', s.devices.rt.ifaces.find((i) => i.id === 'Gi0/0/1.10')).storm, '兩張上行接兩台交換器，不會被當成迴圈（vSwitch 不在上行之間轉送）');
+  const eps = sim.l2Explore(s, 'rt', s.devices.rt.ifaces.find((i) => i.id === 'Gi0/0/1.10'));
+  ok(eps.filter((e) => e.dev === 'web').length === 1, '從上行收到的廣播只交給固定走那張上行的 VM：web-vm 只收到一份');
+  esx.vsw.standby = ['vmnic1']; settle(s);
+  ok(pin('vp3') === 'vmnic0' && teamUplinks(s, esx).active.join() === 'vmnic0' && runObjective(s, lv.objectives[0]).pass, 'vmnic1 設成備用：全部改走 vmnic0，app-vm 就通了');
+  esx.vsw.standby = []; settle(s);
+  const s2 = cloneState(s); s2.cut = { [s2.cables.find((c) => c.a.dev === 'esx' && c.a.port === 'vmnic1').id]: true }; settle(s2);
+  ok(pinnedUplink(s2, s2.devices.esx, 'vp3') === 'vmnic0' && runObjective(s2, lv.objectives[0]).pass, 'vmnic1 斷線：app-vm 自動改走 vmnic0');
+  lv.solve(s); settle(s);
+  ok(res(s).every(Boolean), '解法：SW-B 建立 VLAN 20、Gi0/11 放行 99，六個目標都通過');
+}
+
 console.log('\nNetFlow 與 QoS 的 police');
 {
   const sim = await import('../src/engine/sim.js');

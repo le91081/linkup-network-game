@@ -1,8 +1,8 @@
 // 虛擬化主機（ESXi）的設定頁面：虛擬交換器、連接埠群組、虛擬機器
 import { h, button, toast } from './dom.js';
-import { inp, sel, field, note, cardHead, badge, grid2, del, bind, linkBadge, isIp, isMask, isNum } from './form.js';
+import { inp, sel, field, note, cardHead, badge, grid2, del, bind, linkBadge, isIp, isMask, isNum, toggle } from './form.js';
 import { fmtIp } from '../engine/ip.js';
-import { pgVlan, vmsOn } from '../engine/virt.js';
+import { pgVlan, vmsOn, teamUplinks, pinnedUplink } from '../engine/virt.js';
 import { vswMtuField, vmkMtuField } from './panel-mtu.js';
 
 const vlanText = (v) => (+v > 0 ? `VLAN ${+v}（加標籤）` : '不加標籤（VLAN 0）');
@@ -12,9 +12,16 @@ export function vswTab(ctx, body) {
   const { dev, state } = ctx;
   const v = dev.vsw;
   const names = v.pgs.map((p) => p.name);
+  // NIC teaming：兩張上行、每台 VM 固定走哪一張、備用的上行
+  const team = teamUplinks(state, dev), vmsT = vmsOn(state, dev);
+  body.append(h('div', { class: 'card' }, cardHead('上行（NIC teaming）'),
+    note('muted', '負載平衡：Route based on originating virtual port。每台 VM 固定走一張有連線的上行（依虛擬埠輪流分配），那張斷線就改走另一張。兩張上行接到的實體交換器埠，VLAN 設定要一模一樣：不然固定走某一張的 VM 會不通。'),
+    team.ups.map((id) => h('div', { class: 'line' }, h('b', { class: 'mono', text: id }), linkBadge(ctx, id),
+      h('span', { class: 'muted', text: (() => { const on = vmsT.filter((m) => pinnedUplink(state, dev, m.port) === id).map((m) => m.vm.name); if (pinnedUplink(state, dev, 'vmk0') === id) on.unshift('vmk0'); return on.length ? '走這張：' + on.join('、') : team.linked.includes(id) ? '（沒有 VM 走這張）' : '（沒有連線）'; })() }),
+      toggle(ctx, () => ((v.standby ||= []).includes(id)), (x) => { v.standby = x ? [...new Set([...(v.standby || []), id])] : (v.standby || []).filter((y) => y !== id); }, '備用 (standby)', { rerender: true })))));
   // 連接埠群組
   const pgCard = h('div', { class: 'card' }, cardHead('連接埠群組 (Port Group)'),
-    note('muted', '虛擬機器的網卡接在哪個連接埠群組，就在哪個 VLAN。VLAN ID 0 不加標籤；1 – 4094 從 vmnic0 送出去時加上 802.1Q 標籤，實體交換器那一端要是 Trunk。'),
+    note('muted', '虛擬機器的網卡接在哪個連接埠群組，就在哪個 VLAN。VLAN ID 0 不加標籤；1 – 4094 從上行 (vmnic) 送出去時加上 802.1Q 標籤，實體交換器那一端要是 Trunk。'),
     h('div', { class: 'thead c-pg' }, h('span', { text: '名稱' }), h('span', { text: 'VLAN ID' }), h('span', { text: '使用中' }), h('span')),
     v.pgs.map((p, n) => {
       const used = dev.ports.filter((x) => x.media === 'virt' && dev.sw.ports[x.id].pg === p.name && vmsOn(state, dev).some((m) => m.port === x.id)).length + (v.vmkPg === p.name ? 1 : 0);

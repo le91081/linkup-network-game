@@ -106,6 +106,7 @@ npm run build    # 輸出到 dist/
 - **中繼 CA 與憑證鏈**：網站的憑證可以由中繼 CA 簽發（公司的 Corp Issuing CA，根是 Corp Root CA；公開 CA 的 DigiCert 中繼）。網站的「網站」分頁有「一起送出中繼憑證（完整的憑證鏈 fullchain）」：沒有送的話，Windows（瀏覽器、Schannel 的 curl）會照 AIA 自己去下載中繼憑證所以正常，Linux 的 OpenSSL（curl、程式）會失敗；任務可以要求用戶端不自己下載 (strict)。
 - **設定檔裡的密碼**：`enable password` 與 `enable secret`（兩個都有時 secret 優先）、`username … password` 與 `username … secret`、line con 0 / vty 的 `password`。可逆的密碼在沒有 `service password-encryption` 時以明文出現在 running-config，有的話是 type 7（只是遮住）；關掉 service password-encryption 之後，已經是 type 7 的不會變回明文。`security passwords min-length <n>`：之後設定的明文密碼太短就拒絕（% Password too short）。
 - **IOS 的 PPPoE（Dialer）**：實體介面 `pppoe enable group global`、`pppoe-client dial-pool-number <n>`；`interface Dialer<n>` 底下 `ip address negotiated`、`encapsulation ppp`、`dialer pool <n>`、`ppp chap hostname` / `ppp chap password`（或 `ppp pap sent-username … password …`）、`mtu 1492`、`ip nat outside`、`ip tcp adjust-mss 1452`；`ip nat inside source list … interface Dialer1 overload`、`ip route 0.0.0.0 0.0.0.0 Dialer1`（點對點，不用下一站）。`show ip interface brief` 的位址顯示在 Dialer（IPCP），實體介面是 unassigned。圖形介面設定的 PPPoE，running-config 也會寫成 Dialer1。
+- **ESXi 的 NIC teaming**：vSwitch 有 vmnic0、vmnic1 兩張上行，預設依虛擬埠輪流分配（Route based on originating virtual port），每台 VM 與 vmk0 固定走一張；那張斷線就改走另一張，也可以把一張設成備用 (standby)。vSwitch 不在上行之間轉送（不用 STP、不用 LACP），從上行收到的廣播只交給固定走那張的 VM。「虛擬交換器」分頁的「上行」卡片看得到每張上行的連線與哪些 VM 走它。
 - **定時封存**：`archive` 底下的 `time-period <分鐘>` 每隔一段時間自動封存一份 running-config 到 path。
 - Cisco 的路由器與交換器有「CLI」分頁：IOS 風格的命令列。`show running-config`、`show startup-config`、`show ip route`、`show vlan brief`、`show interfaces trunk`、`show arp` 等四十多個 `show` 指令用來查看狀態；輸入 `configure terminal` 之後可以直接用指令設定（見下方「CLI 設定指令」），改的和圖形介面是同一份設定。
 - FortiGate 防火牆也有「CLI」分頁，用的是 FortiOS 的階層式語法（`config firewall policy` → `edit 1` → `set …` → `next` → `end`）。
@@ -126,7 +127,7 @@ npm run build    # 輸出到 dist/
 - **評分**：過關時依實際作答時間（畫面在前景、沒有開對話框才算；標準時間是 3 分鐘加上每個目標 1.5 分鐘）、看了幾個提示、跑了幾次完整測試給 S / A / B / C 與分數，關卡選單上顯示最佳等級。設定變更的次數只列出來參考。
 - **關卡編輯器**：自由模式的「關卡設計」可以寫關卡名稱、任務說明、提示，指定哪些設備鎖定（玩家看得到、不能設定），然後試玩、存成自訂關卡、或匯出成關卡檔分享；關卡選單的「自訂關卡」可以遊玩、匯出、刪除與匯入。
 
-## 關卡（17 章 150 關）
+## 關卡（17 章 151 關）
 
 | 章節 | 關卡數 | 主題 |
 | --- | --- | --- |
@@ -146,7 +147,7 @@ npm run build    # 輸出到 dist/
 | 14 無線控制器與無線環境 | 6 | 輕量型 AP 與無線控制器（CAPWAP、DHCP option 43、Local 模式的流量經控制器放進 VLAN、RRM 自動分頻道）、牆面衰減與訊號熱力圖、漫遊（同一個 VLAN、sticky client 與 802.11k/v/r）；控制器 N+1：AP 要填主要與次要控制器、備援控制器要有一樣的 WLAN、它的 Trunk 要允許員工的 VLAN（heartbeat 逾時約 30 秒才切換，主要的回來會自己切回去）；分公司的 AP 用 Local 模式，開分公司的 NAS 也繞回總公司、專線一斷 Wi-Fi 就停：改成 FlexConnect，AP 的埠改成 Trunk（Native VLAN 是 AP 的管理 VLAN）；Corp 用 WPA2-Enterprise，每次換基地台都要重做 802.1X（大約 445 ms），邊走邊講 Teams 就斷：兩台都開 802.11k/v（只掃鄰近清單）與 802.11r（金鑰直接帶過去），漫遊降到 30 ms 左右，而且不改回共用密碼 |
 | 15 網路自動化 | 6 | RESTCONF：只走 HTTPS、HTTP Basic 驗證、YANG 路徑（`ietf-interfaces`、`Cisco-IOS-XE-native`）、JSON 與 XML、狀態碼、名稱裡的 `/` 要寫成 `%2F`、自簽憑證；Ansible：INI 格式的 inventory、YAML、`network_cli`、資源模組、`--check`、PLAY RECAP 與冪等；Catalyst Center：Token 驗證的北向 API、用 SNMP / SSH 輪詢的設備清單、AI 驅動的問題清單（DHCP 失敗率偏離基準、雙工不一致、設備連不到）；HTTPS 管理要關掉、改用 NETCONF：`netconf-yang`、SSH 要先有 RSA 金鑰，用 <edit-config> 建立 Loopback；三台新交換器用 Catalyst Center 的範本一次設好：變數、草稿要提交成新版本才會部署、部署結果一台一台看（錯字那一行失敗、控制器被 access-class 擋住）；昨晚有人改了 Core、今天倉儲全斷：備份伺服器上用 git log / git show 找出少打 add 的 trunk，修好之後 ./backup.sh、git add、git commit |
 | 16 雲端網路 | 5 | AWS 的 VPC：公有 / 私有子網路與路由表、網際網路閘道與彈性 IP（一對一 NAT）、安全群組（有狀態）、NAT 閘道、網路 ACL（無狀態、臨時連接埠）、站對站 VPN 與路由傳播（混合雲），「下載設定檔」貼到公司的路由器；應用程式負載平衡器 (ALB) 回 503：目標的安全群組沒有允許 ALB 的健康檢查（來源用 ALB 的安全群組）；兩條 VPC peering 接好了，開發環境還是到不了正式環境（peering 不能轉送）：改用 Transit Gateway，兩邊的路由表都指向它、安全群組允許新的網段；有人在主控台手動改了安全群組 (drift)：Terraform 的 plan 列出差異，要留的規則補進 main.tf 再 apply，別讓 apply 把合作夥伴的規則一起拿掉 |
-| 17 虛擬化 | 3 | VMware ESXi：虛擬交換器、連接埠群組決定 VLAN（VLAN ID 0 不加標籤）、接主機的實體交換器埠要設成 Trunk 並只放行需要的 VLAN、vmk0 管理介面；VRF-Lite：兩家公司用同一個網段（`vrf definition`、`vrf forwarding` 會清掉 IP、`show ip route vrf`、`ping vrf`）；Docker：橋接網路與 veth、`-p 主機埠:容器埠`、只綁 127.0.0.1、資料庫不要發佈（Docker 會繞過 ufw）、改連接埠要重建容器 |
+| 17 虛擬化 | 4 | VMware ESXi：虛擬交換器、連接埠群組決定 VLAN（VLAN ID 0 不加標籤）、接主機的實體交換器埠要設成 Trunk 並只放行需要的 VLAN、vmk0 管理介面；VRF-Lite：兩家公司用同一個網段（`vrf definition`、`vrf forwarding` 會清掉 IP、`show ip route vrf`、`ping vrf`）；Docker：橋接網路與 veth、`-p 主機埠:容器埠`、只綁 127.0.0.1、資料庫不要發佈（Docker 會繞過 ufw）、改連接埠要重建容器；NIC teaming：ESXi 的第二張上行接到另一台交換器，那台少了一個 VLAN，同一個 VLAN 的 VM 一台通一台不通（依虛擬埠分配上行），兩邊接 ESXi 的埠要一模一樣，斷線演練時管理介面也要連得到 |
 
 ## 學習輔助
 
@@ -530,12 +531,12 @@ src/engine/   模擬引擎（不依賴瀏覽器，可直接用 Node 測試）
   l2sec.js        第二層安全：Port Security 的安全位址與違規、MAC 位址表的容量與 MAC flooding、靜態 MAC、Storm Control 的門檻、RA Guard
   policy.js       路由政策：prefix-list、route-map 套在路由上（重分配進 OSPF / BGP 時的比對與 set）
   mtu.js          MTU：每個介面的 IP MTU、交換器能收的訊框、IPsec 的額外負擔、TCP MSS 的調整
-  virt.js         虛擬化主機：vSwitch、連接埠群組與 VLAN 標籤
+  virt.js         虛擬化主機：vSwitch、連接埠群組與 VLAN 標籤、NIC teaming
   docker.js       容器：映像檔、bridge 網路、連接埠發佈（只綁 127.0.0.1、埠對錯會被重設）
   web.js          網站與 HTTPS 憑證：信任的 CA、有效期間（用戶端的時鐘）、SAN 與萬用字元
   dns.js          DNS 伺服器的記錄、TTL 與用戶端快取
   sim6.js         IPv6：SLAAC 與 DHCPv6（RA 的 M / O / A 旗標、relay、binding）、鄰居探索、靜態路由與 OSPFv3、IPv6 ACL、ICMPv6 / TCP / UDP
-src/levels/   關卡定義：設備、初始設定、任務目標、提示、參考解法（trouble.js 是故障排除章，maint.js 是維運章，voip.js 是語音與 QoS 章，routing.js 是進階路由章，ipv6.js 是 IPv6 章的補充，vpn2.js 是多站台 VPN，wireless.js 是無線控制器章，auto.js 是自動化章，cloud.js 是雲端章，virtual.js 是虛擬化章（vSwitch、VRF、容器），tls.js 是 HTTPS 憑證，mtu.js 是 Jumbo Frame 與 PMTUD，redist.js 是路由重分配與政策路由，routing2.js 是 OSPF 的 stub / NSSA、iBGP、VRF 裡的 OSPF 與路由洩漏，tunnels.js 是 GRE、GRE over IPsec、VTI、DMVPN 與 NAT-T，ipv6b.js 是 AAAA 與雙協定、IPv6 經過 VPN，ha.js 是 BFD 與 GLBP，ops2.js 是 NetFlow 與 police，l2sec.js 是第二層的攻擊與防護（MAC flooding、雙重標籤、Storm Control、Private VLAN、RA Guard），resil.js / audit.js / trouble2.js 是各章的補充關卡）
+src/levels/   關卡定義：設備、初始設定、任務目標、提示、參考解法（trouble.js 是故障排除章，maint.js 是維運章，voip.js 是語音與 QoS 章，routing.js 是進階路由章，ipv6.js 是 IPv6 章的補充，vpn2.js 是多站台 VPN，wireless.js 是無線控制器章，auto.js 是自動化章，cloud.js 是雲端章，virtual.js 是虛擬化章（vSwitch、VRF、容器），team.js 是 ESXi 的 NIC teaming，tls.js 是 HTTPS 憑證，mtu.js 是 Jumbo Frame 與 PMTUD，redist.js 是路由重分配與政策路由，routing2.js 是 OSPF 的 stub / NSSA、iBGP、VRF 裡的 OSPF 與路由洩漏，tunnels.js 是 GRE、GRE over IPsec、VTI、DMVPN 與 NAT-T，ipv6b.js 是 AAAA 與雙協定、IPv6 經過 VPN，ha.js 是 BFD 與 GLBP，ops2.js 是 NetFlow 與 police，l2sec.js 是第二層的攻擊與防護（MAC flooding、雙重標籤、Storm Control、Private VLAN、RA Guard），resil.js / audit.js / trouble2.js 是各章的補充關卡）
 src/data/     題庫與證照對照表
 src/scene/    three.js 場景、設備模型、網路線、無線涵蓋範圍與封包動畫
 src/ui/       設定面板、終端機、CLI、任務面板、測驗、模擬考、故障演練、評分、自由模式與關卡編輯器、對話框

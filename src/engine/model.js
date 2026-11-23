@@ -108,7 +108,7 @@ export const CATALOG = {
   },
   esxi: {
     kind: 'hypervisor', shape: 'esxi', vendor: 'VMware', title: 'VMware ESXi 8',
-    tagline: 'Dell PowerEdge R650 · 1×25GbE 上行 · 8 個虛擬埠', ports: [sfp('vmnic0', 'vmnic0'), ...seq(8, (i) => virt('vp' + i, '虛擬埠 ' + i))],
+    tagline: 'Dell PowerEdge R650 · 2×25GbE 上行（NIC teaming）· 8 個虛擬埠', ports: [sfp('vmnic0', 'vmnic0'), sfp('vmnic1', 'vmnic1'), ...seq(8, (i) => virt('vp' + i, '虛擬埠 ' + i))],
     services: [{ proto: 'tcp', port: 443, name: 'ESXi Host Client (HTTPS)' }],
   },
   vm: {

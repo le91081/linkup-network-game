@@ -1,5 +1,6 @@
 // 第二層：VLAN 與 Trunk 的標籤、廣播網域的探索、MAC 位址表、ARP 快取
 // （從 sim.js 拆出來的一部分；其他程式一律從 engine/sim.js 引入，不直接引入這裡）
+import { pinnedUplink } from '../virt.js';
 import { parseIp, parseVlanList } from '../ip.js';
 import { spanDest } from '../wire.js';
 import { DROP, bridgeKey, isTrunk, isVlanSw, macList, phoneEgress, phoneIngress } from './core.js';
@@ -128,7 +129,12 @@ export function l2Explore(state, devId, iface, opts = {}) {
     if (l) queue.push({ from: d.id, fromPort: pid, to: l.dev, toPort: l.port, cable: l.cable, tag, path, inner });
   };
   const flood = (d, key, exceptPort, path, viaWifi, inner) => {
-    const k = d.id + '|' + key + (inner != null ? '|' + inner : '');
+    // 虛擬化主機的 vSwitch（NIC teaming）：上行收到的不從別的上行送出去；虛擬埠送出去的只走它固定的那一張上行。
+    // 從上行收到的廣播只交給「固定走這張上行」的虛擬埠與 vmk0（ESXi 的 reverse filter，不然兩張上行各收一份會重複）
+    const hv = d.kind === 'hypervisor', upIn = hv && exceptPort && d.ports.some((p) => p.id === exceptPort && p.media !== 'virt');
+    const pin = hv && !upIn ? pinnedUplink(state, d, exceptPort || 'vmk0') : null;
+    const mine = (vport) => !upIn || pinnedUplink(state, d, vport) === exceptPort;
+    const k = d.id + '|' + key + (inner != null ? '|' + inner : '') + (upIn ? '|' + exceptPort : '');
     if (seen.has(k)) { out.storm = d.id; return; } // 同一個網段被走到第二次 = 有迴圈
     seen.add(k);
     if (out.sws) out.sws.push({ dev: d.id, key, port: exceptPort });
@@ -136,7 +142,7 @@ export function l2Explore(state, devId, iface, opts = {}) {
     const prot = exceptPort && d.sw.ports[exceptPort] && d.sw.ports[exceptPort].protected;
     if (inner == null) {
       for (const i of d.ifaces) {
-        if (i === iface) continue;
+        if (i === iface || (hv && i.id === 'vmk0' && !mine('vmk0'))) continue;
         const pvSvi = i.bind.t === 'svi' && d.sw.mode === 'vlan' && (i.pvMap || []).map(Number).includes(+key) && pvPrimaryOf(d, key) === i.bind.vlan;
         if ((i.bind.t === 'svi' && d.sw.mode === 'vlan' && i.bind.vlan === key) || pvSvi || (i.bind.t === 'bridge' && key === bridgeKey(d))) {
           out.push({ dev: d.id, iface: i, path });
@@ -151,6 +157,7 @@ export function l2Explore(state, devId, iface, opts = {}) {
     for (const pid of Object.keys(d.sw.ports)) {
       if (pid === exceptPort || !isBridgePort(d, pid)) continue;
       if (prot && d.sw.ports[pid].protected) continue;
+      if (hv && (d.ports.some((p) => p.id === pid && p.media !== 'virt') ? upIn || pid !== pin : !mine(pid))) continue;
       if (d.rt.wait && d.rt.wait[pid] > 0 && links[d.id + ':' + pid]) { out.stp ||= { dev: d.id, pid, left: d.rt.wait[pid] }; continue; }
       const t = egressTag(d, pid, key);
       if (t === DROP) continue;
