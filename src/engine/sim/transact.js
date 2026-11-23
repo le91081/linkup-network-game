@@ -120,7 +120,7 @@ function transactInner(state, fromId, spec) {
   }
   const id = 1000 + (pktSeq++ % 20000);
   const icmp = spec.proto === 'icmp';
-  const pkt = { proto: spec.proto, src: srcIp, dst: spec.dst, sport: icmp ? id : spec.sport ?? 30000 + id, dport: icmp ? 0 : spec.dport, ttl: spec.ttl || 64, reply: false, data: spec.data || null, ...(spec.size ? { len: +spec.size } : {}), ...(spec.df ? { df: true } : {}), ...(spec.host ? { host: spec.host } : {}), ...(spec.attack ? { attack: spec.attack } : {}) };
+  const pkt = { proto: spec.proto, src: srcIp, dst: spec.dst, sport: icmp ? id : spec.sport ?? 30000 + id, dport: icmp ? 0 : spec.dport, ttl: spec.ttl || 64, reply: false, data: spec.data || null, ...(spec.size ? { len: +spec.size } : {}), ...(spec.df ? { df: true } : {}), ...(spec.host ? { host: spec.host } : {}), ...(spec.qname ? { qname: spec.qname } : {}), ...(spec.attack ? { attack: spec.attack } : {}) };
   ctx.log.push({ dev: fromId, kind: 'tx', text: `送出 ${pktDesc(pkt)}` });
   const a = forward(state, ctx, fromId, pkt);
   if (!a.ok && a.local) return done({ ok: false, reason: a.reason, failDev: fromId, phase: 'request', dfLocal: a.mtu });

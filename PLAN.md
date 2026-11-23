@@ -248,7 +248,7 @@ README 說明「現在有什麼、怎麼玩」，這份文件說明「整體應�
 | FortiOS CLI | ✅ | `config` / `edit` / `set` / `next` / `end`、`show`、`get`、`diagnose`、`execute ping` |
 | 主機終端機 | ✅ | `ping`、`ipconfig`、`arp`、`tracert`、`nslookup`、`curl`、`iperf3` |
 | 封包追蹤 | ✅ | 每一段的 MAC、IP、TTL、埠號、TCP 旗標都可以打開看 |
-| 封包擷取 | 🟡 | 主機上的 Wireshark：顯示篩選、逐層標頭；FortiGate 的 `diagnose sniffer packet`；還不能匯出 pcap，沒有 IOS 的 `monitor capture` |
+| 封包擷取 | 🟡 | 主機上的 Wireshark：顯示篩選、逐層標頭；FortiGate 的 `diagnose sniffer packet`；匯出 .pcap（真正的封包位元組與檢查碼，用 Wireshark 打得開）；沒有 IOS 的 `monitor capture` |
 | FortiGate 的 debug flow | ✅ | `diagnose debug flow`：收到封包、找路由、符合哪一條政策、SNAT / DNAT、進 VPN、沒有符合的連線 |
 | 遠端登入 | ✅ | 主機 `ssh` / `telnet` 進 IOS 與 FortiGate 的命令列；金鑰指紋、密碼錯誤次數、閒置登出、`terminal monitor`；RSA 金鑰的產生與重建、vty 的 `login` / `login local` / 線路密碼 |
 | IOS 的診斷指令 | ✅ | `traceroute`、`show interfaces`、`show ip protocols`、`show ip ospf interface brief`；`debug ip packet` / `icmp`、`debug ip ospf adj` / `hello`（區域、計時器、遮罩、驗證、MTU 的 IOS 15 訊息）、`debug ip dhcp server packet` / `events`（DORA、續約）、`debug crypto isakmp` / `ikev2` / `ipsec`（重送、金鑰、提案、proxy ID）；Router ID 重複記 `%OSPF-4-DUP_RTRID_NBR` |

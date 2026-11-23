@@ -34,3 +34,15 @@ export function saveText(name, text, type, okText) {
     h('div', { class: 'd-actions' }, button('關閉', { kind: 'ghost', onclick: closeModal }), button('複製全部', { ic: 'check', kind: 'primary', onclick: copy })),
   ], { wide: true });
 }
+
+/** 二進位檔（例如 .pcap）：一般的瀏覽器直接下載；Artifact 裡不能下載 */
+export function saveBinary(name, bytes, type, okText) {
+  if (IN_ARTIFACT) { toast('這個頁面不能下載檔案：請改用一般的瀏覽器打開 LinkUp', 'bad', 5000); return; }
+  const url = URL.createObjectURL(new Blob([bytes], { type }));
+  const a = h('a', { href: url, download: name });
+  document.body.append(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 2000);
+  toast(okText, 'ok');
+}

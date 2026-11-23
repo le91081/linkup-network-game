@@ -801,6 +801,7 @@ export function forward(state, ctx, startId, pkt) {
           proto: pkt.proto, smac: outIf.rt.mac, dmac: tmac, src: pkt.src, dst: pkt.dst, sport: pkt.sport, dport: pkt.dport, ttl: pkt.ttl,
           reply: !!pkt.reply, ack: !!pkt.ack, ssl: !!pkt.ssl, data: pkt.data || null, spi: pkt.spi, ...(pkt.gre ? { gre: pkt.gre } : {}), ...(pkt.natt ? { natt: true } : {}),
           ...(pkt.len ? { len: pkt.len } : {}), ...(pkt.df ? { df: true } : {}), ...(pkt.bulk ? { bulk: true } : {}), ...(pkt.icmpErr ? { icmpErr: pkt.icmpErr, mtu: pkt.mtu } : {}),
+          ...(pkt.qname ? { qname: pkt.qname } : {}), ...(pkt.host ? { host: pkt.host } : {}),
         }, leak);
       }
     });

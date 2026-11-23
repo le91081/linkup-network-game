@@ -4,6 +4,9 @@ import { note, cardHead, field, sel } from './form.js';
 import { fmtIp } from '../engine/ip.js';
 import { isBridgePort } from '../engine/sim.js';
 import { counters, clearCounters, spanDest, setCapture, captureOf, protoName, infoOf, displayFilter, BCAST } from '../engine/wire.js';
+import { pcapBytes } from '../engine/pcap.js';
+import { SIM_EPOCH } from '../engine/ops.js';
+import { saveBinary } from './save.js';
 
 const num = (n) => Number(n || 0).toLocaleString('en-US');
 
@@ -127,7 +130,13 @@ export function captureTab(ctx, body) {
   body.append(h('div', { class: 'card' },
     cardHead(on ? '擷取中' : '封包擷取',
       button(on ? '停止' : '開始擷取', { small: true, kind: on ? '' : 'primary', ic: on ? 'pause' : 'play', onclick: () => { setCapture(state, dev.id, !on); if (!on) ui.sel = null; app.renderPanel(); } }),
-      button('清除', { small: true, onclick: () => { const c = captureOf(state, dev.id); if (c) { c.frames = []; c.seq = 0; c.t0 = state.clock; } ui.sel = null; app.refreshLive(); } })),
+      button('清除', { small: true, onclick: () => { const c = captureOf(state, dev.id); if (c) { c.frames = []; c.seq = 0; c.t0 = state.clock; } ui.sel = null; app.refreshLive(); } }),
+      button('匯出 .pcap', { small: true, ic: 'download', onclick: () => {
+        const c = captureOf(state, dev.id);
+        if (!c || !c.frames.length) return;
+        const name = `${dev.name.replace(/[^\w.-]+/g, '_').replace(/^_+|_+$/g, '') || dev.id}.pcap`;
+        saveBinary(name, pcapBytes(c.frames, Math.floor(SIM_EPOCH / 1000) + c.t0), 'application/vnd.tcpdump.pcap', `已匯出 ${c.frames.length} 個訊框：用 Wireshark 打開`);
+      } })),
     filter,
     ctx.live(() => {
       const c = captureOf(state, dev.id);

@@ -4720,6 +4720,43 @@ console.log('\n接觸不良的網路線：flapping、CRC 與 PortFast');
   ok(lv.objectives.every((o) => sim.runObjective(s, o).pass), 'spanning-tree portfast：三個目標都過');
 }
 
+console.log('\n封包擷取匯出成 .pcap');
+{
+  const { setCapture, captureOf } = await import('../src/engine/wire.js');
+  const { pcapBytes, frameBytes } = await import('../src/engine/pcap.js');
+  const { resolveName } = await import('../src/engine/sim/resolve.js');
+  const sim = await import('../src/engine/sim.js');
+  const ok = (cond, title) => (cond ? console.log('  ✔ ' + title) : fail(title));
+  const sum = (b) => { let s = 0; for (let k = 0; k < b.length; k += 2) s += (b[k] << 8) + (b[k + 1] || 0); while (s >>> 16) s = (s & 0xffff) + (s >>> 16); return s; };
+  const lv = LEVELS.find((x) => x.id === 'l04');
+  const s = lv.setup(); lv.solve(s); settle(s);
+  const pc = Object.values(s.devices).find((d) => d.kind === 'host' && d.ifaces.some((i) => i.rt && i.rt.ip != null && i.rt.gw != null));
+  setCapture(s, pc.id, true);
+  resolveName(s, pc.id, 'www.example.com', 0, { nocache: true });
+  sim.transact(s, pc.id, { proto: 'icmp', dst: parseIp('8.8.8.8') });
+  sim.transact(s, pc.id, { proto: 'tcp', dst: parseIp('93.184.216.34'), dport: 443, host: 'www.example.com' });
+  const fr = captureOf(s, pc.id).frames;
+  const bytes = pcapBytes(fr, 1767574800);
+  const dv = new DataView(bytes.buffer);
+  ok(dv.getUint32(0, true) === 0xa1b2c3d4 && dv.getUint16(4, true) === 2 && dv.getUint16(6, true) === 4 && dv.getUint32(20, true) === 1, '全域標頭：libpcap magic、2.4 版、Ethernet');
+  const pkts = []; for (let o = 24; o < bytes.length;) { const len = dv.getUint32(o + 8, true); pkts.push(bytes.slice(o + 16, o + 16 + len)); o += 16 + len; }
+  ok(pkts.length === fr.length && fr.length > 4, `每個擷取到的訊框都匯出了（${fr.length} 個）`);
+  const ipOf = (p) => { const o = p[12] === 0x81 ? 18 : 14; return p[o - 2] === 0x08 && p[o - 1] === 0x00 ? o : -1; };
+  const ips = pkts.map((p) => [p, ipOf(p)]).filter(([, o]) => o > 0);
+  ok(ips.length && ips.every(([p, o]) => sum(p.slice(o, o + 20)) === 0xffff), 'IPv4 標頭的檢查碼都正確');
+  const icmp = ips.find(([p, o]) => p[o + 9] === 1);
+  ok(icmp && sum(icmp[0].slice(icmp[1] + 20, icmp[1] + ((icmp[0][icmp[1] + 2] << 8) | icmp[0][icmp[1] + 3]))) === 0xffff && icmp[0][icmp[1] + 20] === 8, 'ICMP Echo request 的檢查碼正確');
+  const tcp = ips.find(([p, o]) => p[o + 9] === 6);
+  const tl = tcp && ((tcp[0][tcp[1] + 2] << 8) | tcp[0][tcp[1] + 3]) - 20;
+  ok(tcp && sum([...tcp[0].slice(tcp[1] + 12, tcp[1] + 20), 0, 6, tl >> 8, tl & 255, ...tcp[0].slice(tcp[1] + 20, tcp[1] + 20 + tl)]) === 0xffff, 'TCP 的檢查碼（含虛擬標頭）正確');
+  const dns = ips.find(([p, o]) => p[o + 9] === 17 && ((p[o + 22] << 8) | p[o + 23]) === 53);
+  ok(dns && new TextDecoder().decode(dns[0].slice(dns[1] + 28 + 12, dns[1] + 28 + 12 + 16)) === '\x03www\x07example\x03com', 'DNS 查詢裡有真正查的名稱 www.example.com');
+  const arp = frameBytes({ proto: 'arp', smac: 'aa:bb:cc:00:00:01', dmac: 'ff:ff:ff:ff:ff:ff', arp: { op: 1, sha: 'aa:bb:cc:00:00:01', sip: parseIp('10.0.0.1'), tip: parseIp('10.0.0.2') } });
+  ok(arp.length === 60 && arp[12] === 0x08 && arp[13] === 0x06 && arp[21] === 1, 'ARP：Ethernet type 0x0806、Request，補到最短的 60 位元組');
+  const tel = frameBytes({ proto: 'tcp', smac: 'a', dmac: 'b', src: 1, dst: 2, sport: 50000, dport: 23, data: { kind: 'login', user: 'admin', pass: 'cisco123' }, len: 120 });
+  ok(new TextDecoder().decode(new Uint8Array(tel)).includes('admin\r\ncisco123'), 'Telnet 的帳號密碼是明文（在 Wireshark 的 Follow TCP Stream 看得到）');
+}
+
 console.log('\nNetFlow 與 QoS 的 police');
 {
   const sim = await import('../src/engine/sim.js');

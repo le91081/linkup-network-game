@@ -888,3 +888,22 @@ test('接觸不良的網路線：show logging 每分鐘一次 Gi0/5 up / down、
   expect(await page.evaluate(() => { const app = window.linkup; return app.objectives().slice(1).map((o) => o.test(app.state)).join(); })).toBe('true,true');
   expect(await scan(page, '#panel', 'CLI（接觸不良）')).toEqual([]);
 });
+
+test('封包擷取匯出 .pcap：開始擷取、ping、下載的檔案是 libpcap 格式', async ({ page }) => {
+  const fs = await import('fs');
+  await boot(page);
+  await open(page, 'l04');
+  await page.evaluate(() => { const app = window.linkup; const lv = app.level; lv.solve(app.state); app.changed(); });
+  await clickDevice(page, 'pc-1');
+  await page.locator('#panel .tab', { hasText: '封包擷取' }).click();
+  await page.locator('#panel .btn', { hasText: '開始擷取' }).click();
+  await page.locator('#panel .tab', { hasText: '終端機' }).click();
+  await typeCmd(page, 'ping 8.8.8.8');
+  await expect(page.locator('#panel .term-out')).toContainText('回覆自 8.8.8.8');
+  await page.locator('#panel .tab', { hasText: '封包擷取' }).click();
+  const [dl] = await Promise.all([page.waitForEvent('download'), page.locator('#panel .btn', { hasText: '匯出 .pcap' }).click()]);
+  expect(dl.suggestedFilename()).toMatch(/\.pcap$/);
+  const b = fs.readFileSync(await dl.path());
+  expect(b.readUInt32LE(0)).toBe(0xa1b2c3d4);
+  expect(b.length).toBeGreaterThan(24 + 16 + 60);
+});

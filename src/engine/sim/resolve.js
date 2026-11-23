@@ -48,7 +48,7 @@ export function resolveName(state, devId, name, depth = 0, opts = {}) {
   }
   const server = servers[0] ?? servers6[0], v6t = !servers.length;
   log.push({ dev: devId, kind: 'dns', text: `向 DNS 伺服器 ${v6t ? fmtIp6(server) : fmtIp(server)} 查詢 ${name}${six ? ' 的 AAAA（IPv6 位址）' : ''}${v6t ? '（用 IPv6 查詢）' : ''}` });
-  const r = v6t ? transact6(state, devId, server, { proto: 'udp', dport: 53 }) : transact(state, devId, { proto: 'udp', dst: server, dport: 53 });
+  const r = v6t ? transact6(state, devId, server, { proto: 'udp', dport: 53 }) : transact(state, devId, { proto: 'udp', dst: server, dport: 53, qname: name });
   log.push(...r.log); hops.push(...r.hops);
   if (!r.ok) return { ok: false, reason: `DNS 查詢失敗：${r.reason}`, failDev: r.failDev, log, hops };
   const sd = state.devices[r.responder];

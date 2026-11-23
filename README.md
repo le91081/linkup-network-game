@@ -80,6 +80,7 @@ npm run build    # 輸出到 dist/
 
 - 電腦與伺服器有「終端機」分頁：`ping`（支援 IPv6）、`ipconfig`、`ipconfig /renew`、`ipconfig /release`、`arp -a`、`arp -d`、`tracert`、`nslookup`、`curl`（HTTPS 會驗證憑證，錯誤訊息和真的 curl 一樣；`-k` 略過、`-v` 看憑證、`-I` 只看標頭、`-L` 跟著轉址）、`date`、`w32tm /resync`、`certutil -store root` / `-addstore root`、`netstat -e`、`netsh interface ipv4 show subinterfaces`（MTU）、`ping -f -l <大小>`（設 DF 找出路徑上的 MTU）、`iperf3 -c <IP>`（量實際傳輸速率，會讓時間前進 10 秒），以及 `ssh 帳號@IP`、`telnet IP` 登入網路設備的命令列（見下方「遠端登入」）。Linux 主機（Ansible 控制主機、Docker 主機）用的是 `ip addr`、`ip route`、`sudo ip link set eth0 mtu 9000`、`ping -M do -s <大小>`、`timedatectl`，Docker 主機還有 `docker`。
 - 電腦與伺服器還有「封包擷取」分頁：像 Wireshark 一樣記下網路卡收送的訊框，可以用 `ip.addr == …`、`tcp.port == …`、`arp`、`telnet` 之類的條件篩選，點一下看每一層的標頭。
+- 擷取到的訊框可以「匯出 .pcap」，用真的 Wireshark 打開：每個訊框都組成真正的位元組（Ethernet / 802.1Q、ARP、IPv4、ICMP、TCP、UDP、DNS 的查詢名稱、DHCP、STP、CDP、LLDP），檢查碼都算好；Telnet、FTP、HTTP 放的是明文（Follow TCP Stream 看得到帳號密碼），SSH、TLS、ESP 是亂數。
 - Cisco 的路由器與交換器有「CLI」分頁：IOS 風格的命令列。`show running-config`、`show startup-config`、`show ip route`、`show vlan brief`、`show interfaces trunk`、`show arp` 等四十多個 `show` 指令用來查看狀態；輸入 `configure terminal` 之後可以直接用指令設定（見下方「CLI 設定指令」），改的和圖形介面是同一份設定。
 - FortiGate 防火牆也有「CLI」分頁，用的是 FortiOS 的階層式語法（`config firewall policy` → `edit 1` → `set …` → `next` → `end`）。
 - 伺服器的「網路設定」分頁可以開啟伺服器角色：TFTP、FTP、SNMP 網管 (NMS)。有 TFTP / FTP 的伺服器多一個「檔案」分頁（備份上來的設定、放在上面的韌體），網管伺服器多一個「網管」分頁（輪詢結果、每條線路的使用率、收到的 Trap）。
