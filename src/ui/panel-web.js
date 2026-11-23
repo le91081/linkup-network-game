@@ -1,7 +1,7 @@
 // 網站與 HTTPS 憑證：伺服器的「網站」分頁、用戶端的「憑證與時間」卡片
 import { h, button, toast } from './dom.js';
 import { inp, sel, field, note, cardHead, badge, toggle, kv } from './form.js';
-import { certSelf, certDaysLeft, fmtDate, issueCert, PUBLIC_CAS, CORP_CA } from '../engine/web.js';
+import { certSelf, certDaysLeft, fmtDate, issueCert, PUBLIC_CAS, CORP_CA, INTERMEDIATES } from '../engine/web.js';
 import { plainStamp } from '../engine/ops.js';
 
 const isName = (v) => /^(\*\.)?[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)*$/i.test(v);
@@ -30,7 +30,9 @@ export function webTab(ctx, body) {
     c ? [
       kv('主體 (CN)', c.cn),
       kv('主體別名 (SAN)', (c.san && c.san.length ? c.san : [c.cn]).join(', ')),
-      kv('簽發者', certSelf(c) ? `${c.cn}（自簽）` : c.issuer),
+      kv('簽發者', certSelf(c) ? `${c.cn}（自簽）` : INTERMEDIATES[c.issuer] ? `${c.issuer}（中繼 CA，根憑證是 ${INTERMEDIATES[c.issuer]}）` : c.issuer),
+      INTERMEDIATES[c.issuer] && toggle(ctx, () => !!w.chain, (v) => { w.chain = v; }, '一起送出中繼憑證（安裝完整的憑證鏈 fullchain）'),
+      INTERMEDIATES[c.issuer] && !w.chain && note('warn', '只送出網站自己的憑證：Windows 的瀏覽器會自己去下載中繼憑證，Linux 的 curl、Java、手機 App 會說「unable to get local issuer certificate」。'),
       kv('有效期間', `${fmtDate(c.from)} ～ ${fmtDate(c.to)}`),
       certSelf(c) && note('warn', '自簽憑證沒有人信任：每個使用者都會看到警告。'),
     ] : note('bad', '這個網站還沒有安裝憑證：443 有在聽，但 TLS 交握一開始就會失敗。')));
@@ -40,15 +42,15 @@ export function webTab(ctx, body) {
     note('muted', '產生新的私密金鑰與憑證簽署要求 (CSR)，送給 CA 簽發之後安裝到網站。Chrome 58 之後只看主體別名 (SAN)，不看 CN：使用者會打的每一個名稱都要列進去。'),
     field('主體 (CN)', inp({ commit() {} }, () => draft.cn, (v) => { draft.cn = v.trim(); }, { ph: 'intranet.corp.local', check: isName })),
     field('主體別名 (SAN)', inp({ commit() {} }, () => draft.san, (v) => { draft.san = v; }, { ph: 'intranet.corp.local, portal.corp.local', check: (v) => splitNames(v).every(isName) }), '用逗號分隔；可以用萬用字元 *.corp.local（只比對一層）'),
-    field('交給哪個 CA 簽發', sel({ commit() {} }, () => draft.issuer, (v) => { draft.issuer = v; }, [[CORP_CA, `${CORP_CA}（公司的內部 CA）`], [PUBLIC_CAS[0], `${PUBLIC_CAS[0]}（公開 CA）`], ['self', '自簽（不經過 CA）']])),
+    field('交給哪個 CA 簽發', sel({ commit() {} }, () => draft.issuer, (v) => { draft.issuer = v; }, [[CORP_CA, `${CORP_CA}（公司的內部 CA）`], ['Corp Issuing CA', 'Corp Issuing CA（公司的中繼 CA）'], [PUBLIC_CAS[0], `${PUBLIC_CAS[0]}（公開 CA）`], ['DigiCert Global G2 TLS RSA SHA256 2020 CA1', 'DigiCert 的中繼 CA（公開）'], ['self', '自簽（不經過 CA）']])),
     field('有效期間', sel({ commit() {} }, () => draft.days, (v) => { draft.days = v; }, [['90', '90 天'], ['365', '1 年'], ['730', '2 年']])),
     h('div', { class: 'addrow' }, button('產生 CSR、簽發並安裝', { ic: 'check', small: true, onclick: () => {
       const cn = draft.cn.toLowerCase(), san = splitNames(draft.san);
       if (!isName(cn)) return toast('主體 (CN) 要是一個網域名稱，例如 intranet.corp.local', 'bad');
       if (!san.every(isName)) return toast('主體別名裡有不是網域名稱的項目', 'bad');
       const names = san.length ? san : [cn];
-      if (draft.issuer === PUBLIC_CAS[0] && names.some((n) => /\.(local|lan|internal|corp)$/.test(n))) return toast('公開 CA 不會簽發內部網域（.local 這類）的憑證：CA/B 論壇從 2015 年起禁止。內部的名稱要用公司自己的 CA', 'bad', 7000);
-      if (draft.issuer === PUBLIC_CAS[0] && +draft.days > 398) return toast('公開 CA 簽發的憑證最長 398 天', 'bad');
+      if ((draft.issuer === PUBLIC_CAS[0] || INTERMEDIATES[draft.issuer] === PUBLIC_CAS[0]) && names.some((n) => /\.(local|lan|internal|corp)$/.test(n))) return toast('公開 CA 不會簽發內部網域（.local 這類）的憑證：CA/B 論壇從 2015 年起禁止。內部的名稱要用公司自己的 CA', 'bad', 7000);
+      if ((draft.issuer === PUBLIC_CAS[0] || INTERMEDIATES[draft.issuer] === PUBLIC_CAS[0]) && +draft.days > 398) return toast('公開 CA 簽發的憑證最長 398 天', 'bad');
       w.cert = issueCert(state, { cn, san: names, issuer: draft.issuer === 'self' ? cn : draft.issuer, days: +draft.days });
       toast(draft.issuer === 'self' ? '已安裝自簽憑證' : `${draft.issuer} 已簽發並安裝：${names.join('、')}`, 'ok', 5000);
       ctx.commit(true);

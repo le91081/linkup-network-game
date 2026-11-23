@@ -80,7 +80,7 @@ const HELP_LINUX = [
 export function buildTerminal(ctx, body) {
   const { app, dev } = ctx;
   // Ansible 的控制主機跑的是 Linux（Ansible 不能裝在 Windows 上）
-  const linux = !!dev.ansible || !!dev.docker || !!dev.tf || !!dev.git;
+  const linux = !!dev.ansible || !!dev.docker || !!dev.tf || !!dev.git || dev.os === 'linux';
   const PS = dev.git ? 'netops@backup:~/network-configs$' : linux ? `${dev.ansible || dev.tf ? 'netops' : 'admin'}@${dev.name.replace(/[^\w-]+/g, '-').replace(/^-+|-+$/g, '').toLowerCase() || 'ansible'}:~$` : 'C:\\>';
   const logs = (app.termLog[dev.id] ||= [{ t: `${dev.name} 終端機 — 輸入 help 查看指令`, c: 'dim' }]);
   const hist = (app.termHist[dev.id] ||= []);
@@ -816,7 +816,7 @@ export function buildTerminal(ctx, body) {
       if (!https && port === 443) { print('HTTP/1.1 400 Bad Request', 'warn'); print('<center>The plain HTTP request was sent to HTTPS port</center>', 'pre'); print('  ↳ 443 是 HTTPS：網址要寫 https://', 'hint'); return; }
       if (https && port === 80) { print('curl: (35) OpenSSL/3.0.13: error:0A00010B:SSL routines::wrong version number', 'bad'); print('  ↳ 80 是明文的 HTTP：要用 https:// 就連 443，或把網址改成 http://', 'hint'); return; }
       if (https) {
-        const t = tlsCheck(st(), dev, srv, host, res.deep && st().devices[res.deep.dev]);
+        const t = tlsCheck(st(), dev, srv, host, res.deep && st().devices[res.deep.dev], { aia: !linux });
         if (verbose && t.cert) {
           print('* SSL connection using TLSv1.3 / TLS_AES_256_GCM_SHA384', 'dim');
           print('* Server certificate:', 'dim');

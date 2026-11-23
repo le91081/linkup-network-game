@@ -8,6 +8,13 @@ import { deviceTime, SIM_EPOCH } from './ops.js';
 
 export const PUBLIC_CAS = ['DigiCert Global Root G2', 'ISRG Root X1', 'GlobalSign Root R3'];
 export const CORP_CA = 'Corp Root CA';
+/**
+ * 中繼 CA：根 CA 平常離線保管，實際簽發網站憑證的是它簽出來的中繼 CA。
+ * 網站要把中繼憑證一起送出去（完整的憑證鏈 fullchain），用戶端才接得到自己信任的根憑證
+ */
+export const INTERMEDIATES = { 'Corp Issuing CA': CORP_CA, 'DigiCert Global G2 TLS RSA SHA256 2020 CA1': 'DigiCert Global Root G2' };
+/** Linux 的程式（OpenSSL）不會自己去下載缺少的中繼憑證；Windows（瀏覽器、Schannel）會照憑證裡的 AIA 網址去抓 */
+export const isLinuxHost = (d) => !!(d && (d.ansible || d.docker || d.tf || d.git || d.os === 'linux'));
 const DAY = 86400000;
 export const certSelf = (c) => !c.issuer || c.issuer === 'self' || c.issuer === c.cn;
 
@@ -44,14 +51,20 @@ export function certOf(server, host) {
   return { ...PUBLIC_CERT(host), assumed: true };
 }
 
-export function tlsCheck(state, client, server, host, deepBy) {
+export function tlsCheck(state, client, server, host, deepBy, opts = {}) {
   const real = certOf(server, host);
   // SSL deep inspection：FortiGate 先和網站完成 TLS，再用自己的 CA 簽一張同名的憑證給電腦
   const cert = deepBy && real ? { cn: host, san: [host], issuer: 'Fortinet_CA_SSL', from: real.from, to: real.to, resigned: deepBy.name } : real;
   if (!cert) return { ok: false, code: 35, msg: 'OpenSSL SSL_connect: SSL_ERROR_SYSCALL', why: `${server.name} 的 443 有在聽，但沒有設定 HTTPS 憑證，TLS 交握失敗` };
   const trust = new Set([...PUBLIC_CAS, ...(client.trust || [])]);
   if (certSelf(cert)) return { ok: false, cert, code: 60, msg: 'SSL certificate problem: self-signed certificate', why: `${server.name} 的憑證是自簽的（簽發者就是它自己），${client.name} 不信任${cert.factory ? '。網路設備的管理網頁出廠都是自簽憑證，正式環境要換成內部 CA 簽的' : ''}` };
-  if (!trust.has(cert.issuer)) return { ok: false, cert, code: 60, msg: 'SSL certificate problem: unable to get local issuer certificate', why: cert.resigned ? `${cert.resigned} 做 SSL deep inspection：連線被它解密，電腦收到的是 FortiGate 用「Fortinet_CA_SSL」重新簽發的憑證，${client.name}沒有安裝這張 CA（要用群組原則發給每台電腦，或改用 certificate-inspection）` : `${server.name} 的憑證是「${cert.issuer}」簽的，${client.name} 的信任清單裡沒有這個 CA` };
+  // 中繼 CA 簽的：要接得到信任的根憑證，伺服器又要把中繼憑證一起送出來（或用戶端自己去 AIA 抓）
+  const root = !cert.resigned && INTERMEDIATES[cert.issuer];
+  if (root) {
+    if (!trust.has(root)) return { ok: false, cert, code: 60, msg: 'SSL certificate problem: unable to get local issuer certificate', why: `${server.name} 的憑證是中繼 CA「${cert.issuer}」簽的，它的根憑證「${root}」不在 ${client.name} 的信任清單裡` };
+    const sent = !!(server.web && server.web.chain);
+    if (!sent && !(opts.aia ?? !isLinuxHost(client))) return { ok: false, cert, code: 60, msg: 'SSL certificate problem: unable to get local issuer certificate', why: `${server.name} 只送出網站自己的憑證，沒有附上中繼 CA「${cert.issuer}」的憑證：${client.name} 接不上信任鏈（Windows 的瀏覽器會照 AIA 自己去下載，所以看起來正常；Linux 的 curl、Java、手機 App 就會失敗）。網站要安裝完整的憑證鏈 (fullchain)` };
+  } else if (!trust.has(cert.issuer)) return { ok: false, cert, code: 60, msg: 'SSL certificate problem: unable to get local issuer certificate', why: cert.resigned ? `${cert.resigned} 做 SSL deep inspection：連線被它解密，電腦收到的是 FortiGate 用「Fortinet_CA_SSL」重新簽發的憑證，${client.name}沒有安裝這張 CA（要用群組原則發給每台電腦，或改用 certificate-inspection）` : `${server.name} 的憑證是「${cert.issuer}」簽的，${client.name} 的信任清單裡沒有這個 CA` };
   const now = deviceTime(state, client).ms;
   if (now < cert.from) return { ok: false, cert, code: 60, msg: 'SSL certificate problem: certificate is not yet valid', why: `${client.name} 的時鐘是 ${fmtDate(now)}，憑證 ${fmtDate(cert.from)} 才開始生效（用戶端的時間不對，也會讓憑證「還沒生效」）` };
   if (now > cert.to) return { ok: false, cert, code: 60, msg: 'SSL certificate problem: certificate has expired', why: `${server.name} 的憑證 ${fmtDate(cert.to)} 就到期了` };

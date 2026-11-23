@@ -83,6 +83,7 @@ function hostLines(a, b) {
     const wa = a.web || {}, wb = b.web || {}, c = wb.cert;
     if (JSON.stringify(wa.cert) !== JSON.stringify(c)) out.push(c ? `網站的憑證：換成${certSelf(c) ? '自簽憑證' : ` ${c.issuer} 簽發的新憑證`}（SAN：${(c.san && c.san.length ? c.san : [c.cn]).join('、')}；${fmtDate(c.from)} ～ ${fmtDate(c.to)}）` : '網站的憑證：移除');
     if (!!wa.redirect !== !!wb.redirect) out.push(`HTTP 轉到 HTTPS：${wb.redirect ? '關 → 開' : '開 → 關'}`);
+    if (!!wa.chain !== !!wb.chain) out.push(`一起送出中繼憑證（完整的憑證鏈）：${wb.chain ? '關 → 開' : '開 → 關'}`);
     if ((wa.title || '') !== (wb.title || '')) out.push(`網頁標題：${wa.title || '（無）'} → ${wb.title || '（無）'}`);
     delete a.web; delete b.web;
   }

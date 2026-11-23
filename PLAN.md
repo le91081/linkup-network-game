@@ -48,7 +48,7 @@ README 說明「現在有什麼、怎麼玩」，這份文件說明「整體應�
 | 16. 工程品質 | 6 | 3 | 1 | 0 |
 | **合計** | **187** | **12** | **6** | **6** |
 
-另外：關卡 147 關（第 17 節）、證照條目涵蓋情形（第 18 節）、建議的實作順序（第 19 節）。
+另外：關卡 148 關（第 17 節）、證照條目涵蓋情形（第 18 節）、建議的實作順序（第 19 節）。
 
 範圍的調整（2026-11-22）：第 14 節遊戲系統還沒做完的項目暫時不做（⏸）；第 15 節的手機與平板、多語系、無障礙、主題從規劃中移除，不做。
 
@@ -156,7 +156,7 @@ README 說明「現在有什麼、怎麼玩」，這份文件說明「整體應�
 | IOS 進階過濾 | ✅ | Zone-Based Firewall 已完成：zone security、zone-member security、class-map type inspect（match protocol、match access-group）、policy-map type inspect（inspect 有狀態、pass 單向、drop、class-default）、zone-pair 與 self zone、有 zone 和沒 zone 的介面不通；`show zone security`、`show zone-pair security`、`show policy-map type inspect zone-pair sessions`；ACL 分頁的簡化編輯器 → 6-14。時間型 ACL（`time-range` 的 periodic、規則後面的 `time-range`、`show time-range`、(active) / (inactive)，照設備的時鐘與時區）→ 6-18；`established`（只比對有 ACK / RST 的 TCP）與 Reflexive ACL（具名 ACL 的 `permit … reflect <名稱> [timeout <秒>]` 記下反過來的暫時規則、`evaluate <名稱>` 比對，TCP / UDP / ICMP 都適用，閒置 300 秒消失、`ip reflexive-list timeout`，`show access-lists` 列出暫時規則與剩下的秒數）→ 6-19 |
 | NGFW / UTM | ✅ | 網頁過濾已完成：FortiGuard 類別（設定檔、`config webfilter profile` 的 ftgd-wf filters）、政策的 utm-status / webfilter-profile / ssl-ssh-profile、SSL 檢查（no-inspection 看不到 HTTPS、certificate-inspection 看 SNI、deep-inspection 用 Fortinet_CA_SSL 重新簽憑證，電腦要信任）、HTTP 的封鎖頁面、「安全設定檔」分頁 → 6-15；應用程式控管（`config application list`，依類別封鎖 P2P / Proxy…）、IPS 感測器（`config ips sensor`，依嚴重程度封鎖 Log4Shell 這類攻擊）、政策的 application-list / ips-sensor → 6-16。DNS 過濾（`config dnsfilter profile` 的 ftgd-dns filters、政策的 dnsfilter-profile，擋下的名稱回 208.91.112.55，不用解密）、防毒（`config antivirus profile` 的 http / ftp av-scan、政策的 av-profile，EICAR 測試檔，HTTPS 要 deep-inspection 才掃得到）、「安全設定檔」分頁的兩種設定檔 → 6-17。還沒有 DoH 的偵測、沙箱 (FortiSandbox) 與郵件過濾 |
 | IPv6 安全 | ✅ | IPv6 ACL（見第 8 節）；冒牌的 Router Advertisement（主機用每一個 RA 的前綴各產生一個位址、預設閘道選 Router Preference 最高的）與 RA Guard（`ipv6 nd raguard policy` / `device-role host \| router` / `attach-policy`、`show ipv6 nd raguard policy`） |
-| 憑證與 PKI | 🟡 | 公開 CA 與公司內部的 CA（公開 CA 不簽 .local、效期上限）、用戶端的信任清單（加入網域的電腦自動有公司的根憑證，`certutil -addstore root` 匯入）、有效期間用用戶端自己的時鐘判斷（`w32tm`、`timedatectl`、自動設定時間）、SAN 與萬用字元；沒有中繼憑證鏈、CRL / OCSP、ACME 自動續約，用在 802.1X 的 EAP-TLS（→ 6-13）與 IOS 的 IKEv2 rsa-sig（trustpoint、SCEP、revocation-check → 7-12） |
+| 憑證與 PKI | 🟡 | 公開 CA 與公司內部的 CA（公開 CA 不簽 .local、效期上限）、用戶端的信任清單（加入網域的電腦自動有公司的根憑證，`certutil -addstore root` 匯入）、有效期間用用戶端自己的時鐘判斷（`w32tm`、`timedatectl`、自動設定時間）、SAN 與萬用字元；中繼 CA（公司的 Corp Issuing CA、公開 CA 的中繼）：網站要送出完整的憑證鏈，Windows 會照 AIA 自己補、Linux 的 OpenSSL 不會 → 11-14；沒有 CRL / OCSP、ACME 自動續約，用在 802.1X 的 EAP-TLS（→ 6-13）與 IOS 的 IKEv2 rsa-sig（trustpoint、SCEP、revocation-check → 7-12） |
 
 ## 6. VPN 與廣域網路
 
@@ -294,7 +294,7 @@ README 說明「現在有什麼、怎麼玩」，這份文件說明「整體應�
 
 | 功能 | 狀態 | 說明 |
 | --- | --- | --- |
-| 關卡 | ✅ | 17 章 147 關（清單見第 17 節） |
+| 關卡 | ✅ | 17 章 148 關（清單見第 17 節） |
 | 任務目標 | ✅ | ping、TCP、UDP、DHCP、設定檢查、故障演練、IPv6 ping、傳輸速率、遠端登入（SSH / Telnet 帳號密碼）、IP 電話註冊、通話品質 (MOS)、HTTPS（連得上之後還要通過憑證驗證）、路徑（一定要經過 / 不能經過某台設備）；TCP 的目標交握完還會送一個裝滿的資料區段（設了 DF），MTU 的問題才看得出來 |
 | 提示與星等 | ✅ | 每關 3 個提示，看一個少一顆星 |
 | 學習卡 | ✅ | 每關 2 到 4 張觀念說明 |
@@ -353,7 +353,7 @@ README 說明「現在有什麼、怎麼玩」，這份文件說明「整體應�
 
 ## 17. 關卡規劃
 
-### 現有的 147 關
+### 現有的 148 關
 
 | 章 | 關卡 |
 | --- | --- |
@@ -367,7 +367,7 @@ README 說明「現在有什麼、怎麼玩」，這份文件說明「整體應�
 | 8 高可用與進階路由 | 迴圈與生成樹、EtherChannel、閘道備援、集中式 DHCP、OSPF 路徑選擇、切蛋糕、閘道還活著，但出不去（HSRP 追蹤）、主線斷了，電話斷了四十秒（BFD）、兩台閘道，只有一台在做事（GLBP）、防火牆一壞，全公司就斷網（FortiGate HA）、兩台核心說好分擔，結果全擠在 Core-1（MST）、備援線一接上，整棟樓斷網（BPDU Filter 與 Loop Guard） |
 | 9 IPv6 | IPv6 初體驗、雙協定、位址從哪裡來？、IPv6 也要動態路由、封了 IPv4，忘了 IPv6、IPv6 的預設閘道被搶走了（RA Guard）、內部網站加了 IPv6 之後（AAAA 與 Happy Eyeballs）、IPv6 過不了 VPN（VTI 只載 IPv4）、換了 ISP，IPv6 就上不了網（DHCPv6 PD）、防火牆開了 IPv6，網站卻都打不開（FortiGate 的 IPv6 政策）、新大樓只有 IPv6，網站卻大多只有 IPv4（NAT64 與 DNS64） |
 | 10 故障排除 | 誰搶了我的 IP、樓層之間又斷了、分公司的求救電話、明明連得上，為什麼這麼慢、分公司的 OSPF 鄰居起不來、流量為什麼繞去實驗室、VPN 通了，資料卻過不去、DNS 改了，為什麼還連到舊的、整層樓都慢了（廣播風暴與 Storm Control）、新交換器一插上去，整棟樓的 VLAN 都不見了（VTP）、會議室的電腦每隔一分鐘就斷一次（接觸不良的網路線與 PortFast）、大廳的電視一開，倉庫就傳不動檔案（多點傳送與 IGMP querier） |
-| 11 維運與管理 | 還好有備份、韌體升級、讓 SSH 能用、網路怎麼變慢了、是誰動了設定？、你的連線不是私人連線、專線被塞滿了，是誰？（NetFlow）、事件的先後兜不起來（NTP 與 service timestamps）、機櫃裡的線全部沒有標籤（看不到接線，用 CDP / LLDP 找）、外包工程師要能看設定但不能改（AAA 與 TACACS+）、SSH 被自己鎖在門外（Console 線）、核心交換器一出事，網管就連不進去（帶外管理與 Mgmt-vrf）、核心交換器要升級，flash 卻滿了（IOS XE 的 install 模式） |
+| 11 維運與管理 | 還好有備份、韌體升級、讓 SSH 能用、網路怎麼變慢了、是誰動了設定？、你的連線不是私人連線、專線被塞滿了，是誰？（NetFlow）、事件的先後兜不起來（NTP 與 service timestamps）、機櫃裡的線全部沒有標籤（看不到接線，用 CDP / LLDP 找）、外包工程師要能看設定但不能改（AAA 與 TACACS+）、SSH 被自己鎖在門外（Console 線）、核心交換器一出事，網管就連不進去（帶外管理與 Mgmt-vrf）、核心交換器要升級，flash 卻滿了（IOS XE 的 install 模式）、瀏覽器打得開，程式卻說憑證有問題（中繼 CA 與完整的憑證鏈） |
 | 12 語音與 QoS | 電話接上了，然後呢？、語音斷斷續續、新的 AP 怎麼插都不亮（PoE 預算與 CDP 的電力協商）、專線一斷，電話就聽不清楚（雙 WAN 的 QoS）、監視器的錄影一卡一卡（網路攝影機、NVR 與上行頻寬） |
 | 13 進階路由 | 誰當 DR？、10G 和 1G 一樣快？、分公司自成一區、兩家 ISP 都要用、併購的工廠只會靜態路由（重分配）、備份走另一條線（PBR）、分公司的路由表太大了（stub）、工廠接了一條供應商專線（NSSA）、兩個出口，同一個 AS（iBGP）、共用服務放在全域的路由表（VRF 的 OSPF 與路由洩漏）、分公司的 EIGRP 鄰居起不來，訊務都擠在 4G（EIGRP 與 MD5 驗證）、舊工廠的 RIP：一半的機台連不到（版本與 auto-summary）、總部的 IPTV，分公司看不到（PIM、RPF 與 RP） |
 | 14 無線控制器與無線環境 | AP 找不到控制器、牆後面收不到、走到另一頭就斷線、控制器重開機，整棟的 Wi-Fi 斷了六分鐘（N+1）、分公司的專線一斷，Wi-Fi 也跟著斷（FlexConnect）、一走進會議室，Teams 就斷一下（802.1X 的漫遊時間與 802.11r） |

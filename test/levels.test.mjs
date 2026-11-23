@@ -5370,6 +5370,24 @@ console.log('\n郵件：SMTP、MX 與佇列');
   ok(sendMail(s, 'inet', 'amy@corp.com.tw', { via: 'partner.com' }).ok && mx.mail.boxes.amy.length === 1, 'VIP 加政策：客戶寄來的信進了 amy 的信箱');
   ok(sendMail(s, 'inet', 'ken@corp.com.tw', { via: 'partner.com' }).ok && /查不到 other\.com 的 MX/.test(sendMail(s, 'inet', 'x@other.com', { via: 'partner.com' }).why), '寄給 ken 也收得到；別的網域在網際網路上查不到 MX');
 }
+console.log('\nTLS：中繼 CA 與完整的憑證鏈');
+{
+  const { tlsCheck, CORP_CA, issueCert } = await import('../src/engine/web.js');
+  const ok = (cond, title) => (cond ? console.log('  ✔ ' + title) : fail(title));
+  const lv = LEVELS.find((x) => x.id === 'l148');
+  const s = lv.setup(); settle(s);
+  const api = s.devices.api, pc = s.devices.pc, ship = s.devices.ship;
+  const t = (c, o) => tlsCheck(s, c, api, 'api.corp.local', null, o);
+  ok(t(pc).ok && !t(ship).ok && /沒有附上中繼 CA「Corp Issuing CA」/.test(t(ship).why) && t(ship).code === 60, 'Windows 會自己抓中繼憑證 (AIA)：通過；Linux (OpenSSL)：unable to get local issuer certificate');
+  ok(!t(pc, { aia: false }).ok, '用戶端不抓 AIA（API 用戶端、Java）：Windows 上也一樣失敗');
+  api.web.chain = true;
+  ok(t(pc).ok && t(ship).ok, '送出完整的憑證鏈：兩台都通過');
+  ship.trust = [];
+  ok(/根憑證「Corp Root CA」不在/.test(t(ship).why), '沒有安裝根憑證：鏈接得起來，但根不受信任');
+  ship.trust = [CORP_CA];
+  api.web = { cert: issueCert(s, { cn: 'api.corp.local', san: ['api.corp.local'], issuer: 'DigiCert Global G2 TLS RSA SHA256 2020 CA1', days: 90 }) };
+  ok(!t(ship).ok && t(pc).ok, '公開 CA 的中繼憑證也一樣：伺服器沒送，Linux 就接不上（根憑證內建也沒用）');
+}
 console.log('\nNetFlow 與 QoS 的 police');
 {
   const sim = await import('../src/engine/sim.js');
