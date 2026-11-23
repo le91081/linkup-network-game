@@ -1,6 +1,6 @@
 // 主機上的終端機：ping / ipconfig / tracert / nslookup / curl
 import { h, ownKeys, escLine } from './dom.js';
-import { fmtIp, fmtMask, parseIp } from '../engine/ip.js';
+import { fmtIp, fmtMask, parseIp, maskOf, parseMask } from '../engine/ip.js';
 import { transact, resolveName, dualStack, dnsQuery, dhcpTrace, arpRows, clearArp, dhcpRelease, dhcpRenew, fmtDur, throughput, unreachOf } from '../engine/sim.js';
 import { rttSamples, pingStats, winMs, winCol, linuxMs } from '../engine/latency.js';
 import { lookupRoute } from '../engine/sim.js';
@@ -66,6 +66,7 @@ const HELP_LINUX = [
   '可用指令：',
   '  ping <IP 或網域>        測試連線（會在場景中播放封包動畫）',
   '  ip addr / ip route      網路介面的位址 / 路由表（sudo ip link set eth0 mtu 9000 改 MTU）',
+  '  nmcli device status / nmcli connection show [eth0]   NetworkManager 的狀態與連線設定；sudo nmcli connection modify eth0 ipv4.method manual ipv4.addresses <IP/長度> ipv4.gateway <閘道> → sudo nmcli connection up eth0',
   '  ip route get <位址>     往這個位址實際走哪一條（收到 ICMP Redirect 的標 <redirected>；sudo ip route flush cache 清掉）',
   '  ping -M do -s 8972 <IP> 送 8972 位元組的資料、設 DF 不可分段：測 Jumbo Frame（8972 + 28 = 9000）',
   '  traceroute <IP 或網域>  顯示封包經過的每一台路由器',
@@ -322,6 +323,8 @@ export function buildTerminal(ctx, body) {
       print(`  ↳ 這台是 Linux：${{ ipconfig: '用 ip addr 看位址、ip route 看路由', w32tm: '用 timedatectl 看時間同步', certutil: '根憑證放進 /usr/local/share/ca-certificates/ 再 update-ca-certificates', cls: '用 clear' }[c]}`, 'hint');
     } else if (linux && (c === 'ip' || c === 'ifconfig')) {
       linuxIp(c === 'ifconfig' ? ['addr'] : args);
+    } else if (linux && c === 'nmcli') {
+      nmcli(args, sudo);
     } else if (!linux && c === 'netsh') {
       const a = args.map((x) => x.toLowerCase());
       const ifName = (i) => (i.bind.t === 'wlan' ? 'Wi-Fi' : dev.ifaces.filter((x) => x.bind.t !== 'wlan').indexOf(i) > 0 ? `乙太網路 ${dev.ifaces.filter((x) => x.bind.t !== 'wlan').indexOf(i) + 1}` : '乙太網路');
@@ -698,6 +701,79 @@ export function buildTerminal(ctx, body) {
     } else if (c) print(linux ? `${cmd}: command not found（輸入 help 查看可用指令）` : `'${cmd}' 不是內部或外部命令。輸入 help 查看可用指令。`, 'warn');
     draw();
   };
+
+  /**
+   * NetworkManager 的 nmcli：nmcli con mod 只改連線設定檔，nmcli con up 才套用到網卡（NM 的連線設定 = 網卡上的 i.nm，還沒套用的）
+   * ipv4.addresses 沒寫 /長度 就是 /32（閘道會不在同一個網段）
+   */
+  function nmcli(argv, su) {
+    const maskLen = (m) => parseMask(m || '') ?? 0;
+    const st = app.state, d = st.devices[dev.id];
+    const nics = d.ifaces.filter((i) => i.bind.t === 'port' || i.bind.t === 'wlan');
+    const conOf = (name) => nics.find((i) => i.label === name || i.id === name);
+    const prof = (i) => (i.nm ||= { method: i.mode === 'dhcp' ? 'auto' : 'manual', addresses: i.ip && i.mask ? `${i.ip}/${maskLen(i.mask)}` : '', gateway: i.gateway || '', dns: i.dns || '' });
+    const [obj = '', verb = '', ...rest] = argv;
+    const isObj = (x, full) => x && full.startsWith(x);
+    if (isObj(obj, 'device')) {
+      print('DEVICE  TYPE      STATE         CONNECTION', 'pre');
+      for (const i of nics) print(`${i.id.padEnd(8)}${(i.bind.t === 'wlan' ? 'wifi' : 'ethernet').padEnd(10)}${(!i.rt.link ? 'unavailable' : i.rt.ip != null ? 'connected' : 'connecting').padEnd(14)}${i.rt.link ? i.id : '--'}`, 'pre');
+      print('lo      loopback  connected (externally)  lo', 'pre');
+      return;
+    }
+    if (!isObj(obj, 'connection')) { print('用法：nmcli device status | nmcli connection show [名稱] | sudo nmcli connection modify <名稱> ipv4.method manual ipv4.addresses <IP/長度> ipv4.gateway <閘道> ipv4.dns <DNS> | sudo nmcli connection up <名稱>', 'warn'); return; }
+    if (!verb || isObj(verb, 'show')) {
+      const i = rest[0] && conOf(rest[0]);
+      if (rest[0] && !i) { print(`Error: ${rest[0]} - no such connection profile.`, 'bad'); return; }
+      if (!i) {
+        print('NAME  UUID                                  TYPE      DEVICE', 'pre');
+        for (const x of nics) print(`${x.id.padEnd(6)}${('5fb06bd0-0bb0-7ffb-45f1-' + (x.rt.mac || '000000000000').replace(/:/g, '')).slice(0, 36).padEnd(38)}${(x.bind.t === 'wlan' ? 'wifi' : 'ethernet').padEnd(10)}${x.rt.link ? x.id : '--'}`, 'pre');
+        return;
+      }
+      const p = prof(i);
+      print(`connection.id:                          ${i.id}`, 'pre');
+      print(`ipv4.method:                            ${p.method}`, 'pre');
+      print(`ipv4.addresses:                         ${p.addresses || '--'}`, 'pre');
+      print(`ipv4.gateway:                           ${p.gateway || '--'}`, 'pre');
+      print(`ipv4.dns:                               ${p.dns || '--'}`, 'pre');
+      if (i.rt.ip != null) { print(`IP4.ADDRESS[1]:                         ${fmtIp(i.rt.ip)}/${i.rt.bits}`, 'pre'); print(`IP4.GATEWAY:                            ${i.rt.gw != null ? fmtIp(i.rt.gw) : '--'}`, 'pre'); }
+      const pend = (p.method === 'manual') !== (i.mode === 'static') || (p.method === 'manual' && (p.addresses !== `${i.ip}/${maskLen(i.mask)}` || (p.gateway || '') !== (i.gateway || '')));
+      if (pend) print('  ↳ 設定檔改過，還沒套用到網卡：sudo nmcli connection up ' + i.id, 'hint');
+      return;
+    }
+    if (isObj(verb, 'modify')) {
+      const i = conOf(rest[0] || '');
+      if (!i) { print(`Error: unknown connection '${rest[0] || ''}'.`, 'bad'); return; }
+      if (!su) { print('Error: Failed to modify connection \'' + i.id + '\': Insufficient privileges', 'bad'); print('  ↳ 改網路設定要 root 權限：前面加 sudo', 'hint'); return; }
+      const p = { ...prof(i) }, kv = rest.slice(1);
+      if (!kv.length || kv.length % 2) { print('Error: <setting>.<property> argument is missing.', 'bad'); return; }
+      for (let k = 0; k < kv.length; k += 2) {
+        const key = kv[k].replace(/^\+/, ''), v = kv[k + 1];
+        if (key === 'ipv4.method') { if (!['auto', 'manual'].includes(v)) { print(`Error: failed to modify ipv4.method: '${v}' not among [auto, manual, link-local, shared, disabled].`, 'bad'); return; } p.method = v; }
+        else if (key === 'ipv4.addresses') { const [ip, len] = v.split('/'); if (parseIp(ip) == null || (len != null && !(+len >= 0 && +len <= 32))) { print(`Error: failed to modify ipv4.addresses: invalid IP address: '${v}'.`, 'bad'); return; } p.addresses = len == null ? ip + '/32' : v; }
+        else if (key === 'ipv4.gateway') { if (v !== '' && parseIp(v) == null) { print(`Error: failed to modify ipv4.gateway: invalid IP address '${v}'.`, 'bad'); return; } p.gateway = v; }
+        else if (key === 'ipv4.dns') p.dns = v;
+        else { print(`Error: invalid or not allowed setting '${key}'.`, 'bad'); return; }
+      }
+      if (p.method === 'manual' && !p.addresses) { print(`Error: Failed to modify connection '${i.id}': ipv4.addresses: this property cannot be empty for 'method=manual'`, 'bad'); return; }
+      i.nm = p;
+      if (/\/32$/.test(p.addresses) && !kv.some((x) => /\/\d+$/.test(x))) print('  ↳ ipv4.addresses 沒寫 /長度，NetworkManager 當成 /32（只有自己一個位址，閘道會不在同一個網段）', 'hint');
+      print('  ↳ 只改了連線設定檔：要 sudo nmcli connection up ' + i.id + ' 才會套用到網卡', 'hint');
+      ctx.commit(false);
+      return;
+    }
+    if (isObj(verb, 'up')) {
+      const i = conOf(rest[0] || '');
+      if (!i) { print(`Error: unknown connection '${rest[0] || ''}'.`, 'bad'); return; }
+      if (!su) { print('Error: Connection activation failed: Insufficient privileges', 'bad'); print('  ↳ 前面加 sudo', 'hint'); return; }
+      const p = prof(i);
+      if (p.method === 'auto') Object.assign(i, { mode: 'dhcp' });
+      else { const [ip, len] = p.addresses.split('/'); Object.assign(i, { mode: 'static', ip, mask: fmtIp(maskOf(+len)), gateway: p.gateway || '', dns: p.dns || '' }); }
+      ctx.commit(false);
+      print('Connection successfully activated (D-Bus active path: /org/freedesktop/NetworkManager/ActiveConnection/' + (2 + nics.indexOf(i)) + ')', 'ok');
+      return;
+    }
+    print(`Error: argument '${verb}' not understood. Try passing --help instead.`, 'bad');
+  }
 
   /** Linux 的 ip addr / ip route（Docker 主機多了 docker0 與每個容器的 veth） */
   function linuxIp(argv) {

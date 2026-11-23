@@ -5762,6 +5762,20 @@ console.log('\nJuniper 的 Junos：commit、DTP 與 native VLAN');
   ok(!/v30/.test(jn('show | compare')), 'rollback 0：候選設定回到現在生效的版本');
 }
 
+console.log('\nnmcli：Linux 伺服器改固定 IP');
+{
+  const { runObjective } = await import('../src/engine/sim/objectives.js');
+  const ok = (cond, title) => (cond ? console.log('  ✔ ' + title) : fail(title));
+  const lv = LEVELS.find((x) => x.id === 'l162');
+  const s = lv.setup(); settle(s);
+  const w = s.devices.web.ifaces[0];
+  ok(w.rt.src === 'dhcp' && !runObjective(s, lv.objectives[0]).pass, '開場：web-01 用 DHCP 拿到別的位址，使用者連不到 10.0.20.15');
+  Object.assign(w, { mode: 'static', ip: '10.0.20.15', mask: '255.255.255.255', gateway: '10.0.20.1' }); settle(s);
+  ok(!runObjective(s, lv.objectives[0]).pass && /\/32/.test(lv.objectives[1].test(s)), 'ipv4.addresses 沒寫 /24（變成 /32）：閘道不在網段裡，使用者連不到');
+  w.mask = '255.255.255.0'; settle(s);
+  ok(lv.objectives.every((o) => (o.type === 'check' ? o.test(s) : runObjective(s, o).pass) === true), '10.0.20.15/24、閘道 10.0.20.1：兩個目標都通過');
+}
+
 console.log('\nNetFlow 與 QoS 的 police');
 {
   const sim = await import('../src/engine/sim.js');

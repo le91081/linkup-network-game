@@ -48,7 +48,7 @@ README 說明「現在有什麼、怎麼玩」，這份文件說明「整體應�
 | 16. 工程品質 | 6 | 3 | 1 | 0 |
 | **合計** | **194** | **10** | **2** | **6** |
 
-另外：關卡 161 關（第 17 節）、證照條目涵蓋情形（第 18 節）、建議的實作順序（第 19 節）。
+另外：關卡 162 關（第 17 節）、證照條目涵蓋情形（第 18 節）、建議的實作順序（第 19 節）。
 
 範圍的調整（2026-11-22）：第 14 節遊戲系統還沒做完的項目暫時不做（⏸）；第 15 節的手機與平板、多語系、無障礙、主題從規劃中移除，不做。
 
@@ -257,7 +257,7 @@ README 說明「現在有什麼、怎麼玩」，這份文件說明「整體應�
 | 韌體與開機 | ✅ | flash / bootflash 的檔案與空間、`verify /md5`、`boot system`、開機時跳過不存在 / 損毀 / 平台不符的映像檔、ROMMON；FortiGate 的 `execute restore image` 與升級路徑 |
 | 設定管理進階 | ✅ | `archive`（path、maximum、write-memory 自動封存）、`show archive`、`show archive config differences`（Contextual Config Diffs）、`configure replace`（list、force）、`archive log config`（誰、從哪條線、打了什麼；notify syslog、hidekeys）；`time-period` 定時封存；IOS XE 的 install 模式（Catalyst 9300 出廠就是 INSTALL：從 packages.conf 開機）：`install add file … [activate commit]`、`install activate` / `commit`、`install remove inactive`（連還沒 add 的 .bin 也會刪）、`show install summary` 的 I / U / C、`show version` 的 INSTALL / BUNDLE；解開的套件要有空間，activate 會重新開機（沒存檔的設定會不見）→ 11-13 |
 | 監控 | ✅ | Syslog 伺服器、SNMP 網管（輪詢、使用率、Trap）；NetFlow（傳統與 Flexible NetFlow、快取、匯出到收集器、Top Talkers → 11-7） |
-| 其他廠牌的 CLI | 🟡 | Juniper EX2300 的 Junos：operational / 設定模式、set / delete 改候選設定、`commit`（`commit check` 的錯誤：未定義的 VLAN、access 模式多個 VLAN、native-vlan-id 沒放進 members）、`show | compare`、`rollback`、離開時提醒沒 commit 的設定；`show vlans`、`show interfaces terse`、`show ethernet-switching table`、`show configuration`、`show system commit`；不送 DTP、trunk 預設沒有 native VLAN → 10-13。還沒有 Aruba、MikroTik、Linux 的 `nmcli` |
+| 其他廠牌的 CLI | 🟡 | Juniper EX2300 的 Junos：operational / 設定模式、set / delete 改候選設定、`commit`（`commit check` 的錯誤：未定義的 VLAN、access 模式多個 VLAN、native-vlan-id 沒放進 members）、`show | compare`、`rollback`、離開時提醒沒 commit 的設定；`show vlans`、`show interfaces terse`、`show ethernet-switching table`、`show configuration`、`show system commit`；不送 DTP、trunk 預設沒有 native VLAN → 10-13。Linux 的 `nmcli`：`device status`、`connection show [名稱]`、`connection modify`（ipv4.method / addresses / gateway / dns；沒寫 /長度是 /32；要 sudo）只改設定檔、`connection up` 才套用 → 11-16。還沒有 Aruba、MikroTik |
 | 文件產出 | ✅ | 2D 拓撲圖匯出成 SVG（樣式寫進檔案、裁到內容範圍、加上關卡名稱）與 PNG；IP 位址規劃表（設備、介面、位址、網段、來源、閘道、VLAN、VRF、說明，網段摘要），複製到試算表或下載 CSV；Artifact 版改成顯示內容讓人複製 |
 
 ## 12. 自動化、雲端與虛擬化
@@ -295,7 +295,7 @@ README 說明「現在有什麼、怎麼玩」，這份文件說明「整體應�
 
 | 功能 | 狀態 | 說明 |
 | --- | --- | --- |
-| 關卡 | ✅ | 17 章 161 關（清單見第 17 節） |
+| 關卡 | ✅ | 17 章 162 關（清單見第 17 節） |
 | 任務目標 | ✅ | ping、TCP、UDP、DHCP、設定檢查、故障演練、IPv6 ping、傳輸速率、遠端登入（SSH / Telnet 帳號密碼）、IP 電話註冊、通話品質 (MOS)、HTTPS（連得上之後還要通過憑證驗證）、路徑（一定要經過 / 不能經過某台設備）；TCP 的目標交握完還會送一個裝滿的資料區段（設了 DF），MTU 的問題才看得出來 |
 | 提示與星等 | ✅ | 每關 3 個提示，看一個少一顆星 |
 | 學習卡 | ✅ | 每關 2 到 4 張觀念說明 |
@@ -354,7 +354,7 @@ README 說明「現在有什麼、怎麼玩」，這份文件說明「整體應�
 
 ## 17. 關卡規劃
 
-### 現有的 161 關
+### 現有的 162 關
 
 | 章 | 關卡 |
 | --- | --- |
@@ -368,7 +368,7 @@ README 說明「現在有什麼、怎麼玩」，這份文件說明「整體應�
 | 8 高可用與進階路由 | 迴圈與生成樹、EtherChannel、閘道備援、集中式 DHCP、OSPF 路徑選擇、切蛋糕、閘道還活著，但出不去（HSRP 追蹤）、主線斷了，電話斷了四十秒（BFD）、兩台閘道，只有一台在做事（GLBP）、防火牆一壞，全公司就斷網（FortiGate HA）、兩台核心說好分擔，結果全擠在 Core-1（MST）、備援線一接上，整棟樓斷網（BPDU Filter 與 Loop Guard）、兩台疊成一台，壞一台全公司斷線（交換器堆疊） |
 | 9 IPv6 | IPv6 初體驗、雙協定、位址從哪裡來？、IPv6 也要動態路由、封了 IPv4，忘了 IPv6、IPv6 的預設閘道被搶走了（RA Guard）、內部網站加了 IPv6 之後（AAAA 與 Happy Eyeballs）、IPv6 過不了 VPN（VTI 只載 IPv4）、換了 ISP，IPv6 就上不了網（DHCPv6 PD）、防火牆開了 IPv6，網站卻都打不開（FortiGate 的 IPv6 政策）、新大樓只有 IPv6，網站卻大多只有 IPv4（NAT64 與 DNS64） |
 | 10 故障排除 | 誰搶了我的 IP、樓層之間又斷了、分公司的求救電話、明明連得上，為什麼這麼慢、分公司的 OSPF 鄰居起不來、流量為什麼繞去實驗室、VPN 通了，資料卻過不去、DNS 改了，為什麼還連到舊的、整層樓都慢了（廣播風暴與 Storm Control）、新交換器一插上去，整棟樓的 VLAN 都不見了（VTP）、會議室的電腦每隔一分鐘就斷一次（接觸不良的網路線與 PortFast）、大廳的電視一開，倉庫就傳不動檔案（多點傳送與 IGMP querier）、換成 Juniper 之後，什麼都不通（Junos） |
-| 11 維運與管理 | 還好有備份、韌體升級、讓 SSH 能用、網路怎麼變慢了、是誰動了設定？、你的連線不是私人連線、專線被塞滿了，是誰？（NetFlow）、事件的先後兜不起來（NTP 與 service timestamps）、機櫃裡的線全部沒有標籤（看不到接線，用 CDP / LLDP 找）、外包工程師要能看設定但不能改（AAA 與 TACACS+）、SSH 被自己鎖在門外（Console 線）、核心交換器一出事，網管就連不進去（帶外管理與 Mgmt-vrf）、核心交換器要升級，flash 卻滿了（IOS XE 的 install 模式）、瀏覽器打得開，程式卻說憑證有問題（中繼 CA 與完整的憑證鏈）、Leaf 的管理介面，只有隔壁連得到（Nexus 的 mgmt0） |
+| 11 維運與管理 | 還好有備份、韌體升級、讓 SSH 能用、網路怎麼變慢了、是誰動了設定？、你的連線不是私人連線、專線被塞滿了，是誰？（NetFlow）、事件的先後兜不起來（NTP 與 service timestamps）、機櫃裡的線全部沒有標籤（看不到接線，用 CDP / LLDP 找）、外包工程師要能看設定但不能改（AAA 與 TACACS+）、SSH 被自己鎖在門外（Console 線）、核心交換器一出事，網管就連不進去（帶外管理與 Mgmt-vrf）、核心交換器要升級，flash 卻滿了（IOS XE 的 install 模式）、瀏覽器打得開，程式卻說憑證有問題（中繼 CA 與完整的憑證鏈）、Leaf 的管理介面，只有隔壁連得到（Nexus 的 mgmt0）、伺服器的 IP 每天都不一樣（nmcli） |
 | 12 語音與 QoS | 電話接上了，然後呢？、語音斷斷續續、新的 AP 怎麼插都不亮（PoE 預算與 CDP 的電力協商）、專線一斷，電話就聽不清楚（雙 WAN 的 QoS）、監視器的錄影一卡一卡（網路攝影機、NVR 與上行頻寬） |
 | 13 進階路由 | 誰當 DR？、10G 和 1G 一樣快？、分公司自成一區、兩家 ISP 都要用、併購的工廠只會靜態路由（重分配）、備份走另一條線（PBR）、分公司的路由表太大了（stub）、工廠接了一條供應商專線（NSSA）、兩個出口，同一個 AS（iBGP）、共用服務放在全域的路由表（VRF 的 OSPF 與路由洩漏）、分公司的 EIGRP 鄰居起不來，訊務都擠在 4G（EIGRP 與 MD5 驗證）、舊工廠的 RIP：一半的機台連不到（版本與 auto-summary）、總部的 IPTV，分公司看不到（PIM、RPF 與 RP） |
 | 14 無線控制器與無線環境 | AP 找不到控制器、牆後面收不到、走到另一頭就斷線、控制器重開機，整棟的 Wi-Fi 斷了六分鐘（N+1）、分公司的專線一斷，Wi-Fi 也跟著斷（FlexConnect）、一走進會議室，Teams 就斷一下（802.1X 的漫遊時間與 802.11r） |
