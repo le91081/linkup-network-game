@@ -22,7 +22,7 @@ import { computeAuth } from './sim/auth.js';
 import { dnsList, hash, ifaceMac, isVlanSw, vrfOf } from './sim/core.js';
 import { flowsTick } from './sim/bandwidth.js';
 import { ifaceActive, isBridgePort, l2Explore, macAgeOf, prepL2Attacks } from './sim/l2.js';
-import { prepDtp, prepLag, prepPhysical, prepStp, prepStpTimers, prepVoice } from './sim/phys.js';
+import { prepDtp, prepLag, prepPhysical, prepStp, prepStpTimers, prepVoice, stpTopologyChange } from './sim/phys.js';
 import { prepTunnels } from './sim/tunnels.js';
 import { sessionTtl } from './sim/forward.js';
 import { scriptTick } from './script.js';
@@ -274,15 +274,13 @@ function computePass(state, auth) {
     }
   }
   // MAC 位址表：連接埠斷線時，從那個埠學到的位址馬上清掉；設備關機整張表就沒了。
-  // 生成樹的拓撲一變 (Topology Change)，所有交換器都會把學到的位址清掉重學
-  const stpSig = devs.filter(isVlanSw).map((d) => d.id + ':' + (d.rt.stp && d.rt.stp.blocked ? [...d.rt.stp.blocked].sort().join(',') : '')).join(';');
-  const tc = state.dyn.stpSig != null && state.dyn.stpSig !== stpSig;
-  state.dyn.stpSig = stpSig;
+  // 生成樹的拓撲一變 (Topology Change)，那個 VLAN 的交換器都會把學到的位址清掉重學
+  const flush = stpTopologyChange(state);
   for (const d of devs) {
     const tbl = state.dyn.mac[d.id];
     if (tbl) {
-      if (down[d.id] || state.rt.off[d.id] || tc) delete state.dyn.mac[d.id];
-      else for (const [k, e] of Object.entries(tbl)) if (now - e.t >= macAgeOf(d) || (e.port !== 'wlan' && !state.rt.links[d.id + ':' + e.port])) delete tbl[k];
+      if (down[d.id] || state.rt.off[d.id]) delete state.dyn.mac[d.id];
+      else for (const [k, e] of Object.entries(tbl)) if (now - e.t >= macAgeOf(d) || (e.port !== 'wlan' && !state.rt.links[d.id + ':' + e.port]) || flush.has(k.slice(0, k.lastIndexOf('|')))) delete tbl[k];
     }
     // 連線表：閒置太久的項目移除
     const ct = state.dyn.ct[d.id];

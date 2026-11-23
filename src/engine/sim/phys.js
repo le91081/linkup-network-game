@@ -530,6 +530,7 @@ export const portfastOn = (d, pc, pid) => (pc.portfast != null ? !!pc.portfast :
 
 export function prepStpTimers(state) {
   const rt = state.rt, dyn = state.dyn, now = state.clock, live = new Set();
+  rt.tcSrc = []; // 這一輪開始轉送的非 Edge 埠（拓撲變更的來源）
   for (const d of Object.values(state.devices)) {
     if (!isVlanSw(d) || (d.sw.stp && d.sw.stp.on === false) || (state.down || {})[d.id]) continue;
     for (const [pid, pc] of Object.entries(d.sw.ports)) {
@@ -549,11 +550,76 @@ export function prepStpTimers(state) {
       const toSwitch = isVlanSw(x) && !(x.sw.stp && x.sw.stp.on === false) && isBridgePort(x, l.port);
       const delay = toSwitch ? STP_P2P_DELAY : portfastOn(d, pc, pid) ? 0 : STP_EDGE_DELAY;
       const left = rec.since + delay - now;
-      if (left <= 0) continue;
+      if (left <= 0) {
+        // 非 Edge 的埠（交換器之間的線、沒有 PortFast 的埠）開始轉送：發出拓撲變更 (TC)
+        if (!rec.fwd) {
+          rec.fwd = true;
+          if (rec.since > -1e8 && (toSwitch || !portfastOn(d, pc, pid))) rt.tcSrc.push({ dev: d.id, pid, vlans: portVlans(d, pid), at: rec.since + delay });
+        }
+        continue;
+      }
       d.rt.wait[pid] = left;
       rt.wait[l.cable] = Math.max(rt.wait[l.cable] || 0, left);
       rt.pending.push({ at: rec.since + delay, dev: d.id, kind: 'stp', text: `${d.name} 的 ${pid}：STP ${toSwitch ? '協商中' : left > 15 ? 'listening' : 'learning'}` });
     }
   }
   for (const k of Object.keys(dyn.port)) if (!live.has(k)) delete dyn.port[k];
+}
+
+/** 這個埠帶著哪些 VLAN（Trunk 是允許的、這台也有的 VLAN） */
+export function portVlans(d, pid) {
+  const pc = d.sw.ports[pid];
+  return isTrunk(d, pid) ? d.sw.vlans.map((v) => v.id).filter((v) => vlanAllowed(pc, v)) : [pc.vlan, ...(pc.voice ? [pc.voice] : [])];
+}
+
+/** TC 從 origin 的 pid 開始，沿著這個 VLAN 在轉送的交換器之間的線傳出去：[[交換器, 從哪個埠收到]] */
+function tcReach(state, origin, pid, v) {
+  const rt = state.rt, out = [[origin, pid]], seen = new Set([origin]), q = [origin];
+  const fwd = (x, p) => isBridgePort(x, p) && !(x.rt.stp && x.rt.stp.blocked.has(p + '|' + v)) && portVlans(x, p).includes(v);
+  while (q.length) {
+    const x = state.devices[q.shift()];
+    for (const p of x.ports) {
+      const l = rt.links[x.id + ':' + p.id];
+      if (!l || seen.has(l.dev) || !fwd(x, p.id)) continue;
+      const y = state.devices[l.dev];
+      if (!isVlanSw(y) || !y.rt.stp || !y.rt.stp.on || !fwd(y, l.port)) continue;
+      seen.add(y.id); q.push(y.id); out.push([y.id, l.port]);
+    }
+  }
+  return out;
+}
+
+/**
+ * 拓撲變更 (Topology Change)：非 Edge 的埠開始轉送，或某個埠的生成樹狀態變了（被擋下、解除）。
+ * TC 傳遍那個 VLAN 的交換器，每一台都把那個 VLAN 學到的 MAC 清掉重學（RSTP），
+ * show spanning-tree detail 的 Number of topology changes 加一、記下從哪個埠收到。
+ * 回傳這一輪要清掉 MAC 的 VLAN（字串）
+ */
+export function stpTopologyChange(state) {
+  const dyn = state.dyn, rt = state.rt, now = state.clock;
+  const tcs = (dyn.tc ||= {}), sig = (dyn.stpSigDev ||= {});
+  const events = [...(rt.tcSrc || [])];
+  for (const d of Object.values(state.devices)) {
+    if (!isVlanSw(d) || !d.rt.stp || (state.down || {})[d.id]) continue;
+    const s = [...d.rt.stp.blocked].sort().join(',');
+    if (sig[d.id] != null && sig[d.id] !== s) {
+      const a = new Set(sig[d.id] ? sig[d.id].split(',') : []), b = new Set(s ? s.split(',') : []);
+      for (const k of [...a].filter((x) => !b.has(x)).concat([...b].filter((x) => !a.has(x)))) {
+        const cut = k.lastIndexOf('|');
+        events.push({ dev: d.id, pid: k.slice(0, cut), vlans: [+k.slice(cut + 1)], at: now });
+      }
+    }
+    sig[d.id] = s;
+  }
+  const flush = new Set();
+  for (const e of events) {
+    for (const v of e.vlans) {
+      flush.add(String(v));
+      for (const [id, pid] of tcReach(state, e.dev, e.pid, v)) {
+        const r = ((tcs[id] ||= {})[v] ||= { n: 0 });
+        r.n++; r.at = e.at; r.from = pid;
+      }
+    }
+  }
+  return flush;
 }

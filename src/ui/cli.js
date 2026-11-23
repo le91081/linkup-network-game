@@ -43,6 +43,7 @@ import { iosSession, runningConfig, startupConfig, hostName as host, aclName, ac
 import { ipMtu, l2Mtu, jumboNow, isCat2960, isCat9300, isNexus } from '../engine/mtu.js';
 import { tunByName, tunnelDetail, dmvpnLines, nhrpLines, nhsLines, ipsecProfileLines, cryptoSessionLines, transformSetLines, bfdLines, pkiCertLines, pkiTrustpointLines } from './cli-tun.js';
 import { cacheFlowLines, flowMonitorLines, flowExporterLines } from './cli-flow.js';
+import { stpDetailLines } from './cli-stp.js';
 
 const pad = (s, n) => String(s).padEnd(n);
 const isTunIf = (i) => i.bind && i.bind.t === 'gre';
@@ -402,6 +403,7 @@ const SHOW = {
     }
     return o;
   },
+  'show spanning-tree detail': (st, d) => (!isSw(d) || !d.rt.stp ? ['% 這個指令只適用於交換器'] : !d.rt.stp.on ? ['No spanning tree instance exists.（STP 已關閉）'] : stpDetailLines(st, d)),
   'show spanning-tree inconsistentports': (st, d) => {
     if (!isSw(d) || !d.rt.stp) return ['% 這個指令只適用於交換器'];
     const rows = [], lab = (pid) => longIf((d.ports.find((p) => p.id === pid) || {}).label || pid);
@@ -2033,6 +2035,17 @@ function showOrPing(app, devId, line, print) {
       psecIfLines(st, d, p).forEach((l) => print(l, l.startsWith('（') ? 'hint' : 'pre'));
       return true;
     }
+  }
+  // show spanning-tree vlan <n> [detail]
+  if (tok[0].length >= 2 && 'show'.startsWith(tok[0]) && tok[1] && tok[1].length >= 2 && 'spanning-tree'.startsWith(tok[1]) && tok[2] === 'vlan' && /^\d+$/.test(tok[3] || '')) {
+    if (!isSw(d) || !d.rt.stp) { print('% 這個指令只適用於交換器', 'warn'); return true; }
+    const v = +tok[3];
+    if (tok[4] && 'detail'.startsWith(tok[4])) { stpDetailLines(st, d, v).forEach((l) => print(l, 'pre')); return true; }
+    const all = SHOW['show spanning-tree'](st, d), name = 'VLAN' + String(v).padStart(4, '0'), k = all.indexOf(name);
+    if (k < 0) { print(`Spanning tree instance(s) for vlan ${v} does not exist.`, 'warn'); return true; }
+    let e = k + 1; while (e < all.length && !/^VLAN\d{4}$/.test(all[e])) e++;
+    all.slice(k, e).forEach((l) => print(l, 'pre'));
+    return true;
   }
   // show storm-control <埠>
   if (tok[0].length >= 2 && 'show'.startsWith(tok[0]) && tok[1] && tok[1].length >= 5 && 'storm-control'.startsWith(tok[1]) && tok[2] && !'broadcast'.startsWith(tok[2])) {

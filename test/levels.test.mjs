@@ -4996,6 +4996,35 @@ console.log('\nSTP：BPDU Filter、Loop Guard 與 BPDU Guard 的預設');
   ok(/^spanning-tree portfast bpduguard default$/m.test(rc) && /interface GigabitEthernet0\/2\n spanning-tree portfast\n spanning-tree bpdufilter enable/.test(rc), 'running-config：portfast bpduguard default、介面的 spanning-tree bpdufilter enable');
   ok(/% 用法：spanning-tree guard root \| loop \| none/.test(U2('configure terminal', 'interface Gi0/2', 'spanning-tree guard xyz', 'end')), 'spanning-tree guard 只能是 root、loop、none');
 }
+console.log('\nSTP：拓撲變更 (TC) 與 show spanning-tree detail');
+{
+  const { iosSession } = await import('../src/engine/ios.js');
+  const { iosRun } = await import('../src/ui/cli.js');
+  const ok = (cond, title) => (cond ? console.log('  ✔ ' + title) : fail(title));
+  const cli = (s, id) => { const S = iosSession(() => s.devices[id], () => s); return (...lines) => { const out = []; for (const l of lines) { const r = iosRun({ state: s, showTrace() {}, refreshLive() {} }, id, S, l, (x) => out.push(x)); if (r.changed) settle(s); } return out.join('\n'); }; };
+  const lv = LEVELS.find((x) => x.id === 'l139');
+  const s = lv.setup(); lv.solve(s); settle(s);
+  const tcN = (id) => (((s.dyn.tc || {})[id] || {})[10] || { n: 0 }).n;
+  const n0 = [tcN('core'), tcN('sw2'), tcN('sw3')];
+  const macs = (id) => Object.keys(s.dyn.mac[id] || {}).filter((k) => k.startsWith('10|')).length;
+  transact(s, 'pc2', { proto: 'icmp', dst: parseIp('10.10.10.10') });
+  transact(s, 'pc3', { proto: 'icmp', dst: parseIp('10.10.10.10') });
+  ok(macs('core') >= 2, `Core 學到 VLAN 10 的 MAC（${macs('core')} 筆）`);
+  // PortFast 的埠（Edge）接上電腦：不算拓撲變更
+  const B3 = cli(s, 'sw3');
+  B3('enable', 'configure terminal', 'interface Gi0/1', 'shutdown', 'no shutdown', 'end');
+  ok(tcN('core') === n0[0], 'PortFast 的埠重新接上：不發 TC');
+  transact(s, 'pc2', { proto: 'icmp', dst: parseIp('10.10.10.10') });
+  // 沒有 PortFast 的埠：30 秒後開始轉送時發出 TC，整個 VLAN 的 MAC 清掉
+  B3('configure terminal', 'interface Gi0/1', 'spanning-tree portfast disable', 'shutdown', 'no shutdown', 'end');
+  ok(tcN('core') === n0[0] + 1 && tcN('sw2') === n0[1] + 1 && tcN('sw3') === n0[2] + 1, '沒有 PortFast 的埠開始轉送：三台交換器的拓撲變更都加一');
+  ok(macs('core') === 0, 'TC 之後 Core 的 VLAN 10 MAC 全部清掉重學');
+  const det = B3('show spanning-tree vlan 10 detail');
+  ok(new RegExp(`Number of topology changes ${tcN('sw3')} last change occurred \\d\\d:\\d\\d:\\d\\d ago\\n {10}from GigabitEthernet0/1`).test(det), 'show spanning-tree vlan 10 detail：拓撲變更的次數、多久以前、從哪個埠');
+  ok(/Port 10 \(GigabitEthernet0\/10\) of VLAN0010 is alternate blocking/.test(det) && /Loop guard is enabled on the port/.test(det) && /Root port is 9 \(GigabitEthernet0\/9\), cost of root path is 4/.test(det), '每個埠的角色與狀態、Loop Guard、Root port 與路徑成本');
+  ok(/from GigabitEthernet1\/0\/2/.test(cli(s, 'core')('enable', 'show spanning-tree detail')) && /We are the root of the spanning tree/.test(cli(s, 'core')('show spanning-tree vlan 10 detail')), 'Core 記下 TC 是從接 SW-3F 的 Gi1/0/2 收到的；它自己是根橋');
+  ok(/^VLAN0010$/m.test(B3('show spanning-tree vlan 10')) && !/^VLAN0001$/m.test(B3('show spanning-tree vlan 10')) && /does not exist/.test(B3('show spanning-tree vlan 99')), 'show spanning-tree vlan <n> 只列那個 VLAN；不存在的 VLAN');
+}
 console.log('\nNetFlow 與 QoS 的 police');
 {
   const sim = await import('../src/engine/sim.js');
