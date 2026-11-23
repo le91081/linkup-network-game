@@ -129,6 +129,26 @@ function netBox(g, dev, u, o) {
 }
 
 const BUILDERS = {
+  camera(g, dev, u) {
+    Object.assign(u, { w: 1.2, h: 1.3, d: 1.4 });
+    box(g, 0.6, 0.1, 0.6, mat(PALETTE.light, { rough: 0.5 }), 0, 0.05, -0.2, 0.04);
+    box(g, 0.14, 0.75, 0.14, mat(PALETTE.light, { rough: 0.5 }), 0, 0.45, -0.2, 0.05);
+    const head = new THREE.Group();
+    head.position.set(0, 0.92, 0.05);
+    head.rotation.x = 0.28;
+    g.add(head);
+    box(head, 0.42, 0.38, 0.95, mat(0xf2f5fb, { rough: 0.4 }), 0, 0, 0, 0.12);
+    box(head, 0.5, 0.06, 1.05, mat(0xf2f5fb, { rough: 0.4 }), 0, 0.22, 0.04, 0.03); // 遮陽罩
+    const lens = new THREE.Mesh(new THREE.CylinderGeometry(0.13, 0.13, 0.04, 32), mat(PALETTE.black, { rough: 0.15, metal: 0.6 }));
+    lens.rotation.x = Math.PI / 2;
+    lens.position.set(0, 0, 0.48);
+    head.add(lens);
+    u.led = new THREE.Mesh(new THREE.TorusGeometry(0.16, 0.02, 8, 32), glow(PALETTE.screenOff, 0.4));
+    u.led.position.set(0, 0, 0.485);
+    head.add(u.led);
+    jacks(g, u, dev, 0, 0.3, 0.12, -0.52, 0, -1, { w: 0.16, h: 0.09, t: 0.07 });
+    u.rect = [-0.32, 0.32, -0.52, 0.55];
+  },
   pc(g, dev, u) {
     Object.assign(u, { w: 1.8, h: 1.65, d: 1.7 });
     const tilt = new THREE.Group();

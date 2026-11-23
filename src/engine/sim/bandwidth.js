@@ -56,7 +56,11 @@ export function flowsTick(state) {
   const load = {}, count = {}, qload = {};
   state.rt.load = load; state.rt.loadN = count; state.rt.qload = qload;
   const Q = (dk, h) => { const q = (qload[dk] ||= { offered: 0, fixed: 0, rate: 0, elastic: [], byCls: {} }); if (h && !q.h) q.h = h; return q; };
-  const flows = (state.flows || []).filter((f) => f.on !== false && state.devices[f.from]);
+  // 網路攝影機的影像串流：每台往自己的 NVR 送（d.cam = { nvr, mbps }），結果記在 state.rt.cams[攝影機]
+  const camFlows = Object.values(state.devices).filter((d) => d.cam && d.cam.nvr && +d.cam.mbps > 0 && !(state.down || {})[d.id] && !(state.rt.off || {})[d.id])
+    .map((d) => ({ id: 'cam:' + d.id, from: d.id, ip: d.cam.nvr, port: 554, mbps: +d.cam.mbps, label: `${d.name} 的影像`, cam: true }));
+  state.rt.cams = Object.fromEntries(camFlows.map((f) => [f.from, f]));
+  const flows = [...(state.flows || []).filter((f) => f.on !== false && state.devices[f.from]), ...camFlows];
   // 1. 每條流量走哪一條路
   const items = [];
   for (const f of flows) {

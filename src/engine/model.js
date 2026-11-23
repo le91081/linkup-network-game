@@ -83,6 +83,16 @@ export const CATALOG = {
     tagline: '無線雷射印表機 · 無線只支援到 WPA2', ports: [rj('eth0', '乙太網路')], wlan: true, wifiCaps: ['open', 'wep', 'wpa2'],
     services: [{ proto: 'tcp', port: 9100, name: 'RAW 列印' }, { proto: 'tcp', port: 631, name: 'IPP' }],
   },
+  ipcam: {
+    kind: 'host', shape: 'camera', vendor: 'Hikvision', title: 'Hikvision DS-2CD2043G2-I',
+    tagline: '4MP 槍型網路攝影機 · 紅外線夜視 · PoE Class 3 (802.3af)', ports: [rj('eth0', 'LAN / PoE')], needsPoe: true, poe: { cls: 3, watts: 6.5 }, cam: true,
+    services: [{ proto: 'tcp', port: 554, name: 'RTSP 影像串流' }, { proto: 'tcp', port: 443, name: '網頁管理 (HTTPS)' }],
+  },
+  nvr: {
+    kind: 'host', shape: 'nas', vendor: 'Hikvision', title: 'Hikvision DS-7608NXI-K2',
+    tagline: '8 路網路錄影機 (NVR) · 2 顆硬碟 · 1×1GbE', ports: [rj('eth0', 'LAN')], nvr: true,
+    services: [{ proto: 'tcp', port: 554, name: 'RTSP 錄影' }, { proto: 'tcp', port: 443, name: '網頁管理 (HTTPS)' }],
+  },
   nas: {
     kind: 'host', shape: 'nas', vendor: 'Synology', title: 'Synology DS224+',
     tagline: '2-Bay NAS · 2×1GbE', ports: [rj('eth0', 'LAN 1'), rj('eth1', 'LAN 2')],
@@ -245,6 +255,7 @@ export function makeDevice(model, id, o = {}) {
         break;
       }
       d.ifaces = d.ports.map((p) => iface(p.id, p.label, { t: 'port', port: p.id }));
+      if (m.cam) d.cam = { nvr: '', mbps: 4 }; // 網路攝影機：影像送到哪一台 NVR、位元率
       if (m.wlan) d.ifaces.push(iface('wlan0', 'Wi-Fi', { t: 'wlan' }, { mode: 'dhcp', wifi: { ssid: '', pass: '' } }));
       break;
     case 'hub':

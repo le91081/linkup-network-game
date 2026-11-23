@@ -11,6 +11,7 @@ import { hasPsuSlots } from '../engine/power.js';
 import { breakoutCard } from './panel-breakout.js';
 import { openAnnot } from './annot.js';
 import { eigrpCard } from './panel-eigrp.js';
+import * as CAM from './panel-cam.js';
 import { ripCard } from './panel-rip.js';
 import { ZONE, sdwanOn } from '../engine/sdwan.js';
 import * as CL from './panel-cloud.js';
@@ -673,6 +674,7 @@ function baseTabs(dev) {
       (dev.services || []).some((s) => s.proto === 'udp' && s.port === 514) && ['syslog', 'Syslog', M.syslogTab],
       (isTftp(dev) || isFtp(dev) || isScp(dev)) && ['files', '檔案', OPS.filesTab], dev.nms && ['nms', '網管', OPS.nmsTab], dev.cucm && ['cucm', 'CUCM', V.cucmTab],
       (dev.apps || []).includes('api') && ['api', 'API', AUTO.apiTab], dev.dnac && ['dnac', 'Catalyst Center', AUTO.dnacTab], ((dev.apps || []).includes('ansible') || dev.ansible) && ['ansible', 'Ansible', AUTO.ansibleTab], dev.tf && ['tf', 'Terraform', AUTO.terraformTab],
+      dev.cam && ['cam', '攝影機', CAM.camTab], CATALOG[dev.model].nvr && ['nvr', '錄影', CAM.nvrTab],
       ['cap', '封包擷取', DG.captureTab], T.term].filter(Boolean);
     case 'hub': case 'switch': return [T.ports];
     case 'ap': return dev.lwap ? [['lwap', 'AP', W.lwapTab]] : [['ssid', '無線網路', X.ssidTab], ['radio', '無線電', X.radioTab], T.ports];
