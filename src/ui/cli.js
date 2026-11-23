@@ -29,6 +29,7 @@ import { route6Rows, nat64Rows, nat64Stats, clearNat64 } from '../engine/sim6.js
 import { vtpCapable, vtpOf, vtpStatusLines } from '../engine/vtp.js';
 import { zbfActive } from '../engine/zbf.js';
 import { envPowerLines } from '../engine/power.js';
+import { eigrpNeighborLines, eigrpTopoLines, eigrpIfLines, eigrpProtoLines, eigrpBw, eigrpDly } from '../engine/eigrp.js';
 import { CATALOG, MEDIA, peerOf, portOf, linkInfo, phyConfig, fiberLink } from '../engine/model.js';
 import { xcvrAt, xcvrSerial, MEDIA_TYPE } from '../engine/optics.js';
 import { PLATFORM as PID_OF } from '../engine/dnac.js';
@@ -121,6 +122,11 @@ const SHOW = {
   'show ip route static': (st, d) => routeLines(st, d, (r) => r.type === 'S' || r.type === 'D'),
   'show ip route ospf': (st, d) => routeLines(st, d, (r) => r.type === 'O'),
   'show ip route bgp': (st, d) => routeLines(st, d, (r) => r.type === 'B'),
+  'show ip route eigrp': (st, d) => routeLines(st, d, (r) => r.type === 'E'),
+  'show ip eigrp neighbors': (st, d) => eigrpNeighborLines(st, d, longIf, hms),
+  'show ip eigrp topology': (st, d) => eigrpTopoLines(st, d, longIf),
+  'show ip eigrp topology all-links': (st, d) => eigrpTopoLines(st, d, longIf, true),
+  'show ip eigrp interfaces': (st, d) => eigrpIfLines(st, d, longIf),
   'show ipv6 route': (st, d) => route6Lines(st, d, () => true),
   'show ipv6 route connected': (st, d) => route6Lines(st, d, (r) => r.type === 'C'),
   'show ipv6 route local': (st, d) => route6Lines(st, d, (r) => r.type === 'L'),
@@ -596,7 +602,11 @@ const SHOW = {
     return [...grp('IP:', ['packet', 'icmp']), ...grp('OSPF:', ['ospfAdj', 'ospfHello']), ...grp('DHCP server:', ['dhcpPkt', 'dhcpEv']),...grp('Cryptographic Subsystem:', ['isakmp', 'ipsec']), ...grp('IKEv2:', ['ikev2']),
       '','（debug 的輸出會出現在 console 上，也會進紀錄緩衝區 (show logging)。用 SSH 登入的話，要先輸入 terminal monitor 才看得到）'];
   },
-  'show ip protocols': (st, d) => protocolLines(st, d, ''),
+  'show ip protocols': (st, d) => {
+    const o = protocolLines(st, d, ''), e = eigrpProtoLines(st, d, longIf, hms);
+    if (!e.length) return o;
+    return o.length === 1 && o[0].startsWith('（') ? ['*** IP Routing is NSF aware ***', '', ...e] : [...o, '', ...e]; // OSPF 在前、EIGRP 在後
+  },
   'show ip ospf interface brief': (st, d) => {
     const rows = [];
     const SHORT = { DROTHER: 'DROTH', WAITING: 'WAIT', P2P: 'P2P', LOOP: 'LOOP', PASSIVE: 'DR' };
@@ -1124,7 +1134,7 @@ const rtAge = (st, r) => {
   return s < 86400 ? hms(s) : `${Math.floor(s / 86400)}d${String(Math.floor((s % 86400) / 3600)).padStart(2, '0')}h`;
 };
 /** 路由代碼：O IA、O*E2、S*、B* … （DHCP 學到的預設路由在 IOS 也是 S*） */
-const routeCode = (r) => { const t = r.type === 'D' ? 'S' : r.type, def = r.bits === 0 ? '*' : ''; return t + def + (r.sub ? (def ? '' : ' ') + r.sub : ''); };
+const routeCode = (r) => { const t = r.type === 'D' ? 'S' : r.type === 'E' ? 'D' : r.type, def = r.bits === 0 ? '*' : ''; return t + def + (r.sub ? (def ? '' : ' ') + r.sub : ''); }; // E：EIGRP（D 已經是 DHCP 學到的預設路由）
 /**
  * 真正放進路由表的路：每個網段只留管理距離（再來是 metric）最好的那一種，等價的全部留下；再加上每個介面自己的 /32 (L)。
  * 沒放進去的（下一站不通的靜態路由、管理距離比較大的備援路由）另外列出來，畫面上用提示說明原因
@@ -1146,6 +1156,7 @@ const routeTail = (st, r) => {
   if (r.type === 'C' || r.type === 'L') return `is directly connected, ${longIf(r.iface.label)}`;
   const m = `[${r.ad}/${r.metric}] via ${fmtIp(r.via)}`;
   if (r.type === 'O') return `${m}, ${rtAge(st, r)}, ${longIf(r.iface.label)}`;
+  if (r.type === 'E') return `[${r.ad}/${r.real ?? r.metric}] via ${fmtIp(r.via)}, ${rtAge(st, r)}, ${longIf(r.iface.label)}`; // variance 的路：路由表照最佳的分流，顯示自己的 metric
   if (r.type === 'B') return `[${r.ad}/${r.metric}] via ${fmtIp(r.bnh ?? r.via)}, ${rtAge(st, r)}`; // BGP 的下一站要再查一次路由表（遞迴），所以不寫介面
   if (r.type === 'H') return `${m}, ${rtAge(st, r)}, ${longIf(r.iface.label)}`;
   if (r.via == null && r.iface) return `is directly connected, ${longIf(r.iface.label)}`; // ip route … Tunnel0：只寫出口介面
@@ -1626,7 +1637,7 @@ function ifaceDetail(st, d, p) {
   return [`${L} ${state}`,
     `  Hardware is ${p.media === 'rj45' ? 'Gigabit Ethernet' : 'Ten Gigabit Ethernet'}, address is ${dotMac(mac)} (bia ${dotMac(mac)})`,
     ...(i && i.rt && i.rt.ip != null ? [`  Internet address is ${fmtIp(i.rt.ip)}/${i.rt.bits}`] : []),
-    `  MTU ${mtu} bytes, BW ${speed * 1000} Kbit/sec, DLY 10 usec,`,
+    `  MTU ${mtu} bytes, BW ${i ? eigrpBw(st, d, i) : speed * 1000} Kbit/sec, DLY ${i ? eigrpDly(st, d, i) : 10} usec,`,
     `     reliability ${inErr && c.ip ? Math.max(1, Math.round(255 * (1 - Math.min(1, inErr / Math.max(1, c.ip + inErr))))) : 255}/255, txload ${load(c.outRate)}/255, rxload ${load(c.inRate)}/255`,
     '  Encapsulation ARPA, loopback not set', '  Keepalive set (10 sec)',
     `  ${dup}, ${speed >= 1000 ? speed / 1000 + '000' : speed}Mb/s, media type is ${p.media === 'rj45' ? '10/100/1000BaseTX' : (() => { const x = xcvrAt(st, d, p.id, fiberLink); return x ? MEDIA_TYPE[x.pn] || x.pn : p.media === 'qsfp' ? 'QSFP 100G CU' : 'SFP-10GBase-CU'; })()}`,

@@ -705,3 +705,32 @@ test('標註也畫在 2D 拓撲圖上：註解的便利貼與群組框', async (
   expect(await scan(page, '#topo2d', '2D 拓撲圖（標註）')).toEqual([]);
   await page.keyboard.press('t');
 });
+
+test('EIGRP：路由分頁的 EIGRP 卡片讓光纖介面加入，看到驗證失敗的原因，CLI 補上 key chain 之後鄰居起來', async ({ page }) => {
+  await boot(page);
+  await open(page, 'l129');
+  await clickDevice(page, 'br');
+  await page.locator('#panel .tab', { hasText: '路由' }).click();
+  const card = page.locator('#panel .card.eigrp');
+  await expect(card).toContainText('EIGRP · AS 100');
+  await expect(card).toContainText('1 個鄰居');
+  const fiber = card.locator('.eigrp-if').filter({ hasText: 'Gi0/0/0' });
+  await fiber.locator('label.switch', { hasText: '跑 EIGRP' }).click();
+  await expect(card.locator('.note.warn')).toContainText('authentication failure');
+  expect(await scan(page, '#panel', '路由分頁的 EIGRP 卡片')).toEqual([]);
+  await page.locator('#panel .tab', { hasText: 'CLI' }).click();
+  await typeCmd(page, 'enable', 'configure terminal', 'key chain EIGRP-KEY', 'key 1', 'key-string Lnk#2026', 'exit', 'exit',
+    'interface Gi0/0/0', 'ip authentication mode eigrp 100 md5', 'ip authentication key-chain eigrp 100 EIGRP-KEY', 'end', 'show ip eigrp neighbors');
+  await expect(page.locator('#panel .term-out')).toContainText('10.0.12.1');
+  await typeCmd(page, 'show running-config | section eigrp');
+  await expect(page.locator('#panel .term-out')).toContainText('network 10.0.12.2 0.0.0.0');
+  await page.locator('#panel .tab', { hasText: '路由' }).click();
+  await expect(card).toContainText('2 個鄰居');
+  await expect(card.locator('.eigrp-nb')).toHaveCount(2);
+  const red = page.locator('#panel .card', { hasText: '重分配進 EIGRP' });
+  await red.locator('label.switch', { hasText: '靜態路由' }).click();
+  await expect(red).toContainText('metric 10000 100 255 1 1500');
+  expect(await scan(page, '#panel', '路由分頁（EIGRP 的鄰居與重分配）')).toEqual([]);
+  expect(await page.evaluate(() => JSON.stringify(window.linkup.state.devices.br.eigrp.redist))).toBe('[{"src":"static","metric":[10000,100,255,1,1500]}]');
+  expect(await page.evaluate(() => window.linkup.state.devices.br.rt.routes.find((r) => r.type === 'E' && r.bits === 24 && r.iface.id === 'Gi0/0/0') != null)).toBe(true);
+});

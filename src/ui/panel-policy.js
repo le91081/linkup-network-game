@@ -4,35 +4,40 @@ import { inp, sel, field, note, cardHead, toggle, del, grid2, isAddr, isPortNo }
 import { parseIp, sameNet } from '../engine/ip.js';
 import { pbrHits } from '../engine/sim.js';
 import { aclRules } from '../engine/policy.js';
+import { eigrpOn } from '../engine/eigrp.js';
 
-const SRC_NAME = { static: '靜態路由', connected: '直連網段（沒有跑 OSPF 的介面）', bgp: 'BGP 學到的路', ospf: 'OSPF 學到的路（含跑 OSPF 的直連網段）' };
+const SRC_NAME = { static: '靜態路由', connected: '直連網段（沒有跑 OSPF 的介面）', bgp: 'BGP 學到的路', ospf: 'OSPF 學到的路（含跑 OSPF 的直連網段）', eigrp: 'EIGRP 學到的路（含跑 EIGRP 的直連網段）' };
+const SEED_EIGRP = [10000, 100, 255, 1, 1500]; // 重分配進 EIGRP 的種子 metric：頻寬 kbps、延遲（十微秒）、可靠度、負載、MTU
 
-/** 路由重分配：OSPF 收進哪些外部路由、BGP 送出哪些路 */
+/** 路由重分配：OSPF / EIGRP 收進哪些外部路由、BGP 送出哪些路 */
 export function redistCard(ctx) {
   const { dev } = ctx;
   const ospf = (dev.ospfNets || []).length > 0 || dev.ifaces.some((i) => i.ospf);
-  const bgp = !!(dev.bgp && dev.bgp.asn);
-  if (!ospf && !bgp) return null;
+  const bgp = !!(dev.bgp && dev.bgp.asn), eig = eigrpOn(dev);
+  if (!ospf && !bgp && !eig) return null;
   const rmOpts = [['', '全部都送（不過濾）'], ...Object.keys(dev.routeMaps || {}).map((n) => [n, `route-map ${n}`])];
   const block = (title, getList, setList, srcs, into) => {
     const list = getList();
-    return [h('div', { class: 'acl-h' }, h('span', { text: title }), h('em', { text: into === 'ospf' ? '這台變成 ASBR' : 'origin 是 ?' })),
+    return [h('div', { class: 'acl-h' }, h('span', { text: title }), h('em', { text: into === 'ospf' ? '這台變成 ASBR' : into === 'eigrp' ? '外部路由 D EX（AD 170）' : 'origin 是 ?' })),
       ...srcs.map((src) => {
         const cur = list.find((x) => x.src === src);
         return h('div', { class: 'redist-row' },
           toggle(ctx, () => !!cur, (v) => {
             const l = getList().filter((x) => x.src !== src);
-            if (v) l.push({ src, ...(src === 'bgp' ? { as: +dev.bgp.asn } : src === 'ospf' ? { as: 1 } : {}) });
+            if (into === 'eigrp') { if (v) l.push({ src, ...(src === 'ospf' ? { pid: 1 } : {}), ...(src !== 'connected' && !dev.eigrp.defMetric ? { metric: SEED_EIGRP } : {}) }); setList(l); return; }
+            if (v) l.push({ src, ...(src === 'bgp' ? { as: +dev.bgp.asn } : src === 'ospf' ? { as: 1 } : src === 'eigrp' ? { as: +dev.eigrp.as } : {}) });
             setList(l);
-          }, SRC_NAME[src], { rerender: true }),
-          cur && h('div', { class: 'redist-opts' },
+          }, into === 'eigrp' && src === 'connected' ? '直連網段（沒有跑 EIGRP 的介面）' : SRC_NAME[src], { rerender: true }),
+          cur && into === 'eigrp' && h('div', { class: 'redist-opts' }, h('span', { class: 'muted mono', text: cur.metric ? `metric ${cur.metric.join(' ')}` : src === 'connected' ? '用介面的頻寬與延遲' : `default-metric ${dev.eigrp.defMetric.join(' ')}` })),
+          cur && into !== 'eigrp' && h('div', { class: 'redist-opts' },
             into === 'ospf' && sel(ctx, () => String(cur.type || 2), (v) => { if (+v === 1) cur.type = 1; else delete cur.type; }, [['2', 'E2（metric 固定）'], ['1', 'E1（加上內部的 cost）']]),
             sel(ctx, () => cur.rm || '', (v) => { if (v) cur.rm = v; else delete cur.rm; }, rmOpts, { rerender: true })));
       })];
   };
   return h('div', { class: 'card' }, cardHead('路由重分配'),
     note('muted', '把一種來源的路放進另一個路由協定，其他路由器才學得到。預設路由不會跟著出去（OSPF 要用「發布預設路由」）。只想送其中幾筆時，先在 CLI 寫 prefix-list 與 route-map，再在這裡選它。'),
-    ospf ? block('重分配進 OSPF', () => dev.ospfRedist || [], (l) => { if (l.length) dev.ospfRedist = l; else delete dev.ospfRedist; }, bgp ? ['static', 'connected', 'bgp'] : ['static', 'connected'], 'ospf') : [],
+    ospf ? block('重分配進 OSPF', () => dev.ospfRedist || [], (l) => { if (l.length) dev.ospfRedist = l; else delete dev.ospfRedist; }, ['static', 'connected', ...(bgp ? ['bgp'] : []), ...(eig ? ['eigrp'] : [])], 'ospf') : [],
+    eig ? block(`重分配進 EIGRP（AS ${dev.eigrp.as}）`, () => dev.eigrp.redist || [], (l) => { if (l.length) dev.eigrp.redist = l; else delete dev.eigrp.redist; }, ospf ? ['static', 'connected', 'ospf'] : ['static', 'connected'], 'eigrp') : [],
     bgp ? block(`重分配進 BGP（AS ${dev.bgp.asn}）`, () => dev.bgp.redist || [], (l) => { if (l.length) dev.bgp.redist = l; else delete dev.bgp.redist; }, ospf ? ['static', 'connected', 'ospf'] : ['static', 'connected'], 'bgp') : []);
 }
 

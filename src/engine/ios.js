@@ -22,6 +22,9 @@ import { archiveNow, archiveLines, cfgLog, cfgDiff, ARCH_MAX_DEFAULT } from './a
 import { vtpCapable, vtpOf, vtpSet } from './vtp.js';
 import { ZBF_PROTO, newZbf, zbfConfigLines } from './zbf.js';
 import { breakoutPort, unbreakoutPort, breakoutLines, BREAKOUT_MAPS } from './breakout.js';
+// EIGRP 的設定小工具（不從 eigrp.js 匯入：那邊會拉進整個模擬引擎，造成循環匯入）
+const eigrpOn = (d) => !!(d && d.eigrp && +d.eigrp.as > 0);
+const classBitsOf = (ip) => (ip == null ? null : (ip >>> 24) < 128 ? 8 : (ip >>> 24) < 192 ? 16 : 24);
 
 // ───────────────────────── running-config 與 startup-config ─────────────────────────
 // IOS 設備改的是記憶體裡的 running-config；要下 write memory 才會存進 startup-config。
@@ -102,6 +105,7 @@ const isSw = (d) => !!d.sw && d.sw.mode === 'vlan';
 export const ERR_RECOVERY_CAUSES = ['arp-inspection', 'bpduguard', 'channel-misconfig', 'dhcp-rate-limit', 'dtp-flap', 'gbic-invalid', 'inline-power', 'link-flap', 'loopback', 'mac-limit', 'pagp-flap', 'port-mode-failure', 'psecure-violation', 'security-violation', 'sfp-config-mismatch', 'storm-control', 'udld', 'vmps'];
 const TYPES = { gi: 'gigabitethernet', te: 'tengigabitethernet', fa: 'fastethernet', eth: 'ethernet' };
 const PROMPT = {
+  eigrp: '(config-router)#', keychain: '(config-keychain)#', kckey: '(config-keychain-key)#',
   zone: '(config-sec-zone)#', zpair: '(config-sec-zone-pair)#', icmap: '(config-cmap)#', ipmap: '(config-pmap)#', ipmapc: '(config-pmap-c)#',
   exec: '#', config: '(config)#', if: '(config-if)#', vlan: '(config-vlan)#', raguard: '(config-ra-guard)#', router: '(config-router)#', dhcp: '(dhcp-config)#',
   line: '(config-line)#', tacacs: '(config-server-tacacs)#', acl: '(config-ext-nacl)#', stdacl: '(config-std-nacl)#', radius: '(config-radius-server)#',
@@ -813,6 +817,28 @@ export function iosSession(getDev, getState, who = null) {
     })],
     // DHCPv6 Prefix Delegation 的用戶端：向 ISP 要一段前綴，存成一般前綴
     ['ipv6 dhcp client pd <name> [...]', ([name]) => onL3((i) => { i.pd6 = name; })],
+    ['delay <n>', ([n]) => (/^\d+$/.test(n) && +n >= 1 && +n <= 16777215 ? onL3((i) => { i.eigrpDelay = +n; }) : err('delay 的單位是十微秒，1 – 16777215'))],
+    ['no delay', () => onL3((i) => { delete i.eigrpDelay; })],
+    ['ip hello-interval eigrp <as> <sec>', ([, s]) => (+s >= 1 && +s <= 65535 ? onL3((i) => { i.eigrpHello = +s; }) : err('Hello 間隔是 1 – 65535 秒'))],
+    ['no ip hello-interval eigrp [...]', () => onL3((i) => { delete i.eigrpHello; })],
+    ['ip hold-time eigrp <as> <sec>', ([, s]) => (+s >= 1 && +s <= 65535 ? onL3((i) => { i.eigrpHold = +s; }) : err('Hold time 是 1 – 65535 秒'))],
+    ['no ip hold-time eigrp [...]', () => onL3((i) => { delete i.eigrpHold; })],
+    ['ip authentication mode eigrp <as> md5', ([as]) => onL3((i) => { i.eigrpAuth = { ...(i.eigrpAuth || {}), as: +as, md5: true }; })],
+    ['no ip authentication mode eigrp [...]', () => onL3((i) => { if (i.eigrpAuth) { delete i.eigrpAuth.md5; if (!i.eigrpAuth.chain) delete i.eigrpAuth; } })],
+    ['ip authentication key-chain eigrp <as> <chain>', ([as, c]) => onL3((i) => { i.eigrpAuth = { ...(i.eigrpAuth || {}), as: +as, chain: c }; })],
+    ['no ip authentication key-chain eigrp [...]', () => onL3((i) => { if (i.eigrpAuth) { delete i.eigrpAuth.chain; if (!i.eigrpAuth.md5) delete i.eigrpAuth; } })],
+    ['ip summary-address eigrp <as> <net> <mask> [...]', ([, n, m]) => {
+      const net = parseIp(n), bits = parseMask(m);
+      if (net == null || bits == null) return err('用法：ip summary-address eigrp <AS> <網段> <遮罩>');
+      return onL3((i) => { const s = { net: netOf(net, bits), bits }; i.eigrpSum = [...(i.eigrpSum || []).filter((x) => !(x.net === s.net && x.bits === s.bits)), s]; });
+    }],
+    ['no ip summary-address eigrp <as> <net> <mask> [...]', ([, n, m]) => {
+      const net = parseIp(n), bits = parseMask(m);
+      if (net == null || bits == null) return err('用法：no ip summary-address eigrp <AS> <網段> <遮罩>');
+      return onL3((i) => { i.eigrpSum = (i.eigrpSum || []).filter((x) => !(x.net === netOf(net, bits) && x.bits === bits)); if (!i.eigrpSum.length) delete i.eigrpSum; });
+    }],
+    ['no ip split-horizon eigrp <as>', () => onL3((i) => { i.eigrpNoSplit = true; })],
+    ['ip split-horizon eigrp <as>', () => onL3((i) => { delete i.eigrpNoSplit; })],
     ['zone-member security <z>', ([z]) => {
       const Z = dev().zbf;
       if (!Z || !Z.zones[z]) return err(`Zone ${z} does not exist（先用 zone security ${z} 建立）`);
@@ -1101,13 +1127,14 @@ export function iosSession(getDev, getState, who = null) {
    */
   function redistArgs(src, rest, into) {
     const t = String(rest || '').split(/\s+/).filter(Boolean);
-    const S2 = ['static', 'connected', into === 'ospf' ? 'bgp' : 'ospf'].find((x) => x.startsWith(String(src).toLowerCase()) && String(src).length >= 2);
-    if (!S2) return err(into === 'ospf' ? '用法：redistribute static | connected | bgp <AS> [subnets] [metric <n>] [metric-type 1|2] [route-map <名稱>]' : '用法：redistribute static | connected | ospf <程序> [metric <n>] [route-map <名稱>]');
+    const S2 = ['static', 'connected', ...(into === 'ospf' ? ['bgp', 'eigrp'] : ['ospf'])].find((x) => x.startsWith(String(src).toLowerCase()) && String(src).length >= 2);
+    if (!S2) return err(into === 'ospf' ? '用法：redistribute static | connected | bgp <AS> | eigrp <AS> [subnets] [metric <n>] [metric-type 1|2] [route-map <名稱>]' : '用法：redistribute static | connected | ospf <程序> [metric <n>] [route-map <名稱>]');
     const o = { src: S2 };
     let k = 0;
-    if (S2 === 'bgp' || S2 === 'ospf') {
-      if (!/^\d+$/.test(t[0] || '')) return err(`用法：redistribute ${S2} <${S2 === 'bgp' ? 'AS 號碼' : '程序號碼'}> …`);
+    if (S2 === 'bgp' || S2 === 'ospf' || S2 === 'eigrp') {
+      if (!/^\d+$/.test(t[0] || '')) return err(`用法：redistribute ${S2} <${S2 === 'ospf' ? '程序號碼' : 'AS 號碼'}> …`);
       o.as = +t[0]; k = 1;
+      if (S2 === 'eigrp' && !(eigrpOn(dev()) && +dev().eigrp.as === o.as)) return err(`% EIGRP process ${o.as} not running（這台的 router eigrp 是 ${eigrpOn(dev()) ? dev().eigrp.as : '還沒有設定'}）`);
       if (S2 === 'bgp' && !(dev().bgp && +dev().bgp.asn === o.as)) return err(`% BGP process ${o.as} not running（這台的 router bgp 是 ${(dev().bgp && dev().bgp.asn) || '還沒有設定'}）`);
     }
     for (; k < t.length; k++) {
@@ -1681,6 +1708,19 @@ export function iosSession(getDev, getState, who = null) {
       enter('router', { vrf: v });
       return undefined;
     }],
+    // ── EIGRP（傳統模式） ──
+    ['router eigrp <as>', ([as]) => {
+      const d = dev();
+      if (!('ospfDefault' in d)) return err('這台設備不支援 EIGRP');
+      if (!/^\d+$/.test(as) || +as < 1 || +as > 65535) return err('AS 號碼是 1 – 65535');
+      if (eigrpOn(d) && +d.eigrp.as !== +as) return err(`% 這台已經在跑 EIGRP AS ${d.eigrp.as}（這個模擬一台只跑一個 EIGRP 程序；要換先 no router eigrp ${d.eigrp.as}）`);
+      d.eigrp ||= { as: +as, nets: [] };
+      enter('eigrp', null);
+      return undefined;
+    }],
+    ['no router eigrp <as>', ([as]) => { const d = dev(); if (!eigrpOn(d) || +d.eigrp.as !== +as) return err(`% EIGRP AS ${as} 沒有在執行`); delete d.eigrp; return undefined; }],
+    ['key chain <name>', ([n]) => { const d = dev(); ((d.keyChains ||= {})[n] ||= []); enter('keychain', n); return undefined; }],
+    ['no key chain <name>', ([n]) => { const d = dev(); if (!(d.keyChains || {})[n]) return err(`% key chain ${n} 不存在`); delete d.keyChains[n]; if (!Object.keys(d.keyChains).length) delete d.keyChains; return undefined; }],
     ['router ospf <pid>', ([pid]) => {
       const d = dev();
       if (!('ospfDefault' in d)) return err('這台設備不支援 OSPF');
@@ -3268,6 +3308,92 @@ export function iosSession(getDev, getState, who = null) {
       ['description [...]', () => undefined],
     ],
     zone: [['description [...]', ([t]) => { dev().zbf.zones[S.cur].desc = t; return undefined; }]],
+    eigrp: [
+      ['network <ip> [...]', ([ip, w]) => {
+        const net = parseIp(ip), bits = w ? wildBits(w) : classBitsOf(net);
+        if (net == null || bits == null) return err('用法：network <網段> [萬用遮罩]，例如 network 10.0.0.0 0.0.0.255');
+        const e = dev().eigrp, s = { net: netOf(net, bits), bits };
+        e.nets = [...(e.nets || []).filter((n) => !(n.net === s.net && n.bits === s.bits)), s];
+        const hit = dev().ifaces.filter((i) => { const n = staticNet(i), a = n ? n.ip : i.rt && i.rt.ip; return !i.vrf && a != null && netOf(a, bits) === s.net; });
+        return hit.length ? `EIGRP 已在 ${hit.map((i) => i.label).join('、')} 啟用` : '（目前還沒有介面的 IP 落在這個範圍內；之後設定了符合的 IP，那個介面就會自動加入 EIGRP）';
+      }],
+      ['no network <ip> [...]', ([ip, w]) => {
+        const net = parseIp(ip), bits = w ? wildBits(w) : classBitsOf(net);
+        if (net == null || bits == null) return err('用法：no network <網段> [萬用遮罩]');
+        const e = dev().eigrp, had = (e.nets || []).length;
+        e.nets = (e.nets || []).filter((n) => !(n.net === netOf(net, bits) && n.bits === bits));
+        return e.nets.length < had ? undefined : err('沒有這一條 network 敘述');
+      }],
+      ['passive-interface default', () => { const e = dev().eigrp; e.passiveDefault = true; delete e.passive; return undefined; }],
+      ['no passive-interface default', () => { const e = dev().eigrp; delete e.passiveDefault; delete e.noPassive; return undefined; }],
+      ['passive-interface <if>', ([t]) => {
+        const r = resolveIf(dev(), t); if (isErr(r)) return r;
+        const e = dev().eigrp, id = (r.iface || {}).id;
+        if (!id) return err('這個介面沒有 IP（不能當 L3 介面）');
+        if (e.passiveDefault) e.noPassive = (e.noPassive || []).filter((x) => x !== id); else e.passive = [...new Set([...(e.passive || []), id])];
+        return undefined;
+      }],
+      ['no passive-interface <if>', ([t]) => {
+        const r = resolveIf(dev(), t); if (isErr(r)) return r;
+        const e = dev().eigrp, id = (r.iface || {}).id;
+        if (!id) return err('這個介面沒有 IP');
+        if (e.passiveDefault) e.noPassive = [...new Set([...(e.noPassive || []), id])]; else e.passive = (e.passive || []).filter((x) => x !== id);
+        return undefined;
+      }],
+      ['eigrp router-id <ip>', ([ip]) => (parseIp(ip) == null ? err('Router ID 要寫成 IP 位址的格式') : void (dev().eigrp.rid = ip))],
+      ['no eigrp router-id [...]', () => { delete dev().eigrp.rid; }],
+      ['eigrp log-neighbor-changes', () => undefined],
+      ['no eigrp log-neighbor-changes', () => undefined],
+      ['variance <n>', ([n]) => (/^\d+$/.test(n) && +n >= 1 && +n <= 128 ? void (+n === 1 ? delete dev().eigrp.variance : (dev().eigrp.variance = +n)) : err('variance 是 1 – 128'))],
+      ['no variance [...]', () => { delete dev().eigrp.variance; }],
+      ['maximum-paths <n>', ([n]) => (/^\d+$/.test(n) && +n >= 1 && +n <= 32 ? void (+n === 4 ? delete dev().eigrp.maxPaths : (dev().eigrp.maxPaths = +n)) : err('maximum-paths 是 1 – 32'))],
+      ['no maximum-paths [...]', () => { delete dev().eigrp.maxPaths; }],
+      ['metric weights <tos> <k1> <k2> <k3> <k4> <k5>', ([, ...k]) => {
+        const v = k.map(Number);
+        if (v.some((x, n) => !/^\d+$/.test(k[n]) || x > 255)) return err('用法：metric weights 0 <K1> <K2> <K3> <K4> <K5>（0 – 255）');
+        if (v.join() === '1,0,1,0,0') delete dev().eigrp.k; else dev().eigrp.k = v;
+        return undefined;
+      }],
+      ['no metric weights [...]', () => { delete dev().eigrp.k; }],
+      ['auto-summary', () => err('這個模擬只支援 no auto-summary（IOS 15 之後的預設，不會自動彙總成有類別的網段）')],
+      ['no auto-summary', () => undefined],
+      ['default-metric <bw> <dly> <rel> <load> <mtu>', (a) => {
+        const v = a.map(Number);
+        if (v.some((x) => !Number.isFinite(x) || x < 0) || v[0] < 1) return err('用法：default-metric <頻寬 kbps> <延遲 十微秒> <可靠度> <負載> <MTU>，例如 default-metric 10000 100 255 1 1500');
+        dev().eigrp.defMetric = v;
+        return undefined;
+      }],
+      ['no default-metric [...]', () => { delete dev().eigrp.defMetric; }],
+      ['redistribute <src> [...]', ([src, rest]) => {
+        const s = String(src).toLowerCase(), t = String(rest || '').split(/\s+/).filter(Boolean);
+        const kind = 'static'.startsWith(s) ? 'static' : 'connected'.startsWith(s) ? 'connected' : 'ospf'.startsWith(s) ? 'ospf' : null;
+        if (!kind) return err('這個模擬的 EIGRP 可以重分配 static、connected、ospf <程序>');
+        const mi = t.indexOf('metric');
+        let metric = null;
+        if (mi >= 0) {
+          metric = t.slice(mi + 1, mi + 6).map(Number);
+          if (metric.length !== 5 || metric.some((x) => !Number.isFinite(x) || x < 0) || metric[0] < 1) return err('metric 要寫五個值：頻寬 (kbps) 延遲 (十微秒) 可靠度 負載 MTU，例如 metric 10000 100 255 1 1500');
+        }
+        const e = dev().eigrp;
+        e.redist = [...(e.redist || []).filter((r) => r.src !== kind), { src: kind, ...(kind === 'ospf' ? { pid: +t[0] || 1 } : {}), ...(metric ? { metric } : {}) }];
+        return kind !== 'connected' && !metric && !e.defMetric ? '（還沒有種子 metric：static / OSPF 的路要有 metric 或 default-metric 才會宣告出去）' : undefined;
+      }],
+      ['no redistribute <src> [...]', ([src]) => { const e = dev().eigrp, s = String(src).toLowerCase(); e.redist = (e.redist || []).filter((r) => !r.src.startsWith(s)); if (!e.redist.length) delete e.redist; return undefined; }],
+    ],
+    keychain: [
+      ['key <id>', ([id]) => {
+        if (!/^\d+$/.test(id) || +id > 2147483647) return err('key 的編號是 0 – 2147483647');
+        const l = dev().keyChains[S.cur];
+        if (!l.some((k) => k.id === +id)) l.push({ id: +id, str: '' });
+        enter('kckey', { chain: S.cur, id: +id });
+        return undefined;
+      }],
+      ['no key <id>', ([id]) => { const kc = dev().keyChains; kc[S.cur] = kc[S.cur].filter((k) => k.id !== +id); return undefined; }],
+    ],
+    kckey: [
+      ['key-string <...>', ([s]) => { const k = dev().keyChains[S.cur.chain].find((x) => x.id === S.cur.id); k.str = s; return undefined; }],
+      ['no key-string [...]', () => { const k = dev().keyChains[S.cur.chain].find((x) => x.id === S.cur.id); k.str = ''; return undefined; }],
+    ],
     icmap: [
       ['match protocol <p>', ([p]) => {
         const v = p.toLowerCase();
@@ -3542,6 +3668,7 @@ export function iosSession(getDev, getState, who = null) {
     if (match(tok, 'end') || t0 === '^z') { S.mode = 'exec'; S.cur = null; return leave(); }
     if (match(tok, 'exit') && S.mode === 'pmapc') { S.mode = 'pmap'; S.cur = { pm: S.cur.pm }; return done(false); }
     if (match(tok, 'exit') && S.mode === 'ipmapc') { S.mode = 'ipmap'; S.cur = { pm: S.cur.pm }; return done(false); }
+    if (match(tok, 'exit') && S.mode === 'kckey') { S.mode = 'keychain'; S.cur = S.cur.chain; return done(false); }
     if (match(tok, 'exit') && S.mode === 'ikev2peer') { S.mode = 'ikev2kr'; S.cur = S.cur.kr; return done(false); }
     // 巢狀的子模式：exit 只回到上一層（和真的 IOS 一樣）
     if (match(tok, 'exit') && S.mode === 'archlog') { S.mode = 'archive'; S.cur = null; return done(false); }
@@ -3570,7 +3697,7 @@ export function iosSession(getDev, getState, who = null) {
     let res = trySub ? run(SUB[S.mode], tok, out) : { hit: false };
     let viaSub = res.hit;
     // 巢狀的子模式不認得的指令，先往上一層找（例如貼上設定時 log config 底下接著 archive 的 path）
-    const UP = { vrfaf: ['vrfdef', (c) => c], archlog: ['archive', () => null], slaecho: ['ipsla', (c) => c], ikev2peer: ['ikev2kr', (c) => c.kr], pmapc: ['pmap', (c) => ({ pm: c.pm })], ipmapc: ['ipmap', (c) => ({ pm: c.pm })] };
+    const UP = { vrfaf: ['vrfdef', (c) => c], archlog: ['archive', () => null], slaecho: ['ipsla', (c) => c], ikev2peer: ['ikev2kr', (c) => c.kr], pmapc: ['pmap', (c) => ({ pm: c.pm })], ipmapc: ['ipmap', (c) => ({ pm: c.pm })], kckey: ['keychain', (c) => c.chain] };
     if (!res.hit && trySub && UP[S.mode]) {
       const [pm, pc] = UP[S.mode], prev = S.mode, prevCur = S.cur;
       S.mode = pm; S.cur = pc(prevCur);
@@ -4060,6 +4187,12 @@ export function runningConfig(state, dev) {
     if (sw.qos && sw.qos.cosDscp && sw.qos.cosDscp.join() !== COS_DSCP_DEFAULT.join()) o.push(`mls qos map cos-dscp ${sw.qos.cosDscp.join(' ')}`);
     o.push('!');
   }
+  // key chain（EIGRP 的 MD5 驗證用；金鑰照實印出，和 IOS 沒開 service password-encryption 時一樣）
+  for (const [n, keys] of Object.entries(dev.keyChains || {})) {
+    o.push(`key chain ${n}`);
+    for (const k of keys.slice().sort((a, b) => a.id - b.id)) o.push(` key ${k.id}`, ...(k.str ? [`  key-string ${k.str}`] : []));
+    o.push('!');
+  }
   // QoS：class-map 與 policy-map
   for (const [name, m] of Object.entries(dev.classMaps || {})) {
     o.push(`class-map match-${m.any ? 'any' : 'all'} ${name}`);
@@ -4227,6 +4360,14 @@ export function runningConfig(state, dev) {
     if ((i.ip6 || i.gp6) && !i.ra) l.push(' ipv6 nd ra suppress all');
     if (i.pd6) l.push(` ipv6 dhcp client pd ${i.pd6}`);
     if (i.zone) l.push(` zone-member security ${i.zone}`);
+    if (i.eigrpDelay) l.push(` delay ${i.eigrpDelay}`);
+    { const as = eigrpOn(dev) ? dev.eigrp.as : (i.eigrpAuth && i.eigrpAuth.as) || 1;
+      if (i.eigrpAuth && i.eigrpAuth.md5) l.push(` ip authentication mode eigrp ${i.eigrpAuth.as || as} md5`);
+      if (i.eigrpAuth && i.eigrpAuth.chain) l.push(` ip authentication key-chain eigrp ${i.eigrpAuth.as || as} ${i.eigrpAuth.chain}`);
+      if (i.eigrpHello) l.push(` ip hello-interval eigrp ${as} ${i.eigrpHello}`);
+      if (i.eigrpHold) l.push(` ip hold-time eigrp ${as} ${i.eigrpHold}`);
+      if (i.eigrpNoSplit) l.push(` no ip split-horizon eigrp ${as}`);
+      for (const s of i.eigrpSum || []) l.push(` ip summary-address eigrp ${as} ${fmtIp(s.net)} ${fmtMask(s.bits)}`); }
     if (i.nat64) l.push(' nat64 enable');
     if (i.dhcp6) l.push(` ipv6 dhcp server ${i.dhcp6}`);
     if (i.relay6) l.push(` ipv6 dhcp relay destination ${i.relay6.toUpperCase()}`);
@@ -4352,6 +4493,20 @@ export function runningConfig(state, dev) {
   if (dev.kind === 'mswitch') {
     const mg = dev.ifaces.find((x) => x.id === 'mgmt');
     if (mg && mg.gateway) o.push(`ip default-gateway ${mg.gateway}`, '!');
+  }
+  if (eigrpOn(dev)) {
+    const e = dev.eigrp, wild = (bits) => fmtIp(~(bits ? 0xffffffff << (32 - bits) : 0) >>> 0);
+    o.push(`router eigrp ${e.as}`);
+    for (const n of (e.nets || []).slice().sort((a, b) => (a.net >>> 0) - (b.net >>> 0) || a.bits - b.bits)) o.push(` network ${fmtIp(n.net)} ${wild(n.bits)}`); // IOS 照網段排序
+    if (e.defMetric) o.push(` default-metric ${e.defMetric.join(' ')}`);
+    for (const r of e.redist || []) o.push(` redistribute ${r.src}${r.src === 'ospf' ? ' ' + (r.pid || 1) : ''}${r.metric ? ' metric ' + r.metric.join(' ') : ''}`);
+    if (e.k) o.push(` metric weights 0 ${e.k.join(' ')}`);
+    if (e.variance) o.push(` variance ${e.variance}`);
+    if (e.maxPaths) o.push(` maximum-paths ${e.maxPaths}`);
+    if (e.passiveDefault) { o.push(' passive-interface default'); for (const id of e.noPassive || []) { const i = dev.ifaces.find((x) => x.id === id); if (i) o.push(` no passive-interface ${longIf(i.label)}`); } }
+    else for (const id of e.passive || []) { const i = dev.ifaces.find((x) => x.id === id); if (i) o.push(` passive-interface ${longIf(i.label)}`); }
+    if (e.rid) o.push(` eigrp router-id ${e.rid}`);
+    o.push('!');
   }
   // network 敘述照原樣列出；在圖形介面上個別啟用、而且沒有被任何敘述涵蓋的介面，各自列一條。VRF 的程序寫成 router ospf <pid> vrf <名稱>
   for (const { vrf, pid, c } of ospfProcs(dev)) {

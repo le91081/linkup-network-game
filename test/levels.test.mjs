@@ -4384,6 +4384,94 @@ console.log('\n存檔格式遷移');
   ok(store.ver === SAVE_VER && store.saves.la.ver === SAVE_VER && store.saves.la.devices.dns.dnsZone.records[0].value === '10.0.0.5' && store.saves.lx.ver === SAVE_VER + 5 && store.custom[0].state.ver === SAVE_VER, '整份進度：每一關的存檔、自訂關卡都升級，新版本的留著不動');
 }
 
+console.log('\nEIGRP：鄰居條件、MD5 驗證、metric 與 feasible successor');
+{
+  const { iosSession, runningConfig } = await import('../src/engine/ios.js');
+  const { iosRun } = await import('../src/ui/cli.js');
+  const { eigrpMetric } = await import('../src/engine/eigrp.js');
+  const sim = await import('../src/engine/sim.js');
+  const ok = (cond, title) => (cond ? console.log('  ✔ ' + title) : fail(title));
+  const lv = LEVELS.find((x) => x.id === 'l129');
+  const sessions = new Map();
+  const run = (s, id, line) => { const k = s.devices[id]; if (!sessions.has(k)) sessions.set(k, iosSession(() => s.devices[id], () => s)); const out = []; const r = iosRun({ state: s }, id, sessions.get(k), line, (l) => out.push(l)); if (r.changed) settle(s); return out; };
+  const cli = (s, id, lines) => lines.flatMap((l) => run(s, id, l)).join('\n');
+  const route = (s, id, ip, bits) => s.devices[id].rt.routes.filter((r) => r.net === parseIp(ip) && r.bits === bits);
+  ok(eigrpMetric(1e6, 20) === 3072 && eigrpMetric(10000, 30) === 256768 && eigrpMetric(100000, 100) === 28160, 'metric = 256 ×（10⁷ ÷ 最小頻寬 + 延遲總和 ÷ 10）');
+  const s = lv.setup(); settle(s);
+  const r0 = route(s, 'br', '10.1.0.0', 24);
+  ok(r0.length === 1 && r0[0].type === 'E' && r0[0].ad === 90 && r0[0].metric === 256768 && r0[0].iface.id === 'Gi0/0/1', '開場：BR-RT 只從 4G 學到總公司（D [90/256768]）');
+  ok(/^D {8}10\.1\.0\.0\/24 \[90\/256768\] via 10\.0\.23\.1, \d\d:\d\d:\d\d, GigabitEthernet0\/0\/1$/m.test(cli(s, 'br', ['show ip route eigrp'])), 'show ip route：EIGRP 的代碼是 D');
+  ok(!/Gi0\/0\/0/.test(cli(s, 'br', ['show ip eigrp interfaces'])) && /Gi0\/0\/0 +0 /.test(cli(s, 'hq', ['show ip eigrp interfaces'])), 'network 打錯：BR-RT 的光纖介面沒有跑 EIGRP，HQ-RT 那邊 0 個鄰居');
+  cli(s, 'br', ['configure terminal', 'router eigrp 100', 'no network 10.0.21.0 0.0.0.3', 'network 10.0.12.0 0.0.0.3', 'end']);
+  ok(/authentication failure/.test(lv.objectives[1].test(s)) && !s.devices.br.rt.eigrp.nbrs.some((n) => n.dev === 'hq'), '只有一邊做 MD5：Hello 被丟掉，鄰居起不來');
+  cli(s, 'br', ['configure terminal', 'key chain EIGRP-KEY', 'key 1', 'key-string wrong', 'exit', 'exit', 'interface Gi0/0/0', 'ip authentication mode eigrp 100 md5', 'ip authentication key-chain eigrp 100 EIGRP-KEY', 'end']);
+  ok(/MD5 驗證失敗：兩邊的金鑰不一樣（key 1 和 key 1，key-string 不同）/.test(lv.objectives[1].test(s)), 'key-string 不一樣：驗證失敗');
+  cli(s, 'br', ['configure terminal', 'key chain EIGRP-KEY', 'key 1', 'key-string Lnk#2026', 'end']);
+  sim.advance(s, 30); settle(s);
+  ok(lv.objectives.every((o) => (o.type === 'check' ? o.test(s) === true : sim.runObjective(s, o).pass)), '金鑰改對：鄰居起來，三個目標都過');
+  const r1 = route(s, 'br', '10.1.0.0', 24);
+  ok(r1.length === 1 && r1[0].metric === 3072 && r1[0].iface.id === 'Gi0/0/0', '光纖：FD 3072（1 Gbps、延遲 20 µs）');
+  const all = cli(s, 'br', ['show ip eigrp topology all-links']), top = cli(s, 'br', ['show ip eigrp topology']);
+  ok(/P 10\.1\.0\.0\/24, 1 successors, FD is 3072\n {8}via 10\.0\.12\.1 \(3072\/2816\), GigabitEthernet0\/0\/0\n {8}via 10\.0\.23\.1 \(256768\/256512\), GigabitEthernet0\/0\/1/.test(all)
+    && /P 10\.1\.0\.0\/24, 1 successors, FD is 3072\n {8}via 10\.0\.12\.1 \(3072\/2816\), GigabitEthernet0\/0\/0\nP /.test(top), '4G 的 RD 256512 不小於 FD 3072：不是 feasible successor（只在 all-links 看得到）');
+  const nb = cli(s, 'br', ['show ip eigrp neighbors']);
+  ok(/^0 +10\.0\.12\.1 +Gi0\/0\/0 +1[0-5] 00:00:30/m.test(nb) && /^1 +10\.0\.23\.1 +Gi0\/0\/1 +1[0-5] /m.test(nb), 'show ip eigrp neighbors：Hold 在 10 – 15 秒之間倒數');
+  const pr = cli(s, 'br', ['show ip protocols']);
+  ok(/Routing Protocol is "eigrp 100"/.test(pr) && /Router-ID: 2\.2\.2\.2/.test(pr) && /Metric weight K1=1, K2=0, K3=1, K4=0, K5=0/.test(pr) && /^ {4}10\.0\.12\.0\/30$/m.test(pr) && /Passive Interface\(s\):\n {4}GigabitEthernet0\/0\/2/.test(pr) && /^ {4}10\.0\.12\.1 +90 /m.test(pr), 'show ip protocols：AS、Router-ID、K 值、network、passive、路由來源');
+  const rc = runningConfig(s, s.devices.br).join('\n');
+  ok(/^key chain EIGRP-KEY\n key 1\n  key-string Lnk#2026$/m.test(rc) && /interface GigabitEthernet0\/0\/0\n(?: .*\n)* ip authentication mode eigrp 100 md5\n ip authentication key-chain eigrp 100 EIGRP-KEY/.test(rc)
+    && /^router eigrp 100\n network 10\.0\.12\.0 0\.0\.0\.3\n/m.test(rc) && !/10\.0\.21\.0/.test(rc), 'running-config：key chain、介面驗證、router eigrp');
+  // 光纖斷：沒有 feasible successor，要重新查詢才換到 4G
+  cli(s, 'br', ['configure terminal', 'interface Gi0/0/0', 'shutdown', 'end']);
+  const r2 = route(s, 'br', '10.1.0.0', 24);
+  ok(r2.length === 1 && r2[0].metric === 256768 && r2[0].iface.id === 'Gi0/0/1' && sim.runObjective(s, lv.objectives[2].test).pass, '光纖 shutdown：改走 4G');
+  cli(s, 'br', ['configure terminal', 'interface Gi0/0/0', 'no shutdown', 'end']);
+  // 鄰居條件：passive、AS、K 值；Hello 不一樣沒關係
+  cli(s, 'br', ['configure terminal', 'router eigrp 100', 'passive-interface Gi0/0/0', 'end']);
+  ok(s.devices.hq.rt.eigrp.ifs['Gi0/0/0'].why.some((w) => /passive-interface/.test(w)) && !route(s, 'br', '10.1.0.0', 24).some((r) => r.iface.id === 'Gi0/0/0'), 'passive-interface：光纖上不送 Hello，鄰居拆掉');
+  cli(s, 'br', ['configure terminal', 'router eigrp 100', 'no passive-interface Gi0/0/0', 'end']);
+  cli(s, 'hq', ['configure terminal', 'interface Gi0/0/0', 'ip hello-interval eigrp 100 2', 'ip hold-time eigrp 100 6', 'end']);
+  ok(s.devices.br.rt.eigrp.nbrs.some((n) => n.dev === 'hq'), 'Hello / Hold time 兩邊不同：EIGRP 還是成為鄰居（和 OSPF 不同）');
+  cli(s, 'lte', ['configure terminal', 'router eigrp 100', 'metric weights 0 1 0 1 1 0', 'end']);
+  ok(s.devices.br.rt.eigrp.ifs['Gi0/0/1'].why.some((w) => /K-value mismatch/.test(w)), 'K 值不同：K-value mismatch');
+  cli(s, 'lte', ['configure terminal', 'no router eigrp 100', 'router eigrp 200', 'network 10.0.13.0 0.0.0.3', 'network 10.0.23.0 0.0.0.3', 'end']);
+  ok(s.devices.br.rt.eigrp.ifs['Gi0/0/1'].why.some((w) => /AS 200、這裡是 AS 100/.test(w)), 'AS 不同：不會成為鄰居');
+  ok(/% Invalid|這個模擬只支援 no auto-summary/.test(cli(s, 'br', ['configure terminal', 'router eigrp 100', 'auto-summary', 'end'])), 'auto-summary：只支援 no auto-summary');
+}
+
+console.log('\nEIGRP 與 OSPF 雙向重分配');
+{
+  const { iosSession, runningConfig } = await import('../src/engine/ios.js');
+  const { makeDevice: D, makeState } = await import('../src/engine/model.js');
+  const ok = (cond, title) => (cond ? console.log('  ✔ ' + title) : fail(title));
+  const ip4 = (d, port, ip, mask = '255.255.255.0') => Object.assign(d.ifaces.find((i) => i.id === port), { ip, mask });
+  const s = makeState([
+    D('isr4331', 'r1', { name: 'R1', init(d) { ip4(d, 'Gi0/0/0', '10.0.12.1', '255.255.255.252'); ip4(d, 'Gi0/0/2', '10.1.0.1'); } }),
+    D('isr4331', 'r2', { name: 'R2', init(d) { ip4(d, 'Gi0/0/0', '10.0.12.2', '255.255.255.252'); ip4(d, 'Gi0/0/1', '10.0.23.2', '255.255.255.252'); } }),
+    D('isr4331', 'r3', { name: 'R3', init(d) { ip4(d, 'Gi0/0/1', '10.0.23.1', '255.255.255.252'); ip4(d, 'Gi0/0/2', '10.3.0.1'); } }),
+    D('pc', 'p1', { name: 'P1', ip: '10.1.0.10', gw: '10.1.0.1' }), D('pc', 'p3', { name: 'P3', ip: '10.3.0.10', gw: '10.3.0.1' }),
+  ], [['r1:Gi0/0/0', 'r2:Gi0/0/0'], ['r2:Gi0/0/1', 'r3:Gi0/0/1'], ['r1:Gi0/0/2', 'p1:eth0'], ['r3:Gi0/0/2', 'p3:eth0']]);
+  settle(s);
+  const cli = (id, lines) => { const S = iosSession(() => s.devices[id], () => s); const o = []; for (const l of lines) o.push(...[].concat(S.exec(l).out || [])); settle(s); return o.join('\n'); };
+  cli('r1', ['configure terminal', 'router eigrp 100', 'network 10.0.0.0', 'end']);
+  cli('r2', ['configure terminal', 'router eigrp 100', 'network 10.0.12.0 0.0.0.3', 'exit', 'router ospf 1', 'network 10.0.23.0 0.0.0.3 area 0', 'end']);
+  cli('r3', ['configure terminal', 'router ospf 1', 'network 10.0.0.0 0.255.255.255 area 0', 'end']);
+  advance(s, 60); settle(s);
+  const rt = (id, ip, bits) => s.devices[id].rt.routes.find((r) => r.net === parseIp(ip) && r.bits === bits);
+  ok(!rt('r1', '10.3.0.0', 24) && !rt('r3', '10.1.0.0', 24), '沒有重分配：兩邊各自的路由協定看不到對方');
+  ok(/EIGRP process 200 not running/.test(cli('r2', ['configure terminal', 'router ospf 1', 'redistribute eigrp 200', 'end'])), 'redistribute eigrp 的 AS 要是這台在跑的');
+  ok(/種子 metric/.test(cli('r2', ['configure terminal', 'router eigrp 100', 'redistribute ospf 1', 'end'])) && !rt('r1', '10.3.0.0', 24), 'OSPF 進 EIGRP 沒有種子 metric：不會宣告出去');
+  cli('r2', ['configure terminal', 'router eigrp 100', 'redistribute ospf 1 metric 100000 100 255 1 1500', 'exit', 'router ospf 1', 'redistribute eigrp 100 subnets', 'end']);
+  advance(s, 10); settle(s);
+  const a = rt('r1', '10.3.0.0', 24), b = rt('r3', '10.1.0.0', 24), c = rt('r1', '10.0.23.0', 30);
+  ok(a && a.type === 'E' && a.sub === 'EX' && a.ad === 170 && a.metric === 51456, 'R1：D EX 10.3.0.0/24 [170/51456]（metric 100000 kbps、延遲 1000 µs，加上 R1 的介面）');
+  ok(c && c.sub === 'EX', 'redistribute ospf 也帶上跑 OSPF 的直連網段（10.0.23.0/30）');
+  ok(b && b.type === 'O' && b.sub === 'E2' && b.metric === 20 && rt('r3', '10.0.12.0', 30), 'R3：O E2 10.1.0.0/24 [110/20]，連同跑 EIGRP 的直連網段');
+  ok(transact(s, 'p1', { proto: 'icmp', dst: parseIp('10.3.0.10'), quiet: true }).ok, '兩邊的電腦互相 ping 得到');
+  const rc = runningConfig(s, s.devices.r2).join('\n');
+  ok(/router eigrp 100\n network 10\.0\.12\.0 0\.0\.0\.3\n redistribute ospf 1 metric 100000 100 255 1 1500/.test(rc) && / redistribute eigrp 100 subnets/.test(rc), 'running-config：兩個方向的 redistribute');
+}
+
 console.log('\nNetFlow 與 QoS 的 police');
 {
   const sim = await import('../src/engine/sim.js');

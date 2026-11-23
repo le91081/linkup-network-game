@@ -10,6 +10,7 @@ import { consoleTab, remoteOnlyInfo, needsConsole } from './panel-console.js';
 import { hasPsuSlots } from '../engine/power.js';
 import { breakoutCard } from './panel-breakout.js';
 import { openAnnot } from './annot.js';
+import { eigrpCard } from './panel-eigrp.js';
 import { ZONE, sdwanOn } from '../engine/sdwan.js';
 import * as CL from './panel-cloud.js';
 import * as W from './panel-wlc.js';
@@ -434,6 +435,8 @@ function routesTab(ctx, body) {
   if (dev.kind === 'router') body.append(vrfCard(ctx));
   if (dev.kind === 'l3switch' || dev.kind === 'router') {
     body.append(ospfCard(ctx));
+    const ec = eigrpCard(ctx);
+    if (ec) body.append(ec);
   }
   const bc = bgpCard(ctx);
   if (bc) body.append(bc);
