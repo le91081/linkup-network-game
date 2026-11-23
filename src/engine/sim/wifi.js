@@ -5,6 +5,7 @@ import { fmtIp, netOf, parseIp } from '../ip.js';
 import { logEvent } from '../ops.js';
 import { l2Explore, wifiHop } from './l2.js';
 import { transact } from './transact.js';
+import { prepMesh, meshServes } from '../mesh.js';
 
 export const WIFI_SEC = { open: '開放（無加密）', wep: 'WEP', wpa2: 'WPA2-Personal', wpa2wpa3: 'WPA2 / WPA3 混合', wpa3: 'WPA3-Personal', wpa2ent: 'WPA2-Enterprise (802.1X)' };
 const SEC_MODES = { open: ['open'], wep: ['wep'], wpa2: ['wpa2'], wpa2wpa3: ['wpa3', 'wpa2'], wpa3: ['wpa3'], wpa2ent: ['wpa2'] };
@@ -201,6 +202,8 @@ export function prepWifi(state) {
       for (const band of bands) { a.rt.interf.push({ dev: b.id, band }); b.rt.interf.push({ dev: a.id, band }); }
     }
   }
+  // Wi-Fi mesh：先決定每台 mesh 基地台的無線回程（用戶端只連得到回程有連上的）
+  prepMesh(state, aps);
   for (const d of Object.values(state.devices)) {
     for (const i of d.ifaces) {
       if (i.bind.t !== 'wlan') continue;
@@ -210,6 +213,10 @@ export function prepWifi(state) {
       let best = null, why = `找不到無線網路「${w.ssid}」— 不在任何基地台的訊號範圍內`;
       const cands = [];
       for (const ap of aps) {
+        if (!meshServes(state, ap)) {
+          if (ssidsOf(state, ap).some((s) => !s.off && s.name === w.ssid) && rfAt(state, ap, d.pos).band) why = `${ap.name} 是 mesh 基地台，無線回程還沒有連上（${(state.rt.meshWhy || {})[ap.id] || '找不到上游'}），所以不廣播「${w.ssid}」`;
+          continue;
+        }
         const rf = rfAt(state, ap, d.pos), dist = rf.dist;
         // 剛偵測到雷達、正在換頻道：5 GHz 暫時沒有訊號，訊號夠的用戶端退回 2.4 GHz
         if (rf.band === '5GHz' && ap.rt.dfs && ap.rt.dfs.hold) { rf.band = rf.rssi24 >= -78 ? '2.4GHz' : null; rf.rssi = rf.rssi24; }

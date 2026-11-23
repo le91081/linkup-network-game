@@ -5546,6 +5546,38 @@ console.log('\n交換器堆疊（StackWise）');
   ok(/% Invalid input/.test(cli(s, 'swu')('enable', 'show switch')), 'Catalyst 2960 沒有 show switch（不能堆疊）');
 }
 
+console.log('\nWi-Fi mesh：無線回程與無線橋接');
+{
+  const { runObjective } = await import('../src/engine/sim/objectives.js');
+  const ok = (cond, title) => (cond ? console.log('  ✔ ' + title) : fail(title));
+  const lv = LEVELS.find((x) => x.id === 'l154');
+  const s = lv.setup(); settle(s);
+  const ap1 = s.devices.ap1, ap2 = s.devices.ap2, nb = s.devices.nb;
+  const wl = () => nb.ifaces.find((i) => i.bind.t === 'wlan');
+  ok(!s.rt.off.ap2 && !s.rt.meshUp.ap2 && /金鑰/.test(s.rt.meshWhy.ap2) && /不廣播「Corp」/.test(wl().rt.note), 'PoE 電源供應器供電；金鑰不一樣：回程沒連上，AP-倉庫不廣播 Corp');
+  ok(/192\.168\.1\.100 –|沒有設成/.test(runObjective(s, lv.objectives[0]).reason) === false && /還沒有 IP 位址|沒有拿到/.test(runObjective(s, lv.objectives[0]).reason), 'dhcp 目標看的是 Wi-Fi 介面（不是沒接線的有線網卡）');
+  ap2.mesh.key = ap1.mesh.key; settle(s);
+  ok(!s.rt.meshUp.ap2 && /-78 dBm/.test(s.rt.meshWhy.ap2), '金鑰對了，但回程只有 -78 dBm（兩台相距 9 公尺、80 MHz）');
+  ap1.wifi.power = 'high'; settle(s);
+  ok(!s.rt.meshUp.ap2 && /-78 dBm/.test(s.rt.meshWhy.ap2), '只把 AP-辦公室的功率調高：回程看比較弱的方向，還是 -78 dBm');
+  ap2.wifi.power = 'high'; settle(s);
+  ok(s.rt.meshUp.ap2 && s.rt.meshUp.ap2.rssi === -68 && s.rt.meshUp.ap2.parent === 'ap1', '兩台都調高：回程 -68 dBm，接上 AP-辦公室');
+  ap1.wifi.power = ap2.wifi.power = 'mid'; ap1.wifi.width5 = 40; settle(s);
+  const u = s.rt.meshUp.ap2;
+  ok(u && u.rssi === -75 && u.raw === -78 && u.width === 40 && u.rate === 135, '改成 40 MHz：訊噪比多 3 dB（-78 → -75），連上了，回程速率 135 Mbps');
+  const r = runObjective(s, lv.objectives[3]);
+  ok(r.pass && r.speed.mbps <= 34 && /mesh 的無線回程/.test(r.speed.where), `測速 ${r.speed.mbps} Mbps：最慢的一段是 mesh 的無線回程`);
+  const p = transact(s, 'pc', { proto: 'tcp', dst: parseIp('192.168.1.30'), dport: 9100 });
+  ok(p.ok && p.hops.some((h) => h.mesh), '辦公室的電腦 → 印表機：經過無線回程（無線橋接）');
+  ok(lv.objectives.every((o) => (o.type === 'check' ? o.test(s) : runObjective(s, o).pass) === true), '五個目標都通過');
+  // 多跳：再加一台 mesh 基地台在更遠的地方
+  const s2 = cloneState(s);
+  const { makeDevice: mkDev } = await import('../src/engine/model.js');
+  s2.devices.ap3 = mkDev('ap', 'ap3', { name: 'AP-後院', pos: [13, 0], init(d) { d.wifi.ssids = []; d.mesh = { role: 'mesh', key: ap1.mesh.key }; d.injector = true; d.wifi.ssids = [{ name: 'Corp', sec: 'wpa2', pass: 'Warehouse#2026' }]; } });
+  settle(s2);
+  ok(s2.rt.meshUp.ap3 && s2.rt.meshUp.ap3.parent === 'ap2' && s2.rt.meshUp.ap3.hops === 2, '多跳：更遠的 AP-後院接在 AP-倉庫後面（第 2 跳）');
+}
+
 console.log('\nNetFlow 與 QoS 的 police');
 {
   const sim = await import('../src/engine/sim.js');

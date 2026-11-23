@@ -53,7 +53,7 @@ export function prepPhysical(state) {
   const shut = (D, pid) => !!(D.sw && D.sw.ports[pid] && D.sw.ports[pid].shut) || D.ifaces.some((i) => i.shut && i.bind.t === 'port' && i.bind.port === pid);
   rt.poe = poeTable(state, (id) => !!down[id]);
   const powered = new Set(Object.values(rt.poe).filter((e) => e.state === 'on').map((e) => e.pd));
-  for (const d of Object.values(state.devices)) if (CATALOG[d.model] && CATALOG[d.model].needsPoe && !powered.has(d.id)) rt.off[d.id] = true;
+  for (const d of Object.values(state.devices)) if (CATALOG[d.model] && CATALOG[d.model].needsPoe && !powered.has(d.id) && !d.injector) rt.off[d.id] = true; // d.injector：用 PoE 電源供應器供電
   // 接觸不良的網路線：下一次斷線或恢復的時間點要重算一次
   for (const c of state.cables) if (c.loose && state.devices[c.a.dev] && state.devices[c.b.dev]) rt.pending.push({ at: looseNext(state, c), dev: c[c.loose === 'a' ? 'a' : 'b'].dev, kind: 'link', text: `${state.devices[c.a.dev].name} ↔ ${state.devices[c.b.dev].name}：網路線接觸不良，連線一下斷一下` });
   for (const c of state.cables) {

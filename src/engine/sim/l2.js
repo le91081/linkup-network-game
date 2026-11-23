@@ -165,6 +165,11 @@ export function l2Explore(state, devId, iface, opts = {}) {
       if (inner != null && t == null) emit(d, pid, inner, path);
       else emit(d, pid, t, path, inner);
     }
+    // Wi-Fi mesh 的無線回程：像一條看不見的 Trunk，把訊框（連同 VLAN）原封不動帶到相鄰的基地台
+    for (const nb of (rt.meshNb && rt.meshNb[d.id]) || []) {
+      if (exceptPort === 'mesh:' + nb || !state.devices[nb]) continue;
+      flood(state.devices[nb], key, 'mesh:' + d.id, [...path, { ...wifiHop(d.id, nb), mesh: true }], null, inner);
+    }
   };
 
   const b = iface.bind;

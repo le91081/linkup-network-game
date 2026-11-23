@@ -1,5 +1,6 @@
 // 頻寬：每段線路跑得到多快、背景流量的分配、傳輸速率
 // （從 sim.js 拆出來的一部分；其他程式一律從 engine/sim.js 引入，不直接引入這裡）
+import { meshHopMbps } from '../mesh.js';
 import { callsTick } from '../voice.js';
 import { classify, egressOf, markAlong, policyOf } from '../qos.js';
 import { nfAccount } from '../netflow.js';
@@ -193,7 +194,12 @@ export function throughput(state, hops, mss = 1460, down = false) {
     // down：資料從伺服器往用戶端送（下載），看回程那幾段
     if (h.wave || (down ? !h.reply : h.reply) || h.proto === 'arp' || h.proto === 'dhcp') continue;
     let mbps, note;
-    if (h.wifi) {
+    if (h.mesh) {
+      // Wi-Fi mesh 的無線回程
+      const m = (state.rt.meshUp || {})[h.from] && state.rt.meshUp[h.from].parent === h.to ? state.rt.meshUp[h.from] : (state.rt.meshUp || {})[h.to];
+      mbps = m && m.rate ? meshHopMbps(m) : 20;
+      note = `mesh 的無線回程（${m ? m.rate : '?'} Mbps，${m ? m.rssi : '?'} dBm；和用戶端共用同一個 5 GHz 無線電）`;
+    } else if (h.wifi) {
       const a = [state.devices[h.from], state.devices[h.to]].flatMap((d) => d.ifaces).map((i) => i.rt.assoc).find((x) => x && (x.ap === h.from || x.ap === h.to));
       const rate = a ? a.rate : 54;
       mbps = rate * 0.5;

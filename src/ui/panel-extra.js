@@ -11,6 +11,7 @@ import {
 import { fmtIp } from '../engine/ip.js';
 import { newGuestCode } from '../engine/portal.js';
 import { loopGuardOn } from '../engine/stpcfg.js';
+import { meshRole, meshHopMbps, MESH_MIN } from '../engine/mesh.js';
 import { CATALOG, peerOf, portOf, newSsid, cableAt, linkInfo } from '../engine/model.js';
 import { visibleSsids, WIFI_SEC, macsBehind, isBridgePort, hitsOf, P1, accessOf, portfastOn, macRows, clearMac, macAgeOf, saInfo, fmtDur, isTrunk, dtpSpeaker, WALL_MATS, errdisRows, bouncePort, ERR_CAUSES, ERR_RECOVERY_DEFAULT, CH5, DFS, blockOf, CH6, on6, has6, portalPending, portalAccept, transact } from '../engine/sim.js';
 import { cdpCfg, lldpCfg, cdpOn, lldpTxOn, lldpRxOn, portNd, setPortNd, neighbors, speaksCdp, speaksLldp } from '../engine/disc.js';
@@ -280,13 +281,33 @@ export function ssidTab(ctx, body) {
   body.append(clientsCard(ctx));
 }
 
+/** Wi-Fi mesh：root（有線上行）或 mesh（無線上行）、金鑰、回程的狀態 */
+function meshCard(ctx) {
+  const { dev, state } = ctx, role = meshRole(dev) || '';
+  return h('div', { class: 'card' }, cardHead('Wi-Fi mesh（無線回程）', ctx.live(() => {
+    if (!role) return badge('off', '沒有啟用');
+    const u = (state.rt.meshUp || {})[dev.id];
+    return u ? badge('on', role === 'root' ? 'Root（有線上行）' : `已連上 · ${u.hops} 跳`) : badge('warn', '沒有連上');
+  })),
+  grid2(
+    field('角色', sel(ctx, () => role, (v) => { if (!v) delete dev.mesh; else dev.mesh = { key: '', ...(dev.mesh || {}), role: v }; }, [['', '關閉'], ['root', 'Root：有線上行'], ['mesh', 'Mesh：從空中接到別台基地台']], { rerender: true })),
+    role ? field('mesh 金鑰', inp(ctx, () => dev.mesh.key || '', (v) => { dev.mesh.key = v.trim(); }, { ph: '同一個 mesh 網路要一樣' })) : null),
+  role ? ctx.live(() => {
+    const u = (state.rt.meshUp || {})[dev.id], why = (state.rt.meshWhy || {})[dev.id];
+    if (!u) return note('warn', why || '還沒有連上');
+    if (!u.parent) { const kids = Object.entries(state.rt.meshUp).filter(([, x]) => x.parent === dev.id).map(([id]) => state.devices[id].name); return note('ok', kids.length ? `接在這台上的 mesh 基地台：${kids.join('、')}` : '有線上行正常；還沒有 mesh 基地台接上來'); }
+    return note(u.rssi < -70 ? 'warn' : 'ok', `上游：${state.devices[u.parent].name} · 回程訊號 ${u.rssi} dBm（${u.width} MHz）· 速率 ${u.rate} Mbps，實際約 ${meshHopMbps(u)} Mbps（和用戶端共用同一個 5 GHz 無線電）`);
+  }) : null,
+  note('muted', `mesh 基地台沒有線，從 5 GHz 接到 root 或另一台已經連上的 mesh 基地台；回程要兩個方向都收得到 ${MESH_MIN} dBm 以上。頻道寬度改窄（例如 40 MHz）訊噪比比較好、傳得比較遠。它的 LAN 埠可以接有線的設備（無線橋接）。回程沒連上的 mesh 基地台不廣播 SSID。`));
+}
 export function radioTab(ctx, body) {
   const { dev, state } = ctx;
   body.append(h('div', { class: 'card' }, cardHead('供電與上行', linkBadge(ctx, dev.ports[0].id)), ctx.live(() =>
     state.rt.off[dev.id]
       ? note('warn', cableAt(state, dev.id, dev.ports[0].id) ? '沒有電：對面的連接埠不提供 PoE，或已被停用。' : '沒有電：還沒有接上網路線。')
-      : note('ok', 'PoE 供電正常 (802.3af)'))),
-  radioCard(ctx), clientsCard(ctx),
+      : note('ok', dev.injector ? '用 PoE 電源供應器 (injector) 供電' : 'PoE 供電正常 (802.3af)')),
+    dev.lwap ? null : toggle(ctx, () => !!dev.injector, (v) => { dev.injector = v; }, '用 PoE 電源供應器 (injector) 供電（不用接 PoE 交換器）', { rerender: true })),
+  radioCard(ctx), dev.lwap ? null : meshCard(ctx), clientsCard(ctx),
   h('div', { class: 'card' }, cardHead('多點傳送'), h('div', { class: 'toggles' }, toggle(ctx, () => !!dev.wifi.m2u, (v) => { dev.wifi.m2u = v; }, '多點傳送轉單點傳送（Multicast-to-Unicast）：只送給有加入的用戶端，用它們各自的速率')),
     ctx.live(() => { const air = (state.rt.mair || {})[dev.id] || 0; return air > 0.02 ? note(air >= 0.5 ? 'warn' : 'muted', `多點傳送的串流佔掉這台基地台 ${air >= 1 ? '全部' : Math.round(air * 100) + '%'}的空中時間${dev.wifi.m2u ? '' : '：無線上多點傳送要用最低的基本速率送給每一台，比有線慢得多。上游用 IGMP snooping 擋掉沒人看的串流，或打開多點傳送轉單點傳送'}。`) : null; })),
   h('p', { class: 'tip', text: '選取基地台時，場景中的圓圈就是它的訊號涵蓋範圍。兩台基地台的範圍有重疊，頻道就必須錯開。' }));

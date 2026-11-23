@@ -95,7 +95,7 @@ export function runObjective(state, o) {
   }
   if (o.type === 'dhcp') {
     const d = state.devices[o.dev];
-    const i = d.ifaces.find((x) => x.rt.src === 'dhcp') || d.ifaces.find((x) => x.mode === 'dhcp' && x.rt.link) || d.ifaces[0];
+    const i = d.ifaces.find((x) => x.rt.src === 'dhcp') || d.ifaces.find((x) => x.mode === 'dhcp' && x.rt.link) || d.ifaces.find((x) => x.mode === 'dhcp') || d.ifaces[0];
     let reason = '';
     if (i.mode !== 'dhcp') reason = `${d.name} 沒有設成「自動取得 IP (DHCP)」`;
     else if (i.rt.src !== 'dhcp') reason = `${d.name} 沒有拿到 DHCP 租約${i.rt.note ? '：' + i.rt.note : ''}`;

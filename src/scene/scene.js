@@ -570,6 +570,20 @@ export class Scene3D {
         this.wifi.set(c.dev + '>' + apId, curve);
       }
     }
+    // Wi-Fi mesh 的無線回程：兩台基地台之間的紫色虛線
+    for (const [id, x] of Object.entries(state.rt.meshUp || {})) {
+      if (!x.parent) continue;
+      const a = this.devices.get(id), b = this.devices.get(x.parent);
+      if (!a || !b) continue;
+      const from = new THREE.Vector3(a.position.x, a.userData.h - 0.2, a.position.z), to = new THREE.Vector3(b.position.x, b.userData.h - 0.2, b.position.z);
+      const mid = from.clone().lerp(to, 0.5);
+      mid.y = Math.max(from.y, to.y) + 1.6;
+      const curve = new THREE.QuadraticBezierCurve3(from, mid, to);
+      const line = new THREE.Line(new THREE.BufferGeometry().setFromPoints(curve.getPoints(48)), new THREE.LineDashedMaterial({ color: 0xc39bff, dashSize: 0.3, gapSize: 0.14, transparent: true, opacity: 0.9 }));
+      line.computeLineDistances();
+      this.wifiGroup.add(line);
+      this.wifi.set(id + '>' + x.parent, curve);
+    }
     this.emphasizeRing();
   }
 
@@ -789,6 +803,7 @@ export class Scene3D {
       Object.values(state.devices).filter((d) => d.wifi).map((d) => [d.id, apRange(d), !!state.rt.off[d.id] || !!(state.down || {})[d.id] || (state.rt.booting || {})[d.id] > 0, ssidsOf(state, d).filter((x) => !x.off && x.name).length, ...((state.walls || []).length ? d.pos.map((v) => Math.round(v * 4)) : [])]),
       (state.walls || []).map((w) => [w.a, w.b, w.mat]),
       Object.entries(state.rt.clients).map(([ap, l]) => [ap, l.map((c) => c.dev + '@' + (c.ap || ap))]),
+      Object.entries(state.rt.meshUp || {}).filter(([, x]) => x.parent).map(([id, x]) => id + '>' + x.parent),
     ]);
     if (wsig !== this.wifiSig) { this.wifiSig = wsig; this.rebuildWifi(state); }
     const asig = JSON.stringify([state.notes || [], state.groups || [], (state.groups || []).length ? Object.values(state.devices).map((d) => d.pos) : 0]);
