@@ -1,4 +1,5 @@
 // 設備型錄（以現實世界的機型為藍本）與設備物件工廠
+import { JUNOS_DEFAULT, applyJunos } from './junos.js';
 import { parseIp } from './ip.js';
 import { newVpc, CLOUD_REGION } from './cloud.js';
 import { opticsOf, opticLink, rejectsOptic } from './optics.js';
@@ -177,6 +178,11 @@ export const CATALOG = {
     ports: [...seq(8, (i) => rj('Gi0/' + i, 'Gi0/' + i, { poe: true })), rj('Gi0/9'), rj('Gi0/10'), sfp('Gi0/11'), sfp('Gi0/12')],
     poeBudget: 124, // PoE+ 的總預算（瓦）：每個埠最多 30 W，但八個埠加起來只有 124 W
   },
+  ex2300: {
+    kind: 'mswitch', shape: 'switch-r', vendor: 'Juniper', title: 'Juniper EX2300-24T', junos: true,
+    tagline: '網管型 L2 交換器 · 24×GE + 4×10G SFP+ · Junos（commit 才生效、不會 DTP）',
+    ports: [...seq(24, (i) => rj('ge-0/0/' + i), 0), ...seq(4, (i) => sfp('xe-0/1/' + i), 0)],
+  },
   c9300: {
     kind: 'l3switch', shape: 'switch-r', vendor: 'Cisco', title: 'Cisco Catalyst 9300-24T',
     tagline: '園區核心 L3 交換器 · 24×GE + 4×10G SFP+ · 管理埠 Gi0/0',
@@ -322,6 +328,8 @@ export function makeDevice(model, id, o = {}) {
       d.radius = { ip: '', secret: '' };
       if (m.kind === 'l3switch') { d.routing = true; d.ospfDefault = false; }
       else d.ifaces = [iface('mgmt', '管理介面', { t: 'svi', vlan: 1 })];
+      // Juniper EX：設定用 Junos 的 set / commit（engine/junos.js），出廠所有的埠在 default VLAN、開著 RSTP
+      if (m.junos) d.junos = { active: [...JUNOS_DEFAULT], candidate: null, commits: [] };
       // 帶外管理埠：Routed、在管理用的 VRF 裡（Catalyst 9300 的 Gi0/0 在 Mgmt-vrf；Nexus 的 mgmt0 在 vrf context management）
       for (const p of d.ports.filter((x) => x.mgmt)) {
         const nx = /^n9/.test(model), vn = nx ? 'management' : 'Mgmt-vrf';
@@ -390,6 +398,7 @@ export function makeDevice(model, id, o = {}) {
     if (o.dns) i.dns = o.dns;
     if (o.wifi) Object.assign(d.ifaces.find((x) => x.bind.t === 'wlan').wifi, o.wifi);
   }
+  if (d.junos) applyJunos(d);
   // 堆疊（engine/stack.js）：o.stack = 成員的台數
   if (o.stack > 1 && m.stackable) d.stack = { members: seq(o.stack, (n) => ({ num: n, prio: 1 })), active: 1, cables: [true, true] };
   if (o.init) o.init(d);

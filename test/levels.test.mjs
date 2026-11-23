@@ -5734,6 +5734,34 @@ console.log('\nIP hash 的 NIC teaming 與靜態 EtherChannel');
   ok(!runObjective(s, lv.objectives[0]).pass && /沒有加入 Port-channel/.test(sw.rt.lag['Gi0/11'].why), '改回依虛擬埠、交換器還是 EtherChannel：對端沒有加入 Port-channel，還是斷線');
 }
 
+console.log('\nJuniper 的 Junos：commit、DTP 與 native VLAN');
+{
+  const { runObjective } = await import('../src/engine/sim/objectives.js');
+  const { iosSession } = await import('../src/engine/ios.js');
+  const { junosSession, junosRun } = await import('../src/ui/junoscli.js');
+  const ok = (cond, title) => (cond ? console.log('  ✔ ' + title) : fail(title));
+  const typeIn = (s, id, lines) => { const S = iosSession(() => s.devices[id], () => s); for (const l of lines) S.exec(l); };
+  const lv = LEVELS.find((x) => x.id === 'l161');
+  const s = lv.setup(); settle(s);
+  const ex = s.devices.ex, J = junosSession();
+  const jn = (...lines) => { const out = []; for (const l of lines) { const r = junosRun(s, ex, J, l, (x) => out.push(x)); if (r.changed) settle(s); } return out.join('\n'); };
+  ok(s.devices.core.sw.ports['Gi0/1'].mode !== 'trunk' && !runObjective(s, lv.objectives[0]).pass, 'Catalyst 的 dynamic auto 碰到 Juniper：沒有 DTP，停在 Access，VLAN 10 不通');
+  typeIn(s, 'core', ['enable', 'configure terminal', 'interface Gi0/1', 'switchport mode trunk', 'end']); settle(s);
+  ok(runObjective(s, lv.objectives[0]).pass && !runObjective(s, lv.objectives[1]).pass, '寫死 mode trunk：PC-A 通了；PC-B 的埠還沒 commit');
+  ok(/vlan members v20/.test(jn('configure', 'show | compare')) && /ge-0\/0\/2\.0\*/.test(jn('run show vlans')) && /default\s+1\n\s+ge-0\/0\/2/.test(jn('run show vlans')), 'show | compare 看到沒 commit 的設定；show vlans：ge-0/0/2 還在 default');
+  ok(/commit complete/.test(jn('commit')) && runObjective(s, lv.objectives[1]).pass, 'commit：PC-B 通了');
+  ok(!runObjective(s, lv.objectives[2]).pass, 'Junos 的 trunk 沒有 native VLAN：Cisco 送來不加標籤的 VLAN 99 被丟掉');
+  ok(/native-vlan-id 99 也要放進 vlan members/.test(jn('set interfaces ge-0/0/0 native-vlan-id 99', 'commit')), 'commit check：native VLAN 也要在 vlan members 裡');
+  jn('set interfaces ge-0/0/0 unit 0 family ethernet-switching vlan members mgmt', 'commit');
+  ok(runObjective(s, lv.objectives[2]).pass, 'native-vlan-id 99 + vlan members mgmt：管理位址連得到');
+  ok(lv.objectives.every((o) => (o.type === 'check' ? o.test(s) : runObjective(s, o).pass) === true), '四個目標都通過');
+  ok(/statement not found/.test(jn('delete vlans v30')) && /syntax error/.test(jn('set vlan v30 vlan-id 30')), 'delete 不存在的設定、打錯指令：Junos 的錯誤訊息');
+  jn('set vlans v30 vlan-id 30');
+  ok(/Exit with uncommitted changes/.test(jn('exit')) && /Exiting configuration mode/.test(jn('yes')) && J.mode === 'op', '有沒 commit 的設定就離開：先問，候選設定還留著');
+  jn('configure', 'rollback 0');
+  ok(!/v30/.test(jn('show | compare')), 'rollback 0：候選設定回到現在生效的版本');
+}
+
 console.log('\nNetFlow 與 QoS 的 police');
 {
   const sim = await import('../src/engine/sim.js');

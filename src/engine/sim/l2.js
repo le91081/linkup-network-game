@@ -63,6 +63,7 @@ function ingressKey(dev, pid, tag, mac, notes) {
     if (pc.mode === 'pvlan-host' && (pvPrimaryOf(dev, v) !== +h.primary || !pvType(dev, v))) return DROP;
     if (pc.mode === 'pvlan-promisc' && pvType(dev, v) !== 'primary') return DROP;
   } else if (isTrunk(dev, pid)) {
+    if (tag == null && !pc.native) return DROP; // 沒有 native VLAN 的 trunk（Junos 預設）：不帶標籤的訊框直接丟掉
     v = tag == null ? pc.native : tag;
     if (!vlanAllowed(pc, v)) return DROP;
   } else if (tag != null && tag !== 0) {

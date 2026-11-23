@@ -39,6 +39,7 @@ import * as TR from './panel-track.js';
 import * as VZ from './panel-virt.js';
 import * as LTM from './panel-ltm.js';
 import { stackTab } from './panel-stack.js';
+import { buildJunosCli } from './junoscli.js';
 import { isStack } from '../engine/stack.js';
 import { dnsTab } from './panel-dns.js';
 import { vrfField, vrfCard } from './panel-vrf.js';
@@ -674,6 +675,7 @@ const T = {
 function tabsFor(dev, state) {
   // 在機房裡、只能遠端管理的設備：沒有設定分頁（用 SSH 或 Console 線）
   if (dev.remoteOnly) return [['info', '設備資訊', remoteOnlyInfo]];
+  if (dev.junos) return [['jcli', 'CLI (Junos)', buildJunosCli], T.status]; // Juniper：設定都用 Junos 的 CLI
   const t = baseTabs(dev);
   // 場景裡有只能遠端管理的設備時，筆電多一個 Console 分頁（接 Console 線）
   if (/^laptop/.test(dev.model) && state && needsConsole(state)) t.push(['con', 'Console', consoleTab]);
