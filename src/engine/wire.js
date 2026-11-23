@@ -262,6 +262,8 @@ export function countBytes(state, h, bytes) {
   const pk = Math.max(1, Math.round(bytes / 1514));
   countFrame(state, h.from, h.fromPort, h.to, h.toPort, { dmac: '' }, pk, bytes, true);
   countFrame(state, h.to, h.toPort, h.from, h.fromPort, { dmac: '' }, Math.ceil(pk / 2), Math.ceil(pk / 2) * 66, true);
+  const li = linkInfo(state, h.from, h.fromPort);
+  if (li && !li.down && li.crcAt) ctr(state, li.crcAt.dev, li.crcAt.port).crc += Math.max(1, Math.round(pk * (li.crcAt.dev === h.to ? 0.002 : 0.0005)));
 }
 
 /** 狂送廣播的設備：只算計數器，單一方向 */

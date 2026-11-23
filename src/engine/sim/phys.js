@@ -1,6 +1,6 @@
 // 供電與連線、err-disabled、DTP、語音 VLAN、LACP、STP 與連接埠的 STP 計時
 // （從 sim.js 拆出來的一部分；其他程式一律從 engine/sim.js 引入，不直接引入這裡）
-import { CABLES, CATALOG, DTP_MODELS, POE_CLASS_W, cableDist, cableKind, linkInfo, fiberLink } from '../model.js';
+import { CABLES, CATALOG, DTP_MODELS, POE_CLASS_W, cableDist, cableKind, linkInfo, fiberLink, looseNext } from '../model.js';
 import { rejectsOptic } from '../optics.js';
 import { cdpOn, lldpRxOn, lldpTxOn, speaksCdp } from '../disc.js';
 import { spanDest } from '../wire.js';
@@ -52,6 +52,8 @@ export function prepPhysical(state) {
   rt.poe = poeTable(state, (id) => !!down[id]);
   const powered = new Set(Object.values(rt.poe).filter((e) => e.state === 'on').map((e) => e.pd));
   for (const d of Object.values(state.devices)) if (CATALOG[d.model] && CATALOG[d.model].needsPoe && !powered.has(d.id)) rt.off[d.id] = true;
+  // 接觸不良的網路線：下一次斷線或恢復的時間點要重算一次
+  for (const c of state.cables) if (c.loose && state.devices[c.a.dev] && state.devices[c.b.dev]) rt.pending.push({ at: looseNext(state, c), dev: c[c.loose === 'a' ? 'a' : 'b'].dev, kind: 'link', text: `${state.devices[c.a.dev].name} ↔ ${state.devices[c.b.dev].name}：網路線接觸不良，連線一下斷一下` });
   for (const c of state.cables) {
     const A = state.devices[c.a.dev], B = state.devices[c.b.dev];
     if (cut[c.id] || down[A.id] || down[B.id] || rt.off[A.id] || rt.off[B.id] || shut(A, c.a.port) || shut(B, c.b.port)) {

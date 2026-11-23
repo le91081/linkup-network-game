@@ -4685,6 +4685,41 @@ console.log('\nMPLS L3VPN：同一個 AS 的據點、allowas-in 與 as-override'
   ok(br && br.aspath.join(' ') === '64500 64500' && lv.objectives.every((o) => sim.runObjective(t, o).pass), '業者 as-override：分公司收到的 AS_PATH 變成「64500 64500」，一樣互通');
 }
 
+console.log('\n接觸不良的網路線：flapping、CRC 與 PortFast');
+{
+  const { iosSession } = await import('../src/engine/ios.js');
+  const { iosRun } = await import('../src/ui/cli.js');
+  const { linkInfo, LOOSE, removeCable } = await import('../src/engine/model.js');
+  const ops = await import('../src/engine/ops.js');
+  const sim = await import('../src/engine/sim.js');
+  const ok = (cond, title) => (cond ? console.log('  ✔ ' + title) : fail(title));
+  const cli = (s, id) => { const S = iosSession(() => s.devices[id], () => s); return (...lines) => { const out = []; for (const l of lines) { const r = iosRun({ state: s, showTrace() {}, refreshLive() {} }, id, S, l, (x) => out.push(x)); if (r.changed) recomputeNow(s); } return out.join('\n'); }; };
+  const lv = LEVELS.find((x) => x.id === 'l135');
+  const s = lv.setup(); recomputeNow(s);
+  const flaps = (from) => ops.logRows(s, s.devices.sw).filter((r) => r.t >= from && /LINK-3-UPDOWN: Interface GigabitEthernet0\/5, changed state to down/.test(r.line)).length;
+  const t0 = s.clock;
+  let ups = 0, downs = 0;
+  for (let k = 0; k < 180; k += 2) { advance(s, 2); recomputeNow(s); const li = linkInfo(s, 'sw', 'Gi0/5'); if (li.down) downs++; else ups++; }
+  ok(downs > 0 && ups > downs * 5 && flaps(t0) >= 2, `三分鐘裡 Gi0/5 斷了 ${flaps(t0)} 次（每 ${LOOSE.period} 秒斷 ${LOOSE.down} 秒）：show logging 一直是 %LINK-3-UPDOWN`);
+  const li = linkInfo(s, 'sw', 'Gi0/5');
+  ok(li.down || (li.copperCrc && li.crcAt.dev === 'sw' && li.crcAt.port === 'Gi0/5'), '連著的時候也有 CRC 錯誤，記在交換器這一端');
+  ok(!/LINK-3-UPDOWN: Interface GigabitEthernet0\/6/.test(ops.logRows(s, s.devices.sw).map((r) => r.line).join('\n')), '其他埠都正常');
+  // 換線：沒有 PortFast 的話，接上之後要等 30 秒
+  const c = s.cables.find((x) => x.loose);
+  removeCable(s, c.id);
+  const { addCable } = await import('../src/engine/model.js');
+  addCable(s, 'pc1', 'eth0', 'sw', 'Gi0/5'); recomputeNow(s);
+  const r0 = sim.transact(s, 'pc1', { proto: 'tcp', dst: parseIp('10.10.0.20'), dport: 445, quiet: true });
+  ok(!r0.ok && /listening|learning|STP/.test(r0.reason), '換了新線：沒有 PortFast，剛接上還在 STP 的 listening / learning');
+  advance(s, 31); recomputeNow(s);
+  const t1 = s.clock;
+  advance(s, 300); recomputeNow(s);
+  ok(sim.runObjective(s, lv.objectives[0]).pass && flaps(t1) === 0 && lv.objectives[1].test(s) === true, '30 秒後通了，之後五分鐘都沒有再斷');
+  ok(/沒有開 PortFast/.test(lv.objectives[2].test(s)), '可是還沒開 PortFast');
+  cli(s, 'sw')('enable', 'configure terminal', 'interface Gi0/5', 'spanning-tree portfast', 'end');
+  ok(lv.objectives.every((o) => sim.runObjective(s, o).pass), 'spanning-tree portfast：三個目標都過');
+}
+
 console.log('\nNetFlow 與 QoS 的 police');
 {
   const sim = await import('../src/engine/sim.js');

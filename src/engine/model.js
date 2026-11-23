@@ -460,6 +460,16 @@ export function fiberLink(state, c) {
  * - 兩端的速率寫死成不同的值：連線建立不起來。
  * 回傳 { speed, duplex, peerDuplex, half, mismatch, text }，連線建立不起來則是 { down: 原因 }。
  */
+/** 接觸不良的網路線：每 LOOSE.period 秒有 LOOSE.down 秒斷線（每條線的時間點錯開） */
+export const LOOSE = { period: 60, down: 4 };
+const looseOff = (c) => [...String(c.id)].reduce((h, ch) => (h * 31 + ch.charCodeAt(0)) >>> 0, 7) % LOOSE.period;
+const loosePhase = (state, c) => (((state.clock || 0) + looseOff(c)) % LOOSE.period + LOOSE.period) % LOOSE.period;
+export const looseDown = (state, c) => loosePhase(state, c) < LOOSE.down;
+/** 下一次斷線或恢復的時間 */
+export function looseNext(state, c) {
+  const p = loosePhase(state, c), now = state.clock || 0;
+  return p < LOOSE.down ? now + (LOOSE.down - p) : now + (LOOSE.period - p);
+}
 export function linkInfo(state, devId, pid) {
   const peer = peerOf(state, devId, pid);
   if (!peer) return null;
@@ -472,7 +482,11 @@ export function linkInfo(state, devId, pid) {
   const cab = state.cables.find((x) => x.id === peer.cable);
   const broken = !!(cab && cab.damaged) && pa.media === 'rj45';
   const max = broken ? Math.min(max0, 100) : max0;
+  const loose = !!(cab && cab.loose) && pa.media === 'rj45' && pb.media === 'rj45';
+  if (loose && looseDown(state, cab)) return { down: '網路線接觸不良（水晶頭鬆了）：連線時有時無，每分鐘會斷幾秒', flap: true };
+  const looseAt = loose ? cab[cab.loose === 'a' ? 'a' : 'b'] : null;
   const done = (speed, da, db) => ({
+    ...(looseAt ? { crcAt: { dev: looseAt.dev, port: looseAt.port }, copperCrc: true } : {}),
     speed, duplex: da, peerDuplex: db, half: da === 'half' && db === 'half', mismatch: da !== db, downshift: broken && max0 > 100,
     text: `${fmtSpeed(speed)} · ${da === db ? DUP[da] : `雙工不一致（這一端${DUP[da]}、對端${DUP[db]}）`}${broken && max0 > 100 ? `（兩端都支援 ${fmtSpeed(max0)}，但只協商到 ${fmtSpeed(speed)}）` : ''}`,
   });

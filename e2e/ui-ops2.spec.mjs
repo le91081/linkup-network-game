@@ -871,3 +871,20 @@ test('MPLS L3VPN：BGP 卡片打開 allowas-in，分公司學到總公司的網�
   await typeCmd(page, 'ping 10.1.0.10');
   await expect(page.locator('#panel .term-out')).toContainText('回覆自 10.1.0.10');
 });
+
+test('接觸不良的網路線：show logging 每分鐘一次 Gi0/5 up / down、CRC 一直增加；換線並開 PortFast 之後目標都過', async ({ page }) => {
+  await boot(page);
+  await open(page, 'l135');
+  await page.evaluate(() => window.linkup.tick(130));
+  await clickDevice(page, 'sw');
+  await page.locator('#panel .tab', { hasText: 'CLI' }).click();
+  await typeCmd(page, 'enable', 'show logging');
+  const out = page.locator('#panel .term-out');
+  await expect(out).toContainText('Interface GigabitEthernet0/5, changed state to down');
+  await typeCmd(page, 'show interfaces Gi0/5');
+  await expect(out).toContainText(/[1-9]\d* CRC/);
+  await page.evaluate(() => { const app = window.linkup; app.state.cables = app.state.cables.filter((x) => !x.loose); app.connect('pc1', 'eth0', 'sw', 'Gi0/5'); });
+  await typeCmd(page, 'configure terminal', 'interface Gi0/5', 'spanning-tree portfast', 'end');
+  expect(await page.evaluate(() => { const app = window.linkup; return app.objectives().slice(1).map((o) => o.test(app.state)).join(); })).toBe('true,true');
+  expect(await scan(page, '#panel', 'CLI（接觸不良）')).toEqual([]);
+});
