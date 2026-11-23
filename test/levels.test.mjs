@@ -5661,6 +5661,34 @@ console.log('\nUPS：負載、過載與電池時間');
   ok(out(s).rt.feeds.A.runtime === 34.9, '加一組外接電池：17.5 → 34.9 分鐘');
 }
 
+console.log('\nvMotion：虛擬機器搬到另一台主機');
+{
+  const { runObjective } = await import('../src/engine/sim/objectives.js');
+  const { vmotionCheck, vmotion, vmsOn, pgOf } = await import('../src/engine/virt.js');
+  const ok = (cond, title) => (cond ? console.log('  ✔ ' + title) : fail(title));
+  const lv = LEVELS.find((x) => x.id === 'l158');
+  const s = lv.setup(); settle(s);
+  const e1 = s.devices.esx1, e2 = s.devices.esx2;
+  const port = (name) => vmsOn(s, e1).concat(vmsOn(s, e2)).find((x) => x.vm.name === name);
+  let c = vmotionCheck(s, e1, e2, port('web-vm').port, transact);
+  ok(!c.ok && c.errors.length === 1 && /vMotion 網路不通/.test(c.errors[0]), '相容性檢查：vMotion 網路不通（ESXi-02 的 Trunk 沒有放行 VLAN 40）');
+  s.devices.sw.sw.ports['Gi0/12'].allowed = '10,20,40'; settle(s);
+  c = vmotionCheck(s, e1, e2, port('web-vm').port, transact);
+  ok(c.ok, 'Trunk 放行 VLAN 40：相容性檢查通過');
+  vmotion(s, e1, e2, port('web-vm').port); vmotion(s, e1, e2, port('db-vm').port); settle(s);
+  ok(!vmsOn(s, e1).length && vmsOn(s, e2).length === 2 && vmsOn(s, e2).every((x) => e2.sw.ports[x.port].pg === (x.vm.id === 'web' ? 'Web' : 'DB')), '兩台都搬到 ESXi-02，接在同名的連接埠群組上');
+  ok(runObjective(s, lv.objectives[1]).pass && !runObjective(s, lv.objectives[2]).pass, 'vCenter 沒有比對 VLAN：db-vm 搬過去就斷線（ESXi-02 的 DB 是 VLAN 21）');
+  pgOf(e2, 'DB').vlan = 20; settle(s);
+  ok(lv.objectives.every((o) => (o.type === 'check' ? o.test(s) : runObjective(s, o).pass) === true), 'DB 改成 VLAN 20：四個目標都通過');
+  // 目的主機沒有同名的群組
+  const s2 = lv.setup(); settle(s2);
+  s2.devices.sw.sw.ports['Gi0/12'].allowed = '10,20,40';
+  s2.devices.esx2.vsw.pgs = s2.devices.esx2.vsw.pgs.filter((p) => p.name !== 'Web'); settle(s2);
+  const w2 = vmsOn(s2, s2.devices.esx1).find((x) => x.vm.id === 'web');
+  c = vmotionCheck(s2, s2.devices.esx1, s2.devices.esx2, w2.port, transact);
+  ok(!c.ok && /沒有連接埠群組「Web」/.test(c.errors[0]), '目的主機沒有同名的連接埠群組：vCenter 擋下來');
+}
+
 console.log('\nNetFlow 與 QoS 的 police');
 {
   const sim = await import('../src/engine/sim.js');

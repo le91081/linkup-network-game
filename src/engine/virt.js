@@ -27,6 +27,48 @@ export function syncVsw(d) {
   }
   const vmk = d.ifaces.find((i) => i.id === 'vmk0');
   if (vmk) vmk.bind.vlan = pgVlan(pgOf(d, d.vsw.vmkPg));
+  // 其他的 VMkernel 介面卡（vmk1…，例如 vMotion 用的）：各自接在自己的連接埠群組 (i.pg)
+  for (const i of d.ifaces) if (/^vmk[1-9]\d*$/.test(i.id)) i.bind.vlan = pgVlan(pgOf(d, i.pg));
+}
+
+// ── vMotion：虛擬機器不關機，從一台主機搬到另一台 ──
+// vCenter 先做相容性檢查：兩台主機都要有啟用 vMotion 的 VMkernel 介面卡、彼此連得到（vMotion 網路，TCP 8000）、
+// 目的主機要有「同名」的連接埠群組、還有空的虛擬埠。注意：vCenter 只比對名稱，不比對 VLAN ID ——
+// 目的主機的同名群組 VLAN 設錯，虛擬機器照樣搬過去，只是一到那邊就斷線。
+export const vmotionVmk = (d) => d.ifaces.find((i) => /^vmk\d+$/.test(i.id) && i.vmotion);
+const freeVport = (state, d) => d.ports.find((p) => p.media === 'virt' && !state.cables.some((c) => (c.a.dev === d.id && c.a.port === p.id) || (c.b.dev === d.id && c.b.port === p.id)));
+/** 相容性檢查：回傳 { ok, errors: [原因…] }。transact 從引擎傳進來（避免循環引用） */
+export function vmotionCheck(state, src, dst, vport, transact) {
+  const errors = [];
+  if (!dst || dst.kind !== 'hypervisor') return { ok: false, errors: ['目的地要是另一台虛擬化主機'] };
+  if (dst === src) return { ok: false, errors: ['虛擬機器已經在這台主機上'] };
+  if ((state.down || {})[dst.id] || state.rt.off[dst.id]) errors.push(`${dst.name} 沒有開機`);
+  const pg = src.sw.ports[vport].pg;
+  if (!dst.vsw.pgs.some((p) => p.name === pg)) errors.push(`目的主機 ${dst.name} 沒有連接埠群組「${pg}」（Network "${pg}" is not accessible on the destination host）`);
+  if (!freeVport(state, dst)) errors.push(`${dst.name} 沒有空的虛擬埠`);
+  const a = vmotionVmk(src), b = vmotionVmk(dst);
+  if (!a) errors.push(`${src.name} 沒有啟用 vMotion 的 VMkernel 介面卡`);
+  if (!b) errors.push(`${dst.name} 沒有啟用 vMotion 的 VMkernel 介面卡`);
+  if (a && b) {
+    if (a.rt.ip == null || b.rt.ip == null) errors.push(`vMotion 的 VMkernel 介面卡沒有位址（${a.rt.ip == null ? src.name : dst.name}）`);
+    else {
+      const r = transact(state, src.id, { proto: 'tcp', dst: b.rt.ip, dport: 8000, srcIp: a.rt.ip, quiet: true, bulk: false });
+      if (!r.ok) errors.push(`vMotion 網路不通：${src.name} 的 ${a.id} 連不到 ${dst.name} 的 ${b.id}（${r.reason}）`);
+    }
+  }
+  return { ok: !errors.length, errors };
+}
+/** 真的搬過去：虛擬網卡改接到目的主機的空虛擬埠，接在同名的連接埠群組上；虛擬機器在場景裡移到目的主機旁邊 */
+export function vmotion(state, src, dst, vport) {
+  const c = state.cables.find((x) => (x.a.dev === src.id && x.a.port === vport) || (x.b.dev === src.id && x.b.port === vport));
+  const free = freeVport(state, dst);
+  if (!c || !free) return null;
+  const pg = src.sw.ports[vport].pg, end = c.a.dev === src.id ? c.a : c.b, vm = state.devices[(c.a.dev === src.id ? c.b : c.a).dev];
+  end.dev = dst.id; end.port = free.id;
+  dst.sw.ports[free.id].pg = pg;
+  const n = vmsOn(state, dst).length;
+  vm.pos = [dst.pos[0] - 3 + ((n - 1) % 4) * 2, dst.pos[1] + 4.5];
+  return { vm, port: free.id };
 }
 
 /**

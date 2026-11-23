@@ -2,7 +2,9 @@
 import { h, button, toast } from './dom.js';
 import { inp, sel, field, note, cardHead, badge, grid2, del, bind, linkBadge, isIp, isMask, isNum, toggle } from './form.js';
 import { fmtIp } from '../engine/ip.js';
-import { pgVlan, vmsOn, teamUplinks, pinnedUplink } from '../engine/virt.js';
+import { pgVlan, vmsOn, teamUplinks, pinnedUplink, vmotionCheck, vmotion } from '../engine/virt.js';
+import { transact } from '../engine/sim.js';
+import { newIface } from '../engine/model.js';
 import { vswMtuField, vmkMtuField } from './panel-mtu.js';
 
 const vlanText = (v) => (+v > 0 ? `VLAN ${+v}（加標籤）` : '不加標籤（VLAN 0）');
@@ -71,13 +73,31 @@ export function vswTab(ctx, body) {
       field('預設閘道', inp(ctx, ...bind(vmk, 'gateway'), { ph: '選填', check: isIp })),
       vmkMtuField(ctx, vmk)),
     note('muted', `管理員用瀏覽器開 https://${vmk.ip || '這個位址'} 登入 ESXi Host Client；vCenter 也是透過它管理這台主機。目前在 ${vlanText((v.pgs.find((p) => p.name === v.vmkPg) || {}).vlan)}。`));
-  body.append(pgCard, vmCard, upCard, ...(vmkCard ? [vmkCard] : []));
+  // 其他的 VMkernel 介面卡（vMotion 用的 vmk1…）
+  const extra = dev.ifaces.filter((i) => /^vmk[1-9]\d*$/.test(i.id));
+  const vmkMore = h('div', { class: 'card' }, cardHead('其他的 VMkernel 介面卡'),
+    extra.map((i) => h('div', { class: 'card nested' }, cardHead(i.id, i.rt && i.rt.ip != null ? badge('on', fmtIp(i.rt.ip)) : badge('warn', '沒有位址'), del(() => { dev.ifaces = dev.ifaces.filter((x) => x !== i); ctx.commit(true); })),
+      grid2(
+        field('連接埠群組', sel(ctx, () => i.pg || names[0], (x) => { i.pg = x; }, names.map((nm) => [nm, `${nm} · ${vlanText((v.pgs.find((p) => p.name === nm) || {}).vlan)}`]))),
+        field('IP 位址', inp(ctx, ...bind(i, 'ip'), { ph: '例如 10.0.30.11', check: isIp })),
+        field('子網路遮罩', inp(ctx, ...bind(i, 'mask'), { ph: '255.255.255.0', check: isMask }))),
+      toggle(ctx, () => !!i.vmotion, (x) => { i.vmotion = x; }, '啟用 vMotion', { rerender: true }))),
+    note('muted', 'vMotion 用一張獨立的 VMkernel 介面卡，通常在自己的 VLAN 裡。兩台主機的 vMotion 介面卡要互相連得到（TCP 8000），虛擬機器才搬得過去。'),
+    h('div', { class: 'addrow' }, button('新增 VMkernel 介面卡', { ic: 'plus', small: true, onclick: () => {
+      let k = 1; while (dev.ifaces.some((x) => x.id === 'vmk' + k)) k++;
+      dev.ifaces.push(newIface('vmk' + k, 'vmk' + k, { t: 'svi', vlan: 1 }, { pg: names[0] }));
+      ctx.commit(true);
+    } })));
+  body.append(pgCard, vmCard, upCard, ...(vmkCard ? [vmkCard] : []), vmkMore);
 }
 
 /** 虛擬機器清單：電源與網路狀態 */
 export function vmsTab(ctx, body) {
   const { dev, state, app } = ctx;
   const vms = vmsOn(state, dev);
+  // vMotion：可以搬到的其他虛擬化主機；ui 記住選的目的地與上一次的錯誤
+  const hosts = Object.values(state.devices).filter((x) => x.kind === 'hypervisor' && x !== dev);
+  const ui = ((app.vmUi ||= {})[dev.id] ||= {});
   body.append(h('div', { class: 'card' }, cardHead(`虛擬機器（${vms.length} 台）`),
     vms.length ? vms.map(({ port, vm }) => {
       const off = !!(state.down || {})[vm.id];
@@ -85,7 +105,19 @@ export function vmsTab(ctx, body) {
       return h('div', { class: 'line' },
         h('b', { text: vm.name }),
         h('span', { class: 'muted', text: `${pg} · ${off ? '已關機' : i && i.rt && i.rt.ip != null ? fmtIp(i.rt.ip) : '沒有位址'}` }),
-        button(off ? '開機' : '關機', { small: true, onclick: () => app.togglePower(vm.id, true) }));
+        button(off ? '開機' : '關機', { small: true, onclick: () => app.togglePower(vm.id, true) }),
+        hosts.length ? button('遷移 (vMotion)', { small: true, onclick: () => {
+          const dst = state.devices[(ui.to ||= hosts[0].id)];
+          const chk = vmotionCheck(state, dev, dst, port, transact);
+          if (!chk.ok) { ui.err = { vm: vm.id, list: chk.errors }; toast(`無法遷移 ${vm.name}：${chk.errors[0]}`, 'bad', 5000); ctx.commit(true); return; }
+          vmotion(state, dev, dst, port);
+          ui.err = null;
+          toast(`${vm.name} 已經遷移到 ${dst.name}（vMotion：不關機、不斷線地搬過去）`, 'ok', 4000);
+          ctx.commit(true);
+          app.scene.load(state, { keep: true });
+        } }) : null);
     }) : note('muted', '還沒有虛擬機器。'),
+    hosts.length ? field('遷移到哪一台主機', sel(ctx, () => ui.to || hosts[0].id, (x) => { ui.to = x; }, hosts.map((x) => [x.id, x.name]))) : null,
+    ui.err ? h('div', {}, ui.err.list.map((e) => note('warn', `相容性檢查失敗（${state.devices[ui.err.vm] ? state.devices[ui.err.vm].name : ''}）：${e}`))) : null,
     note('muted', `每台虛擬機器的內部 VLAN：${vms.map(({ port, vm }) => `${vm.name} → ${pgVlan(dev.vsw.pgs.find((p) => p.name === dev.sw.ports[port].pg))}`).join('、') || '—'}（0 表示不加標籤，引擎內部當成 native VLAN 1）`)));
 }

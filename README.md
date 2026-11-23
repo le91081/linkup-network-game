@@ -113,6 +113,7 @@ npm run build    # 輸出到 dist/
 - **Nexus 的 vPC**：`feature vpc`、`vpc domain`（peer-keepalive、role priority）、`interface port-channel N` → `vpc N` / `vpc peer-link`。兩台 Nexus 對下面報出同一個 LACP 身分，跨兩台的 Port-channel 兩條都在用；vPC 編號、成員埠設定要一致；peer-link 斷線時 keepalive 通的話 secondary 暫停 vPC（避免 split brain）。`show vpc`、`show vpc peer-keepalive`、`show port-channel summary`。
 - **光纖數據機 (ONT)**：出廠是路由模式（自己撥 PPPoE、做 NAT、LAN 發 192.168.1.x），後面再接路由器就是兩層 NAT；「運作模式」改成橋接，數據機沒有自己的 IP，後面的路由器穿過它撥 PPPoE。從外面連進來、沒有連接埠轉發的連線，會說明是在哪一層 NAT 被擋下。
 - **UPS**：APC Smart-UPS 1500 供應 A 或 B 路（可以加外接電池組）。「UPS」分頁看負載、停電時撐多久，也可以模擬市電中斷：有 UPS 的那一路靠電池撐，沒有的那一路馬上斷電；負載超過額定就過載停止輸出，電池用完設備就關機。設備的「電源」分頁看得到兩路電的狀態。
+- **vMotion**：虛擬化主機可以新增 VMkernel 介面卡（vmk1…）並啟用 vMotion。「虛擬機器」分頁選目的主機、按「遷移 (vMotion)」：先做相容性檢查（兩台的 vMotion 介面卡真的連一次 TCP 8000、目的主機要有同名的連接埠群組與空的虛擬埠），通過就把虛擬機器搬過去。和 vCenter 一樣只比對群組的名稱，不比對 VLAN。
 - **定時封存**：`archive` 底下的 `time-period <分鐘>` 每隔一段時間自動封存一份 running-config 到 path。
 - Cisco 的路由器與交換器有「CLI」分頁：IOS 風格的命令列。`show running-config`、`show startup-config`、`show ip route`、`show vlan brief`、`show interfaces trunk`、`show arp` 等四十多個 `show` 指令用來查看狀態；輸入 `configure terminal` 之後可以直接用指令設定（見下方「CLI 設定指令」），改的和圖形介面是同一份設定。
 - FortiGate 防火牆也有「CLI」分頁，用的是 FortiOS 的階層式語法（`config firewall policy` → `edit 1` → `set …` → `next` → `end`）。
@@ -133,7 +134,7 @@ npm run build    # 輸出到 dist/
 - **評分**：過關時依實際作答時間（畫面在前景、沒有開對話框才算；標準時間是 3 分鐘加上每個目標 1.5 分鐘）、看了幾個提示、跑了幾次完整測試給 S / A / B / C 與分數，關卡選單上顯示最佳等級。設定變更的次數只列出來參考。
 - **關卡編輯器**：自由模式的「關卡設計」可以寫關卡名稱、任務說明、提示，指定哪些設備鎖定（玩家看得到、不能設定），然後試玩、存成自訂關卡、或匯出成關卡檔分享；關卡選單的「自訂關卡」可以遊玩、匯出、刪除與匯入。
 
-## 關卡（17 章 157 關）
+## 關卡（17 章 158 關）
 
 | 章節 | 關卡數 | 主題 |
 | --- | --- | --- |
@@ -153,7 +154,7 @@ npm run build    # 輸出到 dist/
 | 14 無線控制器與無線環境 | 6 | 輕量型 AP 與無線控制器（CAPWAP、DHCP option 43、Local 模式的流量經控制器放進 VLAN、RRM 自動分頻道）、牆面衰減與訊號熱力圖、漫遊（同一個 VLAN、sticky client 與 802.11k/v/r）；控制器 N+1：AP 要填主要與次要控制器、備援控制器要有一樣的 WLAN、它的 Trunk 要允許員工的 VLAN（heartbeat 逾時約 30 秒才切換，主要的回來會自己切回去）；分公司的 AP 用 Local 模式，開分公司的 NAS 也繞回總公司、專線一斷 Wi-Fi 就停：改成 FlexConnect，AP 的埠改成 Trunk（Native VLAN 是 AP 的管理 VLAN）；Corp 用 WPA2-Enterprise，每次換基地台都要重做 802.1X（大約 445 ms），邊走邊講 Teams 就斷：兩台都開 802.11k/v（只掃鄰近清單）與 802.11r（金鑰直接帶過去），漫遊降到 30 ms 左右，而且不改回共用密碼 |
 | 15 網路自動化 | 6 | RESTCONF：只走 HTTPS、HTTP Basic 驗證、YANG 路徑（`ietf-interfaces`、`Cisco-IOS-XE-native`）、JSON 與 XML、狀態碼、名稱裡的 `/` 要寫成 `%2F`、自簽憑證；Ansible：INI 格式的 inventory、YAML、`network_cli`、資源模組、`--check`、PLAY RECAP 與冪等；Catalyst Center：Token 驗證的北向 API、用 SNMP / SSH 輪詢的設備清單、AI 驅動的問題清單（DHCP 失敗率偏離基準、雙工不一致、設備連不到）；HTTPS 管理要關掉、改用 NETCONF：`netconf-yang`、SSH 要先有 RSA 金鑰，用 <edit-config> 建立 Loopback；三台新交換器用 Catalyst Center 的範本一次設好：變數、草稿要提交成新版本才會部署、部署結果一台一台看（錯字那一行失敗、控制器被 access-class 擋住）；昨晚有人改了 Core、今天倉儲全斷：備份伺服器上用 git log / git show 找出少打 add 的 trunk，修好之後 ./backup.sh、git add、git commit |
 | 16 雲端網路 | 5 | AWS 的 VPC：公有 / 私有子網路與路由表、網際網路閘道與彈性 IP（一對一 NAT）、安全群組（有狀態）、NAT 閘道、網路 ACL（無狀態、臨時連接埠）、站對站 VPN 與路由傳播（混合雲），「下載設定檔」貼到公司的路由器；應用程式負載平衡器 (ALB) 回 503：目標的安全群組沒有允許 ALB 的健康檢查（來源用 ALB 的安全群組）；兩條 VPC peering 接好了，開發環境還是到不了正式環境（peering 不能轉送）：改用 Transit Gateway，兩邊的路由表都指向它、安全群組允許新的網段；有人在主控台手動改了安全群組 (drift)：Terraform 的 plan 列出差異，要留的規則補進 main.tf 再 apply，別讓 apply 把合作夥伴的規則一起拿掉 |
-| 17 虛擬化 | 4 | VMware ESXi：虛擬交換器、連接埠群組決定 VLAN（VLAN ID 0 不加標籤）、接主機的實體交換器埠要設成 Trunk 並只放行需要的 VLAN、vmk0 管理介面；VRF-Lite：兩家公司用同一個網段（`vrf definition`、`vrf forwarding` 會清掉 IP、`show ip route vrf`、`ping vrf`）；Docker：橋接網路與 veth、`-p 主機埠:容器埠`、只綁 127.0.0.1、資料庫不要發佈（Docker 會繞過 ufw）、改連接埠要重建容器；NIC teaming：ESXi 的第二張上行接到另一台交換器，那台少了一個 VLAN，同一個 VLAN 的 VM 一台通一台不通（依虛擬埠分配上行），兩邊接 ESXi 的埠要一模一樣，斷線演練時管理介面也要連得到 |
+| 17 虛擬化 | 5 | VMware ESXi：虛擬交換器、連接埠群組決定 VLAN（VLAN ID 0 不加標籤）、接主機的實體交換器埠要設成 Trunk 並只放行需要的 VLAN、vmk0 管理介面；VRF-Lite：兩家公司用同一個網段（`vrf definition`、`vrf forwarding` 會清掉 IP、`show ip route vrf`、`ping vrf`）；Docker：橋接網路與 veth、`-p 主機埠:容器埠`、只綁 127.0.0.1、資料庫不要發佈（Docker 會繞過 ufw）、改連接埠要重建容器；NIC teaming：ESXi 的第二張上行接到另一台交換器，那台少了一個 VLAN，同一個 VLAN 的 VM 一台通一台不通（依虛擬埠分配上行），兩邊接 ESXi 的埠要一模一樣，斷線演練時管理介面也要連得到；vMotion：主機要維護，把虛擬機器搬走，vMotion 的 VLAN 沒有放行到新主機的 Trunk，搬過去之後新主機同名群組的 VLAN 又打錯 |
 
 ## 學習輔助
 
