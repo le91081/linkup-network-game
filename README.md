@@ -111,6 +111,7 @@ npm run build    # 輸出到 dist/
 - **交換器堆疊（Catalyst 9300 StackWise）**：兩台成員是一台交換器（Gi1/0/x、Gi2/0/x，一份設定、一個 STP bridge）。Active / Standby 的角色、優先權（`switch N priority`）、成員故障時它的埠全部斷線、Standby 接手；跨成員的 EtherChannel。`show switch [detail | stack-ports]`、`show redundancy`；「堆疊」分頁可以模擬拔掉某台成員的電源、堆疊線鬆脫。
 - **Wi-Fi mesh 與無線橋接**：基地台可以設成 Root（有線上行）或 Mesh（從 5 GHz 接到 root 或另一台 mesh 基地台，多跳），同一個 mesh 網路的金鑰要一樣。回程看兩個方向裡比較弱的訊號，頻道寬度改窄訊噪比比較好；回程沒連上的 mesh 基地台不廣播 SSID。mesh 基地台的 LAN 埠可以接有線設備（無線橋接）。可以用 PoE 電源供應器供電。場景裡的紫色虛線是回程，測速會顯示回程的瓶頸。
 - **Nexus 的 vPC**：`feature vpc`、`vpc domain`（peer-keepalive、role priority）、`interface port-channel N` → `vpc N` / `vpc peer-link`。兩台 Nexus 對下面報出同一個 LACP 身分，跨兩台的 Port-channel 兩條都在用；vPC 編號、成員埠設定要一致；peer-link 斷線時 keepalive 通的話 secondary 暫停 vPC（避免 split brain）。`show vpc`、`show vpc peer-keepalive`、`show port-channel summary`。
+- **光纖數據機 (ONT)**：出廠是路由模式（自己撥 PPPoE、做 NAT、LAN 發 192.168.1.x），後面再接路由器就是兩層 NAT；「運作模式」改成橋接，數據機沒有自己的 IP，後面的路由器穿過它撥 PPPoE。從外面連進來、沒有連接埠轉發的連線，會說明是在哪一層 NAT 被擋下。
 - **定時封存**：`archive` 底下的 `time-period <分鐘>` 每隔一段時間自動封存一份 running-config 到 path。
 - Cisco 的路由器與交換器有「CLI」分頁：IOS 風格的命令列。`show running-config`、`show startup-config`、`show ip route`、`show vlan brief`、`show interfaces trunk`、`show arp` 等四十多個 `show` 指令用來查看狀態；輸入 `configure terminal` 之後可以直接用指令設定（見下方「CLI 設定指令」），改的和圖形介面是同一份設定。
 - FortiGate 防火牆也有「CLI」分頁，用的是 FortiOS 的階層式語法（`config firewall policy` → `edit 1` → `set …` → `next` → `end`）。
@@ -131,11 +132,11 @@ npm run build    # 輸出到 dist/
 - **評分**：過關時依實際作答時間（畫面在前景、沒有開對話框才算；標準時間是 3 分鐘加上每個目標 1.5 分鐘）、看了幾個提示、跑了幾次完整測試給 S / A / B / C 與分數，關卡選單上顯示最佳等級。設定變更的次數只列出來參考。
 - **關卡編輯器**：自由模式的「關卡設計」可以寫關卡名稱、任務說明、提示，指定哪些設備鎖定（玩家看得到、不能設定），然後試玩、存成自訂關卡、或匯出成關卡檔分享；關卡選單的「自訂關卡」可以遊玩、匯出、刪除與匯入。
 
-## 關卡（17 章 155 關）
+## 關卡（17 章 156 關）
 
 | 章節 | 關卡數 | 主題 |
 | --- | --- | --- |
-| 1 家用網路 | 4 | Hub、Switch、固定 IP、DHCP、PPPoE、NAT、DNS |
+| 1 家用網路 | 5 | Hub、Switch、固定 IP、DHCP、PPPoE、NAT、DNS；光纖數據機是路由模式、後面再接自己的路由器：兩層 NAT，連接埠轉發收不到外面的連線，數據機改成橋接、路由器自己撥 PPPoE |
 | 2 小型辦公室 | 5 | 固定 IP 線路、連接埠轉發、VLAN、Trunk、子介面；固定 IP 專線換成光世代：R1 改用 PPPoE 撥接，實體介面 `pppoe-client dial-pool-number 1`、Dialer1 的 `ip address negotiated` 與 `ppp chap`，NAT 與預設路由改到 Dialer1，`mtu 1492` 與 `ip tcp adjust-mss 1452` |
 | 3 企業網路 | 6 | 防火牆政策與 DMZ、靜態路由與回程路由、一對一靜態 NAT；NAT 位址池沒有 overload：早到的四個人把公用位址借光，晚到的人上不了網（`show ip nat statistics` 的 allocated 100% 與 misses，規則還有轉換在用時要先 `clear ip nat translation *` 才能改）；公司網站用靜態 NAT，外面連得到、辦公室卻連不上：傳統的 inside / outside NAT 不處理 hairpin，改用 split DNS（內部 DNS 回內部位址，改完要 `ipconfig /flushdns` 或等 TTL）；郵件伺服器搬回公司的 DMZ：寄給客戶的信卡在佇列（DMZ → wan1 沒有放行 SMTP），客戶寄來的信進不來（MX 的公用位址沒有 VIP 轉 TCP 25、也沒有政策），而且只對外開 25 |
 | 4 資料中心 | 9 | ToR 與 SVI、Spine-Leaf 與 OSPF、銅纜 / 多模 / 單模光纖與距離；Jumbo Frame 要整條路一致（交換器默默丟掉 giant、`ping -f -l 8972`、2960 的 `system mtu jumbo` 要存檔重新開機）；光纖接好了燈還是不亮：第三方的收發器被關成 err-disabled (gbic-invalid)、兩端一端 10G 一端 1G、接頭髒了收到的光太弱（`show interfaces transceiver`、CRC）；A 路的電一跳機房就全黑：每台設備的兩個電源供應器要都裝上、都接電，而且分別接 A、B 兩路（`show environment power`、故障演練一路一路斷電）；新的 25G GPU 伺服器接不上只有 QSFP28 的 Nexus：`interface breakout module 1 port 1 map 25g-4x` 拆成 4 個 25G 的子埠，用分歧線接（10g-4x 只有 10G）；負載平衡器（F5 BIG-IP）：一臂式架構沒開 SNAT，伺服器的回應直接回給使用者（非對稱路由），SNAT Automap；tcp monitor 看不出應用程式回 500，自訂 http monitor 的 Receive String `200 OK`；Nexus 的 vPC：兩台 Leaf 上的 vPC 編號不一樣（一條 suspended）、peer-keepalive 打錯（peer-link 斷線時 dual-active），`show vpc` |

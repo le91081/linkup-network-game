@@ -414,6 +414,8 @@ function deliver(dev, inIf, pkt) {
   if (dev.docker) { const dk = dockerDeliver(dev, pkt); if (dk) return dk.ok ? ok : no(dk.reason); }
   if (pkt.proto === 'tcp' && pkt.dport === 5201 && dev.kind === 'host') return ok; // 每台主機都當作有跑 iperf3 -s，可以拿來測速
   if ((dev.services || []).some((s) => s.proto === pkt.proto && s.port === pkt.dport)) return ok;
+  // 家用路由器 / 光纖數據機：從網際網路連進來、又沒有對應的連接埠轉發，到這裡就被擋下
+  if (fromWan && dev.kind === 'homerouter') return no(`${dev.name} 沒有 ${PROTO} ${pkt.dport} 的連接埠轉發：從網際網路連進來的連線到了它這裡就被擋下${dev.ont ? '，轉不到後面的路由器（兩層 NAT：後面那台設的連接埠轉發根本收不到）' : ''}`);
   return no(`${dev.name} 沒有在 ${PROTO}/${pkt.dport} 提供服務（連線被拒絕）`);
 }
 

@@ -14,6 +14,7 @@ import { greExplore } from './gre.js';
 export const isBridgePort = (dev, pid) => !!(dev.sw && dev.sw.ports[pid] && dev.sw.ports[pid].mode !== 'routed');
 
 export function ifaceActive(dev, i) {
+  if (dev.ont && dev.ont.bridge) return false; // 光纖數據機在橋接模式：沒有自己的 IP
   const b = i.bind;
   if (b.t === 'port' || b.t === 'sub') return dev.ports.some((p) => p.id === b.port) && !isBridgePort(dev, b.port);
   if (b.t === 'svi') return isVlanSw(dev) && dev.sw.vlans.some((v) => v.id === b.vlan);

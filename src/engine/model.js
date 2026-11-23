@@ -144,6 +144,11 @@ export const CATALOG = {
     kind: 'ap', shape: 'ap', vendor: 'Ubiquiti', title: 'Ubiquiti UniFi U6 Enterprise',
     tagline: 'Wi-Fi 6E 三頻基地台（2.4 / 5 / 6 GHz）· 需要 PoE+ 供電 (802.3at)', ports: [rj('eth0', 'LAN / PoE')], needsPoe: true, poe: { cls: 4, watts: 22 }, band6: true,
   },
+  ont: {
+    kind: 'homerouter', shape: 'router-s', vendor: 'ZTE', title: 'ZTE F670L 光纖數據機 (GPON ONT)', ont: true,
+    tagline: '電信業者的光纖數據機 · PON + 4 LAN · 路由模式（撥接、NAT、DHCP）/ 橋接模式',
+    ports: [rj('wan', 'PON（光纖）'), ...seq(4, (i) => rj('lan' + i, 'LAN ' + i))],
+  },
   erx: {
     kind: 'router', shape: 'router-s', vendor: 'Ubiquiti', title: 'Ubiquiti EdgeRouter X',
     tagline: '5 埠 Gigabit 路由器', ports: seq(5, (i) => rj('eth' + i), 0),
@@ -336,6 +341,8 @@ export function makeDevice(model, id, o = {}) {
         iface('lan', 'LAN', { t: 'bridge' }, { ip: '192.168.50.1', mask: '255.255.255.0' }),
       ];
       d.routing = true; d.dnsProxy = true; d.portForwards = []; d.wifi = newWifi(); d.wifi.ch24 = 6;
+      // 光纖數據機：出廠是路由模式（自己撥接、NAT、LAN 發 192.168.1.x）；橋接模式時只把光纖轉成乙太網路
+      if (m.ont) { d.ont = { bridge: false }; Object.assign(d.ifaces[1], { ip: '192.168.1.1' }); d.ifaces[1].dhcp = { on: true, start: '192.168.1.100', end: '192.168.1.199', dns: '', gw: '' }; }
       break;
     case 'firewall':
       d.sw = { mode: 'plain', ports: Object.fromEntries(m.bridge.map((p) => [p, {}])) };

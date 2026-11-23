@@ -5611,6 +5611,28 @@ console.log('\nNexus 的 vPC');
   ok(/feature 是 NX-OS 的指令/.test(cli(s, 'acc1')('enable', 'configure terminal', 'feature vpc', 'end')), 'Catalyst 沒有 feature vpc');
 }
 
+console.log('\n光纖數據機的橋接模式與兩層 NAT');
+{
+  const { runObjective } = await import('../src/engine/sim/objectives.js');
+  const ok = (cond, title) => (cond ? console.log('  ✔ ' + title) : fail(title));
+  const lv = LEVELS.find((x) => x.id === 'l156');
+  const s = lv.setup(); settle(s);
+  const ont = s.devices.ont, rt = s.devices.rt, wan = rt.ifaces.find((i) => i.id === 'wan');
+  ok(ont.ifaces.find((i) => i.id === 'wan').rt.ip === parseIp('203.0.113.45') && wan.rt.ip === parseIp('192.168.1.100'), '路由模式：數據機撥 PPPoE 拿到公用 IP，ASUS 的 WAN 是 192.168.1.100');
+  const p = transact(s, 'pc', { proto: 'icmp', dst: parseIp('8.8.8.8') });
+  ok(p.ok && p.log.filter((l) => l.kind === 'nat').length >= 2, '上網沒問題，但是轉換了兩次（兩層 NAT）');
+  const r = runObjective(s, lv.objectives[1]);
+  ok(!r.pass && /兩層 NAT/.test(r.reason), '外面連 5001：到了數據機就被擋下，ASUS 的連接埠轉發收不到');
+  // 退而求其次：數據機上也設連接埠轉發
+  const s2 = cloneState(s); s2.devices.ont.portForwards.push({ proto: 'tcp', port: 5001, toIp: '192.168.1.100', toPort: 5001 }); settle(s2);
+  ok(runObjective(s2, lv.objectives[1]).pass && lv.objectives[2].test(s2) !== true, '數據機也設連接埠轉發：連得進來，但還是兩層 NAT');
+  ont.ont.bridge = true; settle(s);
+  ok(ont.ifaces.every((i) => i.rt.ip == null) && /PPPoE/.test(wan.rt.note) && !runObjective(s, lv.objectives[0]).pass, '只把數據機改成橋接：它沒有 IP、不發 DHCP，ASUS 的 DHCP 續約失敗（線路要 PPPoE），暫時上不了網');
+  Object.assign(wan, { mode: 'pppoe', user: '87654321@hinet.net', pass: 'k3m9x2p7' }); settle(s);
+  ok(wan.rt.ip === parseIp('203.0.113.45') && wan.rt.src === 'pppoe', 'ASUS 自己撥 PPPoE（穿過橋接的數據機）：WAN 拿到公用 IP');
+  ok(lv.objectives.every((o) => (o.type === 'check' ? o.test(s) : runObjective(s, o).pass) === true), '三個目標都通過');
+}
+
 console.log('\nNetFlow 與 QoS 的 police');
 {
   const sim = await import('../src/engine/sim.js');

@@ -102,6 +102,8 @@ export function recompute(state) {
   // 還在開機的設備：這一次計算把它當成關機（沒有燈號、不轉送、不回應），算完再把 state.down 還原
   wlcVlans(state);
   for (const d of Object.values(state.devices)) if (d.kind === 'hypervisor') syncVsw(d); // 連接埠群組 → vSwitch 的 VLAN
+  // 光纖數據機的橋接模式：PON 埠併進 LAN 的橋接，自己的介面都停用（撥接、NAT、DHCP 交給後面的路由器）
+  for (const d of Object.values(state.devices)) if (d.ont && d.sw) { if (d.ont.bridge) d.sw.ports.wan ||= {}; else delete d.sw.ports.wan; }
   const booting = opsBefore(state), realDown = state.down, ids = Object.keys(booting);
   if (ids.length) state.down = { ...(realDown || {}), ...Object.fromEntries(ids.map((id) => [id, true])) };
   try {

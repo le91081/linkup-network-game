@@ -18,7 +18,7 @@ import * as CL from './panel-cloud.js';
 import * as W from './panel-wlc.js';
 import { h, icon, button, faceplate, toast } from './dom.js';
 import {
-  inp, sel, toggle, seg, field, note, kv, del, cardHead, grid2, bind, linkBadge, ifaceNote,
+  inp, sel, toggle, seg, field, note, kv, del, cardHead, grid2, bind, linkBadge, ifaceNote, badge,
   isIp, isMask, isIpList, isVlanSpec, isPortNo, isAddr, isAddrList, isNum, isMacList, isCidrList, isCidr6,
 } from './form.js';
 import { fmtIp6 } from '../engine/ip6.js';
@@ -537,6 +537,15 @@ function forwardsTab(ctx, body) {
 
 function hrWan(ctx, body) {
   const i = ctx.dev.ifaces.find((x) => x.id === 'wan');
+  // 光纖數據機：路由模式 / 橋接模式
+  if (ctx.dev.ont) {
+    const o = ctx.dev.ont;
+    body.append(h('div', { class: 'card' }, cardHead('運作模式', o.bridge ? badge('warn', '橋接模式') : badge('on', '路由模式')),
+      toggle(ctx, () => !!o.bridge, (v) => { o.bridge = v; }, '橋接模式 (Bridge)：只把光纖轉成乙太網路', { rerender: true }),
+      note('muted', o.bridge ? '橋接模式：數據機沒有自己的 IP，不撥接、不做 NAT、不發 DHCP。後面的路由器直接用 PPPoE 撥接，拿到公用 IP（只有一層 NAT，連接埠轉發才收得到外面的連線）。'
+        : '路由模式（出廠值）：數據機自己撥 PPPoE、做 NAT、LAN 發 192.168.1.x。後面再接自己的路由器，就變成兩層 NAT（double NAT）：外面連進來會先被數據機擋下。')));
+    if (o.bridge) return;
+  }
   body.append(ifaceCard(ctx, i, {
     title: 'WAN', port: 'wan', gateway: true, dns: true,
     modes: [['dhcp', '自動取得 IP (DHCP)'], ['static', '固定 IP'], ['pppoe', 'PPPoE 撥接']],
@@ -753,7 +762,7 @@ export function renderDevicePanel(app, root) {
   root.dataset.view = viewKey;
   root.replaceChildren(...[
     h('div', { class: 'p-head k-' + dev.kind },
-      h('div', { class: 'p-badge', text: m.phone ? 'IP 電話' : m.vm ? '虛擬機器' : KIND_NAME[dev.kind] }),
+      h('div', { class: 'p-badge', text: m.phone ? 'IP 電話' : m.vm ? '虛擬機器' : m.ont ? '光纖數據機' : KIND_NAME[dev.kind] }),
       h('div', { class: 'p-title' },
         app.level.sandbox ? inp(ctx, () => dev.name, (v) => { if (v) dev.name = v; }, { mono: false, ph: '設備名稱' }) : h('h2', { text: dev.name }),
         h('p', { text: isStack(dev) ? `${m.title} ×${dev.stack.members.length}（StackWise-480 堆疊）` : m.title }), h('p', { class: 'muted', text: isStack(dev) ? `${dev.stack.members.length} 台堆疊成一台交換器 · 每台 24×GE + 4×10G SFP+ · 埠名稱的第一個數字是成員編號` : m.tagline })),
