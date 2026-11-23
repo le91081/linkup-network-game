@@ -634,6 +634,7 @@ const SHOW = {
     return o;
   },
   'show ip nat translations': (st, d) => natTable(st, d, false),
+  'show ip nat nvi translations': (st, d) => natTable(st, d, false),
   'show ip nat translations verbose': (st, d) => natTable(st, d, true),
   'show nat64 translations': (st, d) => {
     const rows = nat64Rows(st, d);

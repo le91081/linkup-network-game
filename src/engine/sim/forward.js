@@ -241,6 +241,11 @@ export function natPoolPick(state, dev, outIf, pkt) {
   return null;
 }
 
+/** NVI 的 ip nat source list <ACL>：ACL 放行的來源才轉換（list 1 沒有定義時是全部） */
+function nviPermits(dev, pkt) {
+  const acl = dev.nviSrc.acl, rules = acl && aclRules(dev, acl);
+  return !rules || !rules.length || aclCheck(rules, pkt) === null;
+}
 function natPermits(dev, outIf, pkt) {
   if (selMatch(cidrList(outIf.natSkip), pkt.dst)) return false;
   const rules = outIf.natAcl && (dev.aclDefs || {})[outIf.natAcl];
@@ -479,10 +484,11 @@ export function forward(state, ctx, startId, pkt) {
         }
         pkt.src = e.dst; pkt.sport = e.dport; pkt.dst = e.src; pkt.dport = e.sport;
       } else if (!pkt.reply) {
-        const sn = (dev.staticNat || []).find((x) => parseIp(x.pub || '') === pkt.dst && parseIp(x.priv || '') != null);
-        if (sn && dev.kind === 'router' && inIf && !inIf.nat && !inIf.natOut) {
+        // NVI（ip nat source static）：從 ip nat enable 的介面進來就轉換，不分 inside / outside，所以 hairpin 也通
+        const sn = (dev.staticNat || []).find((x) => parseIp(x.pub || '') === pkt.dst && parseIp(x.priv || '') != null && (!x.nvi || (inIf && inIf.nvi)));
+        if (sn && !sn.nvi && dev.kind === 'router' && inIf && !inIf.nat && !inIf.natOut) {
           // 從 inside 進來、要找靜態 NAT 的公用位址（NAT hairpin / loopback）：IOS 不轉換，封包到不了伺服器
-          return drop(`${dev.name} 從 inside 介面 ${inIf.label} 收到要給 ${sn.pub} 的封包：傳統的 inside / outside NAT 只轉換「從 outside 介面進來」的封包，這個位址只是路由器替靜態 NAT 回應 ARP 的別名，封包到不了伺服器（NAT hairpin 不通）。內部的人要用內部位址連（內部 DNS 回私有位址：split DNS）`);
+          return drop(`${dev.name} 從 inside 介面 ${inIf.label} 收到要給 ${sn.pub} 的封包：傳統的 inside / outside NAT 只轉換「從 outside 介面進來」的封包，這個位址只是路由器替靜態 NAT 回應 ARP 的別名，封包到不了伺服器（NAT hairpin 不通）。內部的人要用內部位址連（內部 DNS 回私有位址：split DNS），或改用 NVI（介面上 ip nat enable、ip nat source static），不分 inside / outside 都會轉換`);
         }
         dnat = sn ? { ip: parseIp(sn.priv), port: pkt.dport, stat: true } : matchPortForward(dev, inIf, pkt) || nattMap(state, dev, pkt);
         if (dnat) {
@@ -647,13 +653,18 @@ export function forward(state, ctx, startId, pkt) {
       if (v.zbf) log.push({ dev: dev.id, kind: 'fwd', text: `ZBF：zone-pair ${v.zbf.pair} 的 class ${v.zbf.cls} → ${v.zbf.act}${pkt.reply ? '' : v.zbf.act === 'inspect' ? '（記下連線，回程自動放行）' : '（無狀態：回程要另外放行）'}` });
       if (!pkt.reply) {
         let nSrc = pkt.src;
-        const st = (dev.staticNat || []).find((x) => parseIp(x.priv || '') === pkt.src && outIf.rt.vips.includes(parseIp(x.pub || '')));
+        // NVI：兩個介面都是 ip nat enable 才轉換（ip nat source static / ip nat source list … overload）
+        const nviOn = !!(inIf.nvi && outIf.nvi);
+        const st = (dev.staticNat || []).find((x) => parseIp(x.priv || '') === pkt.src && (x.nvi ? nviOn : outIf.rt.vips.includes(parseIp(x.pub || ''))));
         const pp = !st && outIf !== inIf ? natPoolPick(state, dev, outIf, pkt) : null;
         if (pp && pp.drop) return drop(pp.drop);
         if (st) nSrc = parseIp(st.pub); // 靜態 NAT 的主機固定用自己的公用 IP 出去
         else if (pp) {
           if (pp.pat && pkt.proto === 'esp' && !pkt.ssl) return drop(`${dev.name} 用位址池 ${pp.pool} 做 PAT（overload）：ESP 封包沒有連接埠號碼，沒辦法轉換。兩端要用 NAT-T`);
           nSrc = pp.ip;
+        } else if (nviOn && dev.nviSrc && nviPermits(dev, pkt)) {
+          const wi = dev.ifaces.find((x) => x.id === dev.nviSrc.iface);
+          if (wi && wi.rt.ip != null) nSrc = wi.rt.ip;
         } else if (v.nat && outIf !== inIf && outIf.rt.ip != null && natPermits(dev, outIf, pkt)) {
           // ESP（IP 協定 50）沒有連接埠號碼：PAT（多對一）沒辦法替它轉換。家用路由器多半有「IPsec passthrough」可以讓一條通過
           if (pkt.proto === 'esp' && !pkt.ssl && dev.kind !== 'homerouter') return drop(`${dev.name} 做的是 PAT（多個位址共用 ${outIf.label} 的位址）：ESP 封包沒有連接埠號碼，PAT 沒辦法替它轉換，只好丟掉。中間有 NAT 時兩端都要用 NAT-T（ESP 包在 UDP 4500 裡）`);

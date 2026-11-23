@@ -128,7 +128,7 @@ README 說明「現在有什麼、怎麼玩」，這份文件說明「整體應�
 | APIPA | ✅ | 拿不到租約時退回 169.254.x.x |
 | DNS 查詢 | ✅ | 自己架的 DNS 伺服器（A / CNAME / MX / PTR、每筆的 TTL）、用戶端依 TTL 快取（`ipconfig /displaydns` / `/flushdns`）、`nslookup` 直接問伺服器不看快取、`-type=mx` 與反查、家用路由器的 DNS 代理；還沒有 AAAA、轉送器與遞迴伺服器的快取、區域轉送 |
 | NAT | ✅ | PAT、一對一靜態 NAT、連接埠轉發、用 ACL 指定範圍、NAT 例外；可以查看轉換表 |
-| NAT 進階 | 🟡 | 轉換表的閒置逾時已完成（依協定不同，可以用 `ip nat translation` 調整）；位址池已完成（`ip nat pool`、`ip nat inside source list … pool … [overload]`、一對一的動態 NAT 借光了就丟封包、閒置到 `ip nat translation timeout` 才釋放、`show ip nat statistics` 的 allocated / misses、規則還有轉換在用時不能改 → 3-4）；NAT hairpin：傳統的 inside / outside NAT 只轉換從 outside 進來的封包，內部連公用位址會失敗（用 split DNS 解決 → 3-5），沒有 outside 介面時靜態 NAT 不生效；還沒有 NVI（`ip nat enable`）與 FortiGate VIP 的 hairpin |
+| NAT 進階 | 🟡 | 轉換表的閒置逾時已完成（依協定不同，可以用 `ip nat translation` 調整）；位址池已完成（`ip nat pool`、`ip nat inside source list … pool … [overload]`、一對一的動態 NAT 借光了就丟封包、閒置到 `ip nat translation timeout` 才釋放、`show ip nat statistics` 的 allocated / misses、規則還有轉換在用時不能改 → 3-4）；NAT hairpin：傳統的 inside / outside NAT 只轉換從 outside 進來的封包，內部連公用位址會失敗（用 split DNS 解決 → 3-5），沒有 outside 介面時靜態 NAT 不生效；NVI：介面上 `ip nat enable`、`ip nat source static`、`ip nat source list … interface … overload`，不分 inside / outside，進出 NVI 介面的都轉換，所以 hairpin 也通（伺服器看到的來源是路由器的公用位址）、`show ip nat nvi translations`；還沒有 FortiGate VIP 的 hairpin |
 | PPPoE | 🟡 | 帳號密碼驗證與撥接；IOS 沒有 Dialer 介面，只能在圖形介面設定 |
 | NTP | ✅ | 每台設備有自己的時鐘；每 64 秒輪詢，IOS 約四分鐘後才採信；`ntp master`、`clock set`、`clock timezone`；伺服器失聯八次輪詢後失去同步；`service timestamps log | debug`（datetime / msec / localtime / show-timezone / year、uptime，預設和 IOS 15 一樣用 UTC → 11-8） |
 | Syslog | ✅ | 設備記下介面、OSPF、VRRP、VPN、err-disabled 等事件，用 UDP 514 送到伺服器；`logging trap` 設定門檻；伺服器有收件畫面 |

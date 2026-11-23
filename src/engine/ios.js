@@ -714,6 +714,9 @@ export function iosSession(getDev, getState, who = null) {
     ['no ip nat outside', () => { syncNat(); return onL3((i) => { i.natOut = false; setNat(i); }); }],
     ['ip nat inside', () => onL3(() => {})],
     ['no ip nat inside', () => onL3(() => {})],
+    // NVI (NAT Virtual Interface)：不分 inside / outside，進出這些介面的都照 ip nat source … 轉換
+    ['ip nat enable', () => onL3((i) => { i.nvi = true; })],
+    ['no ip nat enable', () => onL3((i) => { delete i.nvi; })],
     ['ip helper-address <ip>', ([ip]) => (parseIp(ip) == null ? err('IP 位址的格式不正確') : onL3((i) => { i.helper = ip; }))],
     ['no ip helper-address [...]', () => onL3((i) => { i.helper = ''; })],
     ['ip ospf cost <n>', ([n]) => (+n >= 1 && +n <= 65535 ? onL3((i) => { i.ospfCost = String(+n); }) : err('cost 必須是 1 – 65535'))],
@@ -1954,6 +1957,20 @@ export function iosSession(getDev, getState, who = null) {
       i.natSkip = '';
       return i.nat ? undefined : `（${i.label} 還要在介面模式下 ip nat outside，才會開始轉換位址）`;
     }],
+    ['ip nat source list <acl> interface <if> [...]', ([acl, name]) => {
+      const i = ifByName(name); if (isErr(i)) return i;
+      dev().nviSrc = { acl: acl === '1' && !(dev().aclDefs || {})['1'] ? '' : acl.toUpperCase(), iface: i.id };
+      return i.nvi ? undefined : `（NVI：${i.label} 與 inside 的介面都要 ip nat enable 才會轉換）`;
+    }],
+    ['no ip nat source list [...]', () => { delete dev().nviSrc; }],
+    ['ip nat source static <priv> <pub>', ([priv, pub]) => {
+      const d = dev();
+      if (!d.staticNat) return err('這台設備不支援靜態 NAT');
+      if (parseIp(priv) == null || parseIp(pub) == null) return err('用法：ip nat source static <內部 IP> <公用 IP>');
+      addUnique(d.staticNat, { pub, priv, nvi: true });
+      return undefined;
+    }],
+    ['no ip nat source static <priv> <pub>', ([priv, pub]) => { const d = dev(); if (d.staticNat) d.staticNat = d.staticNat.filter((n) => !(n.nvi && n.priv === priv && n.pub === pub)); }],
     ['no ip nat inside source list <acl> interface <if> [...]', ([, name]) => { const i = ifByName(name); if (isErr(i)) return i; syncNat(); i.natRule = false; setNat(i); return undefined; }],
     ['ip nat pool <name> <start> <end> <...>', ([name, a, b, rest]) => {
       const d = dev();
@@ -4636,7 +4653,8 @@ export function runningConfig(state, dev) {
     else if (i.mode === 'pppoe') l.push(' pppoe-client dial-pool-number 1', ` ! PPPoE 帳號 ${i.user || '(未設定)'}`);
     else if (i.ip && parseMask(i.mask) != null) l.push(` ip address ${i.ip} ${fmtMask(parseMask(i.mask))}`);
     else l.push(' no ip address');
-    if (anyNat) l.push(natOut(i) ? ' ip nat outside' : i.ip || i.mode !== 'static' ? ' ip nat inside' : null);
+    if (i.nvi) l.push(' ip nat enable');
+    else if (anyNat) l.push(natOut(i) ? ' ip nat outside' : i.ip || i.mode !== 'static' ? ' ip nat inside' : null);
     if (i.helper) l.push(` ip helper-address ${i.helper}`);
     if (i.policyRm) l.push(` ip policy route-map ${i.policyRm}`);
     if (+i.bandwidth > 0) l.push(` bandwidth ${i.bandwidth}`);
@@ -4930,7 +4948,8 @@ export function runningConfig(state, dev) {
   for (const i of out) o.push(`ip nat inside source list ${natList(i)} interface ${longIf(i.label)} overload`);
   for (const [name, p] of Object.entries(dev.natPools || {})) o.push(`ip nat pool ${name} ${p.start} ${p.end} netmask ${fmtMask(p.bits)}`);
   for (const r of dev.natPoolRules || []) o.push(`ip nat inside source list ${r.acl} pool ${r.pool}${r.overload ? ' overload' : ''}`);
-  for (const n of dev.staticNat || []) if (n.pub && n.priv) o.push(`ip nat inside source static ${n.priv} ${n.pub}`);
+  for (const n of dev.staticNat || []) if (n.pub && n.priv) o.push(`ip nat ${n.nvi ? '' : 'inside '}source static ${n.priv} ${n.pub}`);
+  if (dev.nviSrc) { const wi = dev.ifaces.find((x) => x.id === dev.nviSrc.iface); if (wi) o.push(`ip nat source list ${dev.nviSrc.acl || '1'} interface ${longIf(wi.label)} overload`); }
   for (const f of dev.portForwards || []) {
     if (f.port && f.toIp && out[0]) o.push(`ip nat inside source static ${f.proto || 'tcp'} ${f.toIp} ${f.toPort || f.port} interface ${longIf(out[0].label)} ${f.port}`);
   }

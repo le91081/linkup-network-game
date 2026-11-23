@@ -375,7 +375,7 @@ console.log('\nCLI 設定指令');
     const many = sess.complete('show ip ', shows);
     ok(many.line === null && many.options.join() === 'interface,route', '補齊：有多個候選時列出來');
     sess.exec('conf t'); sess.exec('int gi0/0/1');
-    ok(sess.complete('ip na').line === 'ip nat ' && sess.complete('ip nat ').options.join() === 'inside,outside,pool,translation' && sess.complete('do sh', shows).line === 'do show ', '補齊：介面模式與 do show');
+    ok(sess.complete('ip na').line === 'ip nat ' && sess.complete('ip nat ').options.join() === 'enable,inside,outside,pool,source,translation' && sess.complete('do sh', shows).line === 'do show ', '補齊：介面模式與 do show');
   }
 
   // 站對站 VPN：分公司換成 Cisco 路由器，整台用指令設定，和總公司的 FortiGate 互通
@@ -5117,6 +5117,31 @@ console.log('\nReflexive ACL 與 established');
   const rc = runningConfig(s, s.devices.rt).join('\n');
   ok(reflexLists(s, s.devices.rt)[0].rows.every((e) => e.timeout === 120) && /^ip reflexive-list timeout 120$/m.test(rc) && /ip access-list extended TO-ISP\n permit tcp any any reflect MIRROR\n/.test(rc) && /ip access-list extended FROM-ISP\n evaluate MIRROR\n deny ip any any/.test(rc), 'ip reflexive-list timeout 與 running-config（reflect、evaluate）');
   ok(/只能寫在具名的延伸 ACL/.test(R('configure terminal', 'access-list 150 permit ip any any reflect X', 'end')), '編號的 ACL 不能用 reflect');
+}
+console.log('\nNAT NVI：ip nat enable 讓 hairpin 也轉換');
+{
+  const { iosSession, runningConfig } = await import('../src/engine/ios.js');
+  const ok = (cond, title) => (cond ? console.log('  ✔ ' + title) : fail(title));
+  const typeIn = (s, id, lines) => { const S = iosSession(() => s.devices[id], () => s); const out = []; for (const l of lines) out.push(...S.exec(l).out); return out; };
+  const lv = LEVELS.find((x) => x.id === 'l132');
+  const s = lv.setup(); settle(s);
+  const PUB = parseIp('203.0.113.11');
+  ok(!transact(s, 'pc1', { proto: 'tcp', dst: PUB, dport: 443 }).ok, '傳統的 inside / outside：辦公室連公用位址失敗（hairpin）');
+  typeIn(s, 'rt', ['enable', 'configure terminal', 'no ip nat inside source static 192.168.20.10 203.0.113.11', 'no ip nat inside source list 1 interface Gi0/0/0 overload',
+    'interface Gi0/0/0', 'no ip nat outside', 'ip nat enable', 'interface Gi0/0/1', 'ip nat enable', 'interface Gi0/0/2', 'ip nat enable', 'exit',
+    'ip nat source static 192.168.20.10 203.0.113.11', 'ip nat source list 1 interface Gi0/0/0 overload', 'end']);
+  settle(s);
+  const a = transact(s, 'pc1', { proto: 'tcp', dst: PUB, dport: 443 });
+  ok(a.ok && a.log.some((l) => /靜態 NAT：目的位址 203\.0\.113\.11 換成 192\.168\.20\.10/.test(l.text)) && a.log.some((l) => /來源位址 192\.168\.10\.51 換成 203\.0\.113\.10/.test(l.text)), 'NVI：辦公室連 203.0.113.11 → 目的換成 192.168.20.10、來源換成路由器的 203.0.113.10（伺服器的回應才會回到路由器）');
+  ok(transact(s, 'inet', { proto: 'tcp', dst: PUB, dport: 443 }).ok, '外面的人照樣連得到公用位址');
+  const b = transact(s, 'pc1', { proto: 'tcp', dst: parseIp('93.184.216.34'), dport: 443 });
+  ok(b.ok && b.log.some((l) => /來源位址 192\.168\.10\.51 換成 203\.0\.113\.10/.test(l.text)), '上網：ip nat source list 1 interface Gi0/0/0 overload');
+  const rc = runningConfig(s, s.devices.rt).join('\n');
+  ok(/interface GigabitEthernet0\/0\/1\n[^!]* ip nat enable/.test(rc) && /^ip nat source static 192\.168\.20\.10 203\.0\.113\.11$/m.test(rc) && /^ip nat source list 1 interface GigabitEthernet0\/0\/0 overload$/m.test(rc) && !/ip nat inside source/.test(rc), 'running-config：ip nat enable、ip nat source static、ip nat source list … overload');
+  // 只有一邊 ip nat enable：不轉換
+  typeIn(s, 'rt', ['enable', 'configure terminal', 'interface Gi0/0/1', 'no ip nat enable', 'end']);
+  settle(s);
+  ok(!transact(s, 'pc1', { proto: 'tcp', dst: parseIp('93.184.216.34'), dport: 443 }).ok, '辦公室的介面拿掉 ip nat enable：不轉換，私有位址出不去');
 }
 console.log('\nNetFlow 與 QoS 的 police');
 {
