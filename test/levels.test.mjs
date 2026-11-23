@@ -4603,6 +4603,62 @@ console.log('\nNAT 位址池：一對一的動態 NAT 被借光、overload、逾
   ok(transact(s, 'inet', { proto: 'icmp', dst: parseIp('203.0.113.12'), quiet: true }).hops.some((h) => h.to === 'rt'), '位址池的位址由 Edge-RT 回應 ARP（ISP 送得到路由器）');
 }
 
+console.log('\nNAT hairpin 與 split DNS；靜態 NAT 只轉換從 outside 進來的封包');
+{
+  const sim = await import('../src/engine/sim.js');
+  const ok = (cond, title) => (cond ? console.log('  ✔ ' + title) : fail(title));
+  const lv = LEVELS.find((x) => x.id === 'l132');
+  const s = lv.setup(); settle(s);
+  const o0 = sim.runObjective(s, lv.objectives[0]);
+  ok(!o0.pass && /從 inside 介面 Gi0\/0\/1 收到要給 203\.0\.113\.11 的封包/.test(o0.reason) && /hairpin/.test(o0.reason), '開場：辦公室連公用位址，Edge-RT 不轉換（NAT hairpin 不通）');
+  ok(sim.runObjective(s, lv.objectives[1]).pass, '外面的人照樣連得到 203.0.113.11');
+  ok(sim.transact(s, 'pc1', { proto: 'tcp', dst: parseIp('192.168.20.10'), dport: 443, quiet: true }).ok, '直接連內部位址 192.168.20.10 是通的');
+  // 只改 DNS 記錄：電腦的快取裡還是舊的公用位址
+  (s.devices.dns.dnsZone.records.find((r) => r.name === 'www.example.org')).value = '192.168.20.10';
+  settle(s);
+  ok(!sim.runObjective(s, lv.objectives[0]).pass, 'DNS 記錄改了，可是電腦的快取還記著 203.0.113.11（TTL 300 秒）');
+  advance(s, 301); recomputeNow(s);
+  ok(lv.objectives.every((x) => sim.runObjective(s, x).pass), 'TTL 到期之後重新查詢，拿到內部位址：三個目標都過');
+  // 沒有任何介面是 outside：靜態 NAT 進不來
+  const l29 = LEVELS.find((x) => x.id === 'l29'), t = l29.setup();
+  l29.solve(t); settle(t);
+  ok(sim.runObjective(t, l29.objectives[0]).pass, '靜態 NAT（WAN 是 outside）：外面連得到 203.0.113.11');
+  t.devices.rt.ifaces[0].nat = false; settle(t);
+  ok(!sim.runObjective(t, l29.objectives[0]).pass, 'WAN 不是 outside：靜態 NAT 不轉換，外面連不到');
+}
+
+console.log('\nFortiGate 的 DNS 過濾與防毒');
+{
+  const { fortiSession, fortiConfig } = await import('../src/engine/fortios.js');
+  const { resolveName } = await import('../src/engine/sim/resolve.js');
+  const sim = await import('../src/engine/sim.js');
+  const ok = (cond, title) => (cond ? console.log('  ✔ ' + title) : fail(title));
+  const lv = LEVELS.find((x) => x.id === 'l133');
+  const s = lv.setup(); settle(s);
+  const fg = (...lines) => { const F = fortiSession(() => s.devices.fg, () => s); return lines.flatMap((l) => [].concat(F.exec(l).out || [])).join('\n'); }; // 每次開新的工作階段
+  const flush = () => { if (s.dyn.dnsCache) { delete s.dyn.dnsCache.pc1; delete s.dyn.dnsCache.pc2; } };
+  ok(sim.transact(s, 'pc1', { proto: 'tcp', dst: parseIp('198.51.100.61'), dport: 443, quiet: true }).ok && sim.transact(s, 'pc2', { proto: 'tcp', dst: parseIp('198.51.100.24'), dport: 80, quiet: true }).ok, '開場：釣魚網站和放病毒的下載站都連得到');
+  ok(/沒有 DNS 過濾設定檔「x」/.test(fg('config firewall policy', 'edit 1', 'set utm-status enable', 'set dnsfilter-profile "x"', 'next', 'end')), '政策指定不存在的 DNS 過濾設定檔：拒絕');
+  fg('config dnsfilter profile', 'edit "corp-dns"', 'config ftgd-dns', 'config filters', 'edit 1', 'set category 61', 'set action block', 'next', 'end', 'end', 'next', 'end',
+    'config firewall policy', 'edit 1', 'set utm-status enable', 'set dnsfilter-profile "corp-dns"', 'next', 'end');
+  settle(s); flush();
+  const r = resolveName(s, 'pc1', 'login.micr0soft-verify.example', 0, { nocache: true });
+  ok(r.ok && r.ip === parseIp('208.91.112.55') && r.log.some((x) => /Phishing（網路釣魚）.*208\.91\.112\.55/.test(x.text)), 'DNS 過濾：釣魚網站的名稱查到的是封鎖頁面的位址 208.91.112.55');
+  ok(resolveName(s, 'pc1', 'news.example', 0, { nocache: true }).ip === parseIp('198.51.100.90'), '其他類別照常回真正的位址');
+  ok(sim.runObjective(s, lv.objectives[0]).pass && sim.transact(s, 'pc1', { proto: 'tcp', dst: parseIp('198.51.100.61'), dport: 443, quiet: true }).ok, 'HTTPS 的釣魚網站打不開（不用解密）；可是直接打 IP 還是連得到');
+  ok(!sim.runObjective(s, lv.objectives[1]).pass, '還沒有防毒：下載站照樣下載得到');
+  fg('config antivirus profile', 'edit "corp-av"', 'config http', 'set av-scan block', 'end', 'next', 'end', 'config firewall policy', 'edit 1', 'set av-profile "corp-av"', 'next', 'end');
+  settle(s);
+  const d1 = sim.transact(s, 'pc2', { proto: 'tcp', dst: parseIp('198.51.100.24'), dport: 80, host: 'files.share-now.example', quiet: true });
+  ok(!d1.ok && /病毒「EICAR_TEST_FILE」/.test(d1.reason), '防毒：HTTP 下載到 EICAR 測試檔被擋下');
+  const d2 = sim.transact(s, 'pc2', { proto: 'tcp', dst: parseIp('198.51.100.24'), dport: 443, host: 'files.share-now.example', quiet: true });
+  ok(d2.ok && d2.log.some((x) => /HTTPS 下載是加密的/.test(x.text)), 'HTTPS 的下載：no-inspection 看不到檔案內容，防毒掃不到');
+  ok(lv.objectives.every((o) => sim.runObjective(s, o).pass), '五個目標都過');
+  const cfg = fortiConfig(s, s.devices.fg).join('\n');
+  ok(/set dnsfilter-profile "corp-dns"/.test(cfg) && /set av-profile "corp-av"/.test(cfg) && /config dnsfilter profile\n    edit "corp-dns"\n        config ftgd-dns\n            config filters\n                edit 1\n                    set category 61\n                    set action block/.test(cfg) && /config antivirus profile\n    edit "corp-av"\n        config http\n            set av-scan block/.test(cfg),
+    '設定檔：政策的 dnsfilter-profile、av-profile 與兩種設定檔（印在政策前面）');
+}
+
 console.log('\nNetFlow 與 QoS 的 police');
 {
   const sim = await import('../src/engine/sim.js');

@@ -99,16 +99,16 @@ npm run build    # 輸出到 dist/
 - **評分**：過關時依實際作答時間（畫面在前景、沒有開對話框才算；標準時間是 3 分鐘加上每個目標 1.5 分鐘）、看了幾個提示、跑了幾次完整測試給 S / A / B / C 與分數，關卡選單上顯示最佳等級。設定變更的次數只列出來參考。
 - **關卡編輯器**：自由模式的「關卡設計」可以寫關卡名稱、任務說明、提示，指定哪些設備鎖定（玩家看得到、不能設定），然後試玩、存成自訂關卡、或匯出成關卡檔分享；關卡選單的「自訂關卡」可以遊玩、匯出、刪除與匯入。
 
-## 關卡（17 章 131 關）
+## 關卡（17 章 133 關）
 
 | 章節 | 關卡數 | 主題 |
 | --- | --- | --- |
 | 1 家用網路 | 4 | Hub、Switch、固定 IP、DHCP、PPPoE、NAT、DNS |
 | 2 小型辦公室 | 4 | 固定 IP 線路、連接埠轉發、VLAN、Trunk、子介面 |
-| 3 企業網路 | 4 | 防火牆政策與 DMZ、靜態路由與回程路由、一對一靜態 NAT；NAT 位址池沒有 overload：早到的四個人把公用位址借光，晚到的人上不了網（`show ip nat statistics` 的 allocated 100% 與 misses，規則還有轉換在用時要先 `clear ip nat translation *` 才能改） |
+| 3 企業網路 | 5 | 防火牆政策與 DMZ、靜態路由與回程路由、一對一靜態 NAT；NAT 位址池沒有 overload：早到的四個人把公用位址借光，晚到的人上不了網（`show ip nat statistics` 的 allocated 100% 與 misses，規則還有轉換在用時要先 `clear ip nat translation *` 才能改）；公司網站用靜態 NAT，外面連得到、辦公室卻連不上：傳統的 inside / outside NAT 不處理 hairpin，改用 split DNS（內部 DNS 回內部位址，改完要 `ipconfig /flushdns` 或等 TTL） |
 | 4 資料中心 | 7 | ToR 與 SVI、Spine-Leaf 與 OSPF、銅纜 / 多模 / 單模光纖與距離；Jumbo Frame 要整條路一致（交換器默默丟掉 giant、`ping -f -l 8972`、2960 的 `system mtu jumbo` 要存檔重新開機）；光纖接好了燈還是不亮：第三方的收發器被關成 err-disabled (gbic-invalid)、兩端一端 10G 一端 1G、接頭髒了收到的光太弱（`show interfaces transceiver`、CRC）；A 路的電一跳機房就全黑：每台設備的兩個電源供應器要都裝上、都接電，而且分別接 A、B 兩路（`show environment power`、故障演練一路一路斷電）；新的 25G GPU 伺服器接不上只有 QSFP28 的 Nexus：`interface breakout module 1 port 1 map 25g-4x` 拆成 4 個 25G 的子埠，用分歧線接（10g-4x 只有 10G） |
 | 5 無線網路 | 6 | SSID、WPA2 / WPA3、PoE、頻道規劃、訪客 SSID 對應 VLAN；三台 AP 都開 80 MHz 互相重疊、會議室用 DFS 頻道被雷達打斷（改用 40 MHz 與非 DFS 頻道）；Wi-Fi 6E 的新筆電一直連在 5 GHz：6 GHz 規定要 WPA3，只支援 WPA2 的印表機讓 SSID 停在 WPA2（改成 WPA2 / WPA3 混合）；訪客入口 (Captive Portal) 設好了，登入頁面卻從來不跳出：認證前允許的位址沒有 DNS，手機查不到 captive.apple.com |
-| 6 網路安全 | 16 | TCP 與 UDP（只放行 TCP 53 的 ACL 擋掉了 DNS、TFTP、Syslog）、DHCP Snooping、Port Security、ACL、管理加固、DAI、BPDU Guard、802.1X / RADIUS、用 DTP 偽裝成交換器的 VLAN hopping 與邊緣埠加固；MAC flooding 把交換器的表塞滿、變成 Hub（Port Security 的 maximum 與違規動作要先設好再打開、亂造的項目要等老化或 clear）；雙重標籤從 Native VLAN 跳進伺服器 VLAN、繞過 ACL（Native VLAN 改成沒人用的、或 vlan dot1q tag native）；飯店的房間用 Private VLAN 隔離（isolated、community、promiscuous）；EAP-TLS：NPS 的伺服器憑證週末過期，星期一所有電腦同時登不進去（重新申請），時鐘差了兩年的筆電連新的憑證都「還沒生效」，沒有公司憑證的廠商筆電仍然擋在外面；分公司只有一台路由器也要當防火牆：IOS 的 Zone-Based Firewall（zone、class-map / policy-map type inspect、zone-pair，inspect 有狀態、pass 單向，DMZ 只對外開 https、不能主動連進辦公室）；上班時間有人在玩線上博弈：FortiGate 的 FortiGuard 網頁過濾封鎖類別，HTTPS 要搭配 certificate-inspection（no-inspection 看不到網址，deep-inspection 沒裝 Fortinet_CA_SSL 每個網站都跳憑證錯誤）；政策只看位址和埠，擋不住 BitTorrent、Tor 和 Log4Shell：應用程式控管封鎖 P2P / Proxy 類別、IPS 感測器保護對外的訂單系統，掛在流量經過的那一條政策上 |
+| 6 網路安全 | 17 | TCP 與 UDP（只放行 TCP 53 的 ACL 擋掉了 DNS、TFTP、Syslog）、DHCP Snooping、Port Security、ACL、管理加固、DAI、BPDU Guard、802.1X / RADIUS、用 DTP 偽裝成交換器的 VLAN hopping 與邊緣埠加固；MAC flooding 把交換器的表塞滿、變成 Hub（Port Security 的 maximum 與違規動作要先設好再打開、亂造的項目要等老化或 clear）；雙重標籤從 Native VLAN 跳進伺服器 VLAN、繞過 ACL（Native VLAN 改成沒人用的、或 vlan dot1q tag native）；飯店的房間用 Private VLAN 隔離（isolated、community、promiscuous）；EAP-TLS：NPS 的伺服器憑證週末過期，星期一所有電腦同時登不進去（重新申請），時鐘差了兩年的筆電連新的憑證都「還沒生效」，沒有公司憑證的廠商筆電仍然擋在外面；分公司只有一台路由器也要當防火牆：IOS 的 Zone-Based Firewall（zone、class-map / policy-map type inspect、zone-pair，inspect 有狀態、pass 單向，DMZ 只對外開 https、不能主動連進辦公室）；上班時間有人在玩線上博弈：FortiGate 的 FortiGuard 網頁過濾封鎖類別，HTTPS 要搭配 certificate-inspection（no-inspection 看不到網址，deep-inspection 沒裝 Fortinet_CA_SSL 每個網站都跳憑證錯誤）；政策只看位址和埠，擋不住 BitTorrent、Tor 和 Log4Shell：應用程式控管封鎖 P2P / Proxy 類別、IPS 感測器保護對外的訂單系統，掛在流量經過的那一條政策上；釣魚信與「發票」：FortiGate 的 DNS 過濾在查名稱時就把釣魚網站換成封鎖頁面的位址（不用解密 HTTPS，但 DoH 或直接打 IP 就繞過），防毒只掃得到 HTTP 下載（HTTPS 要 deep-inspection） |
 | 7 VPN 與廣域備援 | 13 | 站對站 IPsec、遠端存取 VPN、雙線路浮動靜態路由；業者骨幹故障時介面還是 up，用 IP SLA 與追蹤的靜態路由切換（探測目標要綁在主線、不要用使用者的 DNS）；三個據點的 Hub-and-Spoke 與 IKEv2（版本要一致、PFS 不一致要到重新協商才斷、加密範圍與 NAT 例外要包含另一個分公司）；IPsec 讓封包變大，ICMP「需要分段」被伺服器網段的 ACL 擋掉造成 PMTUD 黑洞（上傳正常、下載卡住），放行 `packet-too-big` 並在介面上 `ip tcp adjust-mss 1360`；GRE 通道上的 OSPF 學到 tunnel destination 的網段，造成 recursive routing、Tunnel 一直 flapping（`%TUN-5-RECURDOWN`，network 敘述不要包含 WAN）；GRE 不加密，用 `tunnel protection ipsec profile` 改成 GRE over IPsec，外部 ACL 改放 UDP 500 與 ESP、不再放行明文 GRE；crypto map 換成 VTI（`tunnel mode ipsec ipv4`），transform-set 不一致時 VTI 是 up/down，再讓 OSPF 在 VTI 上學到新網段；DMVPN（mGRE + NHRP + IPsec）：hub 少了 `ip nhrp map multicast dynamic` 讓 OSPF 只有單向的 Hello，spoke 搶到 DR，門市之間的流量在 NHRP 解析之後直接走；分公司在大樓的 PAT 後面：總公司的對端要寫 NAT 之後的位址，NAT-T 改走 UDP 4500，ACL 要放行；用憑證驗證的 IKEv2：分公司換了主機板電池、時鐘回到 2002 年，總公司的憑證「還沒生效」，偏偏 NTP 伺服器在 VPN 的另一邊（先 `clock set`，再改用不經過 VPN 的 NTP）；下午一塞車電話就斷斷續續：FortiGate 的 SD-WAN（效能 SLA 量每條線路的延遲、抖動、遺失，SLA 模式的規則讓語音走合格的線路，政策的目的介面改成 virtual-wan-link） |
 | 8 高可用與進階路由 | 10 | STP、EtherChannel、VRRP / HSRP、DHCP Relay、OSPF Cost、VLSM；HSRP 追蹤上行介面（preempt 預設是關的，兩台都要開）；主線在業者那一端斷掉、介面燈號還亮著，OSPF 要等 40 秒的 Dead timer，用 BFD（或 fast hello）兩秒內切到備援；兩台閘道只有 HSRP 的 Active 在做事，改成 GLBP 讓兩台一起轉送（AVG 輪流發虛擬 MAC、AVF 壞掉時其他台接手）；唯一的防火牆壞掉全公司斷網：第二台 FortiGate 組成 HA（Active-Passive，heartbeat 線、群組與密碼一致；現役那台 priority 要高，不然新機器的空白設定會蓋過來；`monitor` 決定 wan1 斷線會不會換手、`session-pickup` 讓進行中的連線不斷；`get system ha status`） |
 | 9 IPv6 | 11 | Link-local、SLAAC、IPv6 靜態路由、雙協定；RA 的 M / O / A 旗標與 DHCPv6（stateless / stateful，DHCPv6 不給閘道）、OSPFv3（link-local 鄰居、純 IPv6 路由器的 Router ID）、IPv6 ACL 與隱含的 ND 允許規則；冒牌的 Router Advertisement 搶走預設閘道（主機多一個位址、IPv6 變黑洞），RA Guard 的 device-role host；內部網站加了 AAAA 之後雙協定的電腦 ping 名稱逾時、瀏覽器靠 Happy Eyeballs 改用 IPv4 才打得開（AAAA 寫錯、伺服器少了 IPv6 閘道，`nslookup -type=aaaa`、`ping -4 / -6`）；IPv6 過不了 VPN：`tunnel mode ipsec ipv4` 的 VTI 只載 IPv4，改成 GRE over IPsec，OSPFv3 在 Tunnel 上建鄰居；換了 ISP 之後 IPv6 上不了網：舊業者的前綴沒有回程路由，WAN 用 `ipv6 address autoconfig default` 與 `ipv6 dhcp client pd`，LAN 用一般前綴切出各自的 /64（業者換前綴時自動跟著換）；防火牆開了 IPv6，網站卻都打不開：FortiGate 的政策只寫了 IPv4 位址，IPv6 要加 srcaddr6 / dstaddr6，訪客網段用委派的前綴切子網路；新大樓只有 IPv6，只有 IPv4 的網站打不開：DNS 伺服器開 DNS64 合成 AAAA（64:ff9b::/96 + IPv4 位址），R1 用 `nat64 prefix stateful` 與 `nat64 v6v4 list … overload` 換成 IPv4 送出去，有真的 AAAA 的內部網站照樣直接連 |
@@ -164,6 +164,7 @@ npm run build    # 輸出到 dist/
 - **PKI**：`crypto pki trustpoint`（`enrollment url`（SCEP）、`subject-name`、`revocation-check none | crl | crl none`、`rsakeypair`、`fqdn`、`serial-number none`、`ip-address none`）、`crypto pki authenticate`（核對指紋後接受 CA 的根憑證）、`crypto pki enroll`、`crypto pki certificate chain`（running-config 裡的憑證可以整份貼回）；`show crypto pki certificates`、`show crypto pki trustpoints [status]`。CA 伺服器用 SCEP（TCP 80）自動核發，憑證往前推 10 分鐘生效。
 - **NAT 的範圍**：`ip nat inside source list <ACL>` 可以指定編號或具名的 ACL，`access-list <編號>` 也能用。
 - **NAT 位址池**：`ip nat pool <名稱> <起始> <結束> netmask <遮罩> | prefix-length <長度>`、`ip nat inside source list <ACL> pool <名稱> [overload]`。沒有 overload 是一對一的動態 NAT：一台內部主機佔一個公用位址，閒置到 `ip nat translation timeout`（預設 24 小時）才還回去，借光了就丟封包；overload 是共用第一個位址的 PAT。位址池落在 `ip nat outside` 介面的網段裡時，路由器替它們回應 ARP。位址池在 CLI 設定，「NAT / 轉發」分頁的位址池卡片看得到借出幾個、可以切換 overload。
+- **NAT hairpin**：傳統的 inside / outside NAT 只在封包從 outside 介面進來時，才把靜態 NAT 的公用位址換回內部位址。內部的人連自己公司伺服器的公用位址（hairpin），封包從 inside 進來、不會被轉換，連線失敗；要讓內部 DNS 對同一個名稱回內部位址 (split DNS)。沒有任何介面設成 outside 時，靜態 NAT 也不會生效（NAT 分頁會提醒）。
 - **DHCP 保留位址**：只有一台主機的位址池（`host` 加上 `hardware-address`）。
 - **實體層**：`speed`、`duplex`。
 - **MTU**：路由器介面的 `mtu`（1500 – 9216）與 `ip mtu`（不能比介面的 MTU 大）、`ip tcp adjust-mss <500-1460>`、Catalyst 2960 的 `system mtu jumbo <1500-9000>`（存檔、重新開機才生效）、Catalyst 9300 的 `system mtu <1500-9198>`、Nexus 介面的 `mtu <576-9216>`；`show system mtu`、`show ip interface <介面>`（MTU、套用的 ACL、TCP Adjust MSS）、`show interfaces` 的 MTU 與 giants；`ping <IP> [size <36-18024>] [df-bit] [source <介面>]`（M 代表 could not fragment）。ACL 的 ICMP 可以指定類型（`permit icmp any any packet-too-big`），具名 ACL 的序號（`25 permit …`）會插在對的位置。
@@ -410,7 +411,7 @@ npm run build    # 輸出到 dist/
 - NTP 只有一台伺服器、沒有驗證；設備的時鐘不會慢慢漂移（沒對時的誤差是固定的）。
 - 背景流量之間用 max-min 公平分配近似 TCP 的行為，沒有模擬壅塞控制本身。佇列的延遲與遺失用「TCP 會把佇列塞滿」的穩態估計（平均約七成滿、遺失率隨流量條數增加），不是逐封包的模擬；營運商的管制 (policing) 也是用估計的遺失率。Hub 的碰撞只反映在速率打折上。
 - QoS 只模擬路由器的 MQC 與 Catalyst 2960 的 `mls qos` 信任邊界；交換器自己的出口佇列（`srr-queue`）、WRED、NBAR 的完整協定庫、FortiGate 的流量整形都沒有做。Wi-Fi 的 WMM 也沒有。
-- FortiGate 的安全設定檔只有網頁過濾（FortiGuard 類別，網站的類別是關卡設定的；沒有 URL 清單、評等覆寫、警告 / 驗證動作）與三種內建的 SSL 檢查（no-inspection、certificate-inspection、deep-inspection；沒有豁免清單與自訂設定檔）；應用程式控管依埠號或網址的主機名稱辨識少數幾個應用程式（BitTorrent、Tor、Facebook、YouTube、Steam），IPS 只有幾個代表性的攻擊特徵（Log4Shell、SQL injection、Shellshock）與依嚴重程度封鎖；防毒、DNS 過濾還沒有。
+- FortiGate 的安全設定檔只有網頁過濾（FortiGuard 類別，網站的類別是關卡設定的；沒有 URL 清單、評等覆寫、警告 / 驗證動作）與三種內建的 SSL 檢查（no-inspection、certificate-inspection、deep-inspection；沒有豁免清單與自訂設定檔）；應用程式控管依埠號或網址的主機名稱辨識少數幾個應用程式（BitTorrent、Tor、Facebook、YouTube、Steam），IPS 只有幾個代表性的攻擊特徵（Log4Shell、SQL injection、Shellshock）與依嚴重程度封鎖；DNS 過濾依 FortiGuard 類別把名稱換成 208.91.112.55（沒有 DoH 的偵測、安全搜尋與自訂網域清單），防毒只比對關卡放在網站上的病毒（EICAR 測試檔），沒有沙箱、郵件與檔案類型過濾。
 - IOS 的 Zone-Based Firewall 只在路由器上（match protocol 認得常用的協定，用埠號判斷、沒有深層檢查）；沒有 parameter-map（逾時、半開連線上限）、沒有 L7 的 inspect 政策、沒有 zone 內的政策；GUI 只編輯「一個協定清單 + inspect / pass」的簡化政策。時間型 ACL、Reflexive ACL 還沒有。
 - Console 線不畫在 3D 場景上，接上之後就是那台設備的命令列（沒有 line con 0 的密碼與 exec-timeout、沒有斷線的 BREAK 與密碼復原）；只有標成「在機房裡」的設備不能從面板直接設定，其他設備的 CLI 分頁也當成 Console。
 - breakout 只有 Nexus 的 QSFP 埠（25g-4x、10g-4x）：分歧線在場景裡畫成四條獨立的線；沒有 40G 的 QSFP+ 與 Catalyst 的 breakout。
@@ -427,6 +428,7 @@ npm run build    # 輸出到 dist/
 - 802.1X 只驗證帳號密碼（沒有憑證）。
 - 路由重分配有 OSPF、EIGRP、BGP 之間，以及靜態與直連；重分配進 EIGRP 不能套 route-map 與 tag，兩個地方雙向重分配造成的路由迴圈沒有模擬（每次重算都會收斂成同一個結果）；EIGRP 還不能重分配 RIP 的路。
 - RIP 沒有 RIPng (IPv6)、`offset-list`、`distribute-list`、`neighbor`（單點傳送更新）與 `validate-update-source` 的開關；設定改了路馬上學到（沒有 30 秒週期造成的等待），只有失聯要等 invalid / flush。
+- NAT 沒有 NVI（`ip nat enable`、`ip nat source`）：內部連靜態 NAT 的公用位址（hairpin）一律不通；FortiGate 的 VIP 也還不能套用在內部介面上做 hairpin。
 - EIGRP 只有傳統模式（`router eigrp <AS>`）：一台只跑一個程序、只在全域的路由表，沒有 named mode、stub、`distribute-list`、`offset-list` 與 EIGRP for IPv6；DUAL 的 Query / Reply 沒有時間（沒有 feasible successor 的路一樣立刻換過去，不會 Stuck-in-Active），可靠度與負載固定是 255 與 1；彙總不會在本機加一條往 Null0 的路。政策路由只有 `set ip next-hop` 與 `set ip default next-hop`（沒有 `set interface`、`verify-availability` 搭配 track），FortiGate 的政策路由還沒有做。
 - MTU：TCP 用一個裝滿的資料區段代表一次大量傳輸，PMTUD 的結果不會被記住（每次連線都重新發現）；IPsec 的額外負擔固定算 73 位元組（實際依加密演算法與填充大約 50 – 73），SSL-VPN 與雲端的 VPN 沒有算；FortiGate 的介面 MTU 與 `tcp-mss` 還不能改；Windows 用 `netsh` 設定 MTU，沒有分網卡驅動的 Jumbo Packet 與 IP 的 MTU 兩層。
 - HTTPS 只模擬憑證驗證的結果（信任的 CA、有效期間、SAN）：沒有中繼憑證鏈、CRL / OCSP 撤銷檢查、TLS 版本與加密套件的協商、ACME 自動續約；憑證由 CA 直接簽發，不分產生 CSR、送審、安裝幾個步驟。網頁內容只有標題。
@@ -445,7 +447,7 @@ npm run build    # 輸出到 dist/
 完整的功能規劃（每個領域已完成、部分完成、尚未開始的項目，以及建議的實作順序）在 [PLAN.md](PLAN.md)。以下是最接近的幾項：
 
 1. 堆疊 / vPC、FortiGate HA 的 Active-Active。
-2. 獨立的帶外管理網路（管理埠、Mgmt-vrf）、STP 進階（Loop Guard、UDLD）、NGFW 的防毒與 DNS 過濾。
+2. 獨立的帶外管理網路（管理埠、Mgmt-vrf）、STP 進階（Loop Guard、UDLD）。
 3. OSPF point-to-multipoint、BGP 的 VRF 與 MP-BGP route-target、自由模式畫牆。
 4. 中繼憑證鏈、OCSP 與 FortiGate 的憑證驗證。
 

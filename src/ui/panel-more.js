@@ -91,7 +91,8 @@ export function staticNatCard(ctx) {
   card.append(h('div', { class: 'addrow' }, button('新增對應', { ic: 'plus', small: true, onclick: () => { list.push({ pub: '', priv: '' }); ctx.commit(true); } })),
     ctx.live(() => {
       const bad = list.find((n) => isIp(n.pub || '') && !dev.ifaces.some((i) => i.rt && i.rt.vips.length && i.rt.vips.some((v) => fmtIp(v) === n.pub.trim())));
-      return bad ? note('warn', `${bad.pub} 不在任何介面的網段內，ISP 的封包送不到這台路由器。`) : null;
+      if (bad) return note('warn', `${bad.pub} 不在任何介面的網段內，ISP 的封包送不到這台路由器。`);
+      return list.some((n) => n.pub && n.priv) && !dev.ifaces.some((i) => i.nat || i.natOut) ? note('warn', '沒有任何介面設成 NAT 的外部 (ip nat outside)：靜態 NAT 只轉換從外部介面進來的封包，現在不會生效。') : null;
     }));
   return card;
 }

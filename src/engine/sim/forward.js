@@ -19,7 +19,7 @@ import { lookupRoute } from './l3.js';
 import { GRE_OVERHEAD, greRx, greTarget, isTun, nhrpRedirect, tunMode } from './gre.js';
 import { haLostNote } from '../ha.js';
 import { zbfActive, zbfCheck, zbfNeeds } from '../zbf.js';
-import { utmCheck, appIpsCheck } from '../utm.js';
+import { utmCheck, appIpsCheck, avCheck } from '../utm.js';
 
 // ───────────────────────────── 封包轉送 ─────────────────────────────
 
@@ -469,6 +469,10 @@ export function forward(state, ctx, startId, pkt) {
         pkt.src = e.dst; pkt.sport = e.dport; pkt.dst = e.src; pkt.dport = e.sport;
       } else if (!pkt.reply) {
         const sn = (dev.staticNat || []).find((x) => parseIp(x.pub || '') === pkt.dst && parseIp(x.priv || '') != null);
+        if (sn && dev.kind === 'router' && inIf && !inIf.nat && !inIf.natOut) {
+          // 從 inside 進來、要找靜態 NAT 的公用位址（NAT hairpin / loopback）：IOS 不轉換，封包到不了伺服器
+          return drop(`${dev.name} 從 inside 介面 ${inIf.label} 收到要給 ${sn.pub} 的封包：傳統的 inside / outside NAT 只轉換「從 outside 介面進來」的封包，這個位址只是路由器替靜態 NAT 回應 ARP 的別名，封包到不了伺服器（NAT hairpin 不通）。內部的人要用內部位址連（內部 DNS 回私有位址：split DNS）`);
+        }
         dnat = sn ? { ip: parseIp(sn.priv), port: pkt.dport, stat: true } : matchPortForward(dev, inIf, pkt) || nattMap(state, dev, pkt);
         if (dnat) {
           sess(dev, { act: 'dnat', proto: pkt.proto, src: pkt.src, sport: pkt.sport, dst: pkt.dst, dport: pkt.dport, ndst: dnat.ip, ndport: dnat.port });
@@ -613,6 +617,11 @@ export function forward(state, ctx, startId, pkt) {
         const ai = appIpsCheck(dev, dev.policies[v.rule - 1], v.rule, pkt);
         if (ai.note) log.push({ dev: dev.id, kind: 'info', text: ai.note });
         if (ai.drop) { T('fw_forward_handler', `${ai.ips ? 'IPS' : 'application control'} block, policy-${v.rule}`); return drop(ai.drop); }
+        const avr = avCheck(state, dev, dev.policies[v.rule - 1], v.rule, pkt);
+        if (avr.note) log.push({ dev: dev.id, kind: 'info', text: avr.note });
+        if (avr.drop) { T('fw_forward_handler', `antivirus block, policy-${v.rule}`); return drop(avr.drop); }
+        const pol = dev.policies[v.rule - 1];
+        if (pol && pol.utm && pol.dnsf && pkt.proto === 'udp' && pkt.dport === 53 && !pkt.reply) ctx.dnsf = { dev: dev.id, rule: v.rule };
       }
       if (v.zbf) log.push({ dev: dev.id, kind: 'fwd', text: `ZBF：zone-pair ${v.zbf.pair} 的 class ${v.zbf.cls} → ${v.zbf.act}${pkt.reply ? '' : v.zbf.act === 'inspect' ? '（記下連線，回程自動放行）' : '（無狀態：回程要另外放行）'}` });
       if (!pkt.reply) {

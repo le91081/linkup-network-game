@@ -780,3 +780,49 @@ test('NAT 位址池：show ip nat statistics 看到位址借光，clear 之後�
   await typeCmd(page, 'ping 8.8.8.8');
   await expect(page.locator('#panel .term-out')).toContainText('回覆自 8.8.8.8');
 });
+
+test('NAT hairpin：nslookup 拿到公用位址連不上；DNS 分頁改成內部位址、ipconfig /flushdns 之後打得開', async ({ page }) => {
+  await boot(page);
+  await open(page, 'l132');
+  await clickDevice(page, 'pc1');
+  await page.locator('#panel .tab', { hasText: '終端機' }).click();
+  await typeCmd(page, 'nslookup www.example.org');
+  await expect(page.locator('#panel .term-out')).toContainText('203.0.113.11');
+  await clickDevice(page, 'dns');
+  await page.locator('#panel .tab', { hasText: 'DNS' }).click();
+  const row = page.locator('#panel .trow.c-dns').first(); // 第一筆就是 www.example.org
+  await expect(row.locator('input').first()).toHaveValue('www.example.org');
+  const val = row.locator('input').nth(1);
+  await val.fill('192.168.20.10');
+  await val.press('Enter');
+  expect(await scan(page, '#panel', 'DNS 分頁（split DNS）')).toEqual([]);
+  await clickDevice(page, 'pc1');
+  await page.locator('#panel .tab', { hasText: '終端機' }).click();
+  await typeCmd(page, 'ipconfig /flushdns', 'ping www.example.org');
+  await expect(page.locator('#panel .term-out')).toContainText('回覆自 192.168.20.10');
+});
+
+test('DNS 過濾與防毒：安全設定檔分頁建立兩種設定檔、掛到政策上，nslookup 釣魚網站得到封鎖頁面的位址', async ({ page }) => {
+  await boot(page);
+  await open(page, 'l133');
+  await clickDevice(page, 'fg');
+  await page.locator('#panel .tab', { hasText: '安全設定檔' }).click();
+  const add = (title) => page.locator('#panel .card', { hasText: title }).locator('input');
+  await add('新增 DNS 過濾設定檔').fill('corp-dns'); await add('新增 DNS 過濾設定檔').press('Enter');
+  await page.locator('#panel .card.dnsf-prof label.switch', { hasText: '網路釣魚（61）' }).click();
+  await expect(page.locator('#panel .card.dnsf-prof')).toContainText('封鎖 1 個類別');
+  await add('新增防毒設定檔').fill('corp-av'); await add('新增防毒設定檔').press('Enter');
+  await expect(page.locator('#panel .card.av-prof')).toContainText('掃描 1 種協定');
+  expect(await scan(page, '#panel', 'FortiGate 的安全設定檔（DNS 過濾、防毒）')).toEqual([]);
+  await page.locator('#panel .tab', { hasText: '政策' }).click();
+  const pol = page.locator('#panel .card.policy').nth(0);
+  await pol.locator('label.switch', { hasText: '安全設定檔' }).click();
+  await pol.locator('label.field', { hasText: 'DNS 過濾' }).locator('select').selectOption('corp-dns');
+  await pol.locator('label.field', { hasText: '防毒' }).locator('select').selectOption('corp-av');
+  await expect(pol).toContainText('防毒只掃得到沒加密的下載');
+  expect(await page.evaluate(() => { const p = window.linkup.state.devices.fg.policies[0]; return [p.utm, p.dnsf, p.av, p.ssl].join(); })).toBe('true,corp-dns,corp-av,no-inspection');
+  await clickDevice(page, 'pc1');
+  await page.locator('#panel .tab', { hasText: '終端機' }).click();
+  await typeCmd(page, 'nslookup login.micr0soft-verify.example');
+  await expect(page.locator('#panel .term-out')).toContainText('208.91.112.55');
+});

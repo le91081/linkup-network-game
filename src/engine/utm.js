@@ -227,3 +227,94 @@ export function applyAppIpsCli(d, kind, lines) {
   if (Object.keys(all).length) d[key] = all; else delete d[key];
   return null;
 }
+
+// ── DNS 過濾（config dnsfilter profile）：DNS 查詢經過 FortiGate 時，依 FortiGuard 類別改回封鎖頁面的位址 ──
+// d.dnsf = { 名稱: { block: [類別編號] } }；政策 p.dnsf（dnsfilter-profile）
+// 不用解密：HTTPS 的網站也擋得住（查不到真正的位址）；可是電腦改用 DoH（DNS over HTTPS）或直接打 IP 就繞過了
+export const DNS_BLOCK_IP = '208.91.112.55'; // FortiGuard 的封鎖頁面
+export function dnsfVerdict(state, dev, p, n, name) {
+  if (!p || !p.utm || !p.dnsf) return null;
+  const prof = (dev.dnsf || {})[p.dnsf];
+  if (!prof) return null;
+  const cat = rate(state, name, null);
+  if ((prof.block || []).map(Number).includes(cat)) return { block: true, cat, note: `FortiGate 的 DNS 過濾：${name} 屬於「${catName(cat)}」，政策 #${n} 的設定檔「${p.dnsf}」把答案換成封鎖頁面的位址 ${DNS_BLOCK_IP}` };
+  return { block: false, cat, note: `FortiGate 的 DNS 過濾：${name} 屬於「${catName(cat)}」，允許` };
+}
+
+// ── 防毒（config antivirus profile）：下載的檔案比對病毒碼 ──
+// d.av = { 名稱: { scan: ['http', 'ftp'] } }；政策 p.av（av-profile）；網際網路上的主機用 inet.hosts[].virus 標示放了什麼病毒
+export function virusOf(state, host, ip) {
+  for (const d of Object.values(state.devices)) {
+    if (d.kind !== 'internet') continue;
+    const h = d.inet.hosts.find((x) => (host && (x.name === host || x.fqdn === host)) || (ip != null && ipOf(x.ip) === ip));
+    if (h && h.virus) return h.virus;
+  }
+  return null;
+}
+export function avCheck(state, dev, p, n, pkt) {
+  if (!p || !p.utm || !p.av || pkt.reply || pkt.proto !== 'tcp' || pkt.ack) return {};
+  const prof = (dev.av || {})[p.av];
+  if (!prof || (pkt.dport !== 80 && pkt.dport !== 443)) return {};
+  const v = virusOf(state, pkt.host || nameOf(state, pkt.dst), pkt.dst);
+  if (!v) return {};
+  if (pkt.dport === 443 && (p.ssl || 'no-inspection') !== 'deep-inspection') return { note: `FortiGate 防毒：HTTPS 下載是加密的，政策 #${n} 的 SSL 檢查是 ${p.ssl || 'no-inspection'}，防毒設定檔「${p.av}」看不到檔案內容（要 deep-inspection 才掃得到）` };
+  if (!(prof.scan || []).includes('http')) return { note: `FortiGate 防毒：設定檔「${p.av}」沒有掃描 HTTP（config http → set av-scan block）` };
+  return { drop: `FortiGate 防毒：下載的檔案裡有病毒「${v}」，被政策 #${n} 的設定檔「${p.av}」擋下（使用者看到一頁「High Security Alert」的替換訊息）` };
+}
+
+/** config dnsfilter profile / config antivirus profile 的設定檔 */
+export function dnsfAvConfigLines(d) {
+  const o = [];
+  const dn = Object.entries(d.dnsf || {}), av = Object.entries(d.av || {});
+  if (dn.length) {
+    o.push('config dnsfilter profile');
+    for (const [n, p] of dn) {
+      o.push(`    edit "${n}"`, '        config ftgd-dns', '            config filters');
+      (p.block || []).forEach((c, k) => o.push(`                edit ${k + 1}`, `                    set category ${c}`, '                    set action block', '                next'));
+      o.push('            end', '        end', '    next');
+    }
+    o.push('end');
+  }
+  if (av.length) {
+    o.push('config antivirus profile');
+    for (const [n, p] of av) {
+      o.push(`    edit "${n}"`);
+      if ((p.scan || []).includes('http')) o.push('        config http', '            set av-scan block', '        end');
+      if ((p.scan || []).includes('ftp')) o.push('        config ftp', '            set av-scan block', '        end');
+      o.push('    next');
+    }
+    o.push('end');
+  }
+  return o;
+}
+/** 套用 config dnsfilter profile（kind 'dnsf'）或 config antivirus profile（kind 'av'）。回傳錯誤訊息或 null */
+export function applyDnsfAvCli(d, kind, lines) {
+  const key = kind === 'dnsf' ? 'dnsf' : 'av';
+  const all = JSON.parse(JSON.stringify(d[key] || {}));
+  let cur = null, filt = null, sub = null, depth = 0;
+  const tok = (l) => (l.match(/"[^"]*"|\S+/g) || []).map((x) => x.replace(/^"|"$/g, ''));
+  const commit = () => { if (filt && filt.cat != null) { cur.block = cur.block.filter((c) => c !== filt.cat); if (filt.act === 'block') cur.block.push(filt.cat); } filt = null; };
+  for (const l of lines) {
+    const t = tok(l), w = (t[0] || '').toLowerCase();
+    if (!depth && w === 'edit') { cur = (all[t[1]] ||= kind === 'dnsf' ? { block: [] } : { scan: [] }); continue; }
+    if (!depth && w === 'delete') { delete all[t[1]]; continue; }
+    if (!depth && w === 'next') { cur = null; continue; }
+    if (!cur) return `command parse error before '${t[0]}'`;
+    if (w === 'config') { depth++; sub = (t[1] || '').toLowerCase(); continue; }
+    if (w === 'end') { if (filt) commit(); depth = Math.max(0, depth - 1); sub = depth ? sub : null; continue; }
+    if (kind === 'dnsf' && sub === 'filters') {
+      if (w === 'edit') { if (filt) commit(); filt = { cat: null, act: 'block' }; continue; }
+      if (w === 'next') { commit(); continue; }
+      if (w === 'set' && t[1] === 'category') { if (!/^\d+$/.test(t[2] || '') || !(+t[2] in FG_CATS)) return `value parse error before '${t[2]}'（這個模擬認得的類別：${Object.keys(FG_CATS).filter((x) => x !== '0').join('、')}）`; filt.cat = +t[2]; continue; }
+      if (w === 'set' && t[1] === 'action') { if (!['block', 'monitor'].includes(t[2])) return `value parse error before '${t[2]}'`; filt.act = t[2]; continue; }
+      continue;
+    }
+    if (kind === 'av' && (sub === 'http' || sub === 'ftp') && w === 'set' && t[1] === 'av-scan') {
+      if (!['block', 'monitor', 'disable'].includes(t[2])) return `value parse error before '${t[2]}'`;
+      cur.scan = (cur.scan || []).filter((x) => x !== sub); if (t[2] !== 'disable') cur.scan.push(sub);
+      continue;
+    }
+  }
+  if (Object.keys(all).length) d[key] = all; else delete d[key];
+  return null;
+}

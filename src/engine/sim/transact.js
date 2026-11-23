@@ -97,7 +97,7 @@ import { portalGate } from '../portal.js';
 function transactInner(state, fromId, spec) {
   const ctx = { ct: {}, log: [], hops: [], l3: [], cid: spec.keep || null, vrf: spec.vrf || '', vrfDev: fromId };
   const src = state.devices[fromId];
-  const done = (r) => ({ ...r, log: ctx.log, hops: ctx.hops, l3: ctx.l3, ...(ctx.deep ? { deep: ctx.deep } : {}), ...(ctx.wfBlock ? { wfBlock: ctx.wfBlock } : {}) });
+  const done = (r) => ({ ...r, log: ctx.log, hops: ctx.hops, l3: ctx.l3, ...(ctx.deep ? { deep: ctx.deep } : {}), ...(ctx.wfBlock ? { wfBlock: ctx.wfBlock } : {}), ...(ctx.dnsf ? { dnsf: ctx.dnsf } : {}) });
   let srcIp = spec.srcIp;
   if (srcIp == null) {
     if (isLocal(src, spec.dst, spec.vrf || '')) {

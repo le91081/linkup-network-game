@@ -6,6 +6,7 @@ import { fmtIp6, parseIp6, parseCidr6, net6 } from '../ip6.js';
 import { transact6 } from '../sim6.js';
 import { noRouteReason } from './forward.js';
 import { transact } from './transact.js';
+import { dnsfVerdict, DNS_BLOCK_IP } from '../utm.js';
 
 function devDns(dev) {
   for (const i of dev.ifaces) if (i.rt.dns && i.rt.dns.length && i.rt.link) return i.rt.dns;
@@ -97,6 +98,10 @@ export function resolveName(state, devId, name, depth = 0, opts = {}) {
         log.push({ dev: sd.id, kind: 'dns', text: `DNS64：${name} 沒有 AAAA，用 A 記錄 ${fmtIp(v4)} 合成 ${fmtIp6(ip6)}（前綴 ${sd.dns64}）` });
       }
     }
+  }
+  if (r.dnsf && !six && ip != null) {
+    const fg = state.devices[r.dnsf.dev], v = fg && dnsfVerdict(state, fg, fg.policies[r.dnsf.rule - 1], r.dnsf.rule, name);
+    if (v) { log.push({ dev: fg.id, kind: v.block ? 'drop' : 'dns', text: v.note }); if (v.block) { ip = parseIp(DNS_BLOCK_IP); ttl = 60; } }
   }
   if (six ? ip6 == null : ip == null) {
     if (six) { const r = fail(`DNS 伺服器回覆：${name} 沒有 IPv6 位址（${nodata ? '名稱存在，但沒有 AAAA 記錄' : '找不到這個名稱'}）`, sd.id); r.nodata = nodata; return r; }
