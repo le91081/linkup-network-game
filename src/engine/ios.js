@@ -116,7 +116,7 @@ const PROMPT = {
   exec: '#', config: '(config)#', if: '(config-if)#', vlan: '(config-vlan)#', raguard: '(config-ra-guard)#', router: '(config-router)#', dhcp: '(dhcp-config)#',
   line: '(config-line)#', tacacs: '(config-server-tacacs)#', acl: '(config-ext-nacl)#', stdacl: '(config-std-nacl)#', radius: '(config-radius-server)#',
   isakmp: '(config-isakmp)#', tset: '(cfg-crypto-trans)#', cmap: '(config-crypto-map)#', ipsecprof: '(ipsec-profile)#', flowrec: '(config-flow-record)#', flowexp: '(config-flow-exporter)#', flowmon: '(config-flow-monitor)#', pkitp: '(ca-trustpoint)#', pkichain: '(config-cert-chain)#', pkicert: '(config-pubkey)#',
-  ikev2prop: '(config-ikev2-proposal)#', ikev2pol: '(config-ikev2-policy)#', ikev2kr: '(config-ikev2-keyring)#', ikev2peer: '(config-ikev2-keyring-peer)#', ikev2prof: '(config-ikev2-profile)#', track: '(config-track)#', vrfdef: '(config-vrf)#', vrfaf: '(config-vrf-af)#', ipvrf: '(config-vrf)#', archive: '(config-archive)#', archlog: '(config-archive-log-cfg)#', ipsla: '(config-ip-sla)#', slaecho: '(config-ip-sla-echo)#', bgp: '(config-router)#', rmap: '(config-route-map)#', qcmap: '(config-cmap)#', pmap: '(config-pmap)#', pmapc: '(config-pmap-c)#',
+  ikev2prop: '(config-ikev2-proposal)#', ikev2pol: '(config-ikev2-policy)#', ikev2kr: '(config-ikev2-keyring)#', ikev2peer: '(config-ikev2-keyring-peer)#', ikev2prof: '(config-ikev2-profile)#', track: '(config-track)#', vrfdef: '(config-vrf)#', vpcdom: '(config-vpc-domain)#', vrfaf: '(config-vrf-af)#', ipvrf: '(config-vrf)#', archive: '(config-archive)#', archlog: '(config-archive-log-cfg)#', ipsla: '(config-ip-sla)#', slaecho: '(config-ip-sla-echo)#', bgp: '(config-router)#', rmap: '(config-route-map)#', qcmap: '(config-cmap)#', pmap: '(config-pmap)#', pmapc: '(config-pmap-c)#',
 };
 const SERVICE_PORT = { www: 80, http: 80, https: 443, domain: 53, dns: 53, ssh: 22, telnet: 23, ftp: 21, smtp: 25, ntp: 123, snmp: 161, snmptrap: 162, tftp: 69, bgp: 179, syslog: 514, isakmp: 500, bootps: 67, bootpc: 68, 'non500-isakmp': 4500 };
 
@@ -559,6 +559,8 @@ export function iosSession(getDev, getState, who = null) {
   // 帶外管理埠（Gi0/0）不是交換埠
   const mgmtL2 = (t) => (t.port && isMgmtPort(dev(), t.port.id) ? err(`% ${t.name} 是帶外管理埠（Mgmt-vrf），不能設定成交換埠`) : null);
   const onL2 = (fn) => each((t) => l2(t) || mgmtL2(t) || fn(t.pc, t));
+  // vpc N / vpc peer-link：要在 interface port-channel 底下、feature vpc 啟用之後
+  const vpcIf = (fn) => (!(dev().features || {}).vpc ? err('% Invalid command at \'^\' marker.（先啟用 feature vpc）') : S.cur.some((t) => !t.po) ? err('% vpc 要在 interface port-channel <N> 底下設定') : onL2(fn));
   // 已經加密 / 雜湊過的輸入（type 5、7、9：貼回設定檔時）量不出長度，不檢查
   const minLenErr = (p, t) => { const n = +((dev().mgmt || {}).minLen || 0); if (t && t.length >= 2 && /^[579]$/.test(t[0])) return null; return n && String(p).length < n ? err(`% Password too short - must be at least ${n} characters. Password configuration failed`) : null; };
   /** 第三層介面能設定的最大 ip mtu：路由器看介面的 mtu、Catalyst 9300 看 system mtu */
@@ -1242,6 +1244,9 @@ export function iosSession(getDev, getState, who = null) {
       return onL2((pc) => { pc.lag = String(+n); pc.lagMode = mode; });
     }],
     ['no channel-group [...]', () => onL2((pc) => { pc.lag = ''; })],
+    ['vpc peer-link', () => vpcIf((pc) => { pc.peerLink = true; delete pc.vpc; })],
+    ['vpc <n>', ([n]) => (+n >= 1 && +n <= 4096 ? vpcIf((pc) => { pc.vpc = +n; delete pc.peerLink; }) : err('用法：vpc <1-4096> 或 vpc peer-link'))],
+    ['no vpc [...]', () => vpcIf((pc) => { delete pc.vpc; delete pc.peerLink; })],
     ['authentication port-control <x>', ([x]) => onL2((pc) => { pc.dot1x = 'auto'.startsWith(x.toLowerCase()); })],
     ['no authentication port-control [...]', () => onL2((pc) => { pc.dot1x = false; })],
     ['dot1x port-control <x>', ([x]) => onL2((pc) => { pc.dot1x = 'auto'.startsWith(x.toLowerCase()); })],
@@ -1540,7 +1545,17 @@ export function iosSession(getDev, getState, who = null) {
       return e ? err(e) : undefined;
     }],
     ['interface range <...>', ([text]) => { const r = resolveRange(dev(), text); if (isErr(r)) return r; enter('if', r); return undefined; }],
-    ['interface <...>', ([text]) => { const r = resolveIf(dev(), text); if (isErr(r)) return r; enter('if', [r]); return undefined; }],
+    ['interface <...>', ([text]) => {
+      // interface port-channel N：設定套用到它全部的成員埠（NX-OS 的 vpc N、vpc peer-link 也在這裡下）
+      const po = text.toLowerCase().replace(/\s+/g, '').match(/^po(?:rt-?channel)?(\d+)$/);
+      if (po && isSw(dev())) {
+        const n = +po[1], mem = dev().ports.filter((p) => +((dev().sw.ports[p.id] || {}).lag) === n);
+        if (!mem.length) return err(`% Port-channel${n} 還沒有成員：先在實體介面下 channel-group ${n} mode active`);
+        enter('if', mem.map((p) => ({ name: p.label, port: p, pc: dev().sw.ports[p.id], iface: null, po: n })));
+        return undefined;
+      }
+      const r = resolveIf(dev(), text); if (isErr(r)) return r; enter('if', [r]); return undefined;
+    }],
     ['no interface <...>', ([text]) => {
       const d = dev(), s = text.toLowerCase().replace(/\s+/g, '');
       const before = d.ifaces.length;
@@ -1706,6 +1721,24 @@ export function iosSession(getDev, getState, who = null) {
       putRoute('', net, mask, rc);
       return undefined;
     }],
+    ['feature <...>', ([f]) => {
+      if (!isNexus(dev())) return err('% Invalid input detected：feature 是 NX-OS 的指令（Nexus）');
+      const k = f.trim().toLowerCase();
+      if (!['vpc', 'lacp', 'interface-vlan', 'ospf', 'hsrp', 'lldp'].includes(k)) return err(`% 這個模擬沒有 feature ${k}`);
+      (dev().features ||= {})[k] = true;
+      return undefined;
+    }],
+    ['no feature <...>', ([f]) => { if (dev().features) delete dev().features[f.trim().toLowerCase()]; return undefined; }],
+    ['vpc domain <n>', ([n]) => {
+      if (!isNexus(dev())) return err('% Invalid input detected：vPC 是 Nexus 的功能');
+      if (!(dev().features || {}).vpc) return err('% Invalid command at \'^\' marker.（先啟用 feature vpc）');
+      if (!(+n >= 1 && +n <= 1000)) return err('用法：vpc domain <1-1000>');
+      if (dev().vpc && +dev().vpc.domain !== +n && dev().vpc.domain != null) return err(`% 已經有 vpc domain ${dev().vpc.domain}，一台 Nexus 只能有一個`);
+      dev().vpc = { prio: '', keepalive: {}, ...(dev().vpc || {}), domain: +n };
+      enter('vpcdom', +n);
+      return undefined;
+    }],
+    ['no vpc domain [...]', () => { delete dev().vpc; return undefined; }],
     ['vrf definition <v>', ([v]) => {
       const e = needRouting(); if (e) return e;
       const vs = (dev().vrfs ||= {});
@@ -3420,6 +3453,22 @@ export function iosSession(getDev, getState, who = null) {
       ['hidekeys', () => { dev().archive.log.hide = true; }],
       ['no hidekeys', () => { delete dev().archive.log.hide; }],
     ],
+    vpcdom: [
+      ['peer-keepalive destination <ip> [...]', ([ip, rest]) => {
+        if (parseIp(ip) == null) return err('用法：peer-keepalive destination <IP> source <IP> [vrf <名稱>]');
+        const t = String(rest || '').trim().split(/\s+/), src = t[t.indexOf('source') + 1], vrf = t.includes('vrf') ? t[t.indexOf('vrf') + 1] : 'management';
+        if (t.includes('source') && parseIp(src || '') == null) return err('% source 要是這台 Nexus 自己的 IP');
+        dev().vpc.keepalive = { dst: ip, src: t.includes('source') ? src : '', vrf };
+        return undefined;
+      }],
+      ['no peer-keepalive [...]', () => { dev().vpc.keepalive = {}; }],
+      ['role priority <n>', ([n]) => (+n >= 1 && +n <= 65535 ? void (dev().vpc.prio = +n) : err('用法：role priority <1-65535>（小的當 primary）'))],
+      ['no role priority [...]', () => { dev().vpc.prio = ''; }],
+      ['peer-gateway', () => { dev().vpc.peerGw = true; }],
+      ['no peer-gateway', () => { delete dev().vpc.peerGw; }],
+      ['auto-recovery', () => { dev().vpc.autoRec = true; }],
+      ['no auto-recovery', () => { delete dev().vpc.autoRec; }],
+    ],
     vrfdef: [
       ['rd <rd>', ([rd]) => (/^(\d+|\d+\.\d+\.\d+\.\d+):\d+$/.test(rd) ? void (dev().vrfs[S.cur].rd = rd) : err('用法：rd <ASN:編號> 或 rd <IP:編號>，例如 rd 65000:1'))],
       ['no rd [...]', () => { delete dev().vrfs[S.cur].rd; }],
@@ -4617,6 +4666,15 @@ function aaaTop(dev) {
 export function runningConfig(state, dev) {
   const o = ['Building configuration...', '', '!', `hostname ${hostName(dev)}`, '!'];
   if (isStack(dev)) o.push(...dev.stack.members.map((m) => `switch ${m.num} provision c9300-24t`), '!'); // 堆疊：每台成員的型號
+  // NX-OS：feature 與 vPC domain
+  const feats = Object.keys(dev.features || {}).filter((k) => dev.features[k]).sort();
+  if (feats.length) o.push(...feats.map((f) => `feature ${f}`), '!');
+  if (dev.vpc && dev.vpc.domain != null) {
+    const v = dev.vpc, ka = v.keepalive || {};
+    o.push(`vpc domain ${v.domain}`, ...(+v.prio ? [` role priority ${+v.prio}`] : []),
+      ...(ka.dst ? [` peer-keepalive destination ${ka.dst}${ka.src ? ' source ' + ka.src : ''}${ka.vrf && ka.vrf !== 'management' ? ' vrf ' + ka.vrf : ''}`] : []),
+      ...(v.peerGw ? [' peer-gateway'] : []), ...(v.autoRec ? [' auto-recovery'] : []), '!');
+  }
   if ((dev.bootSys || []).length) o.push(...dev.bootSys.map((b) => `boot system ${b}`), '!');
   if (dev.ftpLogin && (dev.ftpLogin.user || dev.ftpLogin.pass)) o.push(...(dev.ftpLogin.user ? [`ip ftp username ${dev.ftpLogin.user}`] : []), ...(dev.ftpLogin.pass ? [`ip ftp password 7 ${hex(dev.ftpLogin.pass)}`] : []), '!');
   if (+dev.tftpBlk > 512) o.push(`ip tftp blocksize ${+dev.tftpBlk}`, '!');
@@ -5036,6 +5094,12 @@ export function runningConfig(state, dev) {
         o.push(`interface ${longIf(s.label)}`, ...(s.desc ? [` description ${s.desc}`] : []), ` encapsulation dot1Q ${s.bind.vlan}`, ...l3lines(s), '!');
       }
     }
+  }
+  // Port-channel 介面：NX-OS 的 vpc N / vpc peer-link（設定在成員埠上，這裡集中寫在 interface port-channel 底下）
+  if (dev.sw) {
+    const pos = new Map();
+    for (const [pid, pc] of Object.entries(dev.sw.ports)) if (+pc.lag > 0 && (pc.vpc || pc.peerLink)) pos.set(+pc.lag, pc);
+    for (const [n, pc] of [...pos.entries()].sort((a, b) => a[0] - b[0])) o.push(`interface port-channel${n}`, pc.peerLink ? ' vpc peer-link' : ` vpc ${+pc.vpc}`, '!');
   }
   for (const i of dev.ifaces.filter((x) => x.bind.t === 'svi')) {
     if (!i.ip && dev.kind === 'mswitch') continue;

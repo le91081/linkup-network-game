@@ -1,5 +1,6 @@
 // 第二層：VLAN 與 Trunk 的標籤、廣播網域的探索、MAC 位址表、ARP 快取
 // （從 sim.js 拆出來的一部分；其他程式一律從 engine/sim.js 引入，不直接引入這裡）
+import { vpcBlocks } from '../vpc.js';
 import { pinnedUplink } from '../virt.js';
 import { parseIp, parseVlanList } from '../ip.js';
 import { spanDest } from '../wire.js';
@@ -157,6 +158,7 @@ export function l2Explore(state, devId, iface, opts = {}) {
     for (const pid of Object.keys(d.sw.ports)) {
       if (pid === exceptPort || !isBridgePort(d, pid)) continue;
       if (prot && d.sw.ports[pid].protected) continue;
+      if (d.rt.vpc && vpcBlocks(state, d, exceptPort, pid)) continue; // vPC：從 peer-link 收到的不從兩邊都有的 vPC 埠送出去
       if (hv && (d.ports.some((p) => p.id === pid && p.media !== 'virt') ? upIn || pid !== pin : !mine(pid))) continue;
       if (d.rt.wait && d.rt.wait[pid] > 0 && links[d.id + ':' + pid]) { out.stp ||= { dev: d.id, pid, left: d.rt.wait[pid] }; continue; }
       const t = egressTag(d, pid, key);

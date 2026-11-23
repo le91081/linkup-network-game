@@ -40,6 +40,7 @@ import { CATALOG, MEDIA, peerOf, portOf, linkInfo, phyConfig, fiberLink } from '
 import { xcvrAt, xcvrSerial, MEDIA_TYPE } from '../engine/optics.js';
 import { PLATFORM as PID_OF } from '../engine/dnac.js';
 import { showSwitch, showSwitchDetail, showStackPorts, showRedundancy, stackChassis } from './cli-stack.js';
+import { showVpc, showVpcKeepalive } from './cli-vpc.js';
 import { iosSession, runningConfig, startupConfig, hostName as host, aclName, aclLine, aclSeqs } from '../engine/ios.js';
 import { ipMtu, l2Mtu, jumboNow, isCat2960, isCat9300, isNexus } from '../engine/mtu.js';
 import { tunByName, tunnelDetail, dmvpnLines, nhrpLines, nhsLines, ipsecProfileLines, cryptoSessionLines, transformSetLines, bfdLines, pkiCertLines, pkiTrustpointLines } from './cli-tun.js';
@@ -921,6 +922,10 @@ const SHOW = {
     return o;
   },
   'show switch': (st, d) => showSwitch(st, d),
+  'show vpc': (st, d) => showVpc(st, d),
+  'show vpc brief': (st, d) => showVpc(st, d),
+  'show vpc peer-keepalive': (st, d) => showVpcKeepalive(st, d),
+  'show port-channel summary': (st, d) => SHOW['show etherchannel summary'](st, d),
   'show switch detail': (st, d) => showSwitchDetail(st, d),
   'show switch stack-ports': (st, d) => showStackPorts(st, d),
   'show redundancy': (st, d) => showRedundancy(st, d),

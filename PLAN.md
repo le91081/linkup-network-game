@@ -38,7 +38,7 @@ README 說明「現在有什麼、怎麼玩」，這份文件說明「整體應�
 | 6. VPN 與廣域網路 | 11 | 2 | 0 | 0 |
 | 7. 無線網路 | 9 | 1 | 0 | 0 |
 | 8. IPv6 | 8 | 0 | 0 | 0 |
-| 9. 高可用 | 10 | 1 | 0 | 0 |
+| 9. 高可用 | 11 | 0 | 0 | 0 |
 | 10. 時間、效能與流量 | 11 | 0 | 0 | 0 |
 | 11. 設備管理與維運 | 17 | 0 | 1 | 0 |
 | 12. 自動化、雲端與虛擬化 | 5 | 1 | 0 | 0 |
@@ -46,9 +46,9 @@ README 說明「現在有什麼、怎麼玩」，這份文件說明「整體應�
 | 14. 遊戲系統 | 16 | 0 | 0 | 6 |
 | 15. 介面與體驗 | 10 | 0 | 0 | 0 |
 | 16. 工程品質 | 6 | 3 | 1 | 0 |
-| **合計** | **191** | **12** | **3** | **6** |
+| **合計** | **192** | **11** | **3** | **6** |
 
-另外：關卡 154 關（第 17 節）、證照條目涵蓋情形（第 18 節）、建議的實作順序（第 19 節）。
+另外：關卡 155 關（第 17 節）、證照條目涵蓋情形（第 18 節）、建議的實作順序（第 19 節）。
 
 範圍的調整（2026-11-22）：第 14 節遊戲系統還沒做完的項目暫時不做（⏸）；第 15 節的手機與平板、多語系、無障礙、主題從規劃中移除，不做。
 
@@ -216,7 +216,7 @@ README 說明「現在有什麼、怎麼玩」，這份文件說明「整體應�
 | 雙 WAN、Spine-Leaf | ✅ | |
 | 物件追蹤與 IP SLA | ✅ | `track` 物件（介面的線路協定、IP SLA 的可達性）；`standby` / `vrrp … track … decrement`；靜態路由的 `track`；IP SLA icmp-echo（source-interface、frequency，依探測的節拍才發現變化，沒有 `start-time now` 會停在 pending）；`show track`、`show ip sla statistics`；網際網路設備可以模擬「業者骨幹故障」 |
 | BFD | ✅ | `bfd interval … min_rx … multiplier …`、OSPF 的 `bfd all-interfaces` / `ip ospf bfd`、BGP 的 `fall-over bfd`；兩端都要設；中間隔著交換器時一秒內發現鄰居失聯（→ 8-8）；`show bfd neighbors`。另有 OSPF fast hello（`dead-interval minimal hello-multiplier`） |
-| 堆疊、MLAG / vPC | 🟡 | Catalyst 9300 的堆疊（StackWise-480）已完成：兩台成員是一台交換器（埠名稱 Gi2/0/1、一份設定、一個 STP bridge），Active / Standby / Removed 的角色、優先權（`switch N priority`，特權模式、不在 running-config）、選 Active（優先權 → MAC，不搶回，整個堆疊重新開機才重選）、成員故障時它的埠全部斷線、Standby 接手 (SSO)、堆疊線（Full / Half ring）、跨成員的 EtherChannel；`show switch [detail | stack-ports]`、`show redundancy`、`show inventory`、running-config 的 `switch N provision`；「堆疊」分頁、故障演練的 `member` → 8-13。還沒有 Nexus 的 vPC、dual-active 偵測 |
+| 堆疊、MLAG / vPC | ✅ | Catalyst 9300 的堆疊（StackWise-480）已完成：兩台成員是一台交換器（埠名稱 Gi2/0/1、一份設定、一個 STP bridge），Active / Standby / Removed 的角色、優先權（`switch N priority`，特權模式、不在 running-config）、選 Active（優先權 → MAC，不搶回，整個堆疊重新開機才重選）、成員故障時它的埠全部斷線、Standby 接手 (SSO)、堆疊線（Full / Half ring）、跨成員的 EtherChannel；`show switch [detail | stack-ports]`、`show redundancy`、`show inventory`、running-config 的 `switch N provision`；「堆疊」分頁、故障演練的 `member` → 8-13。Nexus 的 vPC：`feature vpc`、`vpc domain`（`peer-keepalive destination … source … vrf …`、`role priority`、`peer-gateway`、`auto-recovery`）、`interface port-channel N` → `vpc N` / `vpc peer-link`；兩台報出同一個 LACP 身分，下面的 Port-channel 跨兩台；vPC 編號與成員埠設定的一致性檢查（secondary 暫停）；peer-link 斷線時 keepalive 通 → secondary 暫停 vPC、不通 → dual-active；從 peer-link 收到的不送往兩邊都在用的 vPC；`show vpc [brief | peer-keepalive]`、`show port-channel summary`、running-config → 4-10 |
 | 防火牆 HA | ✅ | FortiGate 的 FGCP Active-Passive：heartbeat 介面直接對接、群組名稱 / ID / 密碼與型號、版本要一致；選主要機依監控的介面 → HA uptime → priority → 序號（override enable 時 priority 在 uptime 前面）；主要機同步設定（priority、override、名稱除外）、主要機的介面用虛擬 MAC、次要機的資料介面不運作；session-pickup 同步連線表；heartbeat 斷了兩台都當主要機 (split brain)；`config system ha`、`get system ha status`、圖形介面的 HA 分頁 → 8-10。還沒有 Active-Active、heartbeat 經過交換器、管理介面 (ha-mgmt-interface) |
 | GLBP | ✅ | AVG 選舉（同 HSRP，preempt 預設關）、最多四台 AVF 各一個虛擬 MAC（0007.b400.XXYY）、round-robin / host-dependent、AVF 失聯 10 秒後由其他 AVF 接手（→ 8-9）；`show glbp brief`。weighted 還沒有依權重分配 |
 | 電力備援 | ✅ | 兩個電源槽的設備（FG-100F、Catalyst 9300、Nexus、9800、機架伺服器）：每個 PSU 裝了沒、接 A 路或 B 路；全部沒電的設備關機、斷線的原因寫出是哪一路斷電；故障演練可以讓某一路斷電；`show environment power`（Catalyst 與 Nexus 的格式）、「電源」分頁 → 4-6。還沒有 PDU 的插座與電流、UPS 的電池時間 |
@@ -295,7 +295,7 @@ README 說明「現在有什麼、怎麼玩」，這份文件說明「整體應�
 
 | 功能 | 狀態 | 說明 |
 | --- | --- | --- |
-| 關卡 | ✅ | 17 章 154 關（清單見第 17 節） |
+| 關卡 | ✅ | 17 章 155 關（清單見第 17 節） |
 | 任務目標 | ✅ | ping、TCP、UDP、DHCP、設定檢查、故障演練、IPv6 ping、傳輸速率、遠端登入（SSH / Telnet 帳號密碼）、IP 電話註冊、通話品質 (MOS)、HTTPS（連得上之後還要通過憑證驗證）、路徑（一定要經過 / 不能經過某台設備）；TCP 的目標交握完還會送一個裝滿的資料區段（設了 DF），MTU 的問題才看得出來 |
 | 提示與星等 | ✅ | 每關 3 個提示，看一個少一顆星 |
 | 學習卡 | ✅ | 每關 2 到 4 張觀念說明 |
@@ -354,14 +354,14 @@ README 說明「現在有什麼、怎麼玩」，這份文件說明「整體應�
 
 ## 17. 關卡規劃
 
-### 現有的 154 關
+### 現有的 155 關
 
 | 章 | 關卡 |
 | --- | --- |
 | 1 家用網路 | 第一條網路線、換上交換器、自動發 IP、連上網際網路 |
 | 2 小型辦公室 | 辦公室開張、部門隔離、跨樓層、跨 VLAN 路由、換成光世代，路由器要自己撥接（IOS 的 PPPoE 與 Dialer） |
 | 3 企業網路 | 守門員、總公司與分公司、對外伺服器群、十點以後進公司的人都上不了網（NAT 位址池與 overload）、在公司裡打不開自己的網站（NAT hairpin 與 split DNS）、公司自己架了郵件伺服器，信卻寄不出也收不到（SMTP、MX 與 DMZ 的 VIP） |
-| 4 資料中心 | 機櫃上線、Spine-Leaf、跨棟連線、一開 Jumbo Frame，備份就卡住、光纖接好了，燈還是不亮（收發器）、A 路的電一跳，機房就全黑了（雙電源）、新的 GPU 伺服器接不上（breakout）、三台伺服器，有時候會壞掉（負載平衡器） |
+| 4 資料中心 | 機櫃上線、Spine-Leaf、跨棟連線、一開 Jumbo Frame，備份就卡住、光纖接好了，燈還是不亮（收發器）、A 路的電一跳，機房就全黑了（雙電源）、新的 GPU 伺服器接不上（breakout）、三台伺服器，有時候會壞掉（負載平衡器）、兩台 Nexus，一條線在睡覺（vPC） |
 | 5 無線網路 | 家裡的 Wi-Fi、辦公室基地台、訪客 Wi-Fi、下午的視訊會議一直斷（頻道寬度與 DFS）、新筆電明明支援 Wi-Fi 6E（6 GHz 與 WPA3）、訪客連上 Wi-Fi，卻沒有跳出登入頁面（Captive Portal）、倉庫拉不到線（Wi-Fi mesh） |
 | 6 網路安全 | 只開了 TCP、誰在發 IP？、不速之客、存取控制清單、管理介面加固、冒牌閘道、搶走根橋、你是誰？、偽裝成交換器、交換器變成了 Hub（MAC flooding）、跳進伺服器 VLAN 的封包（雙重標籤）、飯店的房間網路（Private VLAN）、星期一早上，有線網路全部登不進去（EAP-TLS）、分公司只有一台路由器，也要當防火牆（ZBF）、上班時間有人在玩線上博弈（網頁過濾與 SSL 檢查）、防火牆擋得住位址，擋不住應用程式（應用程式控管與 IPS）、同事點了釣魚信的連結（DNS 過濾與防毒）、午休才開放的影音網站，晚上八點才打得開（時間型 ACL 與時區）、網頁打得開，名稱卻查不到（established 與 Reflexive ACL）、稽核報告：設定檔裡的密碼看得一清二楚（enable secret 與 service password-encryption） |
 | 7 VPN 與廣域備援 | 站對站 VPN、在家上班、雙線路備援、三個據點，一個中心、線路燈還亮著（IP SLA）、小檔案可以，大檔案卡住（PMTUD 黑洞）、兩個分公司的連線一下通一下斷（GRE 與 recursive routing）、稽核報告（GRE over IPsec）、每加一個網段就要改兩邊的 ACL（VTI）、門市之間的監視器畫面（DMVPN）、新分公司在共享辦公室裡（NAT-T）、換了主機板電池，VPN 就起不來了（IKEv2 的憑證驗證）、下午一塞車電話就斷斷續續（SD-WAN）、換成 MPLS 專線之後互相看不到（MPLS L3VPN 與 allowas-in）、離職的同事還連得上 VPN（SSL-VPN 改用 AD 的帳號） |

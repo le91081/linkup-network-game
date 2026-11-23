@@ -5578,6 +5578,39 @@ console.log('\nWi-Fi mesh：無線回程與無線橋接');
   ok(s2.rt.meshUp.ap3 && s2.rt.meshUp.ap3.parent === 'ap2' && s2.rt.meshUp.ap3.hops === 2, '多跳：更遠的 AP-後院接在 AP-倉庫後面（第 2 跳）');
 }
 
+console.log('\nNexus 的 vPC');
+{
+  const { runObjective } = await import('../src/engine/sim/objectives.js');
+  const { iosSession, runningConfig } = await import('../src/engine/ios.js');
+  const { iosRun } = await import('../src/ui/cli.js');
+  const ok = (cond, title) => (cond ? console.log('  ✔ ' + title) : fail(title));
+  const cli = (s, id) => { const S = iosSession(() => s.devices[id], () => s); return (...lines) => { const out = []; for (const l of lines) { const r = iosRun({ state: s, showTrace() {}, refreshLive() {} }, id, S, l, (x) => out.push(x)); if (r.changed) settle(s); } return out.join('\n'); }; };
+  const lv = LEVELS.find((x) => x.id === 'l155');
+  const s = lv.setup(); settle(s);
+  const n1 = s.devices.n1, n2 = s.devices.n2, acc1 = s.devices.acc1;
+  const N2 = cli(s, 'n2'); N2('enable');
+  ok(n1.rt.vpc.peerLink && n2.rt.vpc.peerLink && [n1.rt.vpc.role, n2.rt.vpc.role].sort().join() === 'primary,secondary', 'peer-link 起來了：一台 primary、一台 secondary');
+  ok(acc1.rt.lag['Gi0/11'].state !== acc1.rt.lag['Gi0/12'].state, 'vPC 編號對不上（20 / 21）：ACC-1 只有一條綁進去，另一條 suspended');
+  const sv = N2('show vpc');
+  ok(/vPC domain id\s+: 10/.test(sv) && /Peer status\s+: peer adjacency formed ok/.test(sv) && /vPC keep-alive status\s+: peer is not reachable/.test(sv) && /\n21\s+Po20\s+down\s+failed/.test(sv), 'show vpc：peer 正常、keepalive 不通、vPC 21 一致性檢查失敗');
+  ok(/Destination\s+: 10\.255\.255\.5/.test(N2('show vpc peer-keepalive')), 'show vpc peer-keepalive：目的位址打錯成 10.255.255.5');
+  N2('configure terminal', 'interface port-channel 20', 'vpc 20', 'end');
+  ok(acc1.rt.lag['Gi0/11'].state === 'bundled' && acc1.rt.lag['Gi0/12'].state === 'bundled', 'vpc 20 對上了：ACC-1 兩條都綁進 Port-channel');
+  ok(!runObjective(s, lv.objectives[3]).pass, 'keepalive 還不通：peer-link 斷了就兩邊各做各的 (dual-active)，使用者斷線');
+  N2('configure terminal', 'vpc domain 10', 'peer-keepalive destination 10.255.255.1 source 10.255.255.2 vrf default', 'end');
+  ok(n1.rt.vpc.keepalive && n2.rt.vpc.keepalive && /peer is alive/.test(N2('show vpc')), 'keepalive 修好：peer is alive');
+  // peer-link 斷線：secondary 暫停 vPC
+  const s2 = cloneState(s);
+  s2.cut = Object.fromEntries(s2.cables.filter((c) => [c.a, c.b].some((e) => e.dev === 'n1' && /^Eth1\/(49|50)$/.test(e.port))).map((c) => [c.id, true])); settle(s2);
+  const sec = ['n1', 'n2'].map((id) => s2.devices[id]).find((d) => d.rt.vpc.role === 'secondary');
+  ok(sec.rt.vpc.susp && runObjective(s2, { type: 'tcp', from: 'pc', to: 'srv', port: 443 }).pass, `peer-link 斷了、keepalive 通：secondary（${sec.name}）暫停 vPC，流量走 primary`);
+  ok(lv.objectives.every((o) => (o.type === 'check' ? o.test(s) : runObjective(s, o).pass) === true), '五個目標都通過');
+  const rc = runningConfig(s, n2).join('\n');
+  ok(/^feature lacp\nfeature vpc$/m.test(rc) && /vpc domain 10\n peer-keepalive destination 10\.255\.255\.1 source 10\.255\.255\.2 vrf default/.test(rc) && /interface port-channel1\n vpc peer-link/.test(rc) && /interface port-channel20\n vpc 20/.test(rc), 'running-config：feature、vpc domain、interface port-channel 的 vpc');
+  ok(/vpc 要在 interface port-channel/.test(N2('configure terminal', 'interface Eth1/3', 'vpc 5', 'end')), 'vpc N 只能在 interface port-channel 底下');
+  ok(/feature 是 NX-OS 的指令/.test(cli(s, 'acc1')('enable', 'configure terminal', 'feature vpc', 'end')), 'Catalyst 沒有 feature vpc');
+}
+
 console.log('\nNetFlow 與 QoS 的 police');
 {
   const sim = await import('../src/engine/sim.js');

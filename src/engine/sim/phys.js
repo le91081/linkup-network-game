@@ -1,5 +1,6 @@
 // 供電與連線、err-disabled、DTP、語音 VLAN、LACP、STP 與連接埠的 STP 計時
 // （從 sim.js 拆出來的一部分；其他程式一律從 engine/sim.js 引入，不直接引入這裡）
+import { prepVpc, lagIdentity } from '../vpc.js';
 import { stackPortDown } from '../stack.js';
 import { stpPrio, isMst, mstKey, bpduFilterIf, bpduGuardOn, loopGuardOn } from '../stpcfg.js';
 import { CABLES, CATALOG, DTP_MODELS, POE_CLASS_W, cableDist, cableKind, linkInfo, fiberLink, looseNext } from '../model.js';
@@ -354,6 +355,7 @@ export function prepVoice(state) {
 }
 
 export function prepLag(state) {
+  prepVpc(state); // Nexus 的 vPC：先決定對端、peer-link、keepalive 與角色
   const rt = state.rt, groups = new Map();
   const lagOf = (D, pid) => (isVlanSw(D) && isBridgePort(D, pid) && +D.sw.ports[pid].lag > 0 ? D.sw.ports[pid] : null);
   for (const d of Object.values(state.devices)) {
@@ -375,8 +377,11 @@ export function prepLag(state) {
     if (!la || !lb) { suspend(c, `對端 ${(la ? B : A).name} 的連接埠沒有加入 Port-channel`); continue; }
     const ma = la.lagMode || 'active', mb = lb.lagMode || 'active';
     if ((ma === 'on') !== (mb === 'on')) { suspend(c, '一端是靜態 (on)、另一端是 LACP，模式不相容'); continue; }
+    // vPC 被暫停（secondary 在 peer-link 斷線時、或設定不一致）：這一端的成員埠不參與協商
+    const vs = [[A, c.a.port, la], [B, c.b.port, lb]].map(([D, pid, l]) => (+l.vpc > 0 && D.rt.vpc && (D.rt.vpc.susp || (D.rt.vpc.role === 'secondary' && D.rt.vpc.bad[+l.vpc])) ? `${D.name} 的 vPC ${+l.vpc} 被暫停：${D.rt.vpc.susp ? D.rt.vpc.why : D.rt.vpc.bad[+l.vpc]}` : null)).find(Boolean);
+    if (vs) { suspend(c, vs); continue; }
     if (ma === 'passive' && mb === 'passive') { suspend(c, '兩端都是 LACP passive，沒有任何一端主動發起協商'); continue; }
-    const sa = `${A.id}#${la.lag}`, sb = `${B.id}#${lb.lag}`;
+    const sa = lagIdentity(state, A, c.a.port), sb = lagIdentity(state, B, c.b.port); // vPC：兩台 Nexus 報出同一個身分
     const key = sa < sb ? sa + '|' + sb : sb + '|' + sa;
     if (!groups.has(key)) groups.set(key, []);
     groups.get(key).push(c);
