@@ -5025,6 +5025,50 @@ console.log('\nSTP：拓撲變更 (TC) 與 show spanning-tree detail');
   ok(/from GigabitEthernet1\/0\/2/.test(cli(s, 'core')('enable', 'show spanning-tree detail')) && /We are the root of the spanning tree/.test(cli(s, 'core')('show spanning-tree vlan 10 detail')), 'Core 記下 TC 是從接 SW-3F 的 Gi1/0/2 收到的；它自己是根橋');
   ok(/^VLAN0010$/m.test(B3('show spanning-tree vlan 10')) && !/^VLAN0001$/m.test(B3('show spanning-tree vlan 10')) && /does not exist/.test(B3('show spanning-tree vlan 99')), 'show spanning-tree vlan <n> 只列那個 VLAN；不存在的 VLAN');
 }
+console.log('\nICMP Redirect：同一個介面進出的路由器告訴主機直接送給另一台');
+{
+  const { makeDevice: MD, makeState: MS } = await import('../src/engine/model.js');
+  const { iosSession, runningConfig } = await import('../src/engine/ios.js');
+  const { redirectRows, REDIRECT_TTL } = await import('../src/engine/redirect.js');
+  const { setDebug, debugOf } = await import('../src/engine/wire.js');
+  const { logRows } = await import('../src/engine/ops.js');
+  const ok = (cond, title) => (cond ? console.log('  ✔ ' + title) : fail(title));
+  const typeIn = (s, id, lines) => { const S = iosSession(() => s.devices[id], () => s); for (const l of lines) S.exec(l); };
+  const mk = () => {
+    const s = MS([
+      MD('isr4321', 'r1', { name: 'R1', pos: [-3, -4] }), MD('isr4321', 'r2', { name: 'R2', pos: [3, -4] }), MD('sw8', 'sw', { name: 'SW', pos: [0, 0] }),
+      MD('pc', 'pc', { name: 'PC', pos: [-3, 4], ip: '10.1.1.10', mask: '255.255.255.0', gw: '10.1.1.1' }),
+      MD('tower', 'srv', { name: '研發伺服器', pos: [6, -7], ip: '10.2.0.5', mask: '255.255.255.0', gw: '10.2.0.1' }),
+    ], [['r1:Gi0/0/0', 'sw:1'], ['r2:Gi0/0/0', 'sw:2'], ['pc:eth0', 'sw:3'], ['r2:Gi0/0/1', 'srv:eth0']]);
+    settle(s);
+    typeIn(s, 'r1', ['enable', 'configure terminal', 'interface Gi0/0/0', 'ip address 10.1.1.1 255.255.255.0', 'no shutdown', 'exit', 'ip route 10.2.0.0 255.255.255.0 10.1.1.2', 'end']);
+    typeIn(s, 'r2', ['enable', 'configure terminal', 'interface Gi0/0/0', 'ip address 10.1.1.2 255.255.255.0', 'no shutdown', 'exit', 'interface Gi0/0/1', 'ip address 10.2.0.1 255.255.255.0', 'no shutdown', 'end']);
+    settle(s);
+    return s;
+  };
+  const s = mk();
+  const via = (r) => r.hops.filter((h) => !h.reply && !h.wave && h.proto !== 'arp').map((h) => h.to);
+  const a = transact(s, 'pc', { proto: 'icmp', dst: parseIp('10.2.0.5') });
+  ok(a.ok && via(a).includes('r1') && a.log.some((l) => /ICMP Redirect/.test(l.text)), '第一個封包：PC → R1 → R2，R1 從同一個介面送回去，同時送 ICMP Redirect');
+  const rows = redirectRows(s, s.devices.pc);
+  ok(rows.length === 1 && rows[0].gw === parseIp('10.1.1.2') && rows[0].by === 'r1', 'PC 的目的地快取：往 10.2.0.5 改送 10.1.1.2（R2）');
+  const b = transact(s, 'pc', { proto: 'icmp', dst: parseIp('10.2.0.5') });
+  ok(b.ok && !via(b).includes('r1') && b.log.some((l) => /目的地快取/.test(l.text)), '之後的封包直接送給 R2，不再經過 R1');
+  const c = transact(s, 'pc', { proto: 'icmp', dst: parseIp('10.1.1.2') });
+  ok(c.ok && redirectRows(s, s.devices.pc).length === 1, '同一個網段的目的地不會產生 Redirect');
+  advance(s, REDIRECT_TTL + 1);
+  ok(!redirectRows(s, s.devices.pc).length && via(transact(s, 'pc', { proto: 'icmp', dst: parseIp('10.2.0.5') })).includes('r1'), `${REDIRECT_TTL / 60} 分鐘後過期：又先送給預設閘道（然後再收到一次 Redirect）`);
+  // no ip redirects：R1 照樣轉送，但不送 Redirect
+  const t = mk();
+  typeIn(t, 'r1', ['enable', 'configure terminal', 'interface Gi0/0/0', 'no ip redirects', 'end']);
+  setDebug(t, 'r1', 'icmp', true);
+  for (let k = 0; k < 2; k++) transact(t, 'pc', { proto: 'icmp', dst: parseIp('10.2.0.5') });
+  ok(!redirectRows(t, t.devices.pc).length && via(transact(t, 'pc', { proto: 'icmp', dst: parseIp('10.2.0.5') })).includes('r1') && /^ no ip redirects$/m.test(runningConfig(t, t.devices.r1).join('\n').split('interface GigabitEthernet0/0/0\n')[1].split('!')[0]), 'no ip redirects：每個封包都繞經 R1；running-config 有 no ip redirects');
+  const u = mk();
+  setDebug(u, 'r1', 'icmp', true);
+  transact(u, 'pc', { proto: 'icmp', dst: parseIp('10.2.0.5') });
+  ok(logRows(u, u.devices.r1).some((r) => /ICMP: redirect sent to 10\.1\.1\.10 for dest 10\.2\.0\.5, use gw 10\.1\.1\.2/.test(r.line)), 'debug ip icmp：ICMP: redirect sent to 10.1.1.10 for dest 10.2.0.5, use gw 10.1.1.2');
+}
 console.log('\nNetFlow 與 QoS 的 police');
 {
   const sim = await import('../src/engine/sim.js');

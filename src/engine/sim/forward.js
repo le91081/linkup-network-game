@@ -21,6 +21,7 @@ import { GRE_OVERHEAD, greRx, greTarget, isTun, nhrpRedirect, tunMode } from './
 import { haLostNote } from '../ha.js';
 import { zbfActive, zbfCheck, zbfNeeds } from '../zbf.js';
 import { utmCheck, appIpsCheck, avCheck } from '../utm.js';
+import { redirectFor, learnRedirect, redirectRoute } from '../redirect.js';
 
 // ───────────────────────────── 封包轉送 ─────────────────────────────
 
@@ -585,7 +586,10 @@ export function forward(state, ctx, startId, pkt) {
     const vrfNow = inIf ? vrfOf(inIf) : dev.id === ctx.vrfDev ? ctx.vrf : '';
     // 政策路由：介面上的 ip policy route-map（路由器自己送出的封包看 ip local policy route-map）先決定下一站，沒有符合才查路由表
     const pbrName = cloud ? null : inIf ? inIf.policyRm : dev.localPolicy;
-    let route = (pbrName && pbrRoute(dev, pbrName, pkt, vrfNow, log)) || (cloud ? cloud.out : lookupRoute(dev, pkt.dst, pkt.src, vrfNow));
+    // 主機的目的地快取：之前收到 ICMP Redirect 的目的地，直接送給 Redirect 指定的下一站
+    const rdRoute = !inIf && !cloud && dev.kind === 'host' && !vrfNow ? redirectRoute(state, dev, pkt.dst) : null;
+    if (rdRoute) log.push({ dev: dev.id, kind: 'info', text: `${dev.name} 的目的地快取：之前收到 ${state.devices[rdRoute.redirect.by] ? state.devices[rdRoute.redirect.by].name : '路由器'} 的 ICMP Redirect，往 ${fmtIp(pkt.dst)} 直接送給 ${fmtIp(rdRoute.via)}（不經過預設閘道）` });
+    let route = (pbrName && pbrRoute(dev, pbrName, pkt, vrfNow, log)) || (cloud ? cloud.out : rdRoute || lookupRoute(dev, pkt.dst, pkt.src, vrfNow));
     // SD-WAN：查到的是 SD-WAN 的預設路由，就由 SD-WAN 規則挑成員（沒有符合的規則：照來源位址分散）
     if (route && route.sdwan != null) {
       const pk = sdwanPick(state, dev, pkt);
@@ -598,6 +602,13 @@ export function forward(state, ctx, startId, pkt) {
     }
     const outIf = route.iface;
     const nh = route.via ?? pkt.dst;
+    // ICMP Redirect：從同一個介面進出、下一站和來源在同一個網段 → 照樣轉送，同時告訴來源以後直接送給下一站
+    const rdr = redirectFor(state, dev, inIf, outIf, nh, pkt, startId);
+    if (rdr) {
+      learnRedirect(state, rdr.host, pkt.dst, rdr.gw, dev.id);
+      D('icmp', `ICMP: redirect sent to ${fmtIp(pkt.src)} for dest ${fmtIp(pkt.dst)}, use gw ${fmtIp(rdr.gw)}`);
+      log.push({ dev: dev.id, kind: 'info', text: `${dev.name} 從 ${inIf.label} 收到，又要從同一個介面送出去（下一站 ${fmtIp(nh)} 和 ${state.devices[rdr.host].name} 在同一個網段）：照樣轉送，同時送一個 ICMP Redirect 告訴 ${state.devices[rdr.host].name}「往 ${fmtIp(pkt.dst)} 直接送給 ${fmtIp(rdr.gw)}」，之後的封包就不再經過 ${dev.name}（介面上 no ip redirects 就不送）` });
+    }
     // 路由器自己送出的封包才會出現在 debug ip packet；經過它轉送的封包由 CEF 處理，不會出現
     if (!inIf) D('packet', `IP: s=${fmtIp(pkt.src)} (local), d=${fmtIp(pkt.dst)} (${longIf(outIf.label)}), len ${ipLen(pkt)}, sending`);
 

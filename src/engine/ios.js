@@ -752,6 +752,9 @@ export function iosSession(getDev, getState, who = null) {
     ['no ip policy route-map [...]', () => onL3((i) => { delete i.policyRm; })],
     ['ip tcp adjust-mss <n>', ([n]) => (/^\d+$/.test(n) && +n >= 500 && +n <= 1460 ? onL3((i) => { i.adjMss = +n; }) : err('% ip tcp adjust-mss 的範圍是 500 – 1460（IPsec 常用 1360、PPPoE 用 1452）'))],
     ['no ip tcp adjust-mss [...]', () => onL3((i) => { delete i.adjMss; })],
+    // ICMP Redirect：預設開著
+    ['ip redirects', () => onL3((i) => { delete i.redirects; })],
+    ['no ip redirects', () => onL3((i) => { i.redirects = false; })],
     ['mtu <n>', ([n]) => {
       const d = dev(), v = +n;
       if (!/^\d+$/.test(n)) return err('用法：mtu <位元組>');
@@ -4614,6 +4617,7 @@ export function runningConfig(state, dev) {
     if (+i.bandwidth > 0) l.push(` bandwidth ${i.bandwidth}`);
     if (i.mtu) l.push(isNexus(dev) ? ` mtu ${i.mtu}` : ` ip mtu ${i.mtu}`);
     if (+i.adjMss) l.push(` ip tcp adjust-mss ${+i.adjMss}`);
+    if (i.redirects === false) l.push(' no ip redirects');
     if (i.ospfAuth) l.push(i.ospfAuth === 'md5' ? ' ip ospf authentication message-digest' : i.ospfAuth === 'null' ? ' ip ospf authentication null' : ' ip ospf authentication');
     if (i.ospfKey && i.ospfKey.id !== '' && i.ospfKey.id != null) l.push(` ip ospf message-digest-key ${i.ospfKey.id} md5 7 ${hex(i.ospfKey.key || '')}`);
     else if (i.ospfKey) l.push(` ip ospf authentication-key 7 ${hex(i.ospfKey.key || '')}`);

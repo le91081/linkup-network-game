@@ -3,6 +3,8 @@ import { h, ownKeys, escLine } from './dom.js';
 import { fmtIp, fmtMask, parseIp } from '../engine/ip.js';
 import { transact, resolveName, dualStack, dnsQuery, dhcpTrace, arpRows, clearArp, dhcpRelease, dhcpRenew, fmtDur, throughput, unreachOf } from '../engine/sim.js';
 import { rttSamples, pingStats, winMs, winCol, linuxMs } from '../engine/latency.js';
+import { lookupRoute } from '../engine/sim.js';
+import { redirectRows, redirectRoute, clearRedirects } from '../engine/redirect.js';
 import { cacheRows, cacheFlush, ptrName } from '../engine/dns.js';
 import { plainStamp } from '../engine/ops.js';
 import { remoteOpen, remoteLogin, remoteSend, remoteAlive, remoteClose, remoteBusy } from '../engine/remote.js';
@@ -34,6 +36,7 @@ const HELP = [
   '  ping <IP 或網域>        測試連線（會在場景中播放封包動畫）',
   '  ping -f -l 1472 <IP>    送 1472 位元組的資料、設 DF 不可分段：找出路徑上的 MTU（1472 + 28 = 1500）',
   '  netsh interface ipv4 show subinterfaces   看每張網卡的 MTU（set subinterface "乙太網路" mtu=9000 修改）',
+  '  netsh interface ip show destinationcache   目的地快取：被 ICMP Redirect 改過下一站的目的地（delete destinationcache 清掉）',
   '  ipconfig                顯示本機的網路設定',
   '  ipconfig /renew         重新向 DHCP 伺服器要一次 IP（播放 DORA 四個步驟）',
   '  ipconfig /release       歸還 DHCP 位址',
@@ -62,6 +65,7 @@ const HELP_LINUX = [
   '可用指令：',
   '  ping <IP 或網域>        測試連線（會在場景中播放封包動畫）',
   '  ip addr / ip route      網路介面的位址 / 路由表（sudo ip link set eth0 mtu 9000 改 MTU）',
+  '  ip route get <位址>     往這個位址實際走哪一條（收到 ICMP Redirect 的標 <redirected>；sudo ip route flush cache 清掉）',
   '  ping -M do -s 8972 <IP> 送 8972 位元組的資料、設 DF 不可分段：測 Jumbo Frame（8972 + 28 = 9000）',
   '  traceroute <IP 或網域>  顯示封包經過的每一台路由器',
   '  nslookup <網域>         直接向 DNS 伺服器查詢',
@@ -336,7 +340,21 @@ export function buildTerminal(ctx, body) {
         else if (!mt) print('用法：netsh interface ipv4 set subinterface "乙太網路" mtu=9000 store=persistent', 'warn');
         else if (!(+mt[1] >= 576 && +mt[1] <= (jumboCapable(dev) && i.bind.t !== 'wlan' ? 9000 : 1500))) print(`設定 MTU 失敗：${i.bind.t === 'wlan' ? 'Wi-Fi 介面卡最大只有 1500' : '超過網路卡支援的最大值（Jumbo Packet 9014 Bytes = MTU 9000）'}`, 'bad');
         else { if (+mt[1] === 1500) delete i.mtu; else i.mtu = +mt[1]; print('確定。', 'ok'); ctx.commit(true); }
-      } else print('用法：netsh interface ipv4 show subinterfaces、netsh interface ipv4 set subinterface "乙太網路" mtu=<576-9000> store=persistent', 'warn');
+      } else if (a[0] === 'interface' && /^ip(v4)?$/.test(a[1] || '') && a[2] === 'show' && a[3] === 'destinationcache') {
+        // 目的地快取：收到 ICMP Redirect 的目的地，下一個躍點不是預設閘道
+        const rows = redirectRows(st(), dev);
+        print('');
+        print(`介面 ${dev.ifaces.findIndex((i) => i.rt && i.rt.ip != null) + 12} 的目的地快取`, 'pre');
+        print('', 'pre');
+        print('PMTU 目的地位址                                      下一個躍點位址', 'pre');
+        print('---- --------------------------------------------- -------------------------', 'pre');
+        for (const r of rows) print(`1500 ${fmtIp(r.dst).padEnd(45)} ${fmtIp(r.gw)}`, 'pre');
+        if (!rows.length) print('（沒有被 ICMP Redirect 改過下一站的目的地）', 'hint');
+        else print(`（${rows.map((r) => `${fmtIp(r.dst)} 是 ${st().devices[r.by] ? st().devices[r.by].name : '路由器'} 用 ICMP Redirect 告訴這台的，大約 ${Math.ceil(r.left / 60)} 分鐘後過期`).join('；')}）`, 'hint');
+      } else if (a[0] === 'interface' && /^ip(v4)?$/.test(a[1] || '') && a[2] === 'delete' && a[3] === 'destinationcache') {
+        clearRedirects(st(), dev);
+        print('確定。', 'ok');
+      } else print('用法：netsh interface ipv4 show subinterfaces、netsh interface ipv4 set subinterface "乙太網路" mtu=<576-9000> store=persistent、netsh interface ip show | delete destinationcache', 'warn');
     } else if (!linux && c === 'w32tm') {
       const a = args.join(' ').toLowerCase(), off = !!(dev.clock && dev.clock.sync === false);
       if (/\/resync/.test(a)) {
@@ -689,6 +707,22 @@ export function buildTerminal(ctx, body) {
     }
     const ctrs = dev.docker ? dev.docker.containers.filter((x) => x.state === 'running') : [];
     const bc = (ip, bits) => fmtIp((ip | (bits >= 32 ? 0 : 0xffffffff >>> bits)) >>> 0);
+    if (/^r/.test(sub) && argv[1] === 'get' && argv[2]) {
+      // ip route get <位址>：實際會走哪一條（收到 ICMP Redirect 的目的地標 <redirected>）
+      const ip = parseIp(argv[2]);
+      if (ip == null) { print(`Error: any valid prefix is expected rather than "${argv[2]}".`, 'bad'); return; }
+      const rd = redirectRoute(st(), dev, ip), r = rd || lookupRoute(dev, ip);
+      if (!r) { print('RTNETLINK answers: Network is unreachable', 'bad'); return; }
+      const e = rd && redirectRows(st(), dev).find((x) => x.dst === ip);
+      print(`${fmtIp(ip)} ${r.via != null ? `via ${fmtIp(r.via)} ` : ''}dev ${r.iface.label} src ${fmtIp(r.iface.rt.ip)} uid 1000`, 'pre');
+      print(`    cache${e ? ` <redirected> expires ${e.left}sec` : ''}`, 'pre');
+      return;
+    }
+    if (/^r/.test(sub) && argv[1] === 'flush' && argv[2] === 'cache') {
+      if (!sudo) { print('Failed to send flush request: Operation not permitted', 'bad'); return; }
+      clearRedirects(st(), dev);
+      return;
+    }
     if (/^r/.test(sub)) {
       for (const i of dev.ifaces) if (i.rt && i.rt.ip != null && i.rt.gw != null) print(`default via ${fmtIp(i.rt.gw)} dev ${i.label} proto ${i.mode === 'dhcp' ? 'dhcp' : 'static'}`, 'pre');
       for (const i of dev.ifaces) if (i.rt && i.rt.ip != null) print(`${fmtIp((i.rt.ip & (i.rt.bits ? 0xffffffff << (32 - i.rt.bits) : 0)) >>> 0)}/${i.rt.bits} dev ${i.label} proto kernel scope link src ${fmtIp(i.rt.ip)}`, 'pre');

@@ -32,7 +32,7 @@ README 說明「現在有什麼、怎麼玩」，這份文件說明「整體應�
 | --- | --- | --- | --- | --- |
 | 1. 實體層與接線 | 12 | 1 | 1 | 0 |
 | 2. 第二層：交換 | 16 | 1 | 0 | 0 |
-| 3. 第三層：路由 | 15 | 1 | 1 | 0 |
+| 3. 第三層：路由 | 16 | 0 | 1 | 0 |
 | 4. IP 服務 | 12 | 2 | 0 | 0 |
 | 5. 網路安全 | 14 | 3 | 0 | 0 |
 | 6. VPN 與廣域網路 | 11 | 2 | 0 | 0 |
@@ -46,7 +46,7 @@ README 說明「現在有什麼、怎麼玩」，這份文件說明「整體應�
 | 14. 遊戲系統 | 16 | 0 | 0 | 6 |
 | 15. 介面與體驗 | 10 | 0 | 0 | 0 |
 | 16. 工程品質 | 6 | 3 | 1 | 0 |
-| **合計** | **180** | **18** | **7** | **6** |
+| **合計** | **181** | **17** | **7** | **6** |
 
 另外：關卡 139 關（第 17 節）、證照條目涵蓋情形（第 18 節）、建議的實作順序（第 19 節）。
 
@@ -107,7 +107,7 @@ README 說明「現在有什麼、怎麼玩」，這份文件說明「整體應�
 | TTL 與路徑追蹤 | ✅ | TTL 逐站遞減；主機有 `tracert` |
 | OSPF 進階 | ✅ | DR / BDR 選舉（priority、Router ID、不搶位、BDR 升上來、`clear ip ospf process`）、Router ID 在程序啟動時決定（Loopback）、Router ID 重複、`passive-interface [default]`、Hello / Dead 可調、network type、明文與 MD5 驗證、MTU 不一致卡在 EXSTART、參考頻寬、多區域與 ABR、`area range` 彙總、O IA 與 O*E2；stub / totally stubby / NSSA / totally NSSA（Hello 的選項位元要一致、ABR 送預設的 Summary LSA、`default-cost`、Type-7 的 O N1 / N2、Router ID 最大的 NSSA ABR 轉成 Type-5 並帶 forwarding address、`default-information-originate`、`no-redistribution`）；`show ip ospf` / `neighbor` / `interface` / `database` |
 | ECMP（等價多路徑） | ✅ | cost 一樣的路最多 `maximum-paths` 條（預設 4）一起放進路由表；依來源與目的位址雜湊（CEF 的 per-destination），同一對位址永遠走同一條 |
-| ICMP 細節 | 🟡 | 分段與 DF、ICMP「需要分段」與 PMTUD（被 ACL 擋掉就是黑洞）、IPsec 的額外負擔（通道裡 1427）、PPPoE 1492、TCP 的 MSS 與 `ip tcp adjust-mss`、家用路由器自動調整 MSS、ACL 的 ICMP 類型（`packet-too-big`、`unreachable`、`echo`…）、`ping … size … df-bit source …`、`ping -f -l`、`ping -M do -s` 已完成；Destination Unreachable 的類型：路由器的 ACL 擋掉回 administratively prohibited、沒有路由回 network unreachable、找不到主機回 host unreachable（IOS ping 的 U.U.U、traceroute 的 !A / !N / !H、Windows 的「回覆自 <路由器>: 目的地網路無法連線。」），交換器默默丟掉、FortiGate 擋掉、回程斷掉只會逾時；還沒有 Redirect |
+| ICMP 細節 | ✅ | 分段與 DF、ICMP「需要分段」與 PMTUD（被 ACL 擋掉就是黑洞）、IPsec 的額外負擔（通道裡 1427）、PPPoE 1492、TCP 的 MSS 與 `ip tcp adjust-mss`、家用路由器自動調整 MSS、ACL 的 ICMP 類型（`packet-too-big`、`unreachable`、`echo`…）、`ping … size … df-bit source …`、`ping -f -l`、`ping -M do -s` 已完成；Destination Unreachable 的類型：路由器的 ACL 擋掉回 administratively prohibited、沒有路由回 network unreachable、找不到主機回 host unreachable（IOS ping 的 U.U.U、traceroute 的 !A / !N / !H、Windows 的「回覆自 <路由器>: 目的地網路無法連線。」），交換器默默丟掉、FortiGate 擋掉、回程斷掉只會逾時；ICMP Redirect：路由器從同一個介面進出、下一站和來源在同一個網段時照樣轉送，同時告訴主機直接送給下一站（主機的目的地快取記 10 分鐘，`netsh interface ip show destinationcache`、Linux 的 `ip route get` 標 `<redirected>`），`no ip redirects` 就不送，`debug ip icmp` 印出 redirect sent |
 | IOS 的 `traceroute` | ✅ | 逐站顯示，每一站三個探測封包；ECMP 時跟著雜湊走 |
 | BGP（eBGP） | ✅ | TCP 179 的鄰居狀態（Idle / Active / OpenSent / Established）、remote-as 寫錯 (Bad Peer AS)、hold time 180 秒、路徑向量與迴圈偵測、最佳路徑（weight、local-preference、AS path、origin、MED）、route-map / prefix-list / as-path ACL、`default-originate`；雙 ISP 的轉運站問題 |
 | iBGP 與 BGP 進階 | ✅ | iBGP（AD 200、可以隔多台路由器、Loopback 與 `update-source`，一個方向對得上就能建立）、下一站不變與 `next-hop-self`、inaccessible 的路不能當最佳路徑、遞迴查下一站、iBGP split horizon 與 BGP 黑洞、route reflector（Originator、Cluster list）、最佳路徑補上 eBGP 優先與 IGP metric、MED 只比同一個鄰居 AS、`network` 的 MED 是 IGP metric、RIB-failure、`ebgp-multihop`（真的看 TTL）與 `disable-connected-check`、community（`set community … additive`、`ip community-list standard`、`match community`、`send-community`、no-export / no-advertise、`ip bgp-community new-format`）、`redistribute bgp` 不含 iBGP 的路（`bgp redistribute-internal`）、`show ip bgp <網段>`；BGP 還不分 VRF；`allowas-in`（AS_PATH 裡可以有自己的 AS）、`as-override`（PE 把客戶的 AS 換掉）→ 7-14 |
