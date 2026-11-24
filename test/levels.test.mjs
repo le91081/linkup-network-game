@@ -5844,6 +5844,30 @@ console.log('\nACME（Let\'s Encrypt）與憑證撤銷');
   ok(!tlsCheck(s, win, web, 'shop.example.com').ok && /撤銷/.test(tlsCheck(s, win, web, 'shop.example.com').why) && tlsCheck(s, lin, web, 'shop.example.com').ok, '憑證被撤銷：Windows 查 CRL / OCSP 擋下，Linux 的 curl 預設不查');
 }
 
+console.log('\nUDLD：單向的光纖');
+{
+  const { runObjective } = await import('../src/engine/sim/objectives.js');
+  const { iosSession, runningConfig } = await import('../src/engine/ios.js');
+  const { iosRun } = await import('../src/ui/cli.js');
+  const ok = (cond, title) => (cond ? console.log('  ✔ ' + title) : fail(title));
+  const cli = (s, id) => { const S = iosSession(() => s.devices[id], () => s); return (...lines) => { const out = []; for (const l of lines) { const r = iosRun({ state: s, showTrace() {}, refreshLive() {} }, id, S, l, (x) => out.push(x)); if (r.changed) settle(s); } return out.join('\n'); }; };
+  const lv = LEVELS.find((x) => x.id === 'l166');
+  const s = lv.setup(); settle(s);
+  ok(/廣播風暴/.test(runObjective(s, lv.objectives[0]).reason), '單向的光纖：Dist-B 收不到 BPDU，打開轉送，形成迴圈');
+  const A = cli(s, 'dsa'), B = cli(s, 'dsb');
+  A('enable', 'configure terminal', 'udld aggressive', 'end');
+  ok(/廣播風暴/.test(runObjective(s, lv.objectives[0]).reason), '只有 Dist-A 開 UDLD：偵測不到');
+  const s2 = cloneState(s); settle(s2);
+  cli(s2, 'dsb')('enable', 'configure terminal', 'interface Gi0/11', 'spanning-tree guard loop', 'end');
+  ok(runObjective(s2, lv.objectives[0]).pass && s2.devices.dsb.rt.stp.loopinc, '只在 Dist-B（收不到的那一端）開 Loop Guard：擋下來 (loop-inconsistent)，沒有迴圈');
+  B('enable', 'configure terminal', 'interface Gi0/11', 'udld port aggressive', 'end');
+  ok(s.dyn.errdis['dsa:Gi0/11'].cause === 'udld' && s.dyn.errdis['dsb:Gi0/11'].cause === 'udld' && runObjective(s, lv.objectives[0]).pass, '兩端都開 UDLD：兩個 Gi0/11 都 err-disabled（原因 udld），流量改走 Access');
+  ok(lv.objectives.every((o) => (o.type === 'check' ? o.test(s) : runObjective(s, o).pass) === true), '兩個目標都通過');
+  ok(/Gi0\/11\s+Dist-A\s+1\s+-\s+Unidirectional \(err-disabled\)/.test(B('show udld neighbors')) && /in aggressive mode/.test(B('show udld')), 'show udld neighbors / show udld');
+  ok(/1 ports shutdown by UDLD were reset/.test(B('udld reset')) && !s.dyn.errdis['dsb:Gi0/11'] && /1 ports/.test(A('udld reset')) && s.dyn.errdis['dsb:Gi0/11'] && s.dyn.errdis['dsa:Gi0/11'].cause === 'udld', 'udld reset：只重設一台，對面還關著；兩台都重設，光纖還沒換，馬上又被關掉');
+  ok(/^udld aggressive$/m.test(runningConfig(s, s.devices.dsa).join('\n')) && / udld port aggressive/.test(runningConfig(s, s.devices.dsb).join('\n')), 'running-config：udld aggressive、udld port aggressive');
+}
+
 console.log('\nNetFlow 與 QoS 的 police');
 {
   const sim = await import('../src/engine/sim.js');

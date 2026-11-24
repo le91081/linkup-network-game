@@ -1237,6 +1237,8 @@ export function iosSession(getDev, getState, who = null) {
     ['spanning-tree portfast [...]', ([opt]) => onL2((pc) => { pc.portfast = !(opt || '').toLowerCase().startsWith('dis'); })],
     ['no spanning-tree portfast', () => onL2((pc) => { delete pc.portfast; })],
     ['spanning-tree bpduguard <x>', ([x]) => onL2((pc) => { pc.bpduguard = 'enable'.startsWith(x.toLowerCase()); })],
+    ['udld port [...]', ([x]) => { const m = String(x || '').trim().toLowerCase(); if (m && !['aggressive', 'disable'].some((k) => k.startsWith(m))) return err('用法：udld port [aggressive | disable]'); return onL2((pc) => { pc.udld = !m ? 'normal' : 'aggressive'.startsWith(m) ? 'aggressive' : 'disable'; }); }],
+    ['no udld port [...]', () => onL2((pc) => { delete pc.udld; })],
     ['no spanning-tree bpduguard [...]', () => onL2((pc) => { pc.bpduguard = false; })],
     // BPDU Filter：這個埠不送也不收 BPDU（等於這個埠沒有 STP）
     ['spanning-tree bpdufilter <x>', ([x]) => { const k = x.toLowerCase(); if (!'enable'.startsWith(k) && !'disable'.startsWith(k)) return err('% 用法：spanning-tree bpdufilter enable | disable'); return onL2((pc) => { pc.bpdufilter = 'enable'.startsWith(k); }); }],
@@ -2038,6 +2040,10 @@ export function iosSession(getDev, getState, who = null) {
     ['spanning-tree portfast default', () => needSw() || void ((dev().sw.stp ||= {}).portfastDefault = true)],
     ['no spanning-tree portfast default', () => needSw() || void ((dev().sw.stp ||= {}).portfastDefault = false)],
     // PortFast 的埠（接終端設備）預設開 BPDU Guard / BPDU Filter；Loop Guard 套在交換器之間的點對點線
+    ['udld enable', () => needSw() || void ((dev().sw.udld ||= {}).on = true)],
+    ['no udld enable', () => needSw() || void ((dev().sw.udld ||= {}).on = false)],
+    ['udld aggressive', () => needSw() || void ((dev().sw.udld ||= {}).aggressive = true)],
+    ['no udld aggressive', () => needSw() || void ((dev().sw.udld ||= {}).aggressive = false)],
     ['spanning-tree portfast bpduguard default', () => needSw() || void ((dev().sw.stp ||= {}).bpduguardDefault = true)],
     ['no spanning-tree portfast bpduguard default', () => needSw() || void ((dev().sw.stp ||= {}).bpduguardDefault = false)],
     ['spanning-tree portfast bpdufilter default', () => needSw() || void ((dev().sw.stp ||= {}).bpdufilterDefault = true)],
@@ -4109,6 +4115,15 @@ export function iosSession(getDev, getState, who = null) {
         recompute(getState());
         return done(false);
       }
+      // udld reset：把被 UDLD 關掉的埠重新打開（原因還在的話馬上又會被關掉）
+      if (match(tok, 'udld reset')) {
+        const st = getState(), ED = (st.dyn && st.dyn.errdis) || {};
+        const keys = Object.keys(ED).filter((k) => k.startsWith(dev().id + ':') && ED[k].cause === 'udld');
+        for (const k of keys) delete ED[k];
+        out.push(`${keys.length} ports shutdown by UDLD were reset.`);
+        recompute(st);
+        return done(false);
+      }
       // 堆疊成員的優先權（存在成員自己的 ROMMON 變數裡，不在 running-config）：下次整個堆疊重新開機選 Active 時才有作用
       const swp = match(tok, 'switch <n> priority <p>');
       if (swp && dev().model === 'c9300') {
@@ -4807,6 +4822,8 @@ export function runningConfig(state, dev) {
     }
     for (const [i, p] of Object.entries((stp.mst || {}).prio || {})) o.push(`spanning-tree mst ${i} priority ${p}`);
     if (stp.portfastDefault) o.push('spanning-tree portfast default');
+    if ((dev.sw.udld || {}).aggressive) o.push('udld aggressive');
+    else if ((dev.sw.udld || {}).on) o.push('udld enable');
     const ig = sw.igmp || {};
     if (ig.off) o.push('no ip igmp snooping');
     for (const v of ig.vlanOff || []) o.push(`no ip igmp snooping vlan ${v}`);
@@ -5133,6 +5150,7 @@ export function runningConfig(state, dev) {
       if (pc.trust) o.push(' ip dhcp snooping trust', ...(dev.sw.dai && dev.sw.dai.on ? [' ip arp inspection trust'] : []));
       if (pc.bpdufilter != null) o.push(` spanning-tree bpdufilter ${pc.bpdufilter ? 'enable' : 'disable'}`);
       if (pc.bpduguard) o.push(' spanning-tree bpduguard enable');
+      if (pc.udld) o.push(pc.udld === 'normal' ? ' udld port' : ` udld port ${pc.udld}`);
       if (pc.rootguard) o.push(' spanning-tree guard root');
       else if (pc.loopguard != null) o.push(` spanning-tree guard ${pc.loopguard ? 'loop' : 'none'}`);
       if (pc.dot1x) o.push(' authentication port-control auto', ' dot1x pae authenticator');

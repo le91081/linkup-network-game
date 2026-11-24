@@ -3,7 +3,7 @@
 import { patchThrough } from '../patch.js';
 import { prepVpc, lagIdentity } from '../vpc.js';
 import { stackPortDown } from '../stack.js';
-import { stpPrio, isMst, mstKey, bpduFilterIf, bpduGuardOn, loopGuardOn } from '../stpcfg.js';
+import { stpPrio, isMst, mstKey, bpduFilterIf, bpduGuardOn, loopGuardOn , udldOn } from '../stpcfg.js';
 import { CABLES, CATALOG, DTP_MODELS, POE_CLASS_W, cableDist, cableKind, linkInfo, fiberLink, looseNext } from '../model.js';
 import { rejectsOptic } from '../optics.js';
 import { cdpOn, lldpRxOn, lldpTxOn, speaksCdp } from '../disc.js';
@@ -140,15 +140,23 @@ export function prepPhysical(state) {
     return f ? f.optics[c.a.dev === d.id && c.a.port === pid ? 'a' : 'b'] : null;
   };
   const gbicBad = (d, pid) => { const pn = gbicPn(d, pid); return !!pn && rejectsOptic(d, pn, (CATALOG[d.model] || {}).vendor); };
-  const what = (c) => (c === 'bpdu' ? 'BPDU Guard 收到 BPDU' : c === 'storm' ? 'Storm Control 偵測到廣播風暴' : c === 'gbic' ? '插了不支援的收發器 (gbic-invalid)' : 'Port Security 違規');
-  const markErr = (d, pid, cause) => { d.rt.err[pid] = cause === 'bpdu' ? 'bpdu' : cause === 'storm' ? 'storm' : cause === 'gbic' ? 'gbic' : true; };
+  // UDLD：這條線是單向的（c.uni 是收不到的那一端），而且兩端都開了 UDLD
+  const uniCable = (d, pid) => {
+    const c = state.cables.find((x) => (x.a.dev === d.id && x.a.port === pid) || (x.b.dev === d.id && x.b.port === pid));
+    if (!c || !c.uni) return null;
+    const o = c.a.dev === d.id && c.a.port === pid ? c.b : c.a;
+    return { c, l: { dev: o.dev, port: o.port, cable: c.id } };
+  };
+  const udldBad = (d, pid) => { const u = uniCable(d, pid); if (!u || rt.cable[u.c.id] !== 'up') return false; const x = state.devices[u.l.dev]; return isVlanSw(x) && udldOn(d, pid) && udldOn(x, u.l.port); };
+  const what = (c) => (c === 'udld' ? 'UDLD 偵測到單向的連線' : c === 'bpdu' ? 'BPDU Guard 收到 BPDU' : c === 'storm' ? 'Storm Control 偵測到廣播風暴' : c === 'gbic' ? '插了不支援的收發器 (gbic-invalid)' : 'Port Security 違規');
+  const markErr = (d, pid, cause) => { d.rt.err[pid] = cause === 'bpdu' || cause === 'storm' || cause === 'gbic' || cause === 'udld' ? cause : true; };
   for (const [key, e] of Object.entries(ED)) {
     const k = key.indexOf(':'), d = state.devices[key.slice(0, k)], pid = key.slice(k + 1);
     if (!d || !isVlanSw(d) || !d.sw.ports[pid] || down[d.id] || shut(d, pid)) { delete ED[key]; continue; }
     const secs = errRecoverSecs(d, e.cause);
     // 計時器到了：埠重新打開，下面照常檢查，原因還在就再關一次
     if (secs && now >= e.at + secs - 1e-9) { retry[key] = e.n || 1; delete ED[key]; continue; }
-    const still = e.cause === 'bpdu' ? bpduBad(d, pid) : e.cause === 'storm' ? stormBad(d, pid) : e.cause === 'gbic' ? gbicBad(d, pid) : psecBad(d, pid, true);
+    const still = e.cause === 'udld' ? !!uniCable(d, pid) : e.cause === 'bpdu' ? bpduBad(d, pid) : e.cause === 'storm' ? stormBad(d, pid) : e.cause === 'gbic' ? gbicBad(d, pid) : psecBad(d, pid, true);
     markErr(d, pid, e.cause);
     const l = rt.links[key];
     if (l) {
@@ -184,6 +192,21 @@ export function prepPhysical(state) {
       errOn(d, pid, 'gbic', `${d.name} 的 ${pid} 插的 ${gbicPn(d, pid)} 不是 Cisco 的收發器，交換器不接受，連接埠被關閉 (err-disabled，原因 gbic-invalid)：換成原廠的收發器，或設定 service unsupported-transceiver`);
     }
   }
+  // UDLD：兩端都開了 UDLD，單向的光纖兩端都被 err-disable（原因 udld）
+  for (const d of Object.values(state.devices)) {
+    if (!isVlanSw(d)) continue;
+    for (const pid of Object.keys(d.sw.ports)) {
+      if (ED[d.id + ':' + pid] || !udldBad(d, pid)) continue;
+      const u = uniCable(d, pid), x = state.devices[u.l.dev], deaf = u.c.uni === 'a' ? u.c.a : u.c.b;
+      const why = `UDLD 偵測到單向的連線：${state.devices[deaf.dev].name} 的 ${deaf.port} 收不到對面送來的封包（光纖的其中一芯或收發器壞了），${d.name} 的 ${pid} 與 ${x.name} 的 ${u.l.port} 被關閉 (err-disabled，原因 udld)`;
+      const xp = u.l.port;
+      errOn(d, pid, 'udld', why);
+      if (!ED[x.id + ':' + xp]) { ED[x.id + ':' + xp] = { cause: 'udld', at: now, n: (retry[x.id + ':' + xp] || 0) + 1 }; markErr(x, xp, 'udld'); }
+    }
+  }
+  // 單向的線（沒有被 UDLD 關掉）：收不到的那一端，對面送來的訊框都掉了（第二層的轉送看 rt.deaf）
+  rt.deaf = new Set();
+  for (const c of state.cables) if (c.uni && rt.cable[c.id] === 'up') { const e = c.uni === 'a' ? c.a : c.b; rt.deaf.add(e.dev + ':' + e.port); }
   // Storm Control 的 shutdown：廣播超過門檻就把埠關掉（err-disabled，原因是 storm-control）
   for (const d of Object.values(state.devices)) {
     if (!isVlanSw(d)) continue;
@@ -279,7 +302,7 @@ export function prepPhysical(state) {
 }
 
 /** errdisable recovery 認得的原因（IOS 的名稱） */
-export const ERR_CAUSES = { psec: 'psecure-violation', bpdu: 'bpduguard', storm: 'storm-control', gbic: 'gbic-invalid' };
+export const ERR_CAUSES = { psec: 'psecure-violation', bpdu: 'bpduguard', storm: 'storm-control', gbic: 'gbic-invalid', udld: 'udld' };
 export const ERR_RECOVERY_DEFAULT = 300;
 /** 這個原因有設定 errdisable recovery 的話，回傳計時器的秒數；沒有設定回傳 0 */
 export function errRecoverSecs(d, cause) {
@@ -432,7 +455,7 @@ export function prepStp(state) {
     const A = state.devices[c.a.dev], B = state.devices[c.b.dev];
     if (!isVlanSw(A) || !isVlanSw(B) || !A.rt.stp.on || !B.rt.stp.on) continue;
     if (!isBridgePort(A, c.a.port) || !isBridgePort(B, c.b.port)) continue;
-    edges.push({ c, A, B, pa: c.a.port, pb: c.b.port, filt: bpduFilterIf(A, c.a.port) || bpduFilterIf(B, c.b.port) });
+    edges.push({ c, A, B, pa: c.a.port, pb: c.b.port, filt: bpduFilterIf(A, c.a.port) || bpduFilterIf(B, c.b.port) || !!c.uni, deaf: c.uni ? (c.uni === 'a' ? A : B) : null });
   }
   if (!edges.length) return;
   const vlans = new Set();
@@ -469,7 +492,8 @@ export function prepStp(state) {
     let healthy = null;
     for (const e of filt) {
       for (const [O, op, F, fp] of [[e.A, e.pa, e.B, e.pb], [e.B, e.pb, e.A, e.pa]]) {
-        if (bpduFilterIf(O, op) || !bpduFilterIf(F, fp) || !loopGuardOn(O, op)) continue;
+        const hearsNothing = e.deaf ? O === e.deaf : !bpduFilterIf(O, op) && bpduFilterIf(F, fp); // 單向的線：收不到的那一端聽不到 BPDU
+        if (!hearsNothing || !loopGuardOn(O, op)) continue;
         healthy ||= tree(v, all, false);
         const r = healthy.get(O.id + ':' + op);
         if (r !== 'root' && r !== 'altn') continue;

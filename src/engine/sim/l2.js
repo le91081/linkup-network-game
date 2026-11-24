@@ -129,6 +129,7 @@ export function l2Explore(state, devId, iface, opts = {}) {
   // inner：雙重標籤的訊框裡面那一層標籤（外層被拿掉之後才看得到）
   const emit = (d, pid, tag, path, inner) => {
     const l = links[d.id + ':' + pid];
+    if (l && rt.deaf && rt.deaf.has(l.dev + ':' + l.port)) return; // 單向的光纖：對面收不到
     if (l) queue.push({ from: d.id, fromPort: pid, to: l.dev, toPort: l.port, cable: l.cable, tag, path, inner });
   };
   const flood = (d, key, exceptPort, path, viaWifi, inner) => {

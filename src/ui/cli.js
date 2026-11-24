@@ -34,7 +34,7 @@ import { eigrpNeighborLines, eigrpTopoLines, eigrpIfLines, eigrpProtoLines, eigr
 import { ripDbLines, ripProtoLines } from '../engine/rip.js';
 import { epcCmd, epcDelete, epcShow } from '../engine/epc.js';
 import { timeRangeLines } from '../engine/timerange.js';
-import { mstOf, isMst, stpPrio, vlanText, loopGuardOn } from '../engine/stpcfg.js';
+import { mstOf, isMst, stpPrio, vlanText, loopGuardOn, udldOn, udldMode } from '../engine/stpcfg.js';
 import { TR_OFF } from '../engine/sim/core.js';
 import { CATALOG, MEDIA, peerOf, portOf, linkInfo, phyConfig, fiberLink } from '../engine/model.js';
 import { xcvrAt, xcvrSerial, MEDIA_TYPE } from '../engine/optics.js';
@@ -477,6 +477,8 @@ const SHOW = {
     return o;
   },
   'show spanning-tree detail': (st, d) => (!isSw(d) || !d.rt.stp ? ['% 這個指令只適用於交換器'] : !d.rt.stp.on ? ['No spanning tree instance exists.（STP 已關閉）'] : stpDetailLines(st, d)),
+  'show udld': (st, d) => udldLines(st, d, false),
+  'show udld neighbors': (st, d) => udldLines(st, d, true),
   'show spanning-tree inconsistentports': (st, d) => {
     if (!isSw(d) || !d.rt.stp) return ['% 這個指令只適用於交換器'];
     const rows = [], lab = (pid) => longIf((d.ports.find((p) => p.id === pid) || {}).label || pid);
@@ -1962,6 +1964,25 @@ const pimNbrs = (st, d, i) => Object.values(st.devices).filter((x) => x !== d &&
 const stpState = (d, pid) => (d.rt.wait && d.rt.wait[pid] > 15 ? 'LSN' : d.rt.wait && d.rt.wait[pid] > 0 ? 'LRN' : 'FWD');
 /** 這個埠帶著哪些 VLAN（Trunk 是允許的、這台也有的 VLAN） */
 const stpVlans = (d, pid) => { const pc = d.sw.ports[pid]; return isTrunk(d, pid) ? d.sw.vlans.map((v) => v.id).filter((v) => vlanOk(pc, v)) : [pc.vlan, ...(pc.voice ? [pc.voice] : [])]; };
+
+/** show udld / show udld neighbors：每個開了 UDLD 的埠、雙向還是單向 */
+function udldLines(st, d, nb) {
+  if (!d.sw) return ['% Invalid input detected（這台設備沒有交換埠）'];
+  const ports = d.ports.filter((p) => udldOn(d, p.id));
+  if (!ports.length) return ['（沒有任何埠開 UDLD：全域 udld enable（光纖埠）、或介面 udld port [aggressive]）'];
+  const ED = (st.dyn && st.dyn.errdis) || {};
+  const stateOf = (p) => {
+    const c = st.cables.find((x) => (x.a.dev === d.id && x.a.port === p.id) || (x.b.dev === d.id && x.b.port === p.id));
+    if (!c) return ['Unknown', 'None'];
+    const o = c.a.dev === d.id && c.a.port === p.id ? c.b : c.a, x = st.devices[o.dev];
+    if ((ED[d.id + ':' + p.id] || {}).cause === 'udld') return ['Unidirectional (err-disabled)', x.name];
+    if (st.rt.cable[c.id] !== 'up') return ['Unknown', 'None'];
+    if (!(x.sw && udldOn(x, o.port))) return ['Unknown (neighbor not running UDLD)', x.name];
+    return [c.uni ? 'Unidirectional' : 'Bidirectional', x.name, o.port];
+  };
+  if (nb) return ['Port       Device Name       Device ID     Port ID       Neighbor State', '----       -----------       ---------     -------       --------------', ...ports.map((p) => { const s = stateOf(p); return `${p.label.padEnd(11)}${(s[1] || '').padEnd(18)}${'1'.padEnd(14)}${(s[2] || '-').padEnd(14)}${s[0]}`; })];
+  return ports.flatMap((p) => { const s = stateOf(p); return ['', `Interface ${longIf(p.label)}`, '---', `Port enable administrative configuration setting: Enabled${udldMode(d, p.id) === 'aggressive' ? ' / in aggressive mode' : ''}`, 'Port enable operational state: Enabled', `Current bidirectional state: ${s[0]}`, `Current operational state: ${/err/.test(s[0]) ? 'Disabled port' : 'Advertisement - Single neighbor detected'}`, 'Message interval: 15000 ms', 'Time out interval: 5000 ms']; });
+}
 const CMDS = Object.keys(SHOW).filter((k) => !k.startsWith('_'));
 const match = (tokens, cmd) => {
   const w = cmd.split(' ');

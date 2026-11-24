@@ -42,6 +42,19 @@ const stpOf = (d) => (d.sw && d.sw.stp) || {};
 export const bpduFilterIf = (d, pid) => !!(d.sw && d.sw.ports[pid] && d.sw.ports[pid].bpdufilter === true);
 /** 會不會送 BPDU：介面的 bpdufilter，或全域的 portfast bpdufilter default 套在 PortFast 的埠上（收到 BPDU 就失去 PortFast，所以不影響交換器之間的線） */
 export const bpduSilent = (d, pid, edge) => bpduFilterIf(d, pid) || (!!edge && stpOf(d).bpdufilterDefault && (d.sw.ports[pid] || {}).bpdufilter !== false);
+/**
+ * UDLD：光纖兩端互相送 UDLD 的封包確認「我收得到你、你也收得到我」。單向的連線（一芯光纖斷了、收發器的 TX 壞了，兩端燈號都亮）
+ * 兩端都開 UDLD 才偵測得到，偵測到就把埠 err-disable（原因 udld）。
+ * d.sw.udld = { on（udld enable：所有光纖埠）, aggressive（udld aggressive）}；埠：pc.udld = 'normal' | 'aggressive' | 'disable'
+ */
+export function udldOn(d, pid) {
+  const pc = d.sw && d.sw.ports[pid];
+  if (!pc || pc.udld === 'disable') return false;
+  if (pc.udld) return true;
+  const g = d.sw.udld || {}, p = d.ports.find((x) => x.id === pid);
+  return !!((g.on || g.aggressive) && p && p.media !== 'rj45');
+}
+export const udldMode = (d, pid) => { const pc = d.sw.ports[pid] || {}; return pc.udld === 'aggressive' || (!pc.udld && (d.sw.udld || {}).aggressive) ? 'aggressive' : 'normal'; };
 /** BPDU Guard：介面上設定的，或全域的 portfast bpduguard default 套在 PortFast 的埠上 */
 export const bpduGuardOn = (d, pid, edge) => { const pc = (d.sw && d.sw.ports[pid]) || {}; return pc.bpduguard === true || (pc.bpduguard == null && !!edge && !!stpOf(d).bpduguardDefault); };
 /** Loop Guard：介面上的 spanning-tree guard loop，或全域的 loopguard default（交換器之間的點對點線） */
