@@ -4,6 +4,7 @@
 //   issuer 是簽發的 CA；和 cn 一樣（或 'self'）就是自簽憑證
 // 用戶端：d.trust = [信任的 CA]（加入公司網域的電腦會自動裝好公司的根憑證），公開的 CA 每台都信任
 // 驗證的順序和瀏覽器、curl 一樣：誰簽的（信不信任）→ 有效期間（用「用戶端自己的時鐘」判斷）→ 名稱對不對
+import { parseIp } from './ip.js';
 import { deviceTime, SIM_EPOCH } from './ops.js';
 
 export const PUBLIC_CAS = ['DigiCert Global Root G2', 'ISRG Root X1', 'GlobalSign Root R3'];
@@ -12,7 +13,7 @@ export const CORP_CA = 'Corp Root CA';
  * 中繼 CA：根 CA 平常離線保管，實際簽發網站憑證的是它簽出來的中繼 CA。
  * 網站要把中繼憑證一起送出去（完整的憑證鏈 fullchain），用戶端才接得到自己信任的根憑證
  */
-export const INTERMEDIATES = { 'Corp Issuing CA': CORP_CA, 'DigiCert Global G2 TLS RSA SHA256 2020 CA1': 'DigiCert Global Root G2' };
+export const INTERMEDIATES = { 'Corp Issuing CA': CORP_CA, 'DigiCert Global G2 TLS RSA SHA256 2020 CA1': 'DigiCert Global Root G2', "Let's Encrypt R11": 'ISRG Root X1' };
 /** Linux 的程式（OpenSSL）不會自己去下載缺少的中繼憑證；Windows（瀏覽器、Schannel）會照憑證裡的 AIA 網址去抓 */
 export const isLinuxHost = (d) => !!(d && (d.ansible || d.docker || d.tf || d.git || d.os === 'linux'));
 const DAY = 86400000;
@@ -68,6 +69,8 @@ export function tlsCheck(state, client, server, host, deepBy, opts = {}) {
   const now = deviceTime(state, client).ms;
   if (now < cert.from) return { ok: false, cert, code: 60, msg: 'SSL certificate problem: certificate is not yet valid', why: `${client.name} 的時鐘是 ${fmtDate(now)}，憑證 ${fmtDate(cert.from)} 才開始生效（用戶端的時間不對，也會讓憑證「還沒生效」）` };
   if (now > cert.to) return { ok: false, cert, code: 60, msg: 'SSL certificate problem: certificate has expired', why: `${server.name} 的憑證 ${fmtDate(cert.to)} 就到期了` };
+  // 已經被撤銷：Windows 的瀏覽器與 Schannel 會查 CRL / OCSP；Linux 的 curl (OpenSSL) 預設不查
+  if (cert.revoked && !(opts.aia === false || isLinuxHost(client))) return { ok: false, cert, code: 60, msg: 'SSL certificate problem: certificate revoked', why: `${server.name} 的憑證已經被 CA 撤銷（${cert.revoked}），${client.name} 查 CRL / OCSP 發現了。要重新申請一張新的憑證` };
   const names = cert.san && cert.san.length ? cert.san : [cert.cn];
   if (!names.some((n) => nameMatch(n, host))) return { ok: false, cert, code: 60, msg: `SSL: no alternative certificate subject name matches target host name '${host}'`, why: `憑證上的名稱是 ${names.join('、')}，網址用的是 ${host}` };
   return { ok: true, cert };
@@ -81,6 +84,26 @@ export function fmtDate(ms) {
 /** 憑證還有幾天到期（用模擬世界的時間） */
 export const certDaysLeft = (state, cert) => Math.floor((cert.to - (SIM_EPOCH + (state.clock || 0) * 1000)) / DAY);
 /** 由某個 CA 簽發一張新的憑證（有效一年） */
+/**
+ * ACME（Let's Encrypt）的 HTTP-01 驗證與續約：CA 從網際網路連 http://<網域>/.well-known/acme-challenge/<token>，
+ * 一定要連到「這台」伺服器的 TCP 80（防火牆只開 443 的話就會 Timeout during connect）。
+ * server.web.acme = { domain, publicIp }；成功就換成一張新的 90 天憑證（Let's Encrypt R11 簽的、送出完整的憑證鏈）
+ * 回傳 { ok, lines: [certbot 的輸出] }
+ */
+export function acmeRenew(state, server, transact, { dry = false } = {}) {
+  const a = server.web && server.web.acme;
+  if (!a) return { ok: false, lines: ['No certificates found.'] };
+  const inet = Object.values(state.devices).find((d) => d.kind === 'internet');
+  const head = [`Processing /etc/letsencrypt/renewal/${a.domain}.conf`, dry ? `Simulating renewal of an existing certificate for ${a.domain}` : `Renewing an existing certificate for ${a.domain}`];
+  const fail = (type, detail) => ({ ok: false, why: detail, lines: [...head, '', 'Certbot failed to authenticate some domains (authenticator: standalone). The Certificate Authority reported these problems:', `  Domain: ${a.domain}`, `  Type:   ${type}`, `  Detail: ${a.publicIp}: Fetching http://${a.domain}/.well-known/acme-challenge/kZb3yJ7p: ${detail}`, '', 'Hint: The Certificate Authority failed to download the challenge files from the temporary standalone webserver started by Certbot on port 80. Ensure that the listed domains point to this machine and that it can accept inbound connections from the internet.'] });
+  if (!inet) return fail('dns', 'DNS problem: NXDOMAIN looking up A for ' + a.domain);
+  const r = transact(state, inet.id, { proto: 'tcp', dst: parseIp(a.publicIp), dport: 80, srcIp: parseIp(inet.inet.client), quiet: true, bulk: false });
+  if (!r.ok) return fail('connection', /拒絕|沒有在/.test(r.reason || '') ? 'Connection refused' : 'Timeout during connect (likely firewall problem)');
+  if (r.responder !== server.id) return fail('unauthorized', 'Invalid response from http://' + a.domain + '/.well-known/acme-challenge/kZb3yJ7p: 404（連到的是別台機器）');
+  if (!dry) { server.web.cert = issueCert(state, { cn: a.domain, san: [a.domain], issuer: "Let's Encrypt R11", days: 90 }); server.web.chain = true; }
+  return { ok: true, lines: [...head, '', dry ? 'Congratulations, all simulated renewals succeeded:' : 'Congratulations, all renewals succeeded:', `  /etc/letsencrypt/live/${a.domain}/fullchain.pem (success)`] };
+}
+
 export function issueCert(state, { cn, san, issuer, days = 365 }) {
   const now = SIM_EPOCH + (state.clock || 0) * 1000;
   return { cn, san: san && san.length ? san : [cn], issuer, from: now - 3600000, to: now + days * DAY };

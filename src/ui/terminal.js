@@ -18,7 +18,7 @@ import { parseIp6, fmtIp6 } from '../engine/ip6.js';
 import { isApiCurl, curlApi, ansibleCmd, fileCmd, netconfCmd, terraformCmd, tfAnswer, tfFileCmd, gitCmd, backupCmd, gitFileCmd } from './term-auto.js';
 import { dockerCmd } from './term-docker.js';
 import { dockerDeliver } from '../engine/docker.js';
-import { tlsCheck, fmtDate, certSelf, CORP_CA, PUBLIC_CAS } from '../engine/web.js';
+import { tlsCheck, fmtDate, certSelf, CORP_CA, PUBLIC_CAS, acmeRenew, certDaysLeft } from '../engine/web.js';
 import { httpStatus } from '../engine/ltm.js';
 import { FG_CATS } from '../engine/utm.js';
 import { ipMtu, jumboCapable } from '../engine/mtu.js';
@@ -66,6 +66,7 @@ const HELP_LINUX = [
   '可用指令：',
   '  ping <IP 或網域>        測試連線（會在場景中播放封包動畫）',
   '  ip addr / ip route      網路介面的位址 / 路由表（sudo ip link set eth0 mtu 9000 改 MTU）',
+  '  sudo certbot certificates / sudo certbot renew [--dry-run]   Let\'s Encrypt 的憑證與續約（HTTP-01 要從網際網路連得到 TCP 80）',
   '  nmcli device status / nmcli connection show [eth0]   NetworkManager 的狀態與連線設定；sudo nmcli connection modify eth0 ipv4.method manual ipv4.addresses <IP/長度> ipv4.gateway <閘道> → sudo nmcli connection up eth0',
   '  ip route get <位址>     往這個位址實際走哪一條（收到 ICMP Redirect 的標 <redirected>；sudo ip route flush cache 清掉）',
   '  ping -M do -s 8972 <IP> 送 8972 位元組的資料、設 DF 不可分段：測 Jumbo Frame（8972 + 28 = 9000）',
@@ -323,6 +324,23 @@ export function buildTerminal(ctx, body) {
       print(`  ↳ 這台是 Linux：${{ ipconfig: '用 ip addr 看位址、ip route 看路由', w32tm: '用 timedatectl 看時間同步', certutil: '根憑證放進 /usr/local/share/ca-certificates/ 再 update-ca-certificates', cls: '用 clear' }[c]}`, 'hint');
     } else if (linux && (c === 'ip' || c === 'ifconfig')) {
       linuxIp(c === 'ifconfig' ? ['addr'] : args);
+    } else if (linux && c === 'certbot') {
+      // Let's Encrypt 的 certbot：certificates 看憑證、renew [--dry-run] 續約（HTTP-01：CA 要從網際網路連得到這台的 TCP 80）
+      const d = app.state.devices[dev.id], a = d.web && d.web.acme;
+      if (!sudo) { print('The following error was encountered:', 'bad'); print('[Errno 13] Permission denied: \'/var/log/letsencrypt/.certbot.lock\'', 'bad'); print('  ↳ certbot 要 root 權限：前面加 sudo', 'hint'); }
+      else if (!a) print('No certificates found.', 'warn');
+      else if (args[0] === 'certificates') {
+        const cert = d.web.cert, left = cert ? certDaysLeft(app.state, cert) : -1;
+        print('Found the following certs:', 'pre');
+        print(`  Certificate Name: ${a.domain}`, 'pre');
+        print(`    Domains: ${a.domain}`, 'pre');
+        print(`    Expiry Date: ${cert ? fmtDate(cert.to) : '-'} (${left >= 0 ? 'VALID: ' + left + ' days' : 'INVALID: EXPIRED'})`, left >= 0 ? 'pre' : 'bad');
+        print(`    Certificate Path: /etc/letsencrypt/live/${a.domain}/fullchain.pem`, 'pre');
+      } else if (args[0] === 'renew') {
+        const r = acmeRenew(app.state, d, transact, { dry: args.includes('--dry-run') });
+        r.lines.forEach((l) => print(l, r.ok ? (/Congratulations/.test(l) ? 'ok' : 'pre') : /Detail|failed/.test(l) ? 'bad' : 'pre'));
+        if (r.ok && !args.includes('--dry-run')) { ctx.commit(false); print('（新的憑證已經放好，nginx 由 deploy hook 重新載入）', 'hint'); }
+      } else print('用法：sudo certbot certificates | sudo certbot renew [--dry-run]', 'warn');
     } else if (linux && c === 'nmcli') {
       nmcli(args, sudo);
     } else if (!linux && c === 'netsh') {

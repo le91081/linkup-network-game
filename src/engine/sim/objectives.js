@@ -240,7 +240,7 @@ export function runObjective(state, o) {
   if (r.ok && o.type === 'https') {
     // HTTPS：TCP 連得上之後還要 TLS 交握，用戶端用自己的信任清單與時鐘驗證憑證
     // strict：用戶端不會自己去下載缺少的中繼憑證（API 用戶端、Java）；沒寫就看作業系統
-    const t = tlsCheck(state, from, state.devices[r.responder], o.name || fmtIp(dst), r.deep && state.devices[r.deep.dev], o.strict ? { aia: false } : {});
+    const t = tlsCheck(state, from, state.devices[r.responder], o.host || o.name || fmtIp(dst), r.deep && state.devices[r.deep.dev], o.strict ? { aia: false } : {});
     if (!t.ok) {
       log.push({ dev: o.from, kind: 'drop', text: `TLS 交握失敗：${t.msg}（${t.why}）` });
       return finish(false, `憑證錯誤：${t.why}`, o.from);

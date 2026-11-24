@@ -5820,6 +5820,30 @@ console.log('\nBIG-IP 的 tmsh');
   ok(/was not found/.test(tm('modify ltm pool nope monitor tcp')) && /Syntax Error/.test(tm('bogus command')), '找不到物件、打錯指令：tmsh 的錯誤訊息');
 }
 
+console.log('\nACME（Let\'s Encrypt）與憑證撤銷');
+{
+  const { runObjective } = await import('../src/engine/sim/objectives.js');
+  const { acmeRenew, tlsCheck, certDaysLeft } = await import('../src/engine/web.js');
+  const { makeDevice: mk } = await import('../src/engine/model.js');
+  const ok = (cond, title) => (cond ? console.log('  ✔ ' + title) : fail(title));
+  const lv = LEVELS.find((x) => x.id === 'l165');
+  const s = lv.setup(); settle(s);
+  const web = s.devices.web;
+  ok(/certificate has expired|到期/.test(runObjective(s, lv.objectives[0]).reason), '開場：憑證過期');
+  let r = acmeRenew(s, web, transact, { dry: true });
+  ok(!r.ok && r.lines.some((l) => /Timeout during connect \(likely firewall problem\)/.test(l)), 'certbot renew --dry-run：只轉 443，HTTP-01 連不到 TCP 80');
+  s.devices.rt.portForwards.push({ proto: 'tcp', port: 80, toIp: '192.168.50.10', toPort: 80 }); settle(s);
+  r = acmeRenew(s, web, transact, { dry: true });
+  ok(r.ok && certDaysLeft(s, web.web.cert) < 0, '轉 80 之後模擬續約成功（--dry-run 不會換憑證）');
+  r = acmeRenew(s, web, transact);
+  ok(r.ok && certDaysLeft(s, web.web.cert) >= 89 && web.web.cert.issuer === "Let's Encrypt R11", 'certbot renew：換成新的 90 天憑證');
+  ok(lv.objectives.every((o) => (o.type === 'check' ? o.test(s) : runObjective(s, o).pass) === true), '兩個目標都通過');
+  // 撤銷：Windows 會查 CRL / OCSP，Linux 的 curl 預設不查
+  web.web.cert.revoked = '私鑰外洩，CA 已撤銷';
+  const win = mk('pc', 'w1', { name: 'Windows PC' }), lin = mk('pc', 'l1', { name: 'Linux PC' }); lin.os = 'linux';
+  ok(!tlsCheck(s, win, web, 'shop.example.com').ok && /撤銷/.test(tlsCheck(s, win, web, 'shop.example.com').why) && tlsCheck(s, lin, web, 'shop.example.com').ok, '憑證被撤銷：Windows 查 CRL / OCSP 擋下，Linux 的 curl 預設不查');
+}
+
 console.log('\nNetFlow 與 QoS 的 police');
 {
   const sim = await import('../src/engine/sim.js');
