@@ -131,6 +131,7 @@ export function prepPhysical(state) {
     const pc = d.sw.ports[pid], l = rt.links[d.id + ':' + pid];
     if (!l || !bpduGuardOn(d, pid, portfastOn(d, pc, pid)) || bpduFilterIf(d, pid)) return false;
     const x = state.devices[l.dev];
+    if (x && (x.kind === 'switch' || x.kind === 'hub')) return stpSegments(state).some((att) => att.some((a) => a.S === d && a.port === pid) && att.some((a) => !(a.S === d && a.port === pid) && !bpduFilterIf(a.S, a.port)));
     return isVlanSw(x) && !(x.sw.stp && x.sw.stp.on === false) && isBridgePort(x, l.port) && !bpduFilterIf(x, l.port);
   };
   // 第三方的收發器：Cisco 的交換器不接受（gbic-invalid），除非 service unsupported-transceiver
@@ -437,6 +438,39 @@ export function prepLag(state) {
 }
 
 /** 每個 VLAN 各算一棵生成樹（近似 Rapid PVST+） */
+/**
+ * 交換器不是直接相連：中間隔著不跑 STP 的交換器或 Hub（它們照樣把 BPDU 轉送出去），接在同一團上的 STP 埠互相看得到 BPDU。
+ * 回傳每一團的 [{ S（跑 STP 的交換器）, port, c（接到這一團的那條線）}]
+ */
+export function stpSegments(state) {
+  const rt = state.rt, down = state.down || {};
+  const transparent = (x) => x && !down[x.id] && !rt.off[x.id] && (x.kind === 'switch' || x.kind === 'hub');
+  const seen = new Set(), out = [];
+  for (const t of Object.values(state.devices)) {
+    if (!transparent(t) || seen.has(t.id)) continue;
+    const comp = new Set([t.id]), st = [t];
+    while (st.length) {
+      const x = st.pop();
+      for (const c of state.cables) {
+        if (rt.cable[c.id] !== 'up') continue;
+        const o = c.a.dev === x.id ? c.b : c.b.dev === x.id ? c.a : null, y = o && state.devices[o.dev];
+        if (transparent(y) && !comp.has(y.id)) { comp.add(y.id); st.push(y); }
+      }
+    }
+    comp.forEach((id) => seen.add(id));
+    const att = [];
+    for (const c of state.cables) {
+      if (rt.cable[c.id] !== 'up') continue;
+      for (const [me, o] of [[c.a, c.b], [c.b, c.a]]) {
+        const S = state.devices[o.dev];
+        if (comp.has(me.dev) && isVlanSw(S) && !down[S.id] && !(S.sw.stp && S.sw.stp.on === false) && isBridgePort(S, o.port)) att.push({ S, port: o.port, c });
+      }
+    }
+    if (att.length > 1) out.push(att);
+  }
+  return out;
+}
+
 export function prepStp(state) {
   const rt = state.rt, down = state.down || {};
   const sws = Object.values(state.devices).filter((d) => isVlanSw(d) && !down[d.id]);
@@ -457,7 +491,16 @@ export function prepStp(state) {
     if (!isBridgePort(A, c.a.port) || !isBridgePort(B, c.b.port)) continue;
     edges.push({ c, A, B, pa: c.a.port, pb: c.b.port, filt: bpduFilterIf(A, c.a.port) || bpduFilterIf(B, c.b.port) || !!c.uni, deaf: c.uni ? (c.uni === 'a' ? A : B) : null });
   }
-  if (!edges.length) return;
+  const selfLoops = [];
+  for (const att of stpSegments(state)) {
+    for (let i = 0; i < att.length; i++) for (let j = i + 1; j < att.length; j++) {
+      const a = att[i], b = att[j];
+      if (!a.S.rt.stp || !b.S.rt.stp) continue;
+      if (a.S === b.S) { selfLoops.push({ S: a.S, p1: a.port, p2: b.port, c1: a.c, c2: b.c }); continue; }
+      edges.push({ c: a.c, cA: a.c, cB: b.c, A: a.S, B: b.S, pa: a.port, pb: b.port, filt: bpduFilterIf(a.S, a.port) || bpduFilterIf(b.S, b.port), via: true });
+    }
+  }
+  if (!edges.length && !selfLoops.length) return;
   const vlans = new Set();
   for (const d of sws) for (const v of d.sw.vlans) vlans.add(v.id);
   const carries = (D, pid, v) => {
@@ -482,6 +525,14 @@ export function prepStp(state) {
   };
   for (const v of vlans) {
     curV = v;
+    for (const L of selfLoops) {
+      const S = L.S;
+      if (!carries(S, L.p1, v) || !carries(S, L.p2, v) || bpduFilterIf(S, L.p1) || bpduFilterIf(S, L.p2)) continue;
+      const [hi, c] = pidx(S, L.p1) > pidx(S, L.p2) ? [L.p1, L.c1] : [L.p2, L.c2];
+      role(S, hi, v, 'back');
+      S.rt.stp.blocked.add(hi + '|' + v);
+      rt.cable[c.id] = 'blocked';
+    }
     const all = edges.filter((e) => carries(e.A, e.pa, v) && carries(e.B, e.pb, v));
     const es = all.filter((e) => !e.filt);
     if (es.length) tree(v, es, true);
@@ -550,7 +601,7 @@ export function prepStp(state) {
         role(X, xp, v, 'altn');
         if (!apply) continue;
         X.rt.stp.blocked.add(xp + '|' + v);
-        rt.cable[e.c.id] = 'blocked';
+        rt.cable[(X === e.A ? e.cA || e.c : e.cB || e.c).id] = 'blocked'; // 隔著不跑 STP 的交換器：標記被擋下的那一端的線
       }
     }
   }

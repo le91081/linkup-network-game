@@ -5868,6 +5868,31 @@ console.log('\nUDLD：單向的光纖');
   ok(/^udld aggressive$/m.test(runningConfig(s, s.devices.dsa).join('\n')) && / udld port aggressive/.test(runningConfig(s, s.devices.dsb).join('\n')), 'running-config：udld aggressive、udld port aggressive');
 }
 
+console.log('\nSTP 經過不跑 STP 的交換器');
+{
+  const { runObjective } = await import('../src/engine/sim/objectives.js');
+  const { iosSession } = await import('../src/engine/ios.js');
+  const { makeState: ms, makeDevice: mk } = await import('../src/engine/model.js');
+  const ok = (cond, title) => (cond ? console.log('  ✔ ' + title) : fail(title));
+  const typeIn = (s, id, lines) => { const S = iosSession(() => s.devices[id], () => s); for (const l of lines) S.exec(l); };
+  const lv = LEVELS.find((x) => x.id === 'l167');
+  const s = lv.setup(); settle(s);
+  ok(/廣播風暴/.test(runObjective(s, lv.objectives[0]).reason), 'BPDU Filter：交換器看不到經過小交換器的迴圈，廣播風暴');
+  typeIn(s, 'sw', ['enable', 'configure terminal', 'interface range Gi0/1 - 8', 'no spanning-tree bpdufilter enable', 'end']); settle(s);
+  const sw = s.devices.sw;
+  ok(runObjective(s, lv.objectives[0]).pass && sw.rt.stp.blocked.has('Gi0/6|1') && sw.rt.stp.roles['Gi0/6'][1] === 'back', '拿掉 BPDU Filter：Gi0/6 收到自己的 BPDU，被擋下來 (Backup)');
+  typeIn(s, 'sw', ['enable', 'configure terminal', 'spanning-tree portfast bpduguard default', 'end']); settle(s);
+  ok(s.dyn.errdis['sw:Gi0/5'] && s.dyn.errdis['sw:Gi0/5'].cause === 'bpdu' && runObjective(s, lv.objectives[0]).pass, 'BPDU Guard：先收到 BPDU 的埠被關成 err-disabled，迴圈就斷了');
+  ok(lv.objectives.every((o) => (o.type === 'check' ? o.test(s) : runObjective(s, o).pass) === true), '兩個目標都通過');
+  // 兩台跑 STP 的交換器中間隔著一台小交換器，另外又有一條直接的線
+  const t = ms([mk('c2960', 'a', { name: 'A', pos: [0, 0], init(d) { d.sw.stp.prio = 4096; } }), mk('c2960', 'b', { name: 'B', pos: [6, 0] }), mk('sw5', 'm', { name: 'M', pos: [3, 3] }),
+    mk('pc', 'p1', { name: 'P1', pos: [-3, 3], ip: '10.0.0.1' }), mk('pc', 'p2', { name: 'P2', pos: [9, 3], ip: '10.0.0.2' })],
+    [['a:Gi0/1', 'b:Gi0/1'], ['a:Gi0/2', 'm:1'], ['b:Gi0/2', 'm:2'], ['p1:eth0', 'a:Gi0/5'], ['p2:eth0', 'b:Gi0/5']]);
+  settle(t);
+  const r = transact(t, 'p1', { proto: 'icmp', dst: parseIp('10.0.0.2') });
+  ok(r.ok && t.devices.b.rt.stp.blocked.has('Gi0/2|1'), '兩台交換器隔著小交換器又直接相連：STP 看得到這條路，把 B 的 Gi0/2 擋下來，沒有迴圈');
+}
+
 console.log('\nNetFlow 與 QoS 的 police');
 {
   const sim = await import('../src/engine/sim.js');
