@@ -9,7 +9,6 @@
 import { linkInfo, DTP_MODELS } from './model.js';
 import { cdpOn, lldpTxOn, cdpCfg, lldpCfg, deviceIdOf } from './disc.js';
 import { fmtIp, parseIp, parseCidr, netOf } from './ip.js';
-import { isIos } from './ios.js';
 import { epcRecord } from './epc.js';
 import { bpduSilent } from './stpcfg.js';
 /** 接終端設備的 PortFast 埠（不是交換器之間跑 STP 的線） */

@@ -3,7 +3,6 @@ import { h, escLine } from './dom.js';
 import { ltmHealth, poolStatus, allMonitors } from '../engine/ltm.js';
 
 const AV = { up: 'available', unknown: 'unknown', down: 'offline', disabled: 'available', offline: 'offline' };
-const pad = (s, n) => String(s).padEnd(n);
 
 /** 執行一行 tmsh：回傳 { changed } */
 export function tmshRun(state, d, line, print) {

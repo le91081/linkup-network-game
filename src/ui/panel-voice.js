@@ -219,7 +219,7 @@ export function qosTab(ctx, body) {
 
 /** 一鍵建立常見的語音 QoS：VOICE (EF) 走 LLQ、其他公平佇列，外層整形到營運商的合約頻寬 */
 function wizardCard(ctx) {
-  const { dev, state } = ctx;
+  const { dev } = ctx;
   const w = (ctx.app.qosWiz ||= {});
   const ifs = dev.ifaces.filter((i) => i.bind.t === 'port' || i.bind.t === 'sub');
   return h('div', { class: 'card' }, cardHead('快速建立：語音優先'),
@@ -240,7 +240,6 @@ function wizardCard(ctx) {
       ctx.commit(true);
     } }),
     note('muted', '等於在 CLI 下 class-map match-any VOICE / match dscp ef、policy-map VOICE-PRIORITY（priority percent + class-default fair-queue），再用 parent policy 的 shape average 包起來。'));
-  void state;
 }
 
 function classMapsCard(ctx) {

@@ -3,7 +3,7 @@ import { h, button, icon, ownKeys } from './dom.js';
 import { note, cardHead, field, sel } from './form.js';
 import { fmtIp } from '../engine/ip.js';
 import { isBridgePort } from '../engine/sim.js';
-import { counters, clearCounters, spanDest, setCapture, captureOf, protoName, infoOf, displayFilter, BCAST } from '../engine/wire.js';
+import { counters, clearCounters, setCapture, captureOf, protoName, infoOf, displayFilter, BCAST } from '../engine/wire.js';
 import { pcapBytes } from '../engine/pcap.js';
 import { SIM_EPOCH } from '../engine/ops.js';
 import { saveBinary } from './save.js';
@@ -74,7 +74,6 @@ export function spanCard(ctx) {
 // ───────────────────────── 封包擷取 (Wireshark) ─────────────────────────
 
 const PROTO_CLASS = { ARP: 'arp', ICMP: 'icmp', DHCP: 'dhcp', STP: 'stp', CDP: 'stp', TELNET: 'bad', SSHv2: 'tcp', TCP: 'tcp', DNS: 'udp', UDP: 'udp', ESP: 'esp', 'TLSv1.3': 'esp' };
-const two = (n) => String(n).padStart(2, '0');
 
 function layers(f) {
   const L = (title, rows, cls) => h('div', { class: 'cap-layer' + (cls ? ' ' + cls : '') }, h('b', { text: title }), rows.filter(Boolean).map(([k, v]) => h('div', { class: 'cap-kv' }, h('span', { text: k }), h('code', { text: v }))));

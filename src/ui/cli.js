@@ -2,20 +2,19 @@
 import { h, ownKeys, escLine } from './dom.js';
 import { fmtIp, parseIp, parseMask, netOf } from '../engine/ip.js';
 import { fmtIp6, parseIp6, parseCidr6, net6 } from '../engine/ip6.js';
-import { dhcp6Bindings, hits6Of, ACL6_IMPLICIT, DHCP6_PREF, DHCP6_VALID, duidOf } from '../engine/sim6.js';
-import { ospf6Area, ospf6Cost, ospf6Dead, ospf6Hello, ospf6Passive, ospf6Prio, ospf6NetType } from '../engine/ospf.js';
-import { acl6Text, up6 } from '../engine/ios.js';
-import { vlanAllowed as vlanOk, transact, routeRows, isBridgePort, arpRows, clearArp, hitsOf, fmtDur, portfastOn, macRows, clearMac, macAgeOf, sessionRows, clearSessions, saInfo, isTrunk, dtpSpeaker, unreachOf } from '../engine/sim.js';
+import { dhcp6Bindings, hits6Of, DHCP6_PREF, DHCP6_VALID } from '../engine/sim6.js';
+import { acl6Text } from '../engine/ios.js';
+import { vlanAllowed as vlanOk, transact, isBridgePort, arpRows, clearArp, hitsOf, fmtDur, portfastOn, macRows, clearMac, macAgeOf, sessionRows, clearSessions, saInfo, isTrunk, dtpSpeaker, unreachOf } from '../engine/sim.js';
 import { rttSamples, pingStats, iosMs } from '../engine/latency.js';
-import { cdpCfg, lldpCfg, cdpOn, lldpTxOn, lldpRxOn, neighbors, ndCounters, cdpCapText, speaksCdp, speaksLldp } from '../engine/disc.js';
-import { dscpName, COS_DSCP_DEFAULT, portTrust, egressOf, classify, QLIMIT } from '../engine/qos.js';
-import { ospfArea, ospfCost, ospfPassive, ospfHello, ospfDead, ospfPrio, ospfNetType, isLoopback, ospfProcs, ospfKeys, ospfAreaCfg, ospfAreaType, areaKindText } from '../engine/ospf.js';
+import { cdpCfg, lldpCfg, cdpOn, lldpTxOn, lldpRxOn, neighbors, ndCounters, cdpCapText } from '../engine/disc.js';
+import { dscpName, COS_DSCP_DEFAULT, portTrust, egressOf, QLIMIT } from '../engine/qos.js';
+import { ospfArea, ospfPassive, isLoopback, ospfProcs, ospfKeys, ospfAreaCfg, ospfAreaType } from '../engine/ospf.js';
 import { bgpCfg, fmtComm, BEST_REASON } from '../engine/bgp.js';
 import { ikeVer, errdisRows, ERR_CAUSES, vrfOf, pbrHits } from '../engine/sim.js';
 import { ERR_RECOVERY_CAUSES } from '../engine/ios.js';
 import { fhrpProto, fhrpGroup, trackUp, trackText, trackUsers, slaKey, SLA_FREQ } from '../engine/track.js';
 import { archiveFiles, nextArchiveName, cfgDiff, ARCH_MAX_DEFAULT } from '../engine/archive.js';
-import { psMax, psMode, psConfigured, camSize, stormLimit, camFull } from '../engine/l2sec.js';
+import { psMax, psMode, psConfigured, camSize, stormLimit } from '../engine/l2sec.js';
 import { iosClock, deviceTime, ntpInfo, logRows, clearLog, syslogStats, uptimeOf, routerId, longIf, SEVERITY, NTP_POLL, vtyRows, idleLimit } from '../engine/ops.js';
 import { quietLeft } from '../engine/remote.js';
 import { counters, clearCounters, clearedAt, spanDest, debugOf, setDebug, consoleRows } from '../engine/wire.js';
@@ -26,7 +25,7 @@ import { snmpStats } from '../engine/snmp.js';
 import { portByName } from '../engine/ios.js';
 import { isIos } from '../engine/ios.js';
 import { fmtMask } from '../engine/ip.js';
-import { route6Rows, nat64Rows, nat64Stats, clearNat64 } from '../engine/sim6.js';
+import { nat64Rows, nat64Stats, clearNat64 } from '../engine/sim6.js';
 import { vtpCapable, vtpOf, vtpStatusLines } from '../engine/vtp.js';
 import { zbfActive } from '../engine/zbf.js';
 import { envPowerLines } from '../engine/power.js';
@@ -36,7 +35,7 @@ import { epcCmd, epcDelete, epcShow } from '../engine/epc.js';
 import { timeRangeLines } from '../engine/timerange.js';
 import { mstOf, isMst, stpPrio, vlanText, loopGuardOn, udldOn, udldMode } from '../engine/stpcfg.js';
 import { TR_OFF } from '../engine/sim/core.js';
-import { CATALOG, MEDIA, peerOf, portOf, linkInfo, phyConfig, fiberLink } from '../engine/model.js';
+import { CATALOG, MEDIA, linkInfo, phyConfig, fiberLink } from '../engine/model.js';
 import { xcvrAt, xcvrSerial, MEDIA_TYPE } from '../engine/optics.js';
 import { PLATFORM as PID_OF } from '../engine/dnac.js';
 import { showSwitch, showSwitchDetail, showStackPorts, showRedundancy, stackChassis } from './cli-stack.js';
@@ -611,16 +610,6 @@ const SHOW = {
       });
     }
     return o;
-  },
-  'show cdp neighbors': (st, d) => {
-    const o = [pad('Device ID', 20) + pad('Local Intrfce', 16) + pad('Platform', 26) + 'Port ID'];
-    for (const p of d.ports) {
-      const n = peerOf(st, d.id, p.id);
-      if (!n || st.rt.cable[n.cable] === 'down') continue;
-      const x = st.devices[n.dev];
-      o.push(pad(host(x).slice(0, 18), 20) + pad(p.label, 16) + pad(CATALOG[x.model].title.replace(/^Cisco /, '').slice(0, 24), 26) + portOf(x, n.port).label);
-    }
-    return o.length > 1 ? o : ['沒有任何鄰居'];
   },
   'show ip ospf neighbor': (st, d) => {
     const n = ospfViews(st, d).flatMap((v) => v.nbrs);
@@ -1641,7 +1630,7 @@ function ospfProcLines(st, d, v) {
 }
 /** show ip ospf database：一個程序 */
 function ospfDbLines(st, d, v) {
-  const o2 = v.o2, db = v.db, key = ospfKeys(v.vrf).key;
+  const o2 = v.o2, db = v.db;
   const age = (x) => String(((x * 7 + st.clock) % 1800) | 0).padStart(4);
   const seq = (x) => '0x800000' + (((x >>> 0) % 200) + 16).toString(16).toUpperCase().padStart(2, '0');
   const ck = (x) => '0x00' + ((x >>> 0) % 0xffff).toString(16).padStart(4, '0').toUpperCase();

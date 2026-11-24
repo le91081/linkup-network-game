@@ -1,5 +1,5 @@
 # 持續整合：每次 push 與 pull request 都跑一次
-# 1. 引擎測試（node test/levels.test.mjs）與建置（vite build）
+# 1. 靜態檢查（ESLint）、引擎測試（node test/levels.test.mjs）與建置（vite build）
 # 2. 瀏覽器端測試（Playwright）：GitHub 的 ubuntu-latest 已經裝好 Google Chrome，
 #    playwright.config.mjs 用 channel: 'chrome'，不用另外下載瀏覽器
 name: CI
@@ -25,6 +25,7 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
+      - run: npm run lint
       - run: npm test
       - run: npm run build
       - run: npm run build:artifact

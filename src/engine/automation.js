@@ -170,7 +170,7 @@ function cond(expr, vars) {
   if (m) { let ok = true; try { lookup(vars, m[1].trim()); } catch { ok = false; } return m[2] ? !ok : ok; }
   const val = (x) => evalExpr(x.trim(), vars);
   m = e.match(/^(.+?)\s*(==|!=|>=|<=|>|<)\s*(.+)$/);
-  if (m) { const a = val(m[1]), b = val(m[3]); return { '==': a == b, '!=': a != b, '>=': a >= b, '<=': a <= b, '>': a > b, '<': a < b }[m[2]]; } // eslint-disable-line eqeqeq
+  if (m) { const a = val(m[1]), b = val(m[3]); return { '==': a == b, '!=': a != b, '>=': a >= b, '<=': a <= b, '>': a > b, '<': a < b }[m[2]]; } // Jinja 的 == 是寬鬆比較（"1" == 1）
   m = e.match(/^(.+?)\s+(not\s+in|in)\s+(.+)$/);
   if (m) { const a = val(m[1]), b = val(m[3]); const has = Array.isArray(b) ? b.includes(a) : String(b).includes(String(a)); return /not/.test(m[2]) ? !has : has; }
   const v = val(e);

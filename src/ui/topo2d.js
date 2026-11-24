@@ -16,7 +16,6 @@ export function cableLoad(st, c) {
 const heatColor = (p) => (p >= 90 ? '#ff5d6c' : p >= 70 ? '#ff9f43' : p >= 40 ? '#f5d547' : p >= 5 ? '#4ade80' : '#3d7a5a');
 const fmtMbps = (m) => (m >= 1000 ? (m / 1000).toFixed(1) + ' Gbps' : m >= 10 ? Math.round(m) + ' Mbps' : m.toFixed(1) + ' Mbps');
 
-const NS = 'http://www.w3.org/2000/svg';
 const KIND = {
   host: '終端', hub: 'Hub', switch: '交換器', mswitch: 'L2 交換器', l3switch: 'L3 交換器', router: '路由器', homerouter: '家用路由器',
   firewall: '防火牆', ap: '基地台', wlc: '無線控制器', internet: 'ISP', cloud: '公有雲', hypervisor: '虛擬化主機', lb: '負載平衡器', patch: '配線架',

@@ -31,7 +31,7 @@ export function shellWords(s) {
 // 帶著 -X / -u / -H / -d 的才是呼叫 API；-k、-v、-I 這些一般的網頁也會用，交給一般的 curl
 export const isApiCurl = (line) => /(^|\s)(-[XuHd][a-zA-Z]*|--(request|user|header|data|data-raw))(\s|$)/.test(line) || /\/(restconf|dna)\b/.test(line);
 
-const b64 = (s) => (typeof btoa === 'function' ? btoa(unescape(encodeURIComponent(s))) : Buffer.from(s).toString('base64'));
+const b64 = (s) => (typeof btoa === 'function' ? btoa(unescape(encodeURIComponent(s))) : globalThis.Buffer.from(s).toString('base64'));
 
 export function curlApi(app, dev, line, print) {
   const sw = shellWords(line);

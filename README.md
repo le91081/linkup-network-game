@@ -9,6 +9,7 @@ three.js 負責 3D 場景，設定頁面是 HTML，底層是一套自己寫的�
 npm install
 npm run dev      # http://localhost:5173
 npm test         # 驗證所有關卡、負面案例與題庫資料
+npm run lint     # ESLint：未定義的變數、沒用到的 import、到不了的程式
 npm run test:e2e # 在真的瀏覽器裡操作一輪（見下方）
 npm run build    # 輸出到 dist/
 ```

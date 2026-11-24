@@ -9,7 +9,7 @@
 //   ‧ 網路 ACL 掛在子網路上，有編號、有拒絕規則、無狀態：回應封包（目的是用戶端的臨時連接埠）也要明確允許
 //   ‧ 應用程式負載平衡器 (ALB)：用戶端的連線在 ALB 結束，ALB 再連到健康的目標（健康檢查也要過目標的安全群組與網路 ACL）
 //   ‧ 虛擬私有閘道 (VGW) 與站對站 VPN：沿用 IPsec 的引擎（d.vpns），路由表要有往地端網段 → vgw 的路由（或開啟路由傳播）
-import { parseIp, parseCidr, netOf, fmtIp, maskOf } from './ip.js';
+import { parseIp, parseCidr, netOf, fmtIp } from './ip.js';
 
 export const CLOUD_REGION = 'ap-northeast-1';
 /** AWS 站對站 VPN 接受的提案：客戶閘道提出其中任何一組都談得成；第二階段一定要有 PFS */

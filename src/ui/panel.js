@@ -19,12 +19,12 @@ import * as W from './panel-wlc.js';
 import { h, icon, button, faceplate, toast } from './dom.js';
 import {
   inp, sel, toggle, seg, field, note, kv, del, cardHead, grid2, bind, linkBadge, ifaceNote, badge,
-  isIp, isMask, isIpList, isVlanSpec, isPortNo, isAddr, isAddrList, isNum, isMacList, isCidrList, isCidr6,
+  isIp, isMask, isIpList, isVlanSpec, isPortNo, isAddrList, isNum, isMacList, isCidrList, isCidr6,
 } from './form.js';
 import { fmtIp6 } from '../engine/ip6.js';
 import { CATALOG, MEDIA, peerOf, newIface, defaultPortMode } from '../engine/model.js';
 import { parseIp, fmtIp } from '../engine/ip.js';
-import { routeRows, SERVICE_NAMES, hitsOf, ospfOn, setOspf, fmtDur } from '../engine/sim.js';
+import { routeRows, SERVICE_NAMES, ospfOn, setOspf, fmtDur } from '../engine/sim.js';
 import { ospfArea, ospfCost, ospfPassive, isLoopback, ospfProcOf, ospfKeys, ospfBfd } from '../engine/ospf.js';
 import { ospfCard, ospfNeighborRows } from './panel-ospf.js';
 import * as L2S from './panel-l2sec.js';

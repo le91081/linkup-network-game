@@ -20,7 +20,7 @@
 //   - 管理距離：eBGP 20、iBGP 200
 //
 // 執行期：state.dyn.bgp[兩端] = { since, up, last }；d.rt.bgp = { rid, asn, peers: [...], table: [...] }
-import { parseIp, fmtIp, netOf, sameNet } from './ip.js';
+import { parseIp, fmtIp, sameNet } from './ip.js';
 import { plHit, aclRouteHit, rmRoute, ospfInternal } from './policy.js';
 import { bfdDetect } from './ospf.js';
 

@@ -2,7 +2,6 @@
 import { makeDevice as D, makeState } from '../engine/model.js';
 import { iosSession } from '../engine/ios.js';
 import { recompute } from '../engine/sim.js';
-import { dev } from './util.js';
 
 const typeIn = (s, id, lines) => { const S = iosSession(() => s.devices[id], () => s); for (const l of lines) S.exec(l); };
 const G = '239.1.1.1';

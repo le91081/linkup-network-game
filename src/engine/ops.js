@@ -24,7 +24,6 @@ const NO_RTC = new Set(['c2960', 'c2960p']); // 這些機型沒有電池供電�
 const LOG_MAX = 60, SYSLOG_MAX = 200;
 
 export const SEVERITY = ['emergencies', 'alerts', 'critical', 'errors', 'warnings', 'notifications', 'informational', 'debugging'];
-const FORTI_LEVEL = ['emergency', 'alert', 'critical', 'error', 'warning', 'notice', 'information', 'debug'];
 const MON = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 const DAY = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 const two = (n) => String(n).padStart(2, '0');

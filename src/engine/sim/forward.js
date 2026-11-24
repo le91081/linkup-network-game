@@ -13,7 +13,7 @@ import { fmtIp, isPrivate, parseIp, sameNet } from '../ip.js';
 import { aclRules } from '../policy.js';
 import { TR_OFF } from './core.js';
 import { PBR_HITS, PROTO_NUM, QUIET, cidrList, denyLog, fmtDur, hash, hit, ipLen, selMatch, sess, sessId, vrfOf, isVlanSw, isTrunk } from './core.js';
-import { VRRP_MAC, answerMac, arpTtl, floodPorts, l2Explore, learnPath, learns, macAgeOf, macKnown, reversed } from './l2.js';
+import { answerMac, arpTtl, floodPorts, l2Explore, learnPath, learns, macAgeOf, macKnown, reversed } from './l2.js';
 import { daiBlock } from './auth.js';
 import { findTunnel } from './tunnels.js';
 import { lookupRoute } from './l3.js';

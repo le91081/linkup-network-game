@@ -975,7 +975,7 @@ console.log('\n排除故障的工具：遠端登入、計數器、擷取、SPAN�
   const wire = await import('../src/engine/wire.js');
   const { iosSession, runningConfig } = await import('../src/engine/ios.js');
   const { fortiSession, fortiConfig } = await import('../src/engine/fortios.js');
-  const { makeState, makeDevice, addCable, removeCable } = await import('../src/engine/model.js');
+  const { makeState, makeDevice, addCable } = await import('../src/engine/model.js');
   const ok = (cond, title) => (cond ? console.log('  ✔ ' + title) : fail(title));
   const fresh = (id) => { const lv = LEVELS.find((l) => l.id === id); const s = lv.setup(); lv.solve(s); recompute(s); return { s, lv }; };
   const ipOf = (s, id) => s.devices[id].ifaces.find((x) => x.rt && x.rt.ip != null).rt.ip;
@@ -1538,7 +1538,7 @@ console.log('\nOSPF 進階：DR / BDR、計時器、MTU、被動介面、多區�
 {
   const { iosSession, runningConfig } = await import('../src/engine/ios.js');
   const { makeState, makeDevice } = await import('../src/engine/model.js');
-  const sim = await import('../src/engine/sim.js');
+
   const ok = (cond, title) => (cond ? console.log('  ✔ ' + title) : fail(title));
   const ios = (s, id, lines) => { const sess = iosSession(() => s.devices[id], () => s); const out = []; for (const l of lines) out.push(...sess.exec(l).out); return out; };
   const nb = (s, a, b) => (s.devices[a].rt.nbrs || []).find((n) => n.dev === b);
@@ -1692,7 +1692,6 @@ console.log('\nIPv6：DHCPv6 的旗標、OSPFv3、IPv6 ACL 與鄰居探索');
   const { parseIp6 } = await import('../src/engine/ip6.js');
   const { transact6 } = await import('../src/engine/sim6.js');
   const { logRows } = await import('../src/engine/ops.js');
-  const { makeState, makeDevice } = await import('../src/engine/model.js');
   const ok = (cond, title) => (cond ? console.log('  ✔ ' + title) : fail(title));
   const sessions = new WeakMap();
   const sessOf = (s, id) => { const m = sessions.get(s) || new Map(); sessions.set(s, m); if (!m.has(id)) m.set(id, iosSession(() => s.devices[id], () => s)); return m.get(id); };
@@ -2052,7 +2051,7 @@ console.log('\n自動化：YAML、RESTCONF、Ansible');
 console.log('\nerr-disabled：會一直維持、errdisable recovery、shutdown → no shutdown');
 {
   const { iosSession, runningConfig } = await import('../src/engine/ios.js');
-  const { removeCable, addCable } = await import('../src/engine/model.js');
+  const { removeCable } = await import('../src/engine/model.js');
   const sim = await import('../src/engine/sim.js');
   const ok = (cond, title) => (cond ? console.log('  ✔ ' + title) : fail(title));
   const ios = (s, id, lines) => { const sess = iosSession(() => s.devices[id], () => s); const out = []; for (const l of lines) out.push(...sess.exec(l).out); recomputeNow(s); return out; };
@@ -2512,7 +2511,7 @@ console.log('\n參考解法與錯題本');
   ok(app.store.review[qKey(q)].box === 1 && dueItems(app, t0).length === 1 && !app.store.review[qKey(q)].item, '答錯：放進第 1 盒，馬上可以複習（題庫的題目只記代碼）');
   noteAnswer(app, q, true, t0);
   ok(app.store.review[qKey(q)].box === 2 && !dueItems(app, t0).length && dueItems(app, t0 + DAY).length === 1, '答對：第 2 盒，一天後才到期');
-  for (const [d, box] of [[1, 3], [4, 4], [11, 5]]) noteAnswer(app, q, true, t0 + d * DAY);
+  for (const [d] of [[1, 3], [4, 4], [11, 5]]) noteAnswer(app, q, true, t0 + d * DAY);
   ok(app.store.review[qKey(q)].box === 5 && reviewStats(app, t0 + 11 * DAY).next === 14 * DAY, '間隔越拉越長：1 → 3 → 7 → 14 天');
   noteAnswer(app, q, false, t0 + 30 * DAY);
   ok(app.store.review[qKey(q)].box === 1 && app.store.review[qKey(q)].wrong === 2, '又答錯：回到第 1 盒，記下答錯兩次');
@@ -2766,7 +2765,7 @@ console.log('\nOSPF 的 stub / NSSA、VRF 裡的 OSPF、路由洩漏、iBGP 與 
     let r = sim.transact(s, 'pc', { proto: 'tcp', dst: IP('198.51.100.80'), dport: 443 });
     ok(!r.ok && /Core/.test(r.reason), '邊界路由器都對了，員工還是連不到：Core 沒有跑 BGP（BGP 黑洞）');
     // route reflector：Core 只和 R-A、R-B 建 iBGP，R-A ↔ R-B 拿掉
-    for (const [x, o, lo] of [[ra, '10.255.0.2', '10.255.0.1'], [rb, '10.255.0.1', '10.255.0.2']]) x('configure terminal', 'router bgp 65010', `no neighbor ${o}`, 'neighbor 10.255.0.3 remote-as 65010', 'neighbor 10.255.0.3 update-source loopback0', 'neighbor 10.255.0.3 next-hop-self', 'end');
+    for (const [x, o] of [[ra, '10.255.0.2', '10.255.0.1'], [rb, '10.255.0.1', '10.255.0.2']]) x('configure terminal', 'router bgp 65010', `no neighbor ${o}`, 'neighbor 10.255.0.3 remote-as 65010', 'neighbor 10.255.0.3 update-source loopback0', 'neighbor 10.255.0.3 next-hop-self', 'end');
     core('configure terminal', 'router bgp 65010', 'neighbor 10.255.0.1 remote-as 65010', 'neighbor 10.255.0.1 update-source loopback0', 'neighbor 10.255.0.2 remote-as 65010', 'neighbor 10.255.0.2 update-source loopback0', 'end');
     ok(!rt(s, 'ra', '198.51.100.0', 24) || rt(s, 'ra', '198.51.100.0', 24).ad === 20, 'Core 不是 route reflector：從 R-B 學到的路不會轉送給 R-A（iBGP split horizon），R-A 只剩繞網際網路的 eBGP 路');
     core('configure terminal', 'router bgp 65010', 'neighbor 10.255.0.1 route-reflector-client', 'neighbor 10.255.0.2 route-reflector-client', 'end');
@@ -3775,7 +3774,7 @@ console.log('\n用 Git 管理設定');
 
 console.log('\n光纖收發器');
 {
-  const { fiberLink, linkInfo, makeDevice: MD, makeState: MS } = await import('../src/engine/model.js');
+  const { fiberLink, linkInfo } = await import('../src/engine/model.js');
   const { opticLink, defaultOptic } = await import('../src/engine/optics.js');
   const { iosSession, runningConfig } = await import('../src/engine/ios.js');
   const { counters } = await import('../src/engine/wire.js');
@@ -4074,7 +4073,6 @@ console.log('\nFortiGate HA（Active-Passive）');
   const { fortiSession, fortiConfig } = await import('../src/engine/fortios.js');
   const { serialOf, haVmac } = await import('../src/engine/ha.js');
   const sim = await import('../src/engine/sim.js');
-  const { fmtIp } = await import('../src/engine/ip.js');
   const ok = (cond, title) => (cond ? console.log('  ✔ ' + title) : fail(title));
   const lv = LEVELS.find((x) => x.id === 'l121');
   const s = lv.setup(); settle(s);
@@ -5030,7 +5028,7 @@ console.log('\nICMP Redirect：同一個介面進出的路由器告訴主機直�
   const { makeDevice: MD, makeState: MS } = await import('../src/engine/model.js');
   const { iosSession, runningConfig } = await import('../src/engine/ios.js');
   const { redirectRows, REDIRECT_TTL } = await import('../src/engine/redirect.js');
-  const { setDebug, debugOf } = await import('../src/engine/wire.js');
+  const { setDebug } = await import('../src/engine/wire.js');
   const { logRows } = await import('../src/engine/ops.js');
   const ok = (cond, title) => (cond ? console.log('  ✔ ' + title) : fail(title));
   const typeIn = (s, id, lines) => { const S = iosSession(() => s.devices[id], () => s); for (const l of lines) S.exec(l); };

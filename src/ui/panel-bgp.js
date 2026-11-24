@@ -1,7 +1,7 @@
 // BGP 的設定頁面：本地 AS、要通告的網段、鄰居與簡單的政策（產生真正的 route-map / prefix-list，和 CLI 是同一份設定）
 import { h, button, toast } from './dom.js';
 import { inp, sel, field, note, del, cardHead, grid2, bind, badge, isIp, isNum, toggle } from './form.js';
-import { fmtIp, parseIp, netOf, parseCidr } from '../engine/ip.js';
+import { fmtIp, parseIp, parseCidr } from '../engine/ip.js';
 
 const fmtNet = (n) => `${fmtIp(n.net)}/${n.bits}`;
 const OWN = 'OWN-PREFIXES';
@@ -33,7 +33,7 @@ function setPrepend(d, n, times) {
 }
 
 export function bgpCard(ctx) {
-  const { dev, state } = ctx;
+  const { dev } = ctx;
   if (dev.kind !== 'router') return null;
   const draft = (ctx.app.bgpDraft ||= {});
   if (!dev.bgp) {
@@ -108,5 +108,4 @@ export function bgpCard(ctx) {
             r.local ? h('span', { class: 'muted', text: '自己發出的' }) : h('span', { class: 'mono muted', text: `${r.ibgp ? 'iBGP · ' : ''}經由 ${fmtIp(r.nh)}${r.ribFail ? ' · 路由表裡有更好的路（RIB-failure）' : ''}` })),
           r.local ? null : h('span', { class: 'mono path', text: `AS path ${r.aspath.join(' ') || '(空)'}${r.lp != null && r.lp !== 100 ? ' · local-pref ' + r.lp : ''}${r.originator != null ? ' · 由 route reflector 轉送' : ''}` }))), deadNote];
     }));
-  void netOf; void state;
 }

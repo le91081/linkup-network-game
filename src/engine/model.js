@@ -1,7 +1,7 @@
 // 設備型錄（以現實世界的機型為藍本）與設備物件工廠
 import { JUNOS_DEFAULT, applyJunos } from './junos.js';
 import { parseIp } from './ip.js';
-import { newVpc, CLOUD_REGION } from './cloud.js';
+import { newVpc } from './cloud.js';
 import { opticsOf, opticLink, rejectsOptic } from './optics.js';
 
 const rj = (id, label = id, extra) => ({ id, label, media: 'rj45', ...extra });

@@ -21,7 +21,6 @@ export function awsId(prefix, seed = '') {
 const AZS = ['a', 'c', 'd'].map((z) => [`${CLOUD_REGION}${z}`, `${CLOUD_REGION}${z}`]);
 const PROTOS = [['all', '全部流量'], ['tcp', 'TCP'], ['udp', 'UDP'], ['icmp', 'ICMP']];
 const tip = (t) => h('p', { class: 'tip', text: t });
-const nameOfSub = (v, id) => (v.subnets.find((s) => s.id === id) || {}).name || id;
 const typeBadge = (v, s) => (isPublic(v, s) ? badge('on', '公有') : badge('off', '私有'));
 const sizeOf = (s) => { const c = parseCidr(s.cidr); return c ? 2 ** (32 - c.bits) : 0; };
 

@@ -6,15 +6,15 @@ import { ICMP_TYPES } from '../engine/mtu.js';
 import { h, icon, button, toast } from './dom.js';
 import {
   inp, sel, toggle, field, note, kv, del, cardHead, badge, grid2, bind, linkBadge, ifaceNote,
-  isIp, isMask, isIpList, isAddr, isCidrList, isMacList, isPortNo, isNum,
+  isIp, isMask, isIpList, isAddr, isCidrList, isPortNo, isNum,
 } from './form.js';
 import { fmtIp } from '../engine/ip.js';
 import { newGuestCode } from '../engine/portal.js';
 import { loopGuardOn } from '../engine/stpcfg.js';
 import { meshRole, meshHopMbps, MESH_MIN } from '../engine/mesh.js';
-import { CATALOG, peerOf, portOf, newSsid, cableAt, linkInfo } from '../engine/model.js';
-import { visibleSsids, WIFI_SEC, macsBehind, isBridgePort, hitsOf, P1, accessOf, portfastOn, macRows, clearMac, macAgeOf, saInfo, fmtDur, isTrunk, dtpSpeaker, WALL_MATS, errdisRows, bouncePort, ERR_CAUSES, ERR_RECOVERY_DEFAULT, CH5, DFS, blockOf, CH6, on6, has6, portalPending, portalAccept, transact } from '../engine/sim.js';
-import { cdpCfg, lldpCfg, cdpOn, lldpTxOn, lldpRxOn, portNd, setPortNd, neighbors, speaksCdp, speaksLldp } from '../engine/disc.js';
+import { peerOf, portOf, newSsid, cableAt, linkInfo } from '../engine/model.js';
+import { visibleSsids, WIFI_SEC, isBridgePort, hitsOf, P1, accessOf, portfastOn, macRows, clearMac, macAgeOf, saInfo, fmtDur, isTrunk, dtpSpeaker, WALL_MATS, errdisRows, bouncePort, ERR_CAUSES, ERR_RECOVERY_DEFAULT, CH5, DFS, blockOf, CH6, on6, has6, portalPending, portalAccept, transact } from '../engine/sim.js';
+import { cdpCfg, lldpCfg, portNd, setPortNd, neighbors, speaksCdp, speaksLldp } from '../engine/disc.js';
 import { ntpInfo, deviceTime, plainStamp, logRows, clearLog, syslogStats, NTP_POLL } from '../engine/ops.js';
 import * as M from './panel-more.js';
 import * as L2 from './panel-l2sec.js';
@@ -330,7 +330,7 @@ function errdisCard(ctx, p) {
 }
 
 export function portAdvanced(ctx, p, pc) {
-  const { dev, state } = ctx;
+  const { dev } = ctx;
   const ps = (pc.ps ||= { on: false, macs: '', mode: 'shutdown' });
   if (pc.lag == null) pc.lag = '';
   if (!pc.lagMode) pc.lagMode = 'active';

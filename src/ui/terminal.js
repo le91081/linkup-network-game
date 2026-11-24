@@ -323,7 +323,7 @@ export function buildTerminal(ctx, body) {
       print(`${cmd}: command not found`, 'warn');
       print(`  ↳ 這台是 Linux：${{ ipconfig: '用 ip addr 看位址、ip route 看路由', w32tm: '用 timedatectl 看時間同步', certutil: '根憑證放進 /usr/local/share/ca-certificates/ 再 update-ca-certificates', cls: '用 clear' }[c]}`, 'hint');
     } else if (linux && (c === 'ip' || c === 'ifconfig')) {
-      linuxIp(c === 'ifconfig' ? ['addr'] : args);
+      linuxIp(c === 'ifconfig' ? ['addr'] : args, sudo);
     } else if (linux && c === 'certbot') {
       // Let's Encrypt 的 certbot：certificates 看憑證、renew [--dry-run] 續約（HTTP-01：CA 要從網際網路連得到這台的 TCP 80）
       const d = app.state.devices[dev.id], a = d.web && d.web.acme;
@@ -794,7 +794,7 @@ export function buildTerminal(ctx, body) {
   }
 
   /** Linux 的 ip addr / ip route（Docker 主機多了 docker0 與每個容器的 veth） */
-  function linuxIp(argv) {
+  function linuxIp(argv, sudo) {
     const sub = argv[0] || '';
     if (sub === 'link' && argv[1] === 'set') {
       // ip link set eth0 mtu 9000

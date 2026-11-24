@@ -5,7 +5,6 @@ import { fmtIp } from '../engine/ip.js';
 import { trackUp, trackText, trackUsers, slaKey, SLA_FREQ, fhrpProto, fhrpGroup, fhrpPreempt, FHRP_DEC, HSRP_HOLD } from '../engine/track.js';
 
 const l3Ifs = (dev) => dev.ifaces.filter((i) => i.bind.t !== 'wlan');
-const ifName = (dev, id) => (dev.ifaces.find((i) => i.id === id) || { label: id }).label;
 const nextNo = (obj) => Math.max(0, ...Object.keys(obj || {}).map(Number)) + 1;
 
 /** 介面上的 VRRP / HSRP */

@@ -9,15 +9,14 @@ import { ICMP6_TYPES } from './sim6.js';
 import { newIface, cloneState, CATALOG, makeDevice, defaultPortMode } from './model.js';
 import { cdpCfg, lldpCfg, portNd, setPortNd, speaksCdp, clearNeighbors, CDP_TIMER, CDP_HOLD, LLDP_TIMER, LLDP_HOLD } from './disc.js';
 import { parseDscp, dscpName, COS_DSCP_DEFAULT } from './qos.js';
-import { clearOspfProcess, clearOspfAll, ospfArea, ospfProc, ospfKeys, ospfProcs } from './ospf.js';
+import { clearOspfProcess, clearOspfAll, ospfProc, ospfKeys, ospfProcs } from './ospf.js';
 import { parseComm } from './bgp.js';
-import { transfer, configFile, ensureFlash, flashFree, flashPath, fsName, IMAGES, PLATFORM, PLATFORM_NAME, imageFile, fmtBytes, pkgFiles, pkgConfFile, pkgNames, buildOf, installedImgs } from './files.js';
-import { macsBehind, recompute, ospfOn, ikeVer, isTun, tunMode, transact } from './sim.js';
+import { transfer, configFile, ensureFlash, flashFree, flashPath, fsName, IMAGES, PLATFORM, PLATFORM_NAME, fmtBytes, pkgFiles, pkgConfFile, pkgNames, buildOf, installedImgs } from './files.js';
+import { recompute, ospfOn, ikeVer, isTun, tunMode, transact } from './sim.js';
 import { parseMethods, METHOD_TEXT, aaaAuthorize, aaaAccount } from './aaa.js';
 import { tpOf, urlTarget, caCert, validityError, issue, certHex, hexCert } from './pki.js';
-import { logEvent, markReboot, setClock, deviceTime, SEVERITY, bootTime, longIf, localUsers, iosClock } from './ops.js';
+import { logEvent, markReboot, setClock, SEVERITY, bootTime, longIf, localUsers, iosClock } from './ops.js';
 import { isNexus, isCat2960, isCat9300, ICMP_TYPES } from './mtu.js';
-import { spanDest } from './wire.js';
 import { genKey } from './remote.js';
 import { fhrpProto, fhrpGroup, fhrpPreempt } from './track.js';
 import { archiveNow, archiveLines, cfgLog, cfgDiff, ARCH_MAX_DEFAULT } from './archive.js';
@@ -2993,7 +2992,7 @@ export function iosSession(getDev, getState, who = null) {
       ['no passive-interface default', () => { const c = oc(); delete c.ospfPassiveDefault; delete c.ospfNoPassive; }],
       ['passive-interface <...>', ([t]) => { const i = ifByName(t); if (isErr(i)) return i; const c = oc(); if (c.ospfPassiveDefault) c.ospfNoPassive = (c.ospfNoPassive || []).filter((x) => x !== i.id); else if (!(c.ospfPassive ||= []).includes(i.id)) c.ospfPassive.push(i.id); return undefined; }],
       ['no passive-interface <...>', ([t]) => { const i = ifByName(t); if (isErr(i)) return i; const c = oc(); if (c.ospfPassiveDefault) { if (!(c.ospfNoPassive ||= []).includes(i.id)) c.ospfNoPassive.push(i.id); } else c.ospfPassive = (c.ospfPassive || []).filter((x) => x !== i.id); return undefined; }],
-      ['auto-cost reference-bandwidth <n>', ([n]) => (+n >= 1 && +n <= 4294967 ? void (oc().ospfRefBw = +n === 100 ? undefined : +n) || '% OSPF: Reference bandwidth is changed.\n        Please ensure reference bandwidth is consistent across all routers.' : err('reference-bandwidth 的單位是 Mbps，範圍 1 – 4294967'))],
+      ['auto-cost reference-bandwidth <n>', ([n]) => (+n >= 1 && +n <= 4294967 ? void (oc().ospfRefBw = +n === 100 ? undefined : +n) || '% OSPF: Reference bandwidth is changed.\n        Please ensure reference bandwidth is consistent across all routers.' : err('reference-bandwidth 的單位是 Mbps，範圍 1 – 4294967'))], // eslint-disable-line no-constant-binary-expression
       ['no auto-cost reference-bandwidth [...]', () => { delete oc().ospfRefBw; }],
       ['maximum-paths <n>', ([n]) => (+n >= 1 && +n <= 32 ? void (oc().ospfMaxPaths = +n === 4 ? undefined : +n) : err('maximum-paths 的範圍是 1 – 32'))],
       ['no maximum-paths [...]', () => { delete oc().ospfMaxPaths; }],
@@ -3092,7 +3091,7 @@ export function iosSession(getDev, getState, who = null) {
       ['no passive-interface default', () => { const c = dev().ospf6; delete c.passiveDefault; delete c.noPassive; }],
       ['passive-interface <...>', ([t]) => { const i = ifByName(t); if (isErr(i)) return i; const c = dev().ospf6; if (c.passiveDefault) c.noPassive = (c.noPassive || []).filter((x) => x !== i.id); else if (!(c.passive ||= []).includes(i.id)) c.passive.push(i.id); return undefined; }],
       ['no passive-interface <...>', ([t]) => { const i = ifByName(t); if (isErr(i)) return i; const c = dev().ospf6; if (c.passiveDefault) { if (!(c.noPassive ||= []).includes(i.id)) c.noPassive.push(i.id); } else c.passive = (c.passive || []).filter((x) => x !== i.id); return undefined; }],
-      ['auto-cost reference-bandwidth <n>', ([n]) => (+n >= 1 && +n <= 4294967 ? void (+n === 100 ? delete dev().ospf6.refBw : (dev().ospf6.refBw = +n)) || '% OSPFv3: Reference bandwidth is changed.\n        Please ensure reference bandwidth is consistent across all routers.' : err('reference-bandwidth 的單位是 Mbps，範圍 1 – 4294967'))],
+      ['auto-cost reference-bandwidth <n>', ([n]) => (+n >= 1 && +n <= 4294967 ? void (+n === 100 ? delete dev().ospf6.refBw : (dev().ospf6.refBw = +n)) || '% OSPFv3: Reference bandwidth is changed.\n        Please ensure reference bandwidth is consistent across all routers.' : err('reference-bandwidth 的單位是 Mbps，範圍 1 – 4294967'))], // eslint-disable-line no-constant-binary-expression
       ['no auto-cost reference-bandwidth [...]', () => { delete dev().ospf6.refBw; }],
       ['maximum-paths <n>', ([n]) => (+n >= 1 && +n <= 32 ? void (+n === 4 ? delete dev().ospf6.maxPaths : (dev().ospf6.maxPaths = +n)) : err('maximum-paths 的範圍是 1 – 32'))],
       ['no maximum-paths [...]', () => { delete dev().ospf6.maxPaths; }],
@@ -5172,7 +5171,7 @@ export function runningConfig(state, dev) {
   // Port-channel 介面：NX-OS 的 vpc N / vpc peer-link（設定在成員埠上，這裡集中寫在 interface port-channel 底下）
   if (dev.sw) {
     const pos = new Map();
-    for (const [pid, pc] of Object.entries(dev.sw.ports)) if (+pc.lag > 0 && (pc.vpc || pc.peerLink)) pos.set(+pc.lag, pc);
+    for (const pc of Object.values(dev.sw.ports)) if (+pc.lag > 0 && (pc.vpc || pc.peerLink)) pos.set(+pc.lag, pc);
     for (const [n, pc] of [...pos.entries()].sort((a, b) => a[0] - b[0])) o.push(`interface port-channel${n}`, pc.peerLink ? ' vpc peer-link' : ` vpc ${+pc.vpc}`, '!');
   }
   for (const i of dev.ifaces.filter((x) => x.bind.t === 'svi')) {

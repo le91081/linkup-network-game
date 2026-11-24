@@ -146,7 +146,7 @@ export function computeEigrp(state, { log = () => {}, ospfOn = () => false } = {
     const keepB = B && isNode.has(bd) && running(B, ib) && ia && rec.last + eigrpHold(ia) > now;
     if (!keepA && !keepB) {
       delete adjT[k];
-      for (const [S, si, O, oi] of [[A, ia, B, ib], [B, ib, A, ia]]) if (S && isNode.has(S.id) && si && oi) log(S, `EIGRP-IPv4 ${S.eigrp.as}: Neighbor ${fmtIp(oi.rt && oi.rt.ip != null ? oi.rt.ip : parseIp(oi.ip || '') || 0)} (${si.label}) is down: ${running(S, si) ? 'holding time expired' : 'interface down'}`);
+      for (const [S, si, , oi] of [[A, ia, B, ib], [B, ib, A, ia]]) if (S && isNode.has(S.id) && si && oi) log(S, `EIGRP-IPv4 ${S.eigrp.as}: Neighbor ${fmtIp(oi.rt && oi.rt.ip != null ? oi.rt.ip : parseIp(oi.ip || '') || 0)} (${si.label}) is down: ${running(S, si) ? 'holding time expired' : 'interface down'}`);
       continue;
     }
     // 還在 Hold time 裡：只有還沒發現的那一邊保留這個鄰居（路還指向它）

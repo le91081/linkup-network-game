@@ -4,7 +4,7 @@ import { isTrunk } from '../engine/sim.js';
 import { pgOf, pgVlan } from '../engine/virt.js';
 import { dev, swp, WEB, DB } from './util.js';
 import { iosSession } from '../engine/ios.js';
-import { addContainer, parsePublish, findCtr, imagePorts } from '../engine/docker.js';
+import { addContainer, parsePublish, findCtr } from '../engine/docker.js';
 
 export const CHAPTERS11 = [
   { id: 17, title: '虛擬化', desc: '一台實體伺服器跑很多台虛擬機器：Hypervisor、虛擬交換器 (vSwitch)、連接埠群組與 VLAN 標籤，以及接實體交換器的 Trunk。' },
