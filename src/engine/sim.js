@@ -16,7 +16,7 @@ import { recompute6 } from './sim6.js';
 import { setCdpCheck } from './qos.js';
 import { slaTick, trackTick } from './track.js';
 import { syncVsw } from './virt.js';
-import { acquire, leaseLen, ospfOn, prepVrrp, relayPass, routesAll } from './sim/l3.js';
+import { acquire, leaseLen, ospfOn, prepVrrp, putLease, relayPass, routesAll } from './sim/l3.js';
 import { capwapTick, prepWifi, wlcVlans } from './sim/wifi.js';
 import { computeAuth } from './sim/auth.js';
 import { dnsList, hash, ifaceMac, isVlanSw, vrfOf } from './sim/core.js';
@@ -244,11 +244,13 @@ function computePass(state, auth) {
     for (const ck of Object.keys(hold)) if (!(ck in tbl)) delete hold[ck];
   }
   const dyn = (i) => i.rt.active && i.rt.ip == null && !i.released && (i.mode === 'dhcp' || i.mode === 'pppoe');
+  state.rt.l2fast = true; // 這一段拓撲不會變：同一台交換器、同一個 VLAN 的 DHCP 用戶端共用一次泛洪（sim/l2.js 的 hostDomain）
   for (let pass = 0; pass < 4; pass++) {
     let changed = false;
     for (const d of devs) for (const i of d.ifaces) if (dyn(i) && acquire(state, old, d, i)) changed = true;
     if (!changed) break;
   }
+  delete state.rt.l2fast; delete state.rt.l2dom; delete state.rt.macSens;
   prepVrrp(state);
   routesAll(state);
   let again = relayPass(state, old);
@@ -259,7 +261,7 @@ function computePass(state, auth) {
       const ck = d.id + '/' + i.id, L = state.dyn.lease[ck];
       if (L && L.exp > now && state.devices[L.server]) {
         Object.assign(i.rt, { ip: L.ip, bits: L.bits, gw: L.gw, dns: L.dns, tftp: L.tftp || [], wlc: L.wlc || [], src: 'dhcp', server: L.server, relay: L.relay, exp: L.exp, held: i.rt.note || 'DHCP 伺服器沒有回應' });
-        if (L.key) (state.leases[L.key] ||= {})[ck] = L.ip;
+        if (L.key) putLease(state, L.key, ck, L.ip);
         again = true;
         continue;
       }

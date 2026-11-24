@@ -780,7 +780,8 @@ export function forward(state, ctx, startId, pkt) {
       log.push({ dev: dev.id, kind: 'arp', text: `ARP 廣播：誰是 ${fmtIp(nh)}？同一個廣播網域的每台設備都會收到` });
       const wave = buildWave(eps);
       if (wave.length) hops.push({ wave, proto: 'arp' });
-      for (const e of eps) learnPath(state, e.path, outIf.rt.mac); // 廣播經過的每一台交換器都學到發問者的 MAC
+      const done = new Set();
+      for (const e of eps) learnPath(state, e.path, outIf.rt.mac, done); // 廣播經過的每一台交換器都學到發問者的 MAC
       if (!QUIET) {
         const req = { proto: 'arp', smac: outIf.rt.mac, dmac: BCAST, arp: { op: 1, sip: outIf.rt.ip, tip: nh, sha: outIf.rt.mac } };
         for (const lvl of wave) for (const x of lvl) onHop(state, x, req, null);

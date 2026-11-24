@@ -10,7 +10,7 @@ import { fmtIp, netOf, parseIp, parseMask, sameNet } from '../ip.js';
 import { logEvent } from '../ops.js';
 import { buildWave } from './forward.js';
 import { cmp, dnsList, hash, isVlanSw, vrfOf } from './core.js';
-import { l2Explore, learnPath, reversed } from './l2.js';
+import { hostDomain, l2Explore, learnPath, reversed } from './l2.js';
 import { transact } from './transact.js';
 import { greLines, greReach, greRecursion, isTun, nhrpRoutes, tunIfaces } from './gre.js';
 import { prepTunnels } from './tunnels.js';
@@ -69,8 +69,10 @@ export function dhcpRenew(state, devId) {
 export function leaseFrom(state, old, key, start, end, exclude, clientKey, busy = []) {
   if (start == null || end == null || end < start) return null;
   const tbl = (state.leases[key] ||= {});
-  const used = new Set(Object.entries(tbl).filter(([k]) => k !== clientKey).map(([, v]) => v)); // 別人還沒到期的租約不能動
-  for (const x of [].concat(exclude ?? [])) used.add(x);
+  const cnt = useCount(state, key), mine0 = tbl[clientKey];
+  const ex = new Set([].concat(exclude ?? []));
+  // 別人還沒到期的租約不能動（計數扣掉自己手上的那一個）
+  const used = { has: (ip) => ex.has(ip) || (cnt.get(ip) || 0) > (mine0 === ip ? 1 : 0) };
   let ip = old[key] ? old[key][clientKey] : null;
   if (ip != null && (ip < start || ip > end || used.has(ip))) ip = null;
   if (ip == null) {
@@ -83,9 +85,28 @@ export function leaseFrom(state, old, key, start, end, exclude, clientKey, busy 
       for (const c of busy) if (c >= start && c <= end && !used.has(c) && (ip == null || c < ip) && !seen.includes(c)) seen.push(c);
     }
   }
-  if (ip == null) { delete tbl[clientKey]; return null; }
-  tbl[clientKey] = ip;
+  if (ip == null) { putLease(state, key, clientKey, undefined); return null; }
+  putLease(state, key, clientKey, ip);
   return ip;
+}
+// 每張租約表裡每個位址被用了幾次（大型拓撲時，每個用戶端都把整張表掃一遍會變成 n²）。
+// 記在 state.rt 上：每一輪計算都重建租約表，計數也跟著重來；這一輪裡寫租約一律經過 putLease
+function useCount(state, key) {
+  const all = state.rt ? (state.rt.leaseUse ||= {}) : null; // VPN 的位址池傳進來的是只有 leases 的物件：不快取
+  if (all && all[key]) return all[key];
+  const m = new Map();
+  for (const v of Object.values(state.leases[key] || {})) m.set(v, (m.get(v) || 0) + 1);
+  if (all) all[key] = m;
+  return m;
+}
+/** 寫入（ip 是 undefined 就刪掉）一筆租約，順便更新計數 */
+export function putLease(state, key, ck, ip) {
+  const tbl = (state.leases[key] ||= {}), old = tbl[ck];
+  if (ip === undefined) delete tbl[ck]; else tbl[ck] = ip;
+  const m = state.rt && state.rt.leaseUse && state.rt.leaseUse[key];
+  if (!m) return;
+  if (old !== undefined) m.set(old, m.get(old) - 1);
+  if (ip !== undefined) m.set(ip, (m.get(ip) || 0) + 1);
 }
 
 /** DHCP 伺服器的回應會從哪些交換器埠進來？若該埠不是 Snooping 信任埠就會被丟掉 */
@@ -99,7 +120,7 @@ function snoopBlock(state, path) {
 }
 
 export function acquire(state, old, d, i) {
-  const eps = l2Explore(state, d.id, i);
+  const eps = (i.mode === 'dhcp' && hostDomain(state, d, i)) || l2Explore(state, d.id, i);
   const set = (ip, bits, gw, dns, src, server) => {
     Object.assign(i.rt, { ip, bits, gw, dns, src, server, note: '' });
     return true;
@@ -135,7 +156,7 @@ export function acquire(state, old, d, i) {
       .filter((r) => r.mac && r.ip != null && sameNet(r.ip, s.rt.ip, s.rt.bits));
     const mine = rsv.find((r) => r.mac === i.rt.mac);
     let ip;
-    if (mine) { ip = mine.ip; (state.leases[sd.id + '/' + s.id] ||= {})[d.id + '/' + i.id] = ip; }
+    if (mine) { ip = mine.ip; putLease(state, sd.id + '/' + s.id, d.id + '/' + i.id, ip); }
     else {
       // 同一個網段上手動設定了 IP 的設備：伺服器 ping 得到它們，不會把這些位址發出去
       const busy = eps.filter((x) => x.iface !== s && x.iface.rt.ip != null && x.iface.rt.src !== 'dhcp' && x.iface.rt.src !== 'apipa').map((x) => x.iface.rt.ip);
@@ -151,11 +172,16 @@ export function acquire(state, old, d, i) {
     const h0 = (state.dyn.hold[lk] || {})[ck], renew = !!h0 && h0.ip === ip;
     rememberLease(state, d, i, lk, touchLease(state, lk, ck, ip));
     // 這一刻真的有 DHCP 封包在走（新的租約或續約）：沿路的交換器學到用戶端與伺服器的 MAC
-    if (state.dyn.hold[lk][ck].t0 === state.clock && !state.dyn.boot) {
+    const hd = state.dyn.hold[lk][ck], sig = state.clock + '|' + e.path.map((x) => x.cable || x.to).join(',') + '#' + eps.length;
+    if (hd.t0 === state.clock && !state.dyn.boot) {
       // debug ip dhcp server packet / events 要用（DORA 或續約的 REQUEST / ACK）
       (state.rt.dhcpEv ||= []).push({ srv: sd.id, sif: s.id, cli: d.id, cif: i.id, ip, renew, mac: i.rt.mac });
-      for (const x of eps) learnPath(state, x.path, i.rt.mac);
-      learnPath(state, reversed(e.path), s.rt.mac);
+      if (hd.learned !== sig) {
+        const done = new Set();
+        for (const x of eps) learnPath(state, x.path, i.rt.mac, done);
+        learnPath(state, reversed(e.path), s.rt.mac);
+        hd.learned = sig;
+      }
     }
     return true;
   }

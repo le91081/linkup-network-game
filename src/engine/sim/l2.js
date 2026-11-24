@@ -120,10 +120,13 @@ export function l2Explore(state, devId, iface, opts = {}) {
   const seen = new Set();
   const queue = [];
   const dev = state.devices[devId];
-  if (!ifaceActive(dev, iface) || rt.off[devId] || (state.down || {})[devId]) return out;
-  if (iface.bind.t === 'gre') return iface.rt && iface.rt.link ? greExplore(state, devId, iface, opts.family) : out; // Tunnel：對面是哪幾台路由器由 GRE / NHRP 決定
+  // opts.from = { dev, key }：不從介面出發，直接從某台交換器的某個 VLAN 開始泛洪（hostDomain 用，沒有來源 MAC）
+  if (!opts.from) {
+    if (!ifaceActive(dev, iface) || rt.off[devId] || (state.down || {})[devId]) return out;
+    if (iface.bind.t === 'gre') return iface.rt && iface.rt.link ? greExplore(state, devId, iface, opts.family) : out; // Tunnel：對面是哪幾台路由器由 GRE / NHRP 決定
+  }
   // opts.mac：用別的來源 MAC 送（macof 亂造的 MAC）；opts.trace：記下走過的交換器 (out.sws) 與每一段線路 (out.links)
-  const mac = opts.mac || (iface.rt && iface.rt.mac);
+  const mac = opts.from ? null : opts.mac || (iface.rt && iface.rt.mac);
   if (opts.trace) { out.sws = []; out.links = []; }
 
   // inner：雙重標籤的訊框裡面那一層標籤（外層被拿掉之後才看得到）
@@ -178,8 +181,9 @@ export function l2Explore(state, devId, iface, opts = {}) {
     }
   };
 
-  const b = iface.bind;
-  if (b.t === 'port') emit(dev, b.port, null, []);
+  const b = iface ? iface.bind : {};
+  if (opts.from) flood(opts.from.dev, opts.from.key, null, []);
+  else if (b.t === 'port') emit(dev, b.port, null, []);
   else if (b.t === 'sub' && b.outer != null) emit(dev, b.port, b.outer, [], b.vlan); // 攻擊工具：外層 b.outer、裡面 b.vlan
   else if (b.t === 'sub') emit(dev, b.port, b.vlan, []);
   else if (b.t === 'svi') flood(dev, b.vlan, null, []);
@@ -189,8 +193,9 @@ export function l2Explore(state, devId, iface, opts = {}) {
     if (a) flood(state.devices[a.via || a.ap], a.key, null, a.path || [wifiHop(devId, a.ap)], a);
   }
 
-  while (queue.length) {
-    const q = queue.shift();
+  // 用索引往前走，不用 shift()（大的廣播網域裡 shift 每次都要搬整個陣列）
+  for (let qi = 0; qi < queue.length; qi++) {
+    const q = queue[qi];
     const d = state.devices[q.to];
     const path = [...q.path, { cable: q.cable, from: q.from, fromPort: q.fromPort, to: q.to, toPort: q.toPort, tag: q.tag, ...(q.inner != null ? { inner: q.inner } : {}) }];
     if (out.links) out.links.push({ cable: q.cable, from: q.from, fromPort: q.fromPort, to: q.to, toPort: q.toPort });
@@ -206,6 +211,49 @@ export function l2Explore(state, devId, iface, opts = {}) {
       );
       if (i && i !== iface) out.push({ dev: d.id, iface: i, path });
     }
+  }
+  return out;
+}
+
+// 端點的 path 用到才組出來（DHCP 只看得到伺服器那幾條路，其他幾百個端點只用到 dev 與 iface）
+class HostEp {
+  constructor(e, first) { this.dev = e.dev; this.iface = e.iface; this.rest = e.path; this.first = first; }
+  get path() { return [this.first, ...this.rest]; }
+}
+
+/**
+ * 一般的主機接在交換器的 Access 埠：它的廣播網域 = 那台交換器的那個 VLAN 往外泛洪（除了它自己那個埠）。
+ * 同一台交換器、同一個 VLAN 的主機共用一次泛洪的結果（DHCP 用戶端很多時，不用每一台都把整個網域走一遍）。
+ * 結果和 l2Explore 一樣：[{ dev, iface, path }]，path 的第一段是主機到交換器。
+ * 會依來源 MAC 或進來的埠而不同的情況（Port Security、靜態丟棄的 MAC、protected / PVLAN / Trunk、vPC、
+ * 單向光纖、還在等 STP、迴圈…）一律回傳 null，交給 l2Explore 照常走。
+ * 只在 state.rt.l2fast 開著的時候用（計算 DHCP 的那一段：這段期間拓撲不會變）
+ */
+export function hostDomain(state, d, i) {
+  const rt = state.rt, b = i.bind;
+  if (!rt.l2fast || b.t !== 'port' || d.sw || d.kind === 'hypervisor' || rt.off[d.id] || (state.down || {})[d.id] || !ifaceActive(d, i)) return null;
+  if (rt.macSens == null) {
+    rt.macSens = Object.values(state.devices).some((x) => x.sw && (((x.sw.staticMacs || []).some((e) => e.drop)) || Object.values(x.sw.ports).some((p) => p.ps && p.ps.on)));
+  }
+  if (rt.macSens) return null;
+  const l = rt.links[d.id + ':' + b.port];
+  if (!l) return null;
+  const S = state.devices[l.dev], Q = l.port;
+  if (!S.sw || S.sw.mode !== 'vlan' || S.kind === 'hypervisor' || S.rt.vpc || !isBridgePort(S, Q)) return null;
+  if (rt.deaf && rt.deaf.has(S.id + ':' + Q)) return null;
+  const pc = S.sw.ports[Q];
+  if (pc.protected || isTrunk(S, Q) || /^pvlan/.test(pc.mode || '')) return null;
+  const notes = {}, v = ingressKey(S, Q, null, i.rt.mac, notes);
+  if (v === DROP || Object.keys(notes).length) return null;
+  const cache = (rt.l2dom ||= {}), k = S.id + '|' + v;
+  const all = (cache[k] ||= l2Explore(state, S.id, null, { from: { dev: S, key: v } }));
+  if (all.storm || all.stp || all.span || all.dot1x || all.ps || all.drop) return null;
+  const first = { cable: l.cable, from: d.id, fromPort: b.port, to: S.id, toPort: Q, tag: null };
+  const out = [];
+  for (const e of all) {
+    const h0 = e.path[0];
+    if (h0 && h0.from === S.id && h0.fromPort === Q) continue; // 從自己那個埠回來的（就是自己）
+    out.push(new HostEp(e, first));
   }
   return out;
 }
@@ -260,10 +308,18 @@ export function macKnown(state, d, key, mac) {
   return e && state.clock - e.t < macAgeOf(d) ? e : null;
 }
 
-/** 訊框沿著 path 走：路上每一台交換器都從進來的那個埠學到來源 MAC。回傳訊框在每一站的內部 VLAN */
-export function learnPath(state, path, mac) {
+/**
+ * 訊框沿著 path 走：路上每一台交換器都從進來的那個埠學到來源 MAC。回傳訊框在每一站的內部 VLAN。
+ * done（Set）：同一個廣播走向很多個目的地時，共用的那幾段只學一次（結果一樣，大的廣播網域快很多）
+ */
+export function learnPath(state, path, mac, done) {
   const keys = [];
   for (const h of path) {
+    if (done) {
+      const id = h.wifi ? 'w|' + h.from + '|' + h.to : h.to + '|' + h.toPort + '|' + h.tag;
+      if (done.has(id)) { keys.push(null); continue; }
+      done.add(id);
+    }
     const d = state.devices[h.to];
     let key = null;
     if (h.wifi) {
