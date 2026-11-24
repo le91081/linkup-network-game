@@ -1,7 +1,7 @@
 // 設定頁面（續）：RADIUS / 802.1X、靜態 NAT、IPv6、本機帳號與 SNMP
 import { h, button } from './dom.js';
 import { sessionLog, clearSessionLog, arpRows, sessionRows, clearSessions, fmtDur } from '../engine/sim.js';
-import { syslogRows, clearSyslog, SIM_EPOCH } from '../engine/ops.js';
+import { syslogRows, clearSyslog, SIM_EPOCH, logRows } from '../engine/ops.js';
 import { inp, sel, toggle, field, note, kv, del, cardHead, grid2, bind, isIp } from './form.js';
 import { fmtIp, parseIp } from '../engine/ip.js';
 import { CORP_CA, fmtDate, certDaysLeft, issueCert } from '../engine/web.js';
@@ -205,7 +205,20 @@ export function logTab(ctx, body) {
   body.append(
     h('p', { class: 'tip', text: '防火牆會記下每一條經過它的新連線：被哪一條政策放行或拒絕、有沒有做位址轉換。排查問題時先來這裡看：封包有沒有到、是被誰處理的。' }),
     sessionTableCard(ctx, '目前的連線 (session table)'),
-    sessionCard(ctx, '流量紀錄（最新的在上面）'));
+    sessionCard(ctx, '流量紀錄（最新的在上面）'),
+    anomalyCard(ctx));
+}
+
+/** DoS 政策的異常紀錄（subtype="anomaly"）：有設 DoS 政策、或已經有紀錄的時候才出現 */
+function anomalyCard(ctx) {
+  const { dev, state } = ctx;
+  const rows = () => logRows(state, dev).filter((r) => /subtype="anomaly"/.test(r.line)).slice(-8).reverse();
+  if (!(dev.dos || []).length && !rows().length) return null;
+  return h('div', { class: 'card anomaly-log' }, cardHead('異常紀錄（DoS 政策，最新的在上面）'), ctx.live(() => {
+    const r = rows();
+    if (!r.length) return note('muted', '還沒有任何異常紀錄。流量超過 DoS 政策的門檻才會記一筆：action="detected" 是只記錄，clear_session 是已經丟掉。');
+    return r.map((x) => h('div', { class: 'logline mono', text: x.line }));
+  }));
 }
 
 // ───────────────────────── Syslog 伺服器 ─────────────────────────

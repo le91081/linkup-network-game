@@ -64,7 +64,7 @@ test('DoS 政策（圖形介面）：掛錯介面量不到、pass 只記錄、bl
   // 2D 拓撲圖：只剩 wan1 那一段是攻擊流量
   await page.keyboard.press('Escape');
   await page.keyboard.press('t');
-  await expect(page.locator('#topo2d line.t2-link.flood')).toHaveCount(1);
+  await expect(page.locator('#topo2d svg.t2 line.t2-link.flood')).toHaveCount(1);
   await expect(page.locator('#topo2d .t2-legend')).toContainText('攻擊流量');
   await page.keyboard.press('t');
   await runAll(page);

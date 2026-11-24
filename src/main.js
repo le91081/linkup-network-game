@@ -366,7 +366,8 @@ const app = {
       app.results[i] = r;
       app.con.result(r.pass, r.pass ? '✔ 通過' : '✘ 未通過' + (o.expect === false ? '：這條連線應該被擋下來' : r.reason ? '：' + r.reason : ''));
       hud.renderMission(app);
-      if (!app.scene.fast) await sleep(r.hops.length ? 480 : 200);
+      // 觀察題沒有動畫，不用停頓（停頓期間還算「測試中」，馬上點下一題會被擋）
+      if (!app.scene.fast && o.type !== 'ask') await sleep(r.hops.length ? 480 : 200);
     }
     app.running = false;
     app.scene.fast = false;

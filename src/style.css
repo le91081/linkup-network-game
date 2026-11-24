@@ -1337,3 +1337,4 @@ body.guide-fold { --side-r: 44px; }
 .dos-th span { white-space: nowrap; }
 .dos-row { grid-template-columns: minmax(0, 1.25fr) minmax(0, 1fr) 116px; }
 @container pbody (max-width: 389px) { .dos-row { grid-template-columns: minmax(0, 1fr) 112px; } }
+.anomaly-log .logline { font-size: 11px; line-height: 1.5; color: #ffd9a0; padding: 5px 0; border-top: 1px dashed var(--line); overflow-wrap: anywhere; user-select: text; }

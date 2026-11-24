@@ -93,7 +93,8 @@ function dosCards(ctx, body) {
         h('label', { class: 'dos-th', title: `門檻：每秒幾個封包（預設 ${def}）` }, inp(ctx, () => String(a.threshold), (v) => { if (isNum(1, 10000000)(v)) put({ threshold: +v }); }, { check: isNum(1, 10000000), rerender: true }), h('span', { text: '/ 秒' }))));
     }
     c.append(ctx.live(() => {
-      const mine = seenOf().filter((x) => x.policy === p.id), other = seenOf().filter((x) => !x.policy || x.iface !== p.iface);
+      // other：有異常的流量從別的介面進來，而且那個介面上沒有任何 DoS 政策在看
+      const mine = seenOf().filter((x) => x.policy === p.id), other = seenOf().filter((x) => !x.policy);
       if (mine.some((x) => x.drop)) { const x = mine.find((y) => y.drop); return note('ok', `封鎖中：${x.e.anomaly} 每秒 ${fmtCount(x.e.pps)} 個封包送往 ${x.e.ip}:${x.e.port}，超過門檻 ${fmtCount(x.threshold)} 的都被丟掉。`); }
       if (mine.some((x) => x.over)) { const x = mine.find((y) => y.over); return note('warn', `偵測到 ${x.e.anomaly}：每秒 ${fmtCount(x.e.pps)} 個封包（門檻 ${fmtCount(x.threshold)}），但動作是 pass，只記錄、沒有丟掉。`); }
       if (mine.length) { const x = mine[0]; return note('warn', x.on ? `從 ${p.iface} 進來的 ${x.e.anomaly} 是每秒 ${fmtCount(x.e.pps)} 個封包，還沒超過門檻 ${fmtCount(x.threshold)}，不會觸發。` : `有 ${x.e.anomaly}（每秒 ${fmtCount(x.e.pps)} 個封包）從 ${p.iface} 進來，但這條政策沒有啟用 ${x.e.anomaly} 的偵測。`); }
