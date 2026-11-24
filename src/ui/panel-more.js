@@ -205,8 +205,9 @@ export function logTab(ctx, body) {
   body.append(
     h('p', { class: 'tip', text: '防火牆會記下每一條經過它的新連線：被哪一條政策放行或拒絕、有沒有做位址轉換。排查問題時先來這裡看：封包有沒有到、是被誰處理的。' }),
     sessionTableCard(ctx, '目前的連線 (session table)'),
-    sessionCard(ctx, '流量紀錄（最新的在上面）'),
-    anomalyCard(ctx));
+    sessionCard(ctx, '流量紀錄（最新的在上面）'));
+  const an = anomalyCard(ctx); // 沒有 DoS 政策也沒有紀錄時是 null（原生的 append 會把 null 印成文字）
+  if (an) body.append(an);
 }
 
 /** DoS 政策的異常紀錄（subtype="anomaly"）：有設 DoS 政策、或已經有紀錄的時候才出現 */
