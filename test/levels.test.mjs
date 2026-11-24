@@ -193,7 +193,7 @@ console.log('\n真實行為');
     ok(a.ok && a.hops.some((h) => h.wave) && a.log.some((l) => l.kind === 'arp'), '第一個封包會先送出 ARP 廣播');
     ok(b.ok && !b.hops.some((h) => h.wave) && !b.log.some((l) => l.kind === 'arp'), 'ARP 快取：第二個封包不再廣播');
     ok(arpRows(s, s.devices['pc-a']).some((r) => r.ip === ip) && arpRows(s, s.devices['pc-b']).length === 1, '兩端都記下了對方的 MAC');
-    ok(a.log.some((l) => l.frame && l.frame.smac === s.devices['pc-a'].ifaces[0].rt.mac && l.frame.ttl === 64), '追蹤紀錄附上訊框標頭（MAC / IP / TTL）');
+    ok(a.log.some((l) => l.frame && l.frame.smac === s.devices['pc-a'].ifaces[0].rt.mac && l.frame.ttl === 128), '追蹤紀錄附上訊框標頭（MAC / IP / TTL：Windows 送出的封包 TTL 是 128）');
     advance(s, 100);
     ok(arpRows(s, s.devices['pc-a']).length === 1 && arpRows(s, s.devices['pc-a'])[0].age === 100, 'ARP 項目會保留下來，而且記得自己多久沒被用到');
     advance(s, 30);
@@ -4380,6 +4380,45 @@ console.log('\n存檔格式遷移');
   ok(migrateState(future).newer && future.ver === SAVE_VER + 5, '比較新的版本存的：不動它、標成 newer');
   const store = migrateStore({ saves: { la: { devices: { dns: { id: 'dns', dnsRecords: { 'a.corp.local': '10.0.0.5' } } }, cables: [] }, lx: future }, custom: [{ state: { devices: {}, cables: [] } }] });
   ok(store.ver === SAVE_VER && store.saves.la.ver === SAVE_VER && store.saves.la.devices.dns.dnsZone.records[0].value === '10.0.0.5' && store.saves.lx.ver === SAVE_VER + 5 && store.custom[0].state.ver === SAVE_VER, '整份進度：每一關的存檔、自訂關卡都升級，新版本的留著不動');
+  // 2 → 3：設定裡寫到的舊 MAC（02 開頭）換成同一個介面現在的位址；不認得的位址不動
+  const sv = LEVELS.find((l) => l.id === 'l17').setup();
+  const oldPc = sim.legacyMac('pc-2', 'eth0'), newPc = sim.macOf('pc-2', 'eth0', 'pc');
+  sv.ver = 2;
+  sv.devices.sw.sw.ports['Gi0/3'].ps = { on: true, macs: oldPc + ', 02:00:00:00:00:01', mode: 'restrict' };
+  sv.devices.sw.sw.staticMacs = [{ mac: oldPc.toUpperCase().replace(/:/g, '-'), vlan: 1, port: 'Gi0/3' }];
+  sv.devices.sw.note = '舊的 ' + oldPc.replace(/:/g, '').match(/.{4}/g).join('.');
+  migrateState(sv);
+  ok(oldPc.startsWith('02:') && sv.ver === SAVE_VER && sv.devices.sw.sw.ports['Gi0/3'].ps.macs === newPc + ', 02:00:00:00:00:01', '舊存檔的 Port Security：以前的 MAC 換成那個介面現在的位址，別的位址不動');
+  ok(sv.devices.sw.sw.staticMacs[0].mac === newPc.replace(/:/g, '-') && sv.devices.sw.note === '舊的 ' + newPc.replace(/:/g, '').match(/.{4}/g).join('.'), '連字號與 Cisco 的點分格式也認得，換完保持原來的格式');
+  sim.settle(sv);
+  ok(sv.devices['pc-2'].ifaces[0].rt.mac === newPc, '換上去的就是那台電腦現在的 MAC');
+}
+
+console.log('\nMAC 位址：廠商碼 (OUI)、同一台設備連號、手機的私人位址');
+{
+  const sim = await import('../src/engine/sim.js');
+  const { makeDevice } = await import('../src/engine/model.js');
+  const { OUI, macVendor } = await import('../src/engine/oui.js');
+  const ok = (cond, title) => (cond ? console.log('  ✔ ' + title) : fail(title));
+  const st = { devices: {}, cables: [] };
+  const add = (model, id) => { st.devices[id] = makeDevice(model, id, {}); return st.devices[id]; };
+  const sw = add('c9300', 'core'), rt = add('isr4331', 'r1'), pc = add('pc', 'pc1'), lap = add('laptop', 'nb1'), ph = add('phone', 'ph1'), fg = add('fg60f', 'fw'), ex = add('ex2300', 'ex1'), vm = add('vm', 'vm1'), vpc = add('vpc', 'aws');
+  sim.settle(st);
+  const macs = (d) => d.ifaces.map((i) => i.rt.mac);
+  const num = (m) => parseInt(m.replace(/:/g, '').slice(6), 16);
+  const all = Object.values(st.devices).flatMap(macs);
+  ok(all.length >= 10 && all.every((m) => /^([0-9a-f]{2}:){5}[0-9a-f]{2}$/.test(m)), '每個介面都有格式正確的 MAC（小寫、冒號分隔）');
+  ok(macs(rt).every((m) => OUI.cisco.includes(m.slice(0, 8))) && macVendor(macs(rt)[0]) === 'Cisco' && macs(fg).every((m) => macVendor(m) === 'Fortinet') && macVendor(macs(ex)[0]) === 'Juniper' && macVendor(macs(pc)[0]) === 'Dell' && macVendor(macs(vm)[0]).startsWith('VMware'), '前三個位元組是那個型號的製造商登記的廠商碼：Cisco、Fortinet、Juniper、Dell、VMware');
+  ok(new Set(macs(rt).map((m) => m.slice(0, 8))).size === 1 && num(macs(rt)[1]) === num(macs(rt)[0]) + 1 && num(macs(rt)[2]) === num(macs(rt)[0]) + 2, '同一台設備的各個埠是連號的：Gi0/0/0、Gi0/0/1、Gi0/0/2 依序加一');
+  const base = sim.macOf('core', 'br', 'c9300'), p0 = sim.macOf('core', sw.ports[0].id, 'c9300', 0), p9 = sim.macOf('core', sw.ports[9].id, 'c9300', 9);
+  ok(num(p0) === num(base) + 1 && num(p9) === num(base) + 10 && (num(base) & 63) === 0, '交換器：基底位址（STP 的 bridge ID、SVI）之後，第 n 個埠是基底 + n');
+  const eth = lap.ifaces.find((i) => i.bind.t === 'port').rt.mac, wl = lap.ifaces.find((i) => i.bind.t === 'wlan').rt.mac;
+  ok(macVendor(eth).startsWith('LCFC') && macVendor(wl).startsWith('Intel') && eth.slice(0, 8) !== wl.slice(0, 8), '筆電的有線與無線網卡是不同廠商做的，廠商碼不一樣');
+  const pm = ph.ifaces.find((i) => i.bind.t === 'wlan').rt.mac, b0 = parseInt(pm.slice(0, 2), 16);
+  ok((b0 & 2) === 2 && (b0 & 1) === 0 && macVendor(pm).startsWith('本機管理位址'), '手機用的是隨機的私人位址：本機管理位元是 1、不是群播，查不到廠商');
+  ok(macs(vpc).every((m) => (parseInt(m.slice(0, 2), 16) & 3) === 2), '雲端的虛擬網卡也是本機管理位址');
+  ok(macVendor('00-00-0C-07-AC-0A').startsWith('HSRP') && macVendor('0000.5e00.0101').startsWith('VRRP') && macVendor('ff:ff:ff:ff:ff:ff') === '廣播' && macVendor('01:00:5e:00:00:05') === 'IPv4 群播' && macVendor('zz') === '' && macVendor('12:34:56:78:9a:bc').startsWith('本機管理') && macVendor('00:aa:bb:cc:dd:ee') === '', 'macVendor：虛擬閘道、廣播、群播認得出來；沒登記在表裡的回傳空字串');
+  ok(sim.macOf('core', 'br', 'c9300') === sim.macOf('core', 'br', 'c9300') && sim.macOf('core', 'br', 'c9300') !== sim.macOf('core2', 'br', 'c9300') && sim.macOf('core', 'br', 'c9300').slice(0, 8) === sim.macOf('core2', 'br', 'c2960').slice(0, 8), '位址是固定的（重開遊戲不會變）；同一家的交換器用同一組廠商碼，比大小只看後半段');
 }
 
 console.log('\nEIGRP：鄰居條件、MD5 驗證、metric 與 feasible successor');
@@ -4925,7 +4964,8 @@ console.log('\nSTP：每個 VLAN 的優先權（PVST+）與 MST 區域');
 
 console.log('\nping 的往返時間：設備處理、線路速率、距離、排隊與 CPU 回應');
 {
-  const { pingStats, pathTimes, rttSamples, winMs, winCol, linuxMs, iosMs } = await import('../src/engine/latency.js');
+  const { pingStats, pathTimes, rttSamples, winMs, winCol, linuxMs, iosMs, ispRows } = await import('../src/engine/latency.js');
+  const { fmtIp } = await import('../src/engine/ip.js');
   const { iosSession } = await import('../src/engine/ios.js');
   const { iosRun } = await import('../src/ui/cli.js');
   const ok = (cond, title) => (cond ? console.log('  ✔ ' + title) : fail(title));
@@ -4947,11 +4987,26 @@ console.log('\nping 的往返時間：設備處理、線路速率、距離、排
   const after = pathTimes(s, net.r).find((x) => x.dev === 'rt').ms;
   ok(after > before + 0.3, `線路的使用率 99%：排隊讓這一段從 ${before.toFixed(3)} ms 變成 ${after.toFixed(3)} ms`);
   s.rt.load[up.cable + '>rt'] = 0;
-  ok(winMs(0.4) === '<1ms' && winMs(9.4) === '=9ms' && winCol(0.4) === ' <1 ms' && winCol(12.2) === ' 12 ms' && linuxMs(0.4123) === '0.412' && linuxMs(9.456) === '9.46' && linuxMs(12.34) === '12.3' && iosMs(0.4) === 1, 'Windows（<1ms）、Linux（有效位數）、IOS（整數，最少 1）的寫法');
+  ok(winMs(0.4) === '<1ms' && winMs(9.4) === '=9ms' && winCol(0.4) === '    <1 ms' && winCol(12.2) === '    12 ms' && winCol(null) === '     *   ' && linuxMs(0.4123) === '0.412' && linuxMs(9.456) === '9.46' && linuxMs(12.34) === '12.3' && iosMs(0.4) === 1, 'Windows（<1ms）、Linux（有效位數）、IOS（整數，最少 1）的寫法');
   const S = iosSession(() => s.devices.rt, () => s), out = [];
   for (const l of ['enable', 'ping 8.8.8.8', 'traceroute 8.8.8.8']) iosRun({ state: s, showTrace() {}, refreshLive() {} }, 'rt', S, l, (x) => out.push(x));
   const txt = out.join('\n');
-  ok(/round-trip min\/avg\/max = (9|1\d)\/(9|1\d)\/(9|1\d) ms/.test(txt) && /^  1 8\.8\.8\.8 (9|1\d) msec (9|1\d) msec (9|1\d) msec$/m.test(txt), 'IOS 的 ping 與 traceroute 印出算出來的時間');
+  ok(/round-trip min\/avg\/max = (9|1\d)\/(9|1\d)\/(9|1\d) ms/.test(txt) && /^  \d+ 8\.8\.8\.8 (9|1\d) msec (9|1\d) msec (9|1\d) msec$/m.test(txt), 'IOS 的 ping 與 traceroute 印出算出來的時間');
+  // 目的地在網際網路上：不是一站就到。業者的閘道之後，骨幹裡還有幾站（有的不回應），時間一站比一站長
+  const rr = transact(s, 'rt', { proto: 'icmp', dst: parseIp('8.8.8.8') }), isp = rr.isp, rows = ispRows(s, rr, 3, 60);
+  const tr = txt.split('\n').filter((l) => /^ {2}\d+ /.test(l));
+  ok(isp && Object.values(s.devices).find((d) => d.kind === 'internet').ifaces.some((i) => i.rt.ip === isp.edge) && isp.hops.length >= 2 && isp.hops.length <= 5 && isp.hops.every((x) => x == null || (x >>> 22) === ((100 << 2) | 1)),
+    `網際網路裡的路徑：業者的閘道 ${fmtIp(isp.edge)}，加上骨幹裡的 ${isp.hops.length} 站（100.64.0.0/10，不回應的是 null）`);
+  ok(tr.length === isp.hops.length + 2 && tr[0].startsWith(`  1 ${fmtIp(isp.edge)} `) && /^ {2}\d+ 8\.8\.8\.8 /.test(tr[tr.length - 1]) && tr.filter((l) => /\*/.test(l)).length === isp.hops.filter((x) => x == null).length, `traceroute 8.8.8.8 一共 ${tr.length} 站：第一站是業者的閘道，最後一站才是 8.8.8.8`);
+  ok(rows.length === isp.hops.length + 1 && rows.every((x, k) => k === 0 || x.ms[0] > rows[k - 1].ms[0] - 1.2) && rows[rows.length - 1].ms[0] < rttSamples(s, rr, 3, 60)[0] + 1, '每一站的時間介於「到業者的閘道」與「到目的地」之間');
+  // ping 回來的 TTL：對方的起始值減掉回程經過的每一站。Windows 128、Linux 與網際網路上的伺服器 64、Cisco 的設備 255
+  ok(rr.rttl === 64 - (isp.hops.length + 1) && net.r.rttl === rr.rttl - 1 && transact(s, 'rt', { proto: 'icmp', dst: isp.edge }).rttl === 255 && transact(s, 'pc-1', { proto: 'icmp', dst: isp.edge }).rttl === 254,
+    `ping 8.8.8.8 回來的 TTL：路由器看到 ${rr.rttl}、後面的電腦再少 1（${net.r.rttl}）；ping 業者的閘道是 255（路由器自己回的）`);
+  const lan = Object.values(s.devices).filter((d) => d.model === 'pc' && d.ifaces[0].rt.ip != null), a2b = transact(s, lan[0].id, { proto: 'icmp', dst: lan[1].ifaces[0].rt.ip });
+  ok(lan.length >= 2 && a2b.ok && a2b.rttl === 128 && a2b.log.some((l) => l.frame && !l.frame.reply && l.frame.ttl === 128), '同一個網段的兩台 Windows 電腦互 ping：TTL=128（沒有經過路由器）');
+  const tcp = transact(s, lan[0].id, { proto: 'tcp', dst: lan[1].ifaces[0].rt.ip, dport: 445 }), fromRt = transact(s, 'rt', { proto: 'udp', dst: parseIp('8.8.8.8'), dport: 53 });
+  const sp = (r) => (r.log.find((l) => l.frame && !l.frame.reply) || { frame: {} }).frame.sport;
+  ok(sp(tcp) >= 49152 && sp(tcp) <= 65535 && sp(fromRt) >= 32768 && sp(fromRt) <= 60999, `來源埠是作業系統的暫時埠：Windows 49152–65535（${sp(tcp)}），其他 32768–60999（${sp(fromRt)}）`);
 }
 console.log('\nSTP：BPDU Filter、Loop Guard 與 BPDU Guard 的預設');
 {
@@ -6136,11 +6191,11 @@ console.log('\n觀察題與封包實驗室');
   const q = (id) => l173.objectives.find((o) => o.id === id);
   ok(evaluate(s, l173.objectives).map((r) => r.pass).join() === 'true,false,false,false,false' && evaluate(s, l173.objectives)[1].empty === true, '18-1 一開始：ping 會通，觀察題還沒作答（不算通過）');
   const mac = askWant(s, q('smac'));
-  ok(/^02(:[0-9a-f]{2}){5}$/.test(mac) && mac === s.devices.r2.ifaces.find((i) => i.id === 'Gi0/0/1').rt.mac, '「到達伺服器時的來源 MAC」的答案是 R2 Gi0/0/1 的 MAC（從網路算出來的）');
+  ok(/^([0-9a-f]{2}:){5}[0-9a-f]{2}$/.test(mac) && mac === s.devices.r2.ifaces.find((i) => i.id === 'Gi0/0/1').rt.mac, '「到達伺服器時的來源 MAC」的答案是 R2 Gi0/0/1 的 MAC（從網路算出來的）');
   const tryAns = (o, v) => { s.answers = { [o.id]: v }; return askCheck(s, o); };
-  ok(tryAns(q('smac'), mac.toUpperCase().replace(/:/g, '-')).pass && tryAns(q('smac'), mac.replace(/:/g, '').replace(/(.{4})(?=.)/g, '$1.')).pass, 'MAC 位址不管分隔符號與大小寫：02-EF-…、02ef.a9ad.ba0d 都算對');
+  ok(tryAns(q('smac'), mac.toUpperCase().replace(/:/g, '-')).pass && tryAns(q('smac'), mac.replace(/:/g, '').replace(/(.{4})(?=.)/g, '$1.')).pass, 'MAC 位址不管分隔符號與大小寫：00-1B-54-…、001b.54xx.xxxx 都算對');
   ok(/PC-A 的 MAC/.test(tryAns(q('smac'), s.devices['pc-a'].ifaces[0].rt.mac).reason) && /R1 的介面/.test(tryAns(q('smac'), s.devices.r1.ifaces[0].rt.mac).reason), '填了 PC-A 或 R1 的 MAC：回饋說明這個位址只出現在哪一段');
-  ok(askWant(s, q('ttl')) === 62 && tryAns(q('ttl'), '62').pass && tryAns(q('ttl'), ' 062 ').pass && !tryAns(q('ttl'), '64').pass, 'TTL 的答案是實際送一個封包量出來的（64 − 兩台路由器 = 62）');
+  ok(askWant(s, q('ttl')) === 126 && tryAns(q('ttl'), '126').pass && tryAns(q('ttl'), ' 0126 ').pass && !tryAns(q('ttl'), '128').pass && !tryAns(q('ttl'), '62').pass, 'TTL 的答案是實際送一個封包量出來的（Windows 的 128 − 兩台路由器 = 126）');
   ok(/ARP 是廣播/.test(tryAns(q('dmac'), 'srv').reason) && tryAns(q('dmac'), 'r1').pass && askText(s, q('dmac')) === 'R1 的 Gi0/0/0（PC-A 的預設閘道）', '選擇題：選錯有那個選項自己的說明；任務清單顯示的是選項的文字');
   ok(askNorm({ input: 'port' }, 'GigabitEthernet0/6') === askNorm({ input: 'port' }, 'gi 0/6') && askNorm({ input: 'port' }, 'Gi0/6') !== askNorm({ input: 'port' }, 'Fa0/6') && askNorm({ input: 'ip' }, ' 203.0.113.25/29 ') === '203.0.113.25', '埠名（GigabitEthernet0/6 = gi 0/6 ≠ Fa0/6）與 IP（忽略空白與 /前綴）的比對');
   // 18-2：答案跟著接線走

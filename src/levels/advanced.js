@@ -283,7 +283,7 @@ export const LEVELS2 = [
     solve(s) {
       const d = dev(s, 'sw');
       d.sw.ports['Gi0/8'].shut = true;
-      d.sw.ports['Gi0/3'].ps = { on: true, macs: macOf('pc-2', 'eth0'), mode: 'restrict' };
+      d.sw.ports['Gi0/3'].ps = { on: true, macs: macOf('pc-2', 'eth0', 'pc'), mode: 'restrict' };
       for (const p of d.ports) if (!s.cables.some((c) => (c.a.dev === 'sw' && c.a.port === p.id) || (c.b.dev === 'sw' && c.b.port === p.id))) d.sw.ports[p.id].shut = true;
     },
     recap: ['閒置的埠要關、使用中的埠要限制 MAC，這是交換器加固的兩個基本動作。', 'Restrict 只丟違規的封包；Shutdown 會把整個埠關掉，連合法設備也斷線。'],

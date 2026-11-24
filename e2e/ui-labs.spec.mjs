@@ -125,7 +125,7 @@ test('觀察題：選錯有說明、填空不管格式、可以復原，全部�
   await send.click();
   await expect(asks.nth(2)).toHaveClass(/pass/);
   await asks.nth(3).click();
-  await dlg.locator('.ask-inp').fill('62');
+  await dlg.locator('.ask-inp').fill('126');
   await dlg.locator('.ask-inp').press('Enter');
   // 復原 / 重做之後結果變舊了：整個重測一次就過關
   await page.locator('#mission .m-foot button', { hasText: '執行' }).click();

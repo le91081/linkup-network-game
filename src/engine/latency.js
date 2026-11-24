@@ -76,8 +76,19 @@ export function pingStats(state, res, n = 4, bytes = 74) {
 }
 /** Windows 的寫法：小於 1 ms 寫成「<1ms」 */
 export const winMs = (ms) => (ms < 1 ? '<1ms' : `=${Math.round(ms)}ms`);
-/** tracert 一欄：「<1 ms」或「 12 ms」 */
-export const winCol = (ms) => (ms < 1 ? '<1 ms' : `${Math.round(ms)} ms`).padStart(6);
+/** tracert 的一欄（和 Windows 一樣寬 9 個字）：「    <1 ms」「    12 ms」；沒有回應是「     *   」 */
+export const winCol = (ms) => (ms == null ? '     *   ' : (ms < 1 ? '<1' : String(Math.round(ms))).padStart(6) + ' ms');
+/**
+ * traceroute 在網際網路裡的那幾站（res.isp，見 sim/transact.js）：業者的閘道，加上骨幹裡的路由器。
+ * 回傳 [{ ip（null：那一站不回應）, ms: n 個樣本 }]，時間從「業者的閘道」到「目的地」依序增加
+ */
+export function ispRows(state, res, n = 3, bytes = 74) {
+  const isp = res && res.isp;
+  if (!isp) return [];
+  const end = rttSamples(state, res, n, bytes), list = [isp.edge, ...isp.hops].filter((x, k) => k > 0 || x != null), cnt = list.length;
+  const span = Math.min(end[0] * 0.9, 9); // 骨幹來回大約 9 ms，攤在這幾站上
+  return list.map((ip, k) => ({ ip, ms: end.map((v, j) => Math.max(0.4, v - span * (1 - (k + 1) / (cnt + 1)) + WOB[(k + j) % WOB.length] * 0.8)) }));
+}
 /** Linux（iputils）的寫法：100 ms 以上整數、10 ms 以上一位小數、1 ms 以上兩位、不到 1 ms 三位 */
 export const linuxMs = (ms) => ms.toFixed(ms >= 100 ? 0 : ms >= 10 ? 1 : ms >= 1 ? 2 : 3);
 /** IOS 的寫法：整數毫秒，最少 1 */

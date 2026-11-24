@@ -130,7 +130,7 @@ export function ec2Tab(ctx, body) {
         const dst = c === 'nc' ? parseIp(b) : ip, port = c === 'nc' ? +line.trim().split(/\s+/)[3] : c === 'curl' ? +(m[2] || (/^http:/.test(a) ? 80 : 443)) : 0;
         const res = transact(state, dev.id, { proto: c === 'ping' ? 'icmp' : 'tcp', dst, dport: port, srcIp: parseIp(x.ip) });
         app.showTrace(`${x.name}$ ${line}`, res.log, res.hops, res);
-        if (res.ok) ui.out.push({ t: c === 'ping' ? `64 bytes from ${fmtIp(dst)}: icmp_seq=1 ttl=${res.l3.length ? 64 - res.l3.length : 64} time=${rttSamples(state, res, 1, 98)[0].toFixed(2)} ms` : c === 'nc' ? `Ncat: Connected to ${fmtIp(dst)}:${port}.` : `HTTP/1.1 200 OK（${fmtIp(dst)}:${port}）`, c: 'ok' });
+        if (res.ok) ui.out.push({ t: c === 'ping' ? `64 bytes from ${fmtIp(dst)}: icmp_seq=1 ttl=${res.rttl ?? 64 - res.l3.length} time=${rttSamples(state, res, 1, 98)[0].toFixed(2)} ms` : c === 'nc' ? `Ncat: Connected to ${fmtIp(dst)}:${port}.` : `HTTP/1.1 200 OK（${fmtIp(dst)}:${port}）`, c: 'ok' });
         else { ui.out.push({ t: c === 'ping' ? `From ${x.ip} icmp_seq=1 Destination Host Unreachable` : `${c}: (28) Failed to connect to ${fmtIp(dst)} port ${port} after 30000 ms: Timeout was reached`, c: 'bad' }); ui.out.push({ t: '  ↳ ' + res.reason, c: 'hint' }); }
       }
       if (ui.out.length > 40) ui.out.splice(0, ui.out.length - 40);

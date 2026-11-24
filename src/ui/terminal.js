@@ -1,12 +1,12 @@
 // 主機上的終端機：ping / ipconfig / tracert / nslookup / curl
 import { h, ownKeys, escLine } from './dom.js';
-import { fmtIp, fmtMask, parseIp, maskOf, parseMask } from '../engine/ip.js';
-import { transact, resolveName, dualStack, dnsQuery, dhcpTrace, arpRows, clearArp, dhcpRelease, dhcpRenew, fmtDur, throughput, unreachOf } from '../engine/sim.js';
-import { rttSamples, pingStats, winMs, winCol, linuxMs } from '../engine/latency.js';
+import { fmtIp, fmtMask, parseIp, maskOf, parseMask, sameNet, bcastOf } from '../engine/ip.js';
+import { transact, resolveName, dualStack, dnsQuery, dhcpTrace, arpRows, clearArp, dhcpRelease, dhcpRenew, fmtDur, throughput, unreachOf, isLinuxHost } from '../engine/sim.js';
+import { rttSamples, pingStats, winMs, winCol, linuxMs, ispRows } from '../engine/latency.js';
 import { lookupRoute } from '../engine/sim.js';
 import { redirectRows, redirectRoute, clearRedirects } from '../engine/redirect.js';
 import { cacheRows, cacheFlush, ptrName } from '../engine/dns.js';
-import { plainStamp } from '../engine/ops.js';
+import { plainStamp, deviceTime } from '../engine/ops.js';
 import { remoteOpen, remoteLogin, remoteSend, remoteAlive, remoteClose, remoteBusy } from '../engine/remote.js';
 import { iosSession } from '../engine/ios.js';
 import { fortiSession } from '../engine/fortios.js';
@@ -24,13 +24,34 @@ import { FG_CATS } from '../engine/utm.js';
 import { ipMtu, jumboCapable } from '../engine/mtu.js';
 
 const V6SRC = { slaac: '（SLAAC）', dhcp6: '（DHCPv6）' };
-const v6Lines = (rt, i) => (rt.v6 && rt.v6.ll != null
-  ? [...rt.v6.addrs.map((a) => `   IPv6 位址 . . . . . . : ${fmtIp6(a.ip)}${a.bits === 128 && a.src === 'dhcp6' ? '' : '/' + a.bits}${V6SRC[a.src] || ''}`),
-    `   連結-本機 IPv6 位址 . : ${fmtIp6(rt.v6.ll)}`, ...(rt.v6.gw != null ? [`   IPv6 預設閘道 . . . . : ${fmtIp6(rt.v6.gw)}`] : []),
-    ...(rt.v6.dhcp && rt.v6.dhcp.ok ? [`   DHCPv6 IAID . . . . . : ${iaidOf(i)}`, `   DHCPv6 用戶端 DUID  . : ${duidOf(i)}`] : []),
-    ...(rt.v6.dns && rt.v6.dns.length ? [`   IPv6 DNS 伺服器 . . . : ${rt.v6.dns.map(fmtIp6).join(', ')}`] : []),
-    ...(rt.v6.dhcp && !rt.v6.dhcp.ok ? [`   DHCPv6 . . . . . . . : 失敗（${rt.v6.dhcp.why}）`] : [])]
-  : []);
+// ── Windows 的 ipconfig：版面照真的來 ──
+/** 顯示寬度：中文字佔兩格 */
+const dispW = (s) => [...s].reduce((n, ch) => n + (ch.charCodeAt(0) > 0x2e7f ? 2 : 1), 0);
+/** 「   IPv4 位址 . . . . . . . . . . . . : 192.168.1.10」：欄位名稱後面補點，冒號對齊在同一欄 */
+const fld = (label, value = '') => {
+  let s = '   ' + label + ' ';
+  while (dispW(s) < 38) s += '. ';
+  if (dispW(s) > 38) s = s.slice(0, -1);
+  return `${s}: ${value}`;
+};
+/** 一個欄位有好幾個值（DNS 伺服器、IPv6 與 IPv4 的閘道）：第二個以後另起一行、對齊在值的那一欄 */
+const fldCont = (value) => ' '.repeat(40) + value;
+const NIC = { pc: 'Intel(R) Ethernet Connection (17) I219-LM', laptop: 'Intel(R) Ethernet Connection (13) I219-V', laptop6e: 'Intel(R) Ethernet Connection (16) I219-V', tower: 'Broadcom NetXtreme Gigabit Ethernet', rack1u: 'Broadcom NetXtreme Gigabit Ethernet', vm: 'vmxnet3 Ethernet Adapter' };
+const WNIC = { laptop: 'Intel(R) Wi-Fi 6 AX201 160MHz', laptop6e: 'Intel(R) Wi-Fi 6E AX211 160MHz' };
+/** 網卡的描述（ipconfig /all）：同一種的第二張後面是 #2 */
+const nicName = (dev, i) => {
+  const wl = i.bind.t === 'wlan', n = dev.ifaces.filter((x) => (x.bind.t === 'wlan') === wl).indexOf(i);
+  return ((wl ? WNIC[dev.model] : NIC[dev.model]) || (wl ? 'Intel(R) Wi-Fi 6 AX201 160MHz' : 'Realtek PCIe GbE Family Controller')) + (n > 0 ? ` #${n + 1}` : '');
+};
+/** Windows 的電腦名稱：最多 15 個字、大寫；畫面上的名稱是中文的話，就是裝機時自動取的 DESKTOP-XXXXXXX */
+const winHost = (dev) => dev.name.replace(/[^\w-]+/g, '-').replace(/^-+|-+$/g, '').toUpperCase().slice(0, 15)
+  || 'DESKTOP-' + dev.id.replace(/[^a-z0-9]/gi, '').toUpperCase().padEnd(7, '7').slice(0, 7);
+const two = (n) => String(n).padStart(2, '0');
+/** 2026年1月5日 上午 09:00:12（ms 是 UTC 的毫秒，off 是時區） */
+const winDate = (ms, off) => {
+  const x = new Date(ms + off * 3600000), hh = x.getUTCHours();
+  return `${x.getUTCFullYear()}年${x.getUTCMonth() + 1}月${x.getUTCDate()}日 ${hh < 12 ? '上午' : '下午'} ${two(hh % 12 || 12)}:${two(x.getUTCMinutes())}:${two(x.getUTCSeconds())}`;
+};
 
 const HELP = [
   '可用指令：',
@@ -38,7 +59,8 @@ const HELP = [
   '  ping -f -l 1472 <IP>    送 1472 位元組的資料、設 DF 不可分段：找出路徑上的 MTU（1472 + 28 = 1500）',
   '  netsh interface ipv4 show subinterfaces   看每張網卡的 MTU（set subinterface "乙太網路" mtu=9000 修改）',
   '  netsh interface ip show destinationcache   目的地快取：被 ICMP Redirect 改過下一站的目的地（delete destinationcache 清掉）',
-  '  ipconfig                顯示本機的網路設定',
+  '  ipconfig                顯示本機的網路設定（IP、遮罩、閘道）',
+  '  ipconfig /all           加上實體位址 (MAC)、DHCP 與 DNS 伺服器、租用時間',
   '  ipconfig /renew         重新向 DHCP 伺服器要一次 IP（播放 DORA 四個步驟）',
   '  ipconfig /release       歸還 DHCP 位址',
   '  ipconfig /renew6        重新向 DHCPv6 要位址或 DNS（依 RA 的 M / O 旗標）',
@@ -83,7 +105,7 @@ const HELP_LINUX = [
 export function buildTerminal(ctx, body) {
   const { app, dev } = ctx;
   // Ansible 的控制主機跑的是 Linux（Ansible 不能裝在 Windows 上）
-  const linux = !!dev.ansible || !!dev.docker || !!dev.tf || !!dev.git || dev.os === 'linux';
+  const linux = isLinuxHost(dev);
   const PS = dev.git ? 'netops@backup:~/network-configs$' : linux ? `${dev.ansible || dev.tf ? 'netops' : 'admin'}@${dev.name.replace(/[^\w-]+/g, '-').replace(/^-+|-+$/g, '').toLowerCase() || 'ansible'}:~$` : 'C:\\>';
   const logs = (app.termLog[dev.id] ||= [{ t: `${dev.name} 終端機 — 輸入 help 查看指令`, c: 'dim' }]);
   const hist = (app.termHist[dev.id] ||= []);
@@ -312,13 +334,22 @@ export function buildTerminal(ctx, body) {
     else if (c === 'date' || c === 'time') { const t = plainStamp(st(), dev); const off = dev.clock && !dev.clock.sync; print(`${t.date} ${t.time}${off ? '' : '（電腦的時間由作業系統自動校正）'}`, off ? 'warn' : ''); if (off) print('（這台電腦的自動校時是關的：時間可能不準，HTTPS 憑證的有效期間也是用這個時間判斷。「網路設定」分頁可以打開自動校時）', 'hint'); }
     else if (c === 'arp' && /^-d/i.test(args[0] || '')) { clearArp(st(), dev); app.refreshLive(); }
     else if (c === 'arp') {
-      const rows = arpRows(st(), dev);
-      if (!rows.length) print('找不到 ARP 項目。（先 ping 一個位址，電腦才會去問它的 MAC；項目兩分鐘沒用到就會過期）', 'dim');
-      else {
+      // Windows 的 arp -a：每張有位址的網卡一段。廣播與群播的位址固定對應到特定的 MAC，不用問，列成「靜態」
+      const rows = arpRows(st(), dev), ups = dev.ifaces.filter((i) => i.rt && i.rt.ip != null && i.rt.link);
+      if (!ups.length) print('找不到 ARP 項目。', 'dim');
+      ups.forEach((i, k) => {
+        const mine = rows.filter((r) => sameNet(r.ip, i.rt.ip, i.rt.bits) || (k === 0 && !ups.some((u) => sameNet(r.ip, u.rt.ip, u.rt.bits))));
+        const list = [
+          ...mine.map((r) => [r.ip, r.mac.replace(/:/g, '-'), '動態']),
+          [bcastOf(i.rt.ip, i.rt.bits), 'ff-ff-ff-ff-ff-ff', '靜態'], [parseIp('224.0.0.22'), '01-00-5e-00-00-16', '靜態'], [parseIp('224.0.0.252'), '01-00-5e-00-00-fc', '靜態'],
+          [parseIp('239.255.255.250'), '01-00-5e-7f-ff-fa', '靜態'], [parseIp('255.255.255.255'), 'ff-ff-ff-ff-ff-ff', '靜態'],
+        ].sort((a, b) => a[0] - b[0]);
         print('');
-        print('  網際網路位址      實體位址            類型', 'pre');
-        rows.forEach((r) => print(`  ${fmtIp(r.ip).padEnd(18)}${r.mac.replace(/:/g, '-').padEnd(20)}動態`, 'pre'));
-      }
+        print(`介面: ${fmtIp(i.rt.ip)} --- 0x${(dev.ifaces.indexOf(i) + 4).toString(16)}`);
+        print('  網際網路網址          實體位址              類型', 'pre');
+        for (const [ip, mac, type] of list) print(`  ${fmtIp(ip).padEnd(22)}${mac.padEnd(22)}${type}`, 'pre');
+      });
+      if (ups.length && !rows.length) print('  ↳ 還沒有「動態」的項目：先 ping 一個位址，電腦才會去問它的 MAC（項目兩分鐘沒用到就會過期）。「靜態」的那幾筆是廣播與群播，對應的 MAC 是固定的，不用問', 'hint');
     } else if (linux && (c === 'ipconfig' || c === 'w32tm' || c === 'certutil' || c === 'cls')) {
       print(`${cmd}: command not found`, 'warn');
       print(`  ↳ 這台是 Linux：${{ ipconfig: '用 ip addr 看位址、ip route 看路由', w32tm: '用 timedatectl 看時間同步', certutil: '根憑證放進 /usr/local/share/ca-certificates/ 再 update-ca-certificates', cls: '用 clear' }[c]}`, 'hint');
@@ -462,27 +493,73 @@ export function buildTerminal(ctx, body) {
         app.showTrace(`${dev.name}> ${line}`, tr.log, tr.hops, { ok: tr.ok, reason: tr.reason, failDev: dev.id });
         if (!tr.ok) print('更新介面時發生錯誤：' + tr.reason, 'bad');
       }
+      // 和 Windows 一樣：ipconfig 只有位址、遮罩、閘道；實體位址、DHCP、DNS、租用時間要 ipconfig /all
+      const all = /^\/?all$/i.test(args[0] || ''), pref = all ? '(偏好選項)' : '';
+      const now = deviceTime(st(), dev), at = (sec) => winDate(now.ms + (sec - st().clock) * 1000, now.tz.off);
+      print('');
+      print('Windows IP 設定');
+      if (all) {
+        print('');
+        print(fld('主機名稱', winHost(dev)));
+        print(fld('主要 DNS 尾碼'));
+        print(fld('節點類型', '混合式'));
+        print(fld('IP 路由啟用', '否'));
+        print(fld('WINS Proxy 啟用', '否'));
+      }
       for (const i of dev.ifaces) {
-        const rt = i.rt || {};
+        const rt = i.rt || {}, v6 = rt.v6 && rt.v6.ll != null ? rt.v6 : null;
+        const hw = () => {
+          print(fld('描述', nicName(dev, i)));
+          print(fld('實體位址', String(rt.mac || '').toUpperCase().replace(/:/g, '-')));
+          print(fld('DHCP 已啟用', i.mode === 'dhcp' ? '是' : '否'));
+          print(fld('自動設定啟用', '是'));
+        };
         print('');
         print(`${i.bind.t === 'wlan' ? '無線區域網路介面卡' : '乙太網路卡'} ${i.label}:`);
-        if (rt.ip == null || !rt.link) {
-          // 線有接、只是沒有 IPv4（例如純 IPv6 的網段）：不是「媒體中斷」
-          if (rt.link) print(`   IPv4 位址 . . . . . . : （尚未設定${rt.note ? '：' + rt.note : ''}）`, rt.v6 && rt.v6.addrs.length ? 'dim' : 'warn');
-          else print('   媒體狀態 . . . . . . : 媒體已中斷連線', 'warn');
-          print(`   實體位址 (MAC) . . . : ${rt.mac}`);
-          v6Lines(rt, i).forEach((x) => print(x));
+        print('');
+        if (!rt.link) {
+          print(fld('媒體狀態', '媒體已中斷連線'), 'warn');
+          print(fld('連線特定 DNS 尾碼'));
+          if (all) hw();
           continue;
         }
-        print(`   實體位址 (MAC) . . . : ${rt.mac}`);
-        print(`   DHCP 已啟用 . . . . . : ${i.mode === 'dhcp' ? '是' : '否'}`);
-        if (rt.exp != null) print(`   租約到期 . . . . . . : ${fmtDur(rt.exp - st().clock)}後${rt.held ? '（目前連不到 DHCP 伺服器）' : ''}`, rt.held ? 'warn' : '');
-        print(`   IPv4 位址 . . . . . . : ${fmtIp(rt.ip)}${rt.src === 'apipa' ? '（APIPA，自動設定）' : ''}`, rt.src === 'apipa' ? 'warn' : '');
-        print(`   子網路遮罩  . . . . . : ${fmtMask(rt.bits)}`);
-        print(`   預設閘道 . . . . . . : ${rt.gw != null ? fmtIp(rt.gw) : ''}`);
-        print(`   DNS 伺服器  . . . . . : ${rt.dns.map(fmtIp).join(', ')}`);
-        v6Lines(rt, i).forEach((x) => print(x));
+        print(fld('連線特定 DNS 尾碼'));
+        if (all) hw();
+        if (v6) {
+          for (const a of v6.addrs) print(fld('IPv6 位址', `${fmtIp6(a.ip)}${a.bits === 128 && a.src === 'dhcp6' ? '' : '/' + a.bits}${pref}${V6SRC[a.src] || ''}`));
+          print(fld('連結-本機 IPv6 位址', fmtIp6(v6.ll) + pref));
+        }
+        // 線有接、只是沒有 IPv4（例如純 IPv6 的網段）
+        if (rt.ip == null) print(fld('IPv4 位址', `（尚未設定${rt.note ? '：' + rt.note : ''}）`), v6 && v6.addrs.length ? 'dim' : 'warn');
+        else {
+          print(fld(rt.src === 'apipa' ? '自動設定 IPv4 位址' : 'IPv4 位址', fmtIp(rt.ip) + pref), rt.src === 'apipa' ? 'warn' : '');
+          print(fld('子網路遮罩', fmtMask(rt.bits)));
+          if (all && rt.exp != null) {
+            const ck = dev.id + '/' + i.id, L = ((st().dyn || {}).lease || {})[ck], H = L && L.key ? (((st().dyn || {}).hold || {})[L.key] || {})[ck] : null;
+            if (H) print(fld('租用取得', at(H.t0)));
+            print(fld('租用到期', at(rt.exp)), rt.held ? 'warn' : '');
+          }
+        }
+        const gws = [v6 && v6.gw != null ? fmtIp6(v6.gw) : null, rt.gw != null ? fmtIp(rt.gw) : null].filter(Boolean);
+        print(fld('預設閘道', gws[0] || ''));
+        gws.slice(1).forEach((g) => print(fldCont(g)));
+        if (all) {
+          const sd = rt.src === 'dhcp' ? st().devices[rt.server] : null;
+          if (sd) {
+            // 伺服器在別的網段（經過 DHCP Relay）時，這裡是伺服器自己的位址，不是轉送的那台路由器
+            const near = sd.ifaces.find((x) => x.rt && x.rt.ip != null && x.rt.bits && sameNet(x.rt.ip, rt.ip, x.rt.bits)) || sd.ifaces.find((x) => x.rt && x.rt.ip != null);
+            if (near) print(fld('DHCP 伺服器', fmtIp(near.rt.ip)));
+          }
+          if (v6 && v6.dhcp && v6.dhcp.ok) { print(fld('DHCPv6 IAID', String(iaidOf(i)))); print(fld('DHCPv6 用戶端 DUID', duidOf(i))); }
+          const dns = [...(v6 && v6.dns ? v6.dns.map(fmtIp6) : []), ...(rt.dns || []).map(fmtIp)];
+          if (dns.length) { print(fld('DNS 伺服器', dns[0])); dns.slice(1).forEach((x) => print(fldCont(x))); }
+          if (rt.ip != null) print(fld('NetBIOS over Tcpip', '已啟用'));
+        }
+        if (rt.src === 'apipa') print('  ↳ 169.254.x.x 是 APIPA：電腦向 DHCP 要不到位址，自己編了一個（沒有閘道，只能和同網段裡同樣情況的電腦互通）', 'hint');
+        if (rt.held) print(`  ↳ 目前連不到 DHCP 伺服器，先繼續用還沒到期的租用（${fmtDur(rt.exp - st().clock)}後到期）`, 'hint');
+        if (v6 && v6.dhcp && !v6.dhcp.ok) print(`  ↳ DHCPv6 失敗：${v6.dhcp.why}`, 'hint');
       }
+      if (!all) { print(''); print('  ↳ 實體位址 (MAC)、DHCP 與 DNS 伺服器、租用時間要用 ipconfig /all 才會列出來', 'dim'); }
     } else if (c === 'ping' || c === 'tracert' || c === 'traceroute') {
       // Windows：ping -f -l 1472 <IP>；Linux：ping -M do -s 1472 <IP>（-l / -s 是資料的大小，IP 封包再多 28 位元組）
       const takes = linux ? ['-s', '-c', '-M', '-W', '-i', '-t', '-I'] : ['-l', '-n', '-w', '-i', '-S'];
@@ -510,12 +587,17 @@ export function buildTerminal(ctx, body) {
           print('');
           if (r6 && r6.ok) print(`（${target} 有 AAAA 記錄，這台電腦也有 IPv6 位址，所以用 IPv6；要用 IPv4 請 ping -4 ${target}）`, 'hint');
           if (c !== 'ping') {
-            print(`在上限 30 個躍點上追蹤 ${fmtIp6(d6)} 的路由：`);
-            const cols = (dv) => rttSamples(st(), res, 3, 74, dv).map(winCol).join('  ');
-            res.l3.forEach((x, n) => print(`  ${String(n + 1).padStart(2)}  ${cols(x.dev)}  ${fmtIp6(x.ip6).padEnd(28)} ${st().devices[x.dev].name}`));
-            if (res.ok || res.phase === 'reply') print(`  ${String(res.l3.length + 1).padStart(2)}  ${res.ok ? cols(null) : '     *       *       *  '}  ${fmtIp6(d6)}`, res.ok ? 'ok' : '');
-            if (!res.ok) { print(`  ${String(res.l3.length + 1 + (res.phase === 'reply' ? 1 : 0)).padStart(2)}     *        *        要求等候逾時。`, 'bad'); print('  ↳ ' + res.reason, 'hint'); }
-            else print('追蹤完成。');
+            print(`在上限 30 個躍點上追蹤 ${r6 && r6.ok ? `${target} [${fmtIp6(d6)}]` : fmtIp6(d6)} 的路由:`);
+            print('');
+            const cols = (dv) => rttSamples(st(), res, 3, 74, dv).map(winCol).join(''), NONE = winCol(null).repeat(3);
+            const row = (n, cells, text, cls) => print(`${String(n).padStart(3)}${cells}  ${text}`, cls);
+            res.l3.forEach((x, n) => row(n + 1, cols(x.dev), `${fmtIp6(x.ip6).padEnd(28)}（${st().devices[x.dev].name}）`));
+            if (res.ok) row(res.l3.length + 1, cols(null), fmtIp6(d6), 'ok');
+            else {
+              row(res.l3.length + 1, NONE, '要求等候逾時。', 'bad');
+              print('  ↳ ' + res.reason, 'hint');
+            }
+            if (res.ok) { print(''); print('追蹤完成。'); }
           } else {
             print(`Ping ${r6 && r6.ok ? `${target} [${fmtIp6(d6)}]` : fmtIp6(d6)} (使用 32 位元組的資料):`);
             const t6 = pingStats(st(), res, 4, 32 + 62);
@@ -536,7 +618,7 @@ export function buildTerminal(ctx, body) {
             const t = pingStats(st(), res, 4, dataLen + 42);
             print(`PING ${target} (${ip}) ${dataLen}(${dataLen + 28}) bytes of data.`);
             for (let n = 1; n <= 4; n++) {
-              if (res.ok) print(`${dataLen + 8} bytes from ${ip}: icmp_seq=${n} ttl=${64 - res.l3.length} time=${linuxMs(t.list[n - 1])} ms`, 'ok');
+              if (res.ok) print(`${dataLen + 8} bytes from ${ip}: icmp_seq=${n} ttl=${res.rttl ?? 64 - res.l3.length} time=${linuxMs(t.list[n - 1])} ms`, 'ok');
               else if (res.dfLocal) print(`ping: local error: message too long, mtu=${res.dfLocal}`, 'bad');
               else if (res.ptb) print(`From ${fmtIp(res.ptb.from)} icmp_seq=${n} Frag needed and DF set (mtu = ${res.ptb.mtu})`, 'bad');
             }
@@ -553,7 +635,7 @@ export function buildTerminal(ctx, body) {
             const t = pingStats(st(), res, 4, dataLen + 42);
             t.list[0] += arp * 0.5; // 第一個封包先等 ARP 的回答
             for (let n = 0; n < 4; n++) {
-              print(res.ok ? `回覆自 ${ip}: 位元組=${dataLen} 時間${winMs(t.list[n])} TTL=${64 - res.l3.length}`
+              print(res.ok ? `回覆自 ${ip}: 位元組=${dataLen} 時間${winMs(t.list[n])} TTL=${res.rttl ?? 64 - res.l3.length}`
                 : res.dfLocal ? '封包需要分段，但設定了 DF。'
                   : res.ptb ? `回覆自 ${fmtIp(res.ptb.from)}: 封包需要分段，但設定了 DF。`
                     : unr ? `回覆自 ${fmtIp(unr.from)}: ${unr.code === 'N' ? '目的地網路無法連線。' : '目的地主機無法連線。'}`
@@ -572,12 +654,24 @@ export function buildTerminal(ctx, body) {
             if (!res.ok) print('  ↳ ' + res.reason, 'hint');
           } else {
             print('');
-            print(`追蹤 ${ip} 的路由：`);
-            const cols = (dv) => rttSamples(st(), res, 3, 74, dv).map(winCol).join('  ');
-            res.l3.forEach((x, n) => print(`  ${String(n + 1).padStart(2)}  ${x.ip == null ? '     *       *       *  ' : cols(x.dev)}  ${(x.ip == null ? 'VPN 通道' : fmtIp(x.ip)).padEnd(16)} ${st().devices[x.dev].name}`));
-            if (res.ok || res.phase === 'reply') print(`  ${String(res.l3.length + 1).padStart(2)}  ${res.ok ? cols(null) : '     *       *       *  '}  ${ip}`, res.ok ? 'ok' : '');
-            if (!res.ok) { print(`  ${String(res.l3.length + 1 + (res.phase === 'reply' ? 1 : 0)).padStart(2)}     *        *        要求等候逾時。`, 'bad'); print('  ↳ ' + res.reason, 'hint'); }
-            else print('追蹤完成。');
+            print(`在上限 30 個躍點上追蹤 ${target === ip ? ip : `${target} [${ip}]`} 的路由:`);
+            print('');
+            const cols = (dv) => rttSamples(st(), res, 3, 74, dv).map(winCol).join(''), NONE = winCol(null).repeat(3);
+            const row = (n, cells, text, cls) => print(`${String(n).padStart(3)}${cells}  ${text}`, cls);
+            let n = 0;
+            // 括號裡的設備名稱是遊戲加的註解：真的 tracert 只有位址（查得到反解的才有名稱）
+            for (const x of res.l3) row(++n, x.ip == null ? NONE : cols(x.dev), x.ip == null ? `要求等候逾時。（VPN 通道裡的那一站：${st().devices[x.dev].name}）` : `${fmtIp(x.ip).padEnd(16)}（${st().devices[x.dev].name}）`);
+            // 目的地在網際網路上：業者的閘道之後，骨幹裡還有幾站
+            const far = res.ok || res.phase === 'reply' ? ispRows(st(), res, 3, 74) : [], first = n + 1;
+            far.forEach((x, k) => row(++n, x.ip == null ? NONE : x.ms.map(winCol).join(''), x.ip == null ? '要求等候逾時。' : fmtIp(x.ip) + (k === 0 && res.isp.edge != null ? '（業者的閘道）' : '')));
+            if (res.ok) row(++n, cols(null), target === ip ? ip : `${target} [${ip}]`, 'ok');
+            else {
+              if (res.phase === 'reply') row(++n, NONE, '要求等候逾時。');
+              row(++n, NONE, '要求等候逾時。', 'bad');
+              print('  ↳ ' + res.reason, 'hint');
+            }
+            if (res.ok) { print(''); print('追蹤完成。'); }
+            if (far.length > 1) print(`  ↳ 第 ${first}–${first + far.length - 1} 站在網際網路上：業者與上游骨幹的路由器。100.64.x.x 是電信業者內部共用的位址（RFC 6598），「*」是那一站不回應 tracert — 都很常見，不代表不通`, 'hint');
           }
         }
       }

@@ -19,7 +19,7 @@ export const VPC_PRIO = 32667;
 export const vpcOn = (d) => !!(d && d.features && d.features.vpc && d.vpc && d.vpc.domain != null && d.vpc.domain !== '');
 const peerLinkPorts = (d) => Object.entries(d.sw.ports).filter(([, pc]) => pc.peerLink && +pc.lag > 0).map(([pid]) => pid);
 const memberPorts = (d, n) => Object.entries(d.sw.ports).filter(([, pc]) => +pc.vpc === +n && +pc.lag > 0).map(([pid]) => pid);
-const sysMac = (d) => macOf(d.id, 'br');
+const sysMac = (d) => macOf(d.id, 'br', d.model);
 
 /** 設定裡的位址在哪個介面上（用設定值，因為這一步比算位址還早）；回傳 { iface, up } */
 function ownerOf(state, d, ip) {

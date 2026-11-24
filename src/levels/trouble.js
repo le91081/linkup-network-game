@@ -8,7 +8,7 @@ export const CHAPTERS4 = [
   { id: 10, title: '故障排除', desc: '網路原本是好的，直到有人動過它。從症狀找出原因：IP 衝突、VLAN 與 Trunk、路由、NAT、ACL、DNS。' },
 ];
 
-const NAS_MAC = macOf('nas', 'eth0');
+const NAS_MAC = macOf('nas', 'eth0', 'nas');
 /** 印表機送修期間，它的 192.168.1.10 已經被 DHCP 發給了 PC-1（租約還沒到期） */
 function seedLease(s) {
   s.leases['rt/Gi0/0/1'] = { 'pc-1/eth0': parseIp('192.168.1.10') };
@@ -27,7 +27,7 @@ export const LEVELS4 = [
       { t: 'IP 位址衝突', d: '同一個網段裡有兩台設備用同一個 IP，別人問「誰是這個 IP」時兩台都會回答，連線就時通時不通。點設備可以看到衝突的警告。' },
       { t: '固定 IP 要避開位址池', d: 'DHCP 伺服器發出位址前會先 ping，確認沒有人在用。但那台設備如果剛好不在線上（關機、送修），位址就會被發給別人，等它回來就撞在一起。固定 IP 一定要放在位址池的範圍之外。' },
       { t: 'DHCP 保留位址', d: '想讓設備「自動取得」又「每次都一樣」，就在 DHCP 伺服器上把它的 MAC 位址綁定一個 IP。' },
-      { t: '先看用戶端拿到什麼', d: '排查的第一步是 ipconfig：IP、遮罩、閘道對不對？是 DHCP 給的，還是有人手動填的？' },
+      { t: '先看用戶端拿到什麼', d: '排查的第一步是 ipconfig /all：IP、遮罩、閘道對不對？是 DHCP 給的，還是有人手動填的？' },
     ],
     setup: () => seedLease(makeState([
       D('isr4321', 'rt', {

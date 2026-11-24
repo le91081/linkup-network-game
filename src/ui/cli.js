@@ -5,7 +5,7 @@ import { fmtIp6, parseIp6, parseCidr6, net6 } from '../engine/ip6.js';
 import { dhcp6Bindings, hits6Of, DHCP6_PREF, DHCP6_VALID } from '../engine/sim6.js';
 import { acl6Text } from '../engine/ios.js';
 import { vlanAllowed as vlanOk, transact, isBridgePort, arpRows, clearArp, hitsOf, fmtDur, portfastOn, macRows, clearMac, macAgeOf, sessionRows, clearSessions, saInfo, isTrunk, dtpSpeaker, unreachOf } from '../engine/sim.js';
-import { rttSamples, pingStats, iosMs } from '../engine/latency.js';
+import { rttSamples, pingStats, iosMs, ispRows } from '../engine/latency.js';
 import { cdpCfg, lldpCfg, cdpOn, lldpTxOn, lldpRxOn, neighbors, ndCounters, cdpCapText } from '../engine/disc.js';
 import { dscpName, COS_DSCP_DEFAULT, portTrust, egressOf, QLIMIT } from '../engine/qos.js';
 import { ospfArea, ospfPassive, isLoopback, ospfProcs, ospfKeys, ospfAreaCfg, ospfAreaType } from '../engine/ospf.js';
@@ -1840,7 +1840,10 @@ function traceLines(app, d, ip, print, line) {
   // 每一站送三個探測封包；回應的是那台設備的 CPU
   const ms = (dv) => rttSamples(st, r, 3, 60, dv).map((v) => `${Math.round(v)} msec`).join(' ');
   r.l3.forEach((x, n) => print(`  ${n + 1} ${x.ip == null ? '*' : `${fmtIp(x.ip)} ${ms(x.dev)}`}`, 'pre'));
-  if (r.ok) print(`  ${r.l3.length + 1} ${fmtIp(ip)} ${ms(null)}`, 'ok');
+  // 目的地在網際網路上：業者的閘道之後，骨幹裡還有幾站
+  const far = r.ok ? ispRows(st, r, 3, 60) : [];
+  far.forEach((x, k) => print(`  ${r.l3.length + k + 1} ${x.ip == null ? ' *  *  * ' : `${fmtIp(x.ip)} ${x.ms.map((v) => `${Math.max(1, Math.round(v))} msec`).join(' ')}`}`, 'pre'));
+  if (r.ok) print(`  ${r.l3.length + far.length + 1} ${fmtIp(ip)} ${ms(null)}`, 'ok');
   else {
     const un = unreachOf(st, d.id, r);
     if (un) print(`  ${r.l3.length + 1} ${fmtIp(un.from)} !${un.code}  *  !${un.code}`, 'bad');

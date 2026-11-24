@@ -113,7 +113,7 @@ function dhcpBlock(ctx, i) {
       h('div', { class: 'acl-h' }, h('span', { text: '保留位址' }), h('em', { text: '指定的 MAC 永遠拿到同一個 IP' }),
         button('新增', { ic: 'plus', small: true, onclick: () => { (d.reserved ||= []).push({ mac: '', ip: '' }); ctx.commit(true); } })),
       (d.reserved || []).map((r, n) => h('div', { class: 'trow c-rsv' },
-        inp(ctx, ...bind(r, 'mac'), { ph: 'MAC，例如 02:1a:2b:3c:4d:5e', check: isMacList }),
+        inp(ctx, ...bind(r, 'mac'), { ph: 'MAC，例如 f8:bc:12:3c:4d:5e', check: isMacList }),
         inp(ctx, ...bind(r, 'ip'), { ph: '要固定發給它的 IP', check: isIp }),
         del(() => { d.reserved.splice(n, 1); ctx.commit(true); })))),
     d.on && ctx.live(() => {

@@ -221,7 +221,7 @@ export function prepPhysical(state) {
   // 埠就進入 root-inconsistent 而被擋下。擋下之後拓撲改變，所以要重複檢查到穩定為止。
   {
     const swOn = (x) => isVlanSw(x) && !(x.sw.stp && x.sw.stp.on === false) && !down[x.id];
-    const bridgeId = (x) => { const s = x.sw.stp || {}; return [s.prio == null || s.prio === '' ? 32768 : +s.prio, macOf(x.id, 'br')]; };
+    const bridgeId = (x) => { const s = x.sw.stp || {}; return [s.prio == null || s.prio === '' ? 32768 : +s.prio, macOf(x.id, 'br', x.model)]; };
     const better = (a, b) => a[0] < b[0] || (a[0] === b[0] && a[1] < b[1]);
     /** 從 start 出發、不經過 skipDev 這台交換器，能走到的所有交換器 */
     const reach = (start, skipDev) => {
@@ -476,7 +476,7 @@ export function prepStp(state) {
   const sws = Object.values(state.devices).filter((d) => isVlanSw(d) && !down[d.id]);
   for (const d of sws) {
     const s = d.sw.stp || {};
-    d.rt.stp = { on: s.on !== false, prio: s.prio == null || s.prio === '' ? 32768 : +s.prio, mac: macOf(d.id, 'br'), blocked: new Set(), roles: {}, root: {} };
+    d.rt.stp = { on: s.on !== false, prio: s.prio == null || s.prio === '' ? 32768 : +s.prio, mac: macOf(d.id, 'br', d.model), blocked: new Set(), roles: {}, root: {} };
   }
   // 優先權依 VLAN（PVST+）或 MST 的 instance；MST 要所有交換器都是同一個區域才照 instance 算
   const stpSws = sws.filter((d) => d.rt.stp.on), region = stpSws.length > 0 && stpSws.every((d) => isMst(d) && mstKey(d) === mstKey(stpSws[0]));

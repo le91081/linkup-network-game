@@ -2,6 +2,7 @@
 // （從 sim.js 拆出來的一部分；其他程式一律從 engine/sim.js 引入，不直接引入這裡）
 import { fmtIp, netOf, parseCidr, parseIp } from '../ip.js';
 import { logEvent } from '../ops.js';
+import { OUI, ONE_OUI, ouiKey } from '../oui.js';
 
 /** 介面屬於哪一個 VRF（'' 是全域的路由表） */
 export const vrfOf = (i) => (i && i.vrf) || '';
@@ -36,14 +37,58 @@ export function hash(s) {
   return h >>> 0;
 }
 
-/** 每個介面固定的 MAC 位址（由設備 id 推導，重開遊戲也不會變） */
-export function macOf(devId, key) {
+const hex2 = (arr) => arr.map((x) => x.toString(16).padStart(2, '0')).join(':');
+/** 以前的寫法：全部是 02 開頭的本機管理位址（只給舊存檔的遷移用，engine/migrate.js） */
+export function legacyMac(devId, key) {
   const a = hash(devId + '/' + key), b = hash(key + '#' + devId);
-  return [0x02, (a >>> 16) & 255, (a >>> 8) & 255, a & 255, (b >>> 8) & 255, b & 255].map((x) => x.toString(16).padStart(2, '0')).join(':');
+  return hex2([0x02, (a >>> 16) & 255, (a >>> 8) & 255, a & 255, (b >>> 8) & 255, b & 255]);
 }
+/**
+ * 每個介面固定的 MAC 位址（由設備 id 推導，重開遊戲也不會變）。
+ * 和真的設備一樣：前三個位元組是那個型號的製造商登記的廠商碼 (OUI，engine/oui.js)；
+ * 同一台設備的位址是連號的 — 基底位址（交換器自己、SVI 用的）之後，第 n 個埠就是基底 + n。
+ * key：埠的 id、'wlan'（無線網卡）或 'br'（基底位址）；idx：這個埠是設備的第幾個埠（從 0 算）
+ */
+export function macOf(devId, key, model, idx = 0) {
+  const v = ouiKey(model, key), list = OUI[v];
+  if (!list) {
+    // 沒有廠商碼的介面：雲端的虛擬網卡、手機對每個 Wi-Fi 隨機產生的私人位址。第一個位元組的「本機管理」位元是 1
+    const a = hash(devId + '/' + key), b = hash(key + '#' + devId);
+    const first = v === 'private' ? ((a >>> 24) & 0xfc) | 0x02 : v === 'aws' ? [0x02, 0x06, 0x0a, 0x0e][a >>> 30] : 0x02;
+    return hex2([first, (a >>> 16) & 255, (a >>> 8) & 255, a & 255, (b >>> 8) & 255, b & 255]);
+  }
+  const oui = ONE_OUI.has(model) ? list[0] : list[hash('oui/' + devId) % list.length];
+  const n = ((hash(devId + '/br') & 0xffffc0) + (key === 'br' ? 0 : idx + 1)) & 0xffffff;
+  return oui + ':' + hex2([n >>> 16, (n >>> 8) & 255, n & 255]);
+}
+// ── 作業系統：送出的封包一開始的 TTL、用戶端連線用的來源埠，各家不一樣 ──
+const WIN_MODELS = new Set(['pc', 'laptop', 'laptop6e', 'tower', 'rack1u', 'vm']);
+const TTL255 = new Set(['isr4321', 'isr4331', 'c2960', 'c2960p', 'c9300', 'n93180', 'n9332', 'c9800', 'fg60f', 'fg100f', 'bigip', 'metroe', 'metroelan']);
+/** 這台主機跑的是 Linux（終端機是 bash）：自動化、容器、備份用的主機，或關卡指定 os: 'linux'。其他的電腦與伺服器是 Windows */
+export const isLinuxHost = (dev) => !!dev && (!!dev.ansible || !!dev.docker || !!dev.tf || !!dev.git || dev.os === 'linux');
+/** 'windows'（電腦、筆電、Windows 伺服器）、'net'（Cisco IOS / NX-OS、FortiOS、BIG-IP）、'linux'（其他：Linux、手機、NAS、印表機、Junos、RouterOS…） */
+export function osOf(dev) {
+  if (!dev) return 'linux';
+  if (dev.kind === 'host') return WIN_MODELS.has(dev.model) && !isLinuxHost(dev) ? 'windows' : 'linux';
+  return TTL255.has(dev.model) ? 'net' : 'linux';
+}
+/**
+ * 送出的封包一開始的 TTL：Windows 128、Linux 與多數設備 64、Cisco / FortiGate / BIG-IP 255。
+ * 所以從 ping 回來的 TTL 可以回推「對方大概是什麼系統、中間隔了幾台路由器」（126 = Windows、隔兩台）。
+ * ip：回應的是哪個位址 — 網際網路那一台，自己的介面是業者的路由器 (255)，上面的主機是伺服器 (64)
+ */
+export function initTtl(dev, ip) {
+  if (dev && dev.kind === 'internet') return ip == null || dev.ifaces.some((i) => i.rt && i.rt.ip === ip) ? 255 : 64;
+  return { windows: 128, net: 255, linux: 64 }[osOf(dev)];
+}
+/** 用戶端的來源埠（暫時埠）：Windows 用 49152–65535，Linux 與多數設備用 32768–60999。n 是封包的流水號，換算成看起來不連續的埠 */
+export const ephPort = (dev, n) => (osOf(dev) === 'windows' ? 49152 + ((n * 7919) % 16384) : 32768 + ((n * 7919) % 28232));
+
 export function ifaceMac(dev, i) {
   const b = i.bind;
-  return macOf(dev.id, b.t === 'port' || b.t === 'sub' ? b.port : b.t === 'wlan' ? 'wlan' : 'br');
+  if (b.t === 'port' || b.t === 'sub') return macOf(dev.id, b.port, dev.model, Math.max(0, dev.ports.findIndex((p) => p.id === b.port)));
+  if (b.t === 'wlan') return macOf(dev.id, 'wlan', dev.model, dev.ports.length);
+  return macOf(dev.id, 'br', dev.model);
 }
 
 export const cidrList = (s) => String(s || '').split(/[,\s]+/).map(parseCidr).filter(Boolean);

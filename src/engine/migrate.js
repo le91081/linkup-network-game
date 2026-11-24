@@ -4,8 +4,9 @@
 // 舊的存檔（瀏覽器裡的進度、匯出的拓撲檔與關卡檔）載入時從它的版本一步一步升級，玩家的進度不用丟掉。
 // 每一步都要能安全地重複執行（沒有舊欄位就什麼都不做）。
 import { DNS_TTL } from './dns.js';
+import { legacyMac, macOf } from './sim/core.js';
 
-export const SAVE_VER = 2;
+export const SAVE_VER = 3;
 
 /** 從第 n 版升到第 n + 1 版 */
 const STEPS = {
@@ -16,6 +17,32 @@ const STEPS = {
       if (!d.dnsZone) d.dnsZone = { records: Object.entries(d.dnsRecords).map(([name, value]) => ({ name, type: 'A', value, ttl: DNS_TTL })) };
       delete d.dnsRecords;
     }
+  },
+  // 2 → 3：MAC 位址改成真的廠商碼 (OUI) 加連號（以前全部是 02 開頭）。設定裡寫到舊位址的地方
+  // （Port Security、DHCP 保留、無線的 MAC 過濾、靜態 MAC…）換成同一個介面現在的位址，玩家做到一半的關卡不會因此壞掉
+  2(st) {
+    const map = new Map();
+    for (const d of Object.values(st.devices || {})) {
+      if (!d || !d.id) continue;
+      const ports = Array.isArray(d.ports) ? d.ports : [];
+      ports.forEach((p, n) => p && p.id && map.set(legacyMac(d.id, p.id), macOf(d.id, p.id, d.model, n)));
+      map.set(legacyMac(d.id, 'wlan'), macOf(d.id, 'wlan', d.model, ports.length));
+      map.set(legacyMac(d.id, 'br'), macOf(d.id, 'br', d.model));
+    }
+    const re = /02(?:[:-][0-9a-f]{2}){5}|02[0-9a-f]{2}\.[0-9a-f]{4}\.[0-9a-f]{4}/gi;
+    const fix = (str) => str.replace(re, (m) => {
+      const hex = m.toLowerCase().replace(/[^0-9a-f]/g, ''), neu = map.get(hex.match(/../g).join(':'));
+      if (!neu) return m;
+      if (m.includes('.')) return neu.replace(/:/g, '').match(/.{4}/g).join('.');
+      return m.includes('-') ? neu.replace(/:/g, '-') : neu;
+    });
+    const walk = (o, depth) => {
+      if (!o || typeof o !== 'object' || depth > 12) return;
+      for (const k of Object.keys(o)) {
+        if (typeof o[k] === 'string') { if (o[k].length >= 14 && o[k].includes('02')) o[k] = fix(o[k]); } else walk(o[k], depth + 1);
+      }
+    };
+    walk(st.devices, 0);
   },
 };
 

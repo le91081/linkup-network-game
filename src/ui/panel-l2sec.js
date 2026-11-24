@@ -102,7 +102,7 @@ export function l2secCards(ctx, body) {
     h('div', { class: 'acl-h' }, h('span', { text: '靜態 MAC' }), h('em', { text: '固定在某個埠，不會老化、也不會被偽造的 MAC 搬走' })),
     (sw.staticMacs || []).map((e, n) => h('div', { class: 'line' }, h('b', { class: 'mono', text: e.mac }), h('span', { class: 'muted', text: `VLAN ${e.vlan} → ${e.drop ? '丟棄 (drop)' : e.port}` }), del(() => { sw.staticMacs.splice(n, 1); if (!sw.staticMacs.length) delete sw.staticMacs; ctx.commit(true); }))),
     h('div', { class: 'addrow' },
-      inp({ commit() {} }, ...bind(draft, 'mac'), { ph: 'MAC，例如 02:1a:2b:3c:4d:5e', check: isMacList }),
+      inp({ commit() {} }, ...bind(draft, 'mac'), { ph: 'MAC，例如 f8:bc:12:3c:4d:5e', check: isMacList }),
       inp({ commit() {} }, ...bind(draft, 'vlan'), { ph: 'VLAN', w: '4.5em', check: isNum(1, 4094) }),
       sel({ commit() {} }, () => draft.port || dev.ports[0].id, (v) => { draft.port = v; }, [...dev.ports.map((p) => [p.id, p.label]), ['@drop', '丟棄 (drop)']]),
       button('新增', { small: true, onclick: () => {

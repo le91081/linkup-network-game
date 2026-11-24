@@ -1,12 +1,27 @@
 // 一次請求 + 回應（ping、TCP、UDP）：TCP 交握、資料區段與 PMTUD、長時間保持的連線
 // （從 sim.js 拆出來的一部分；其他程式一律從 engine/sim.js 引入，不直接引入這裡）
-import { fmtIp, isPrivate } from '../ip.js';
+import { fmtIp, isPrivate, parseIp } from '../ip.js';
 import { ipMtu } from '../mtu.js';
-import { QUIET, selMatch, setQuiet } from './core.js';
+import { QUIET, ephPort, hash, initTtl, selMatch, setQuiet } from './core.js';
 import { forward, isLocal, noRouteReason, pktDesc, sessionTtl } from './forward.js';
 import { lookupRoute } from './l3.js';
 
 let pktSeq = 0;
+
+/**
+ * 網際網路裡面的那幾站。目的地是網際網路上的主機時，封包到了業者的閘道 (edge) 之後，還要在業者與上游的骨幹裡走幾站才到：
+ * 骨幹的路由器常用 100.64.0.0/10（電信業者內部的共用位址）這種不對外公告的位址，也常常不回應 traceroute（null，畫面上是 * * *）。
+ * 每個目的地的站數與位址是固定的（由目的位址算出來）。回傳 { edge: 業者閘道的位址, hops: [位址 | null] }
+ */
+function ispPath(resp, dst, back) {
+  const r = lookupRoute(resp, back), s = fmtIp(dst), h = hash('isp/' + s), n = 2 + (h % 4);
+  const quiet = (h >>> 8) % (n + 1); // 哪一站不回應（等於 n 就是每一站都回應）
+  const hops = Array.from({ length: n }, (_, k) => {
+    const x = hash(s + '/' + k);
+    return k === quiet ? null : parseIp(`100.${64 + (x % 64)}.${(x >>> 8) % 256}.${1 + ((x >>> 16) % 254)}`);
+  });
+  return { edge: r && r.iface && r.iface.rt ? r.iface.rt.ip : null, hops };
+}
 
 /**
  * 模擬一次「請求 + 回應」。spec: { proto:'icmp'|'tcp'|'udp', dst:number, dport?, srcIp? }
@@ -34,11 +49,11 @@ function liveSessions(state) {
 export function flowSend(state, fromId, flow) {
   const ctx = { ct: liveSessions(state), log: [], hops: [], l3: [], mid: true, cid: flow.cid };
   const done = (r) => ({ ...r, log: ctx.log, hops: ctx.hops, l3: ctx.l3 });
-  const pkt = { proto: 'tcp', src: flow.src, dst: flow.dst, sport: flow.sport, dport: flow.dport, ttl: 64, reply: false, ack: true, data: flow.data || null };
+  const pkt = { proto: 'tcp', src: flow.src, dst: flow.dst, sport: flow.sport, dport: flow.dport, ttl: initTtl(state.devices[fromId]), reply: false, ack: true, data: flow.data || null };
   const a = forward(state, ctx, fromId, pkt);
   if (!a.ok) return done({ ok: false, reason: a.reason, failDev: a.dev, phase: 'request' });
   if (a.dev !== flow.to) return done({ ok: false, reason: `封包被送到 ${state.devices[a.dev].name}，不是原本連線的那一台`, failDev: a.dev, phase: 'request' });
-  const rp = { proto: 'tcp', src: pkt.dst, dst: pkt.src, sport: pkt.dport, dport: pkt.sport, ttl: 64, reply: true, ack: true, data: flow.echo || null };
+  const rp = { proto: 'tcp', src: pkt.dst, dst: pkt.src, sport: pkt.dport, dport: pkt.sport, ttl: initTtl(state.devices[a.dev], pkt.dst), reply: true, ack: true, data: flow.echo || null };
   const b = forward(state, ctx, a.dev, rp);
   if (!b.ok) return done({ ok: false, reason: '回程失敗：' + b.reason, failDev: b.dev, phase: 'reply' });
   if (b.dev !== fromId) return done({ ok: false, reason: `回應被送到 ${state.devices[b.dev].name}`, failDev: b.dev, phase: 'reply' });
@@ -60,7 +75,7 @@ function icmpBack(state, ctx, ptb, senderId) {
   if (!route || route.iface.rt.ip == null) return { ok: false, reason: `${r.name} 沒有回到 ${fmtIp(p.src)} 的路由`, failDev: r.id };
   const srcIp = route.iface.rt.ip;
   ctx.log.push({ dev: r.id, kind: 'tx', text: `回報 ICMP「需要分段」(type 3 code 4，下一段的 MTU 是 ${ptb.mtu}) 給 ${fmtIp(p.src)}` });
-  const ic = { proto: 'icmp', icmpErr: 'frag', mtu: ptb.mtu, src: srcIp, dst: p.src, sport: 0, dport: 0, ttl: 64, reply: false, len: 56, inner: { proto: p.proto, src: p.src, sport: p.sport, dst: p.dst, dport: p.dport } };
+  const ic = { proto: 'icmp', icmpErr: 'frag', mtu: ptb.mtu, src: srcIp, dst: p.src, sport: 0, dport: 0, ttl: initTtl(r), reply: false, len: 56, inner: { proto: p.proto, src: p.src, sport: p.sport, dst: p.dst, dport: p.dport } };
   const f = forward(state, ctx, r.id, ic);
   if (f.ok && f.dev === senderId) {
     ctx.log.push({ dev: senderId, kind: 'rx', text: `收到 ${r.name} 的 ICMP「需要分段」：通往 ${fmtIp(p.dst)} 的路徑 MTU 是 ${ptb.mtu}` });
@@ -76,7 +91,7 @@ function icmpBack(state, ctx, ptb, senderId) {
 function bulkSend(state, ctx, o, mss) {
   let len = mss + 40;
   for (let k = 0; k < 4; k++) {
-    const seg = { proto: 'tcp', ...o.seg, ttl: 64, ack: true, bulk: true, df: true, len };
+    const seg = { proto: 'tcp', ...o.seg, ttl: initTtl(state.devices[o.from], o.seg.src), ack: true, bulk: true, df: true, len };
     ctx.log.push({ dev: o.from, kind: 'tx', text: `送出資料：TCP 區段 ${len} 位元組（MSS ${len - 40}，設了 DF 不可分段）` });
     const f = forward(state, ctx, o.from, seg);
     if (f.ok) return { ok: true, mss: len - 40 };
@@ -97,7 +112,7 @@ import { portalGate } from '../portal.js';
 function transactInner(state, fromId, spec) {
   const ctx = { ct: {}, log: [], hops: [], l3: [], cid: spec.keep || null, vrf: spec.vrf || '', vrfDev: fromId };
   const src = state.devices[fromId];
-  const done = (r) => ({ ...r, log: ctx.log, hops: ctx.hops, l3: ctx.l3, ...(ctx.deep ? { deep: ctx.deep } : {}), ...(ctx.wfBlock ? { wfBlock: ctx.wfBlock } : {}), ...(ctx.dnsf ? { dnsf: ctx.dnsf } : {}) });
+  const done = (r) => ({ ...r, log: ctx.log, hops: ctx.hops, l3: ctx.l3, ...(ctx.deep ? { deep: ctx.deep } : {}), ...(ctx.wfBlock ? { wfBlock: ctx.wfBlock } : {}), ...(ctx.dnsf ? { dnsf: ctx.dnsf } : {}), ...(ctx.isp ? { isp: ctx.isp } : {}), ...(ctx.rttl != null ? { rttl: ctx.rttl } : {}) });
   let srcIp = spec.srcIp;
   if (srcIp == null) {
     if (isLocal(src, spec.dst, spec.vrf || '')) {
@@ -120,7 +135,10 @@ function transactInner(state, fromId, spec) {
   }
   const id = 1000 + (pktSeq++ % 20000);
   const icmp = spec.proto === 'icmp';
-  const pkt = { proto: spec.proto, src: srcIp, dst: spec.dst, sport: icmp ? id : spec.sport ?? 30000 + id, dport: icmp ? 0 : spec.dport, ttl: spec.ttl || 64, reply: false, data: spec.data || null, ...(spec.size ? { len: +spec.size } : {}), ...(spec.df ? { df: true } : {}), ...(spec.host ? { host: spec.host } : {}), ...(spec.qname ? { qname: spec.qname } : {}), ...(spec.attack ? { attack: spec.attack } : {}), ...(spec.flood ? { flood: true } : {}) };
+  const sp = icmp ? id : spec.sport ?? ephPort(src, id); // ICMP 沒有埠，這裡放的是識別碼
+  // 從網際網路上的用戶端連進來：到業者的閘道之前，已經在骨幹裡走了幾站
+  const far = src.kind === 'internet' && !src.ifaces.some((i) => i.rt && i.rt.ip === srcIp) ? ispPath(src, srcIp, spec.dst).hops.length + 1 : 0;
+  const pkt = { proto: spec.proto, src: srcIp, dst: spec.dst, sport: sp, dport: icmp ? 0 : spec.dport, ttl: spec.ttl || initTtl(src, srcIp) - far, reply: false, data: spec.data || null, ...(spec.size ? { len: +spec.size } : {}), ...(spec.df ? { df: true } : {}), ...(spec.host ? { host: spec.host } : {}), ...(spec.qname ? { qname: spec.qname } : {}), ...(spec.attack ? { attack: spec.attack } : {}), ...(spec.flood ? { flood: true } : {}) };
   ctx.log.push({ dev: fromId, kind: 'tx', text: `送出 ${pktDesc(pkt)}` });
   const a = forward(state, ctx, fromId, pkt);
   if (!a.ok && a.local) return done({ ok: false, reason: a.reason, failDev: fromId, phase: 'request', dfLocal: a.mtu });
@@ -142,9 +160,13 @@ function transactInner(state, fromId, spec) {
   }
 
   const rv = { src: pkt.dst, dst: pkt.src, sport: pkt.dport, dport: pkt.sport }; // 回應方看到的這條連線（rp 送出去之後會被 NAT 改掉）
-  const rp = { proto: pkt.proto, ...rv, ttl: 64, reply: true, ...(icmp && spec.size ? { len: +spec.size } : {}) };
+  const resp = state.devices[a.dev];
+  // 目的地是網際網路上的主機（不是業者的閘道自己）：業者的骨幹裡還有幾站，回應回到業者的閘道時 TTL 已經少了這麼多
+  if (resp.kind === 'internet' && !resp.ifaces.some((i) => i.rt && i.rt.ip === rv.src)) ctx.isp = ispPath(resp, rv.src, rv.dst);
+  const rp = { proto: pkt.proto, ...rv, ttl: initTtl(resp, rv.src) - (ctx.isp ? ctx.isp.hops.length + 1 : 0), reply: true, ...(icmp && spec.size ? { len: +spec.size } : {}) };
   ctx.log.push({ dev: a.dev, kind: 'rx', text: `收到請求，回覆 ${pktDesc(rp)}` });
   const b = forward(state, ctx, a.dev, rp);
+  if (b.ok) ctx.rttl = rp.ttl; // 回應到達時剩下的 TTL（ping 顯示的就是這個）
   if (!b.ok) return done({ ok: false, reason: '回程失敗：' + b.reason, failDev: b.dev, phase: 'reply', responder: a.dev });
   if (b.dev !== fromId) {
     const reason = `回應被送到 ${state.devices[b.dev].name}，而不是 ${src.name}（IP 位址衝突？）`;
@@ -160,7 +182,7 @@ function transactInner(state, fromId, spec) {
   const seenSrc = pkt.src;
   if (spec.proto === 'tcp') {
     // TCP 要三個封包才算建立連線：SYN → SYN-ACK → ACK
-    const ack = { proto: 'tcp', src: srcIp, dst: spec.dst, sport: 30000 + id, dport: spec.dport, ttl: 64, reply: false, ack: true };
+    const ack = { proto: 'tcp', src: srcIp, dst: spec.dst, sport: sp, dport: spec.dport, ttl: initTtl(src), reply: false, ack: true };
     ctx.log.push({ dev: fromId, kind: 'tx', text: `收到 SYN-ACK，送出 ${pktDesc(ack)}（三向交握的第三步）` });
     const c = forward(state, ctx, fromId, ack);
     if (!c.ok) return done({ ok: false, reason: '三向交握的最後一步 (ACK) 沒有送達：' + c.reason, failDev: c.dev, phase: 'ack', responder: a.dev });
@@ -173,12 +195,12 @@ function transactInner(state, fromId, spec) {
       const resp = state.devices[a.dev];
       const myIf = src.ifaces.find((i) => i.rt && i.rt.ip === srcIp), peerIf = resp.ifaces.find((i) => i.rt && i.rt.ip === rv.src);
       mss = Math.min(ipMtu(state, src, myIf) - 40, ipMtu(state, resp, peerIf) - 40, ctx.mssClamp ?? Infinity);
-      const d = bulkSend(state, ctx, spec.bulk === 'up' ? { from: fromId, seg: { src: srcIp, dst: spec.dst, sport: 30000 + id, dport: spec.dport, reply: false } } : { from: a.dev, seg: { ...rv, reply: true } }, mss);
+      const d = bulkSend(state, ctx, spec.bulk === 'up' ? { from: fromId, seg: { src: srcIp, dst: spec.dst, sport: sp, dport: spec.dport, reply: false } } : { from: a.dev, seg: { ...rv, reply: true } }, mss);
       if (!d.ok) return done({ ok: false, reason: d.reason, failDev: d.dev, phase: 'data', responder: a.dev, mss });
       mss = d.mss;
     }
     if (!spec.keep) for (const l of Object.values(ctx.ct)) for (const e of l) if (e.st === 'est') e.st = 'fin';
-    return done({ ok: true, responder: a.dev, srcIp, seenSrc, sport: 30000 + id, ...(mss ? { mss } : {}) });
+    return done({ ok: true, responder: a.dev, srcIp, seenSrc, sport: sp, ...(mss ? { mss } : {}) });
   }
   ctx.log.push({ dev: fromId, kind: 'ok', text: '收到回應，連線成功' });
   return done({ ok: true, responder: a.dev, srcIp, seenSrc });

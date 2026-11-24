@@ -12,7 +12,8 @@ import { macOf } from './sim/core.js';
 export const isStack = (d) => !!(d && d.stack && d.stack.members && d.stack.members.length > 1);
 /** 埠屬於哪一台成員：Gi2/0/1 → 2；不是堆疊格式的名稱（例如管理埠 Gi0/0）→ 0 */
 export const memberOfPort = (pid) => { const m = String(pid).match(/^[A-Za-z]+(\d+)\/\d+\/\d+$/); return m ? +m[1] : 0; };
-export const memberMac = (d, n) => macOf(d.id, 'stack' + n);
+/** 每台成員自己的基底 MAC。Switch 1 的就是整個堆疊對外用的那一個（STP 的 bridge ID、SVI 都是它） */
+export const memberMac = (d, n) => (n === 1 ? macOf(d.id, 'br', d.model) : macOf(d.id + '#sw' + n, 'br', d.model));
 
 /** 成員是不是故障了：設備上的設定 (fail)，或故障演練 (state.stackDown['設備:編號']) */
 export function memberDown(state, d, n) {

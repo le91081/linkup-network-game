@@ -2,7 +2,7 @@
 import { h, ownKeys, escLine } from './dom.js';
 import { parseIp, fmtIp } from '../engine/ip.js';
 import { transact } from '../engine/sim.js';
-import { rttSamples, pingStats } from '../engine/latency.js';
+import { rttSamples, pingStats, ispRows } from '../engine/latency.js';
 import { fortiSession } from '../engine/fortios.js';
 import { sniffing, stopSniff } from '../engine/wire.js';
 import { consoleFollow } from './cli.js';
@@ -53,7 +53,7 @@ export function fortiRun(app, devId, sess, line, print) {
       app.showTrace(`${d.name} # ${text}`, res.log, res.hops, res);
       print(`PING ${fmtIp(ip)} (${fmtIp(ip)}): 56 data bytes`);
       const t = pingStats(st, res, 5, 98);
-      if (res.ok) for (let n = 0; n < 5; n++) print(`64 bytes from ${fmtIp(ip)}: icmp_seq=${n} ttl=${64 - res.l3.length} time=${t.list[n].toFixed(1)} ms`, 'ok');
+      if (res.ok) for (let n = 0; n < 5; n++) print(`64 bytes from ${fmtIp(ip)}: icmp_seq=${n} ttl=${res.rttl ?? 64 - res.l3.length} time=${t.list[n].toFixed(1)} ms`, 'ok');
       print(`--- ${fmtIp(ip)} ping statistics ---`);
       print(`5 packets transmitted, ${res.ok ? 5 : 0} packets received, ${res.ok ? 0 : 100}% packet loss`, res.ok ? 'ok' : 'bad');
       if (res.ok) print(`round-trip min/avg/max = ${[t.min, t.avg, t.max].map((v) => v.toFixed(1)).join('/')} ms`);
@@ -67,7 +67,10 @@ export function fortiRun(app, devId, sess, line, print) {
     print(`traceroute to ${fmtIp(ip)} (${fmtIp(ip)}), 32 hops max, 3 probe packets per hop, 84 byte packets`);
     const t = (dv) => rttSamples(st, res, 3, 84, dv).map((v) => `${v.toFixed(3)} ms`).join('  ');
     res.l3.forEach((x, n) => print(` ${n + 1}  ${x.ip == null ? '*' : `${fmtIp(x.ip)}  ${t(x.dev)}`}`, 'pre'));
-    if (res.ok) print(` ${res.l3.length + 1}  ${fmtIp(ip)}  ${t(null)}`, 'ok');
+    // 目的地在網際網路上：業者的閘道之後，骨幹裡還有幾站
+    const far = res.ok ? ispRows(st, res, 3, 84) : [];
+    far.forEach((x, k) => print(` ${res.l3.length + k + 1}  ${x.ip == null ? '* * *' : `${fmtIp(x.ip)}  ${x.ms.map((v) => `${v.toFixed(3)} ms`).join('  ')}`}`, 'pre'));
+    if (res.ok) print(` ${res.l3.length + far.length + 1}  ${fmtIp(ip)}  ${t(null)}`, 'ok');
     else { for (let k = 1; k <= 3; k++) print(` ${res.l3.length + k}  * * *`, 'bad'); print('  ↳ ' + res.reason, 'hint'); }
   }
   const d = app.state.devices[devId];
