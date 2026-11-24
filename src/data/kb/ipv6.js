@@ -8,7 +8,7 @@ export const IPV6 = [
       'link-local 只在同一條線上有效，路由協定的鄰居與預設閘道都用它；路由器要開 ipv6 unicast-routing 才會轉送 IPv6 與送 RA。IPv6 沒有廣播，改用多點傳送（ff02::1 所有節點、ff02::2 所有路由器）。',
     ],
     fig: { type: 'table', head: ['開頭', '類型', '用途'], rows: [['2000::/3', '全域單播（GUA）', '網際網路上唯一'], ['fe80::/10', 'link-local', '同一條線，每個介面都有'], ['fc00::/7（fd..）', 'ULA', '內部用，像私有位址'], ['ff00::/8', '多點傳送', '取代廣播'], ['::1', '本機迴路', '像 127.0.0.1']] },
-    cmd: [{ v: 'Cisco IOS', c: ['ipv6 unicast-routing', 'interface Gi0/0/1', ' ipv6 address 2001:db8:1::1/64', ' ipv6 enable', 'show ipv6 interface brief'] }, { v: 'Windows', c: ['ipconfig', 'ping -6 2001:db8:1::10'] }],
+    cmd: [{ v: 'Cisco IOS', c: ['ipv6 unicast-routing', 'interface Gi0/0/1', ' ipv6 address 2001:db8:1::1/64', ' ipv6 enable', 'show ipv6 interface brief'] }, { v: 'Linux', c: ['ip -6 addr', 'ip -6 route', 'ping -6 2001:db8:1::10'] }],
     see: ['slaac', 'ndp', 'dual-stack'],
   },
   {

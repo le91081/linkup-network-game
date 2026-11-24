@@ -21,7 +21,7 @@ export const LEVELS23 = [
     given: [
       ['R1', '使用者 10.10.0.0/24、2001:db8:10::/64（RA，SLAAC）· 伺服器 10.20.0.0/24、2001:db8:20::/64'],
       ['DNS 伺服器', `10.20.0.53 · ${WEB} 的 A 與 AAAA`], ['網站', '10.20.0.10、2001:db8:20::10（HTTPS）'],
-      ['同事的電腦', 'Windows 11，雙協定（IPv6 自動取得）'], ['舊電腦', '只有 IPv4'],
+      ['同事的電腦', 'Ubuntu，雙協定（IPv6 自動取得）'], ['舊電腦', '只有 IPv4'],
     ],
     learn: [
       { t: 'A 與 AAAA', d: 'A 記錄是 IPv4 位址，AAAA（quad-A）是 IPv6 位址。同一個名稱可以兩種都有：用戶端會兩種都問（nslookup 會把兩個位址都列出來，nslookup -type=aaaa 只問 AAAA）。' },
@@ -75,7 +75,7 @@ export const LEVELS23 = [
     hints: [
       '同事的電腦：ping www.corp.local 逾時，ping -4 www.corp.local 卻會通；nslookup www.corp.local 會列出兩個位址。ping 2001:db8:20::10（網站真正的 IPv6）也試試看。',
       'nslookup -type=aaaa www.corp.local：AAAA 記錄是 2001:db8:20::100，可是網站設定的是 2001:db8:20::10。到 DNS 伺服器的「DNS」分頁把 AAAA 改成 2001:db8:20::10。',
-      '改好 AAAA 之後 ping -6 還是逾時：網站手動設定的 IPv6 沒有預設閘道，回應送不出伺服器網段。網站的「網路設定」把 IPv6 預設閘道填 2001:db8:20::1。（同事的電腦 DNS 快取還記著舊的 AAAA 的話，ipconfig /flushdns）',
+      '改好 AAAA 之後 ping -6 還是逾時：網站手動設定的 IPv6 沒有預設閘道，回應送不出伺服器網段。網站的「網路設定」把 IPv6 預設閘道填 2001:db8:20::1。（同事的電腦 DNS 快取還記著舊的 AAAA 的話，resolvectl flush-caches）',
     ],
     solve(s) {
       const rec = dev(s, 'dns').dnsZone.records.find((r) => r.type === 'AAAA');

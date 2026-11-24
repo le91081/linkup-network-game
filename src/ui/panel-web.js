@@ -32,7 +32,7 @@ export function webTab(ctx, body) {
       kv('主體別名 (SAN)', (c.san && c.san.length ? c.san : [c.cn]).join(', ')),
       kv('簽發者', certSelf(c) ? `${c.cn}（自簽）` : INTERMEDIATES[c.issuer] ? `${c.issuer}（中繼 CA，根憑證是 ${INTERMEDIATES[c.issuer]}）` : c.issuer),
       INTERMEDIATES[c.issuer] && toggle(ctx, () => !!w.chain, (v) => { w.chain = v; }, '一起送出中繼憑證（安裝完整的憑證鏈 fullchain）'),
-      INTERMEDIATES[c.issuer] && !w.chain && note('warn', '只送出網站自己的憑證：Windows 的瀏覽器會自己去下載中繼憑證，Linux 的 curl、Java、手機 App 會說「unable to get local issuer certificate」。'),
+      INTERMEDIATES[c.issuer] && !w.chain && note('warn', '只送出網站自己的憑證：瀏覽器會自己去下載中繼憑證，curl、Java、手機 App 這些用 OpenSSL 的程式會說「unable to get local issuer certificate」。'),
       kv('有效期間', `${fmtDate(c.from)} ～ ${fmtDate(c.to)}`),
       certSelf(c) && note('warn', '自簽憑證沒有人信任：每個使用者都會看到警告。'),
     ] : note('bad', '這個網站還沒有安裝憑證：443 有在聽，但 TLS 交握一開始就會失敗。')));

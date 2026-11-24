@@ -74,10 +74,6 @@ export function pingStats(state, res, n = 4, bytes = 74) {
   const avg = list.reduce((a, b) => a + b, 0) / list.length;
   return { list, min: Math.min(...list), max: Math.max(...list), avg, mdev: Math.sqrt(list.reduce((a, b) => a + (b - avg) ** 2, 0) / list.length) };
 }
-/** Windows 的寫法：小於 1 ms 寫成「<1ms」 */
-export const winMs = (ms) => (ms < 1 ? '<1ms' : `=${Math.round(ms)}ms`);
-/** tracert 的一欄（和 Windows 一樣寬 9 個字）：「    <1 ms」「    12 ms」；沒有回應是「     *   」 */
-export const winCol = (ms) => (ms == null ? '     *   ' : (ms < 1 ? '<1' : String(Math.round(ms))).padStart(6) + ' ms');
 /**
  * traceroute 在網際網路裡的那幾站（res.isp，見 sim/transact.js）：業者的閘道，加上骨幹裡的路由器。
  * 回傳 [{ ip（null：那一站不回應）, ms: n 個樣本 }]，時間從「業者的閘道」到「目的地」依序增加

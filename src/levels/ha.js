@@ -135,9 +135,9 @@ export const LEVELS24 = [
       { type: 'failover', down: ['r2'], label: 'R2 壞掉：大家照樣連得到總部（R1 接手）', test: { type: 'tcp', from: 'pc2', to: 'srv', port: 443 } },
     ],
     hints: [
-      'R1：show standby brief，R1 是 Active、R2 是 Standby — HSRP 同一個群組只有 Active 在轉送。PC 的 arp -a：10.10.0.1 的 MAC 是 0000.0c07.ac01（HSRP 的虛擬 MAC）。',
+      'R1：show standby brief，R1 是 Active、R2 是 Standby — HSRP 同一個群組只有 Active 在轉送。PC 的 ip neigh：10.10.0.1 的 MAC 是 00:00:0c:07:ac:01（HSRP 的虛擬 MAC）。',
       '改用 GLBP（兩台都要）：interface Gi0/0/1 → no standby 1 → glbp 1 ip 10.10.0.1 → glbp 1 preempt；R1 再加 glbp 1 priority 110 讓它當 AVG。',
-      '改完之後 PC 的 ARP 快取還記著舊的 HSRP 虛擬 MAC：arp -d 清掉，或等它過期。show glbp brief 看得到兩台各負責一個虛擬 MAC（Fwd 1、Fwd 2）。',
+      '改完之後 PC 的 ARP 快取還記著舊的 HSRP 虛擬 MAC：sudo ip neigh flush all 清掉，或等它過期。show glbp brief 看得到兩台各負責一個虛擬 MAC（Fwd 1、Fwd 2）。',
     ],
     solve(s) {
       for (const [id, prio] of [['r1', 110], ['r2', 100]]) typeIn(s, id, ['configure terminal', 'interface Gi0/0/1', 'no standby 1', 'glbp 1 ip 10.10.0.1', ...(prio !== 100 ? [`glbp 1 priority ${prio}`] : []), 'glbp 1 preempt', 'end', 'write memory']);

@@ -10,7 +10,7 @@ export const SERVICES = [
     ],
     fig: { type: 'ladder', a: '電腦（還沒有 IP）', b: 'DHCP 伺服器', msgs: [{ from: 'a', t: 'DISCOVER（廣播）：有沒有 DHCP 伺服器？' }, { from: 'b', t: 'OFFER：給你 192.168.1.101，閘道 .1、DNS 8.8.8.8' }, { from: 'a', t: 'REQUEST（廣播）：我要這個位址' }, { from: 'b', t: 'ACK：確定，租期一天' }] },
     pit: ['位址池用完：新來的設備拿不到位址（show ip dhcp pool 看使用量，或縮短租期）。', '網段上有兩台 DHCP 伺服器（例如有人接了家用路由器）：電腦拿到錯的閘道，用 DHCP Snooping 擋。', '位址池忘了設閘道（default-router）：同網段通，其他網段都不通。'],
-    cmd: [{ v: 'Cisco IOS', c: ['ip dhcp excluded-address 192.168.1.1 192.168.1.20', 'ip dhcp pool LAN', ' network 192.168.1.0 255.255.255.0', ' default-router 192.168.1.1', ' dns-server 8.8.8.8', 'show ip dhcp binding'] }, { v: 'Windows', c: ['ipconfig /release', 'ipconfig /renew'] }],
+    cmd: [{ v: 'Cisco IOS', c: ['ip dhcp excluded-address 192.168.1.1 192.168.1.20', 'ip dhcp pool LAN', ' network 192.168.1.0 255.255.255.0', ' default-router 192.168.1.1', ' dns-server 8.8.8.8', 'show ip dhcp binding'] }, { v: 'Linux', c: ['sudo dhclient -r eth0', 'sudo dhclient -v eth0'] }],
     see: ['dhcp-relay', 'apipa', 'dhcp-snooping'],
   },
   {
@@ -24,7 +24,7 @@ export const SERVICES = [
     see: ['dhcp', 'svi'],
   },
   {
-    id: 'dns', t: 'DNS', en: 'Domain Name System', cat: 'services', keys: ['DNS', 'nslookup', 'A 記錄', 'CNAME', 'MX', 'split DNS', 'ipconfig /flushdns'], tags: ['DNS', 'CNAME', 'TTL', 'split DNS', 'MX', 'AAAA', 'ipconfig /flushdns'],
+    id: 'dns', t: 'DNS', en: 'Domain Name System', cat: 'services', keys: ['DNS', 'nslookup', 'A 記錄', 'CNAME', 'MX', 'split DNS', 'dig', 'resolvectl flush-caches'], tags: ['DNS', 'CNAME', 'TTL', 'split DNS', 'MX', 'AAAA', 'resolvectl flush-caches'],
     sum: '把名稱（www.example.com）換成 IP 位址：電腦問設定的 DNS 伺服器，伺服器回答或幫忙去問，答案會依 TTL 快取一段時間。',
     body: [
       '常見的記錄：A（名稱 → IPv4）、AAAA（→ IPv6）、CNAME（別名，指向另一個名稱）、MX（這個網域的郵件伺服器）、PTR（IP → 名稱，反查）。',
@@ -33,7 +33,7 @@ export const SERVICES = [
     ],
     steps: { t: '查一個名稱的過程', items: ['先看自己的快取（還沒過期就直接用）。', '問設定的 DNS 伺服器（UDP 53）。', '伺服器有快取就回答；沒有的話，從根伺服器 → .com → example.com 的權威伺服器一層一層問下去（遞迴查詢）。', '拿到答案，連同 TTL 一起回給用戶端，雙方都快取起來。'] },
     pit: ['DNS 指向一台沒有提供 DNS 服務的設備（例如沒開 DNS proxy 的路由器）：網址打不開，ping IP 卻通。', 'nslookup 不看本機快取，瀏覽器會：nslookup 已經是新的、瀏覽器還連到舊的，是快取還沒過期。', 'ACL 只放行 UDP 53：大的回應改走 TCP 53 就失敗。'],
-    cmd: [{ v: 'Windows', c: ['nslookup www.example.com', 'ipconfig /displaydns', 'ipconfig /flushdns'] }],
+    cmd: [{ v: 'Linux', c: ['nslookup www.example.com', 'dig www.example.com', 'resolvectl show-cache', 'resolvectl flush-caches'] }],
     see: ['tcp-udp', 'nat', 'dual-stack'],
   },
   {

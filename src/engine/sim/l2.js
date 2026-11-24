@@ -395,7 +395,7 @@ export const answerMac = (e, ip) => (e.iface.rt.ip !== ip && e.iface.vrrp && e.i
 export const arpRows = (state, dev) => Object.entries((state.dyn && state.dyn.arp[dev.id]) || {})
   .filter(([, e]) => state.clock - e.t < arpTtl(dev))
   .map(([ip, e]) => ({ ip: +ip, mac: e.mac, age: Math.floor(state.clock - e.t), left: Math.ceil(arpTtl(dev) - (state.clock - e.t)) }));
-/** arp -d / clear arp-cache */
+/** ip neigh flush all / clear arp-cache */
 export function clearArp(state, dev) { if (state.dyn) delete state.dyn.arp[dev.id]; }
 
 // ── 攻擊工具與壞掉的網卡 ──

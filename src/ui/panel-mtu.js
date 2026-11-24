@@ -13,12 +13,12 @@ const numSet = (obj, key, lo, hi, def, what) => (v) => {
 /** 下拉選單：常用的值，加上目前的值（如果不在清單裡） */
 const opts = (cur, list) => (list.some(([v]) => v === String(cur)) ? list : [...list, [String(cur), String(cur)]]);
 
-/** 主機網卡的 MTU：Windows 網卡內容裡的「Jumbo Packet」、Linux 的 ip link set mtu */
+/** 主機網卡的 MTU：Linux 的 ip link set <介面> mtu */
 export function hostMtuField(ctx, i) {
   if (!jumboCapable(ctx.dev) || i.bind.t === 'wlan') return null;
   const cur = +i.mtu || 1500;
   return field('MTU', sel(ctx, () => String(cur), (v) => { if (+v === 1500) delete i.mtu; else i.mtu = +v; },
-    opts(cur, [['1500', '1500（預設）'], ['9000', '9000（Jumbo Frame：網卡的 Jumbo Packet 設成 9014 Bytes）']]), { rerender: true }),
+    opts(cur, [['1500', '1500（預設）'], ['9000', '9000（Jumbo Frame：sudo ip link set eth0 mtu 9000）']]), { rerender: true }),
   cur > 1500 ? '同一個網段裡，交換器和另一端也都要開 Jumbo Frame，只開一邊大的封包會被丟掉' : null);
 }
 

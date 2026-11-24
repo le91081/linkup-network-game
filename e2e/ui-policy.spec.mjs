@@ -74,10 +74,10 @@ test('政策路由：在路由分頁新增一條政策，NAS 的備份改走寬�
   expect(await scan(page, '#panel', 'Branch-RT・政策路由')).toEqual([]);
   await page.locator('#panel .card', { hasText: '政策路由 (PBR)' }).scrollIntoViewIfNeeded();
   await page.screenshot({ path: info.outputPath('pbr-card.png') });
-  // NAS 的 tracert 改走寬頻
+  // NAS 的 traceroute 改走寬頻
   await clickDevice(page, 'nas');
   await tab(page, '終端機');
-  let o = await outOf(page, 'tracert 10.1.0.20');
+  let o = await outOf(page, 'traceroute 10.1.0.20');
   expect(o).toContain('10.255.2.1');
   await clickDevice(page, 'br');
   await tab(page, 'CLI');

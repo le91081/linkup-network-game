@@ -2070,7 +2070,7 @@ function showOrPing(app, devId, line, print) {
     if (!isUndebug && what === 'packet') print('（只看得到給這台路由器自己、或它自己送出的封包，以及它丟掉的封包；經過它轉送的封包由 CEF 處理，不會出現在這裡）', 'hint');
     if (!isUndebug && (what === 'ospfAdj' || what === 'ospfHello') && !had.ospfAdj && !had.ospfHello) print('（鄰居建不起來的話，每個 Hello 間隔就會印出原因：區域、計時器、遮罩、驗證、MTU。讓時間前進就看得到；建好的鄰居不會一直印）', 'hint');
     if (!isUndebug && what === 'rip') print('（每 30 秒印一次送出、收到、被丟掉的 RIP 更新：版本不對是 illegal version、驗證不對是 invalid authentication。讓時間前進就看得到）', 'hint');
-    if (!isUndebug && (what === 'dhcpPkt' || what === 'dhcpEv') && !had.dhcpPkt && !had.dhcpEv) print('（這台路由器發出或續約租約的時候會印出 DISCOVER / OFFER / REQUEST / ACK。用戶端 ipconfig /renew 或重新接線就看得到）', 'hint');
+    if (!isUndebug && (what === 'dhcpPkt' || what === 'dhcpEv') && !had.dhcpPkt && !had.dhcpEv) print('（這台路由器發出或續約租約的時候會印出 DISCOVER / OFFER / REQUEST / ACK。用戶端 sudo dhclient -v eth0 或重新接線就看得到）', 'hint');
     if (!isUndebug && ['isakmp', 'ikev2', 'ipsec'].includes(what) && !had.isakmp && !had.ikev2 && !had.ipsec) print('（通道協商的過程與失敗的原因會印在這裡。IKEv1 看 debug crypto isakmp，IKEv2 看 debug crypto ikev2，第二階段看 debug crypto ipsec）', 'hint');
     return true;
   }

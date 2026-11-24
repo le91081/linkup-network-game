@@ -3,7 +3,7 @@
 // 伺服器：d.dnsZone = { records: [{ name, type, value, ttl, pref? }] }（相容舊的 d.dnsRecords：名稱 → IP）
 //   名稱一律寫完整的網域名稱，例如 www.corp.local；PTR 的名稱是 10.0.10.20.in-addr.arpa
 // 用戶端：查到之後依 TTL 記在快取裡，TTL 到之前都直接用快取，不會再問伺服器。
-//   所以伺服器上的記錄改了，用戶端要等 TTL 到期（或 ipconfig /flushdns）才會看到新的位址。
+//   所以伺服器上的記錄改了，用戶端要等 TTL 到期（或 resolvectl flush-caches）才會看到新的位址。
 //   state.dyn.dnsCache[設備] = { 名稱: { ip, exp, alias?, srv } }
 import { parseIp, fmtIp } from './ip.js';
 import { parseIp6 } from './ip6.js';
@@ -74,7 +74,7 @@ export function cachePut(state, dev, name, e) {
   (all[dev.id] ||= {})[norm(name) + (e.ip6 != null ? '|AAAA' : '')] = { ip: e.ip ?? null, ...(e.ip6 != null ? { ip6: e.ip6.toString() } : {}), exp: state.clock + e.ttl, alias: e.alias || null, srv: e.srv };
 }
 export function cacheFlush(state, dev) { if (state.dyn && state.dyn.dnsCache) delete state.dyn.dnsCache[dev.id]; }
-/** ipconfig /displaydns 用：[{ name, ip, left, alias }] */
+/** resolvectl show-cache 用：[{ name, ip, left, alias }] */
 export function cacheRows(state, dev) {
   const c = ((state.dyn && state.dyn.dnsCache) || {})[dev.id] || {};
   return Object.entries(c).filter(([, e]) => e.exp > state.clock).map(([name, e]) => ({ name: name.replace(/\|AAAA$/, ''), ip: e.ip, ...(e.ip6 != null ? { ip6: BigInt(e.ip6) } : {}), left: Math.ceil(e.exp - state.clock), alias: e.alias }));

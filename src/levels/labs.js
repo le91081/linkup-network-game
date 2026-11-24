@@ -42,7 +42,7 @@ export const LEVELS93 = [
       { t: '兩層位址，兩種用途', d: 'IP 位址寫的是「最終要給誰」，從頭到尾不變（沒有 NAT 的話）。MAC 位址寫的是「這一段線路要交給誰」，只在同一個網段裡有意義。' },
       { t: '為什麼目的 MAC 不是伺服器', d: 'PC-A 用自己的遮罩一算，伺服器不在同一個網段：ARP 是廣播，過不了路由器，問不到伺服器的 MAC。所以它改問預設閘道的 MAC，把訊框交給閘道，請它代為轉送。' },
       { t: '路由器：拆開、查表、重新包裝', d: '路由器收到訊框，拆掉乙太網路標頭，看 IP 的目的位址查路由表，決定從哪個介面送出去，再包上新的乙太網路標頭：來源 MAC 是自己送出去的那個介面，目的 MAC 是下一站。' },
-      { t: 'TTL', d: 'IP 標頭裡的存活時間，每經過一台路由器減 1，減到 0 就丟掉並回報（tracert 就是靠這個找出路徑）。交換器是第二層設備，不會動 TTL。起始值看作業系統：Windows 128、Linux 與手機 64、Cisco 的設備 255。' },
+      { t: 'TTL', d: 'IP 標頭裡的存活時間，每經過一台路由器減 1，減到 0 就丟掉並回報（traceroute 就是靠這個找出路徑）。交換器是第二層設備，不會動 TTL。起始值看作業系統：Linux 與手機 64、Windows 128、Cisco 的設備 255。' },
     ],
     setup: () => makeState([
       D('pc', 'pc-a', { name: 'PC-A', pos: [-11, 3.5], ip: '192.168.1.10', gw: '192.168.1.1' }),
@@ -55,7 +55,7 @@ export const LEVELS93 = [
     objectives: [
       { type: 'ping', from: 'pc-a', to: 'srv', label: 'PC-A ping 伺服器（送一個封包來觀察）' },
       {
-        type: 'ask', id: 'dmac', label: 'PC-A 送出的訊框，目的 MAC 是誰的？', tip: TRACE_TIP + '也可以在 PC-A 的終端機輸入 arp -a，看它記住了誰的 MAC。',
+        type: 'ask', id: 'dmac', label: 'PC-A 送出的訊框，目的 MAC 是誰的？', tip: TRACE_TIP + '也可以在 PC-A 的終端機輸入 ip neigh，看它記住了誰的 MAC。',
         q: 'PC-A ping 伺服器（172.16.5.80）。從 PC-A 的網路卡送出去的那個訊框，目的 MAC 位址是哪一台設備的？',
         options: [
           { v: 'srv', t: '伺服器的網路卡', why: '伺服器在另一個網段。ARP 是廣播，過不了路由器，PC-A 問不到伺服器的 MAC，只能把訊框交給預設閘道。' },
@@ -66,7 +66,7 @@ export const LEVELS93 = [
         answer: 'r1', explain: '目的 IP 是伺服器，目的 MAC 卻是預設閘道：不在同一個網段的對象，一律把訊框交給閘道。',
       },
       {
-        type: 'ask', id: 'smac', input: 'mac', label: '封包到達伺服器時，來源 MAC 是什麼？', tip: TRACE_TIP + '到達伺服器的是「R2 → SW-2 → 伺服器」那一段。也可以在伺服器的終端機輸入 arp -a。',
+        type: 'ask', id: 'smac', input: 'mac', label: '封包到達伺服器時，來源 MAC 是什麼？', tip: TRACE_TIP + '到達伺服器的是「R2 → SW-2 → 伺服器」那一段。也可以在伺服器的終端機輸入 ip neigh。',
         q: '同一個封包到達伺服器的時候，訊框的來源 MAC 位址是什麼？（填 MAC 位址）',
         answer: (s) => macOfIf(s, 'r2', 'Gi0/0/1'),
         miss: (s, got) => {
@@ -91,19 +91,19 @@ export const LEVELS93 = [
         answer: 'same', explain: 'IP 位址是端到端的：路由器只看它來查路由表，不會改它（NAT 是例外）。會變的只有 MAC 與 TTL。',
       },
       {
-        type: 'ask', id: 'ttl', input: 'number', label: '伺服器收到封包時，TTL 是多少？', tip: TRACE_TIP + 'PC-A 的終端機 ping 172.16.5.80 的輸出也有 TTL：那是「回應」回到 PC-A 時剩下的值。伺服器也是 Windows、回程一樣經過兩台路由器，所以數字相同。',
-        q: 'PC-A 是 Windows，送出的封包 TTL 是 128。伺服器收到的時候，TTL 是多少？',
-        answer: (s) => { const f = lastFrame(s, 'pc-a', '172.16.5.80'); return f ? f.ttl : 126; },
+        type: 'ask', id: 'ttl', input: 'number', label: '伺服器收到封包時，TTL 是多少？', tip: TRACE_TIP + 'PC-A 的終端機 ping 172.16.5.80 的輸出也有 ttl=：那是「回應」回到 PC-A 時剩下的值。伺服器也是 Linux、回程一樣經過兩台路由器，所以數字相同。',
+        q: 'PC-A 是 Linux，送出的封包 TTL 是 64。伺服器收到的時候，TTL 是多少？',
+        answer: (s) => { const f = lastFrame(s, 'pc-a', '172.16.5.80'); return f ? f.ttl : 62; },
         miss: '每經過一台「路由器」減 1（交換器不算）。數一數 PC-A 到伺服器中間有幾台路由器。',
-        explain: '128 − 2 = 126：路上有 R1、R2 兩台路由器，交換器不會動 TTL。反過來，看到 ping 回來的 TTL 是 126，就能猜出對方是 Windows（128 起跳）、中間隔了兩台路由器；Linux 會是 62、Cisco 的設備會是 253。',
+        explain: '64 − 2 = 62：路上有 R1、R2 兩台路由器，交換器不會動 TTL。反過來，看到 ping 回來的 ttl=62，就能猜出對方是 Linux（64 起跳）、中間隔了兩台路由器；Windows 會是 126、Cisco 的設備會是 253。',
       },
     ],
     hints: [
       '按「執行測試」讓 PC-A ping 一次。下方封包追蹤裡，「PC-A → SW-1 → R1」這一行後面有「封包」兩個字，點它可以看到這一段的 MAC、IP 與 TTL；每一段都點開來比一比。',
       '目的 IP 是伺服器，但目的 MAC 是 R1（預設閘道）：不同網段的 MAC 用 ARP 問不到，只能交給閘道。之後每經過一台路由器，來源與目的 MAC 都換成那一段線路兩端的位址，IP 位址不變。',
-      '到達伺服器的那一段是「R2 → SW-2 → 伺服器」，來源 MAC 是 R2 的 Gi0/0/1（點開那一行的「封包」照著填）。TTL 從 128 開始（Windows 的起始值），經過 R1、R2 各減 1，到伺服器是 126。',
+      '到達伺服器的那一段是「R2 → SW-2 → 伺服器」，來源 MAC 是 R2 的 Gi0/0/1（點開那一行的「封包」照著填）。TTL 從 64 開始（Linux 的起始值），經過 R1、R2 各減 1，到伺服器是 62。',
     ],
-    solve(s) { s.answers = { dmac: 'r1', smac: macOfIf(s, 'r2', 'Gi0/0/1'), ipsame: 'same', ttl: '126' }; },
+    solve(s) { s.answers = { dmac: 'r1', smac: macOfIf(s, 'r2', 'Gi0/0/1'), ipsame: 'same', ttl: '62' }; },
     recap: ['MAC 位址每一段都換：來源是送出去的介面，目的是下一站。IP 位址從頭到尾不變。', '不在同一個網段的目的地，訊框一律先交給預設閘道；TTL 每過一台路由器減 1。'],
   },
 
@@ -116,7 +116,7 @@ export const LEVELS93 = [
       { t: '學習：看來源 MAC', d: '交換器每收到一個訊框，就把「來源 MAC 是從哪個埠進來的」記進 MAC 位址表。沒有送過訊框的設備，交換器不知道它在哪裡。' },
       { t: '轉送：查目的 MAC', d: '表裡查得到目的 MAC，就只從那一個埠送出去。查不到（unknown unicast）或目的是廣播，就送往同一個 VLAN 的其他所有埠，這叫泛洪 (flooding)。' },
       { t: '過期 (aging)', d: '一筆位址 300 秒沒有再看到就會被刪掉，設備搬到別的埠才不會一直送錯地方。show mac address-table 看得到每一筆學到的位址。' },
-      { t: '用 MAC 找埠', d: '現場最常用的一招：先用 arp -a 查到設備的 MAC，再到交換器的 MAC 位址表找這個 MAC 在哪個埠。設備要先送過訊框（讓它被 ping 一下）才查得到。' },
+      { t: '用 MAC 找埠', d: '現場最常用的一招：先用 ip neigh 查到設備的 MAC，再到交換器的 MAC 位址表找這個 MAC 在哪個埠。設備要先送過訊框（讓它被 ping 一下）才查得到。' },
     ],
     setup() {
       const s = makeState([
@@ -154,14 +154,14 @@ export const LEVELS93 = [
         answer: 'flood', explain: '查不到就泛洪：同一個 VLAN 的每一台都會收到一份，不是給自己的就丟掉。對方一回覆，交換器就學到它在哪個埠。',
       },
       {
-        type: 'ask', id: 'port', input: 'port', label: '印表機接在 SW-Office 的哪一個埠？', tip: '線看不到，但 MAC 位址表看得到。先從 PC-A ping 192.168.10.50，用 arp -a 查出印表機的 MAC，再到 SW-Office 的 MAC 位址表找這個 MAC 在哪個埠。',
+        type: 'ask', id: 'port', input: 'port', label: '印表機接在 SW-Office 的哪一個埠？', tip: '線看不到，但 MAC 位址表看得到。先從 PC-A ping 192.168.10.50，用 ip neigh 查出印表機的 MAC，再到 SW-Office 的 MAC 位址表找這個 MAC 在哪個埠。',
         q: '印表機（192.168.10.50）接在 SW-Office 的哪一個連接埠？（填埠名，例如 Gi0/3）',
         answer: (s) => swPortLabel(s, 'sw', 'prn'),
         miss: (s, got) => {
           const g = String(got).toLowerCase().replace(/\s+/g, ''), hit = ['pc-a', 'pc-b', 'nas'].find((id) => swPortLabel(s, 'sw', id).toLowerCase() === g || swPortLabel(s, 'sw', id).toLowerCase().replace(/^gi/, 'g') === g);
-          return hit ? `那個埠後面是 ${dev(s, hit).name}。先用 arp -a 查出 192.168.10.50 的 MAC，再對照 MAC 位址表。` : '在 PC-A 的終端機 ping 192.168.10.50 之後輸入 arp -a，記下印表機的 MAC；再到 SW-Office 的 MAC 位址表找同一個 MAC。';
+          return hit ? `那個埠後面是 ${dev(s, hit).name}。先用 ip neigh 查出 192.168.10.50 的 MAC，再對照 MAC 位址表。` : '在 PC-A 的終端機 ping 192.168.10.50 之後輸入 ip neigh，記下印表機的 MAC；再到 SW-Office 的 MAC 位址表找同一個 MAC。';
         },
-        explain: '用 IP 查 MAC（arp -a），再用 MAC 查埠（show mac address-table）：沒有標籤的線也找得到。',
+        explain: '用 IP 查 MAC（ip neigh），再用 MAC 查埠（show mac address-table）：沒有標籤的線也找得到。',
       },
       {
         type: 'ask', id: 'aging', label: '設備五分鐘沒有送訊框，MAC 位址表會？', tip: 'MAC 位址表每一筆後面都有「剩幾秒」。用場景上方的時鐘加速，看它倒數到 0。',
@@ -177,11 +177,11 @@ export const LEVELS93 = [
     ],
     hints: [
       '點 SW-Office →「狀態」分頁，最上面就是 MAC 位址表。一開始是空的；按「執行測試」讓 PC-A ping 印表機之後再看一次，會多出兩筆（PC-A 與印表機），其他沒送過訊框的設備不在表裡。',
-      '在 PC-A 的終端機輸入 arp -a，192.168.10.50 那一行的「實體位址」就是印表機的 MAC。回到 SW-Office 的 MAC 位址表，找同一個 MAC 前面寫的埠名。',
+      '在 PC-A 的終端機輸入 ip neigh，192.168.10.50 那一行 lladdr 後面的就是印表機的 MAC。回到 SW-Office 的 MAC 位址表，找同一個 MAC 前面寫的埠名。',
       '印表機在 Gi0/6。交換器靠「來源 MAC」學習；查不到目的 MAC 就泛洪到同一個 VLAN 的其他埠；300 秒沒看到的位址會被刪掉。',
     ],
     solve(s) { s.answers = { learn: 'smac', flood: 'flood', port: swPortLabel(s, 'sw', 'prn'), aging: 'age' }; },
-    recap: ['交換器靠來源 MAC 學習、靠目的 MAC 轉送；查不到或是廣播就泛洪。', '找設備接在哪個埠：arp -a 用 IP 查 MAC，MAC 位址表用 MAC 查埠。'],
+    recap: ['交換器靠來源 MAC 學習、靠目的 MAC 轉送；查不到或是廣播就泛洪。', '找設備接在哪個埠：ip neigh 用 IP 查 MAC，MAC 位址表用 MAC 查埠。'],
   },
 
   // ════════════════════════ 18-3 廣播網域 ════════════════════════
@@ -216,7 +216,7 @@ export const LEVELS93 = [
       { type: 'ping', from: 'pc1', to: 'pc4', label: 'PC-1 ping PC-4（先看一次 ARP 廣播怎麼擴散）' },
       {
         type: 'ask', id: 'bcast', multi: true, label: 'PC-1 的 ARP 廣播，誰會收到？（複選）',
-        tip: '在 PC-1 的終端機先輸入 arp -d 清掉快取，再 ping 192.168.20.14：橘色的光點就是 ARP 廣播，看它跑到哪些設備。切到 2D 拓撲圖（T 鍵）看得更清楚，線的顏色就是 VLAN。',
+        tip: '在 PC-1 的終端機先輸入 sudo ip neigh flush all 清掉快取，再 ping 192.168.20.14：橘色的光點就是 ARP 廣播，看它跑到哪些設備。切到 2D 拓撲圖（T 鍵）看得更清楚，線的顏色就是 VLAN。',
         q: 'PC-1 要 ping PC-4，先送出一個 ARP 廣播問「誰是 192.168.10.1？」。下面哪些會收到這個廣播訊框？（複選）',
         options: [
           { v: 'pc2', t: 'PC-2（和 PC-1 接在同一台 Hub）' },
@@ -264,7 +264,7 @@ export const LEVELS93 = [
       },
     ],
     hints: [
-      '在 PC-1 的終端機輸入 arp -d 再 ping 192.168.20.14，橘色的光點（ARP 廣播）會擴散到同一個廣播網域的每一台。按 T 切到 2D 拓撲圖：綠色的線是 VLAN 10，另一個顏色是 VLAN 20。',
+      '在 PC-1 的終端機輸入 sudo ip neigh flush all 再 ping 192.168.20.14，橘色的光點（ARP 廣播）會擴散到同一個廣播網域的每一台。按 T 切到 2D 拓撲圖：綠色的線是 VLAN 10，另一個顏色是 VLAN 20。',
       '廣播會經過 Hub、也會經過交換器，但交換器只送到同一個 VLAN 的埠；到了路由器就停下來，不會從另一個介面出去。所以 PC-4 與 R1 的 Gi0/0/1 收不到。',
       '答案：PC-2、PC-3、R1 的 Gi0/0/0 會收到；PC-2 也收得到給 PC-3 的單點傳送（Hub 照抄到每個埠）；廣播網域有 2 個；會碰撞的是接在 Hub 上的 PC-1 與 PC-2。',
     ],

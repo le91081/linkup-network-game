@@ -271,22 +271,25 @@ test('虛擬化：在 vSwitch 分頁改連接埠群組的 VLAN、虛擬機器清
   await expect.poll(() => page.evaluate(() => window.linkup.state.cables.some((x) => x.a.dev === 'vm3' && x.b.dev === 'esx' && x.b.port === 'vp3'))).toBe(true);
 });
 
-test('DNS：nslookup 不看快取、ping 用快取、ipconfig /displaydns 與 /flushdns', async ({ page }) => {
+test('DNS：nslookup 不看快取、ping 用快取、resolvectl show-cache 與 flush-caches', async ({ page }) => {
   await boot(page);
   await open(page, 'l71');
   await clickDevice(page, 'pc-a');
   await page.locator('#panel .tab', { hasText: '終端機' }).click();
   const out = page.locator('#panel .term-out');
   await typeCmd(page, 'nslookup www.corp.local');
-  await expect(out).toContainText(/名稱:\s+web\.corp\.local/);
-  await expect(out).toContainText(/Address:\s+10\.0\.2\.20/);
-  await expect(out).toContainText(/Aliases:\s+www\.corp\.local/);
-  await typeCmd(page, 'ipconfig /displaydns');
-  await expect(out).toContainText(/A \(主機\) 記錄\s+\. \. \. : 10\.0\.2\.10/);
-  await typeCmd(page, 'ipconfig /flushdns');
-  await expect(out).toContainText('已成功清除 DNS 解析程式快取。');
+  await expect(out).toContainText(/www\.corp\.local\s+canonical name = web\.corp\.local\./);
+  await expect(out).toContainText(/Name:\s+web\.corp\.local/);
+  await expect(out).toContainText(/Address: 10\.0\.2\.20/);
+  await typeCmd(page, 'resolvectl show-cache');
+  await expect(out).toContainText('www.corp.local IN A 10.0.2.10');
+  await typeCmd(page, 'resolvectl flush-caches', 'resolvectl show-cache');
+  await expect(out).toContainText('快取是空的');
   await typeCmd(page, 'nslookup -type=mx corp.local');
-  await expect(out).toContainText('mail exchanger = mail.corp.local');
+  await expect(out).toContainText(/mail exchanger = \d+ mail\.corp\.local\./);
+  await typeCmd(page, 'dig www.corp.local');
+  await expect(out).toContainText(/web\.corp\.local\.\s+\d+\s+IN\s+A\s+10\.0\.2\.20/);
+  await expect(out).toContainText(/flags: qr aa rd ra/);
   expect(await scan(page, '#panel', '終端機')).toEqual([]);
   // DNS 伺服器的記錄分頁
   await page.keyboard.press('Escape'); await page.keyboard.press('Escape');
@@ -327,15 +330,18 @@ test('2D 邏輯拓撲圖：切換、點設備開設定、測試路徑亮起來�
   await expect(page.locator('#topo2d')).toBeHidden();
 });
 
-test('主機終端機：ipconfig、ping 會在主控台播封包', async ({ page }) => {
+test('主機終端機：ip addr、ping 會在主控台播封包', async ({ page }) => {
   await boot(page);
   await open(page, 'l04', true);
   await clickDevice(page, 'pc-1');
   await page.locator('#panel .tab', { hasText: '終端機' }).click();
+  await expect(page.locator('#panel .term .prompt')).toHaveText('user@pc-1:~$');
+  await typeCmd(page, 'ip addr');
+  expect(await termText(page)).toMatch(/inet \d+\.\d+\.\d+\.\d+\/\d+ brd [\d.]+ scope global (dynamic )?eth0/);
   await typeCmd(page, 'ipconfig');
-  expect(await termText(page)).toContain('IPv4 位址');
+  expect(await termText(page)).toContain('ipconfig: command not found');
   await typeCmd(page, 'ping 8.8.8.8');
-  await expect(page.locator('#panel .term-out')).toContainText(/回覆自 8\.8\.8\.8|Reply from 8\.8\.8\.8/, { timeout: 15000 });
+  await expect(page.locator('#panel .term-out')).toContainText(/64 bytes from 8\.8\.8\.8: icmp_seq=1 ttl=\d+ time=/, { timeout: 15000 });
   await expect(page.locator('#console')).toContainText('ping 8.8.8.8');
   expect(await scan(page, '#panel', '終端機')).toEqual([]);
   expect(await scan(page, '#console', '主控台')).toEqual([]);

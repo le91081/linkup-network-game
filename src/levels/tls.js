@@ -76,8 +76,8 @@ export const LEVELS17 = [
     hints: [
       'PC-1 的終端機：curl -v https://intranet.corp.local，看 expire date 是昨天（certificate has expired）。Web-Portal →「網站」分頁 → 申請新的憑證，交給 Corp Root CA 簽發。',
       'curl https://portal.corp.local 的錯誤是 no alternative certificate subject name matches：舊憑證的 SAN 只有 intranet.corp.local。申請時主體別名要同時列 intranet.corp.local, portal.corp.local（或用萬用字元 *.corp.local）。',
-      '新同事的筆電：unable to get local issuer certificate，它沒有加入網域，不信任 Corp Root CA。筆電 →「網路設定」分頁 → 安裝公司的根憑證；或在終端機 certutil -addstore root corp-root-ca.cer。',
-      '會議室電腦：先打 date，時間是 2024 年（換電池之後 BIOS 時間重設，自動校時又被關掉），所以新憑證是「not yet valid」。「網路設定」分頁打開自動設定時間，再 w32tm /resync。',
+      '新同事的筆電：unable to get local issuer certificate，它沒有加入網域，不信任 Corp Root CA。筆電 →「網路設定」分頁 → 安裝公司的根憑證；或在終端機 sudo cp corp-root-ca.crt /usr/local/share/ca-certificates/ && sudo update-ca-certificates。',
+      '會議室電腦：先打 date，時間是 2024 年（換電池之後 BIOS 時間重設，自動校時又被關掉），所以新憑證是「not yet valid」。「網路設定」分頁打開自動設定時間，或在終端機 sudo timedatectl set-ntp true。',
     ],
     solve(s) {
       dev(s, 'web').web.cert = issueCert(s, { cn: 'intranet.corp.local', san: ['intranet.corp.local', 'portal.corp.local'], issuer: CORP_CA, days: 365 });

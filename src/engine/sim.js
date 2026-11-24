@@ -36,7 +36,7 @@ export { portalPending, portalAccept } from './portal.js';
 import { transact } from './sim/transact.js';
 setCdpCheck((d, pid, x, xp) => cdpOn(d, pid) && cdpOn(x, xp));
 
-export { clearSessionLog, ephPort, fmtDur, hitsOf, ifaceMac, initTtl, isLinuxHost, isTrunk, legacyMac, macOf, osOf, pbrHits, sessionLog, vrfOf } from './sim/core.js';
+export { clearSessionLog, ephPort, fmtDur, hitsOf, ifaceMac, initTtl, isTrunk, legacyMac, macOf, osOf, pbrHits, sessionLog, vrfOf } from './sim/core.js';
 export { macVendor } from './oui.js';
 export { MAC_AGE, VRRP_MAC, arpRows, clearArp, clearMac, ifaceActive, isBridgePort, l2Explore, macAgeOf, macRows, macsBehind, vlanAllowed } from './sim/l2.js';
 export { ERR_CAUSES, ERR_RECOVERY_DEFAULT, bouncePort, dtpSpeaker, errRecoverSecs, errdisRows, poeTable, portfastOn } from './sim/phys.js';

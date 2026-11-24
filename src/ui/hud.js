@@ -470,7 +470,7 @@ export function openHelp(app) {
       step('cable', '1. 接線', '在一台設備上按住滑鼠，拖曳到另一台設備再放開。需要選擇連接埠時會跳出設備的面板圖。'),
       step('mouse', '2. 設定', '點一下設備，右側會出現它的管理頁面：IP、DHCP、VLAN、路由、NAT、防火牆政策…'),
       step('play', '3. 測試', '按「執行測試」，看封包沿著網路線一站一站前進。卡住的地方會直接告訴你原因。'),
-      step('terminal', '4. 除錯', '打開電腦的「終端機」分頁，用 ping、tracert、ipconfig、nslookup 自己找問題。')),
+      step('terminal', '4. 除錯', '打開電腦的「終端機」分頁，用 ping、traceroute、ip addr、nslookup 自己找問題。')),
     h('p', { class: 'muted', text: '不知道先玩哪一關？關卡選單左邊的「學習路線」有排好順序的路（新手入門、CCNA 重點、故障排除…）。場景太擠的話，學習筆記右上角的箭頭可以把它收起來。' }),
     h('p', { class: 'muted', text: '鍵盤：按 ? 看所有快捷鍵（Ctrl + Enter 執行測試、[ ] 切換設備、T 切換 2D 拓撲圖、M 開關音效）。' }),
     h('div', { class: 'd-actions' }, button('從第 1-1 關跟著做一次（互動導覽）', { ic: 'mouse', kind: 'ghost', onclick: () => { closeModal(); startTutorial(app); } }), button('開始', { kind: 'primary', onclick: closeModal })),

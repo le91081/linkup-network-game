@@ -65,13 +65,13 @@ export const LEVELS53 = [
       '再新增防毒設定檔（例如 corp-av），預設就會掃描 HTTP 下載。',
       '「政策」分頁的政策 #1：啟用安全設定檔，DNS 過濾選 corp-dns、防毒選 corp-av，SSL 檢查維持 no-inspection。',
       `CLI：config dnsfilter profile → edit "corp-dns" → config ftgd-dns → config filters → edit 1 → set category 61 → set action block …；config antivirus profile → edit "corp-av" → config http → set av-scan block；config firewall policy → edit 1 → set utm-status enable → set dnsfilter-profile "corp-dns" → set av-profile "corp-av"。電腦上 nslookup ${PHISH} 會看到 208.91.112.55。`,
-      '設好了釣魚網站卻還打得開：電腦已經把它真正的位址記在 DNS 快取裡。在電腦的終端機 ipconfig /flushdns，或等 5 分鐘。',
+      '設好了釣魚網站卻還打得開：電腦已經把它真正的位址記在 DNS 快取裡。在電腦的終端機 resolvectl flush-caches，或等 5 分鐘。',
     ],
     solve(s) {
       typeFg(s, 'fg', ['config dnsfilter profile', 'edit "corp-dns"', 'config ftgd-dns', 'config filters', 'edit 1', 'set category 61', 'set action block', 'next', 'edit 2', 'set category 26', 'set action block', 'next', 'end', 'end', 'next', 'end',
         'config antivirus profile', 'edit "corp-av"', 'config http', 'set av-scan block', 'end', 'next', 'end',
         'config firewall policy', 'edit 1', 'set utm-status enable', 'set ssl-ssh-profile "no-inspection"', 'set dnsfilter-profile "corp-dns"', 'set av-profile "corp-av"', 'next', 'end']);
-      if (s.dyn && s.dyn.dnsCache) { delete s.dyn.dnsCache.pc1; delete s.dyn.dnsCache.pc2; } // ipconfig /flushdns
+      if (s.dyn && s.dyn.dnsCache) { delete s.dyn.dnsCache.pc1; delete s.dyn.dnsCache.pc2; } // resolvectl flush-caches
       recompute(s);
     },
     recap: [

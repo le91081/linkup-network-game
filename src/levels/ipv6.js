@@ -22,7 +22,7 @@ export const LEVELS8 = [
     learn: [
       { t: 'RA 的三個旗標', d: '路由器在 Router Advertisement 裡告訴主機怎麼設定：前綴的 A 旗標 = 可以用 SLAAC 自己產生位址；M 旗標 = 位址去問 DHCPv6（stateful）；O 旗標 = 位址自己產生，但 DNS 這些「其他設定」去問 DHCPv6（stateless）。' },
       { t: 'DHCPv6 不給預設閘道', d: '和 DHCPv4 最大的不同：DHCPv6 沒有「預設閘道」這個選項。主機的閘道永遠來自 RA（路由器的 link-local 位址）。所以就算全部改用 DHCPv6，RA 也不能關。' },
-      { t: 'Windows 收不到 RA 時', d: '還是會自己試 stateful DHCPv6。如果網段上剛好有 DHCPv6 伺服器，就會拿到一個 /128 的位址 — 看起來設定好了，其實沒有閘道，出不了這個網段。' },
+      { t: '收不到 RA 時', d: '有些用戶端（Windows，或設成只用 DHCPv6 的 Linux）還是會自己試 stateful DHCPv6。如果網段上剛好有 DHCPv6 伺服器，就會拿到一個 /128 的位址 — 看起來設定好了，其實沒有閘道，出不了這個網段。' },
       { t: 'IOS 的寫法', d: 'ipv6 dhcp pool 建位址池（address prefix 給 stateful、dns-server、domain-name）；介面上 ipv6 dhcp server <位址池>，再用 ipv6 nd managed-config-flag / other-config-flag 設定旗標，ipv6 nd prefix default no-autoconfig 關掉 A 旗標。' },
     ],
     setup: () => {
@@ -95,7 +95,7 @@ export const LEVELS8 = [
       Object.assign(r.ifaces[0], { dhcp6: 'OFFICE', raO: true });
       Object.assign(r.ifaces[1], { ra: true, raM: true, raNoAuto: true });
     },
-    recap: ['A 旗標管 SLAAC、M 旗標管位址、O 旗標管 DNS；三者可以自由組合。', 'DHCPv6 從來不給預設閘道，RA 永遠要開。在電腦上用 ipconfig /all 看得到 DHCPv6 的 DUID 與 IAID，在路由器上用 show ipv6 dhcp binding 查是誰拿了哪個位址。'],
+    recap: ['A 旗標管 SLAAC、M 旗標管位址、O 旗標管 DNS；三者可以自由組合。', 'DHCPv6 從來不給預設閘道，RA 永遠要開。在電腦上用 nmcli device show eth0 看得到 DHCPv6 的 DUID（dhcp6_client_id）與 IAID，在路由器上用 show ipv6 dhcp binding 查是誰拿了哪個位址。'],
   },
 
   // ════════════════════════ 9-4 OSPFv3 ════════════════════════

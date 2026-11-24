@@ -42,7 +42,7 @@ export function redirectRoute(state, host, dst) {
   return { iface: i, via: e.gw, net: dst, bits: 32, ad: 0, metric: 0, redirect: e };
 }
 
-/** 目的地快取裡的 Redirect（給 netsh interface ip show destinationcache、ip route get） */
+/** 目的地快取裡的 Redirect（給 ip route get 用） */
 export function redirectRows(state, host) {
   const t = ((state.dyn && state.dyn.redirect) || {})[host.id] || {};
   return Object.entries(t).filter(([, e]) => state.clock - e.at < REDIRECT_TTL).map(([dst, e]) => ({ dst: +dst, gw: e.gw, by: e.by, left: Math.ceil(REDIRECT_TTL - (state.clock - e.at)) }));

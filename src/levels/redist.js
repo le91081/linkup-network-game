@@ -150,7 +150,7 @@ export const LEVELS19 = [
       },
     ],
     hints: [
-      '從 NAS 的終端機 tracert 10.1.0.20：走的是 10.255.1.1（專線）。OSPF 只看目的位址，cost 比較小的專線永遠贏。',
+      '從 NAS 的終端機 traceroute 10.1.0.20：走的是 10.255.1.1（專線）。OSPF 只看目的位址，cost 比較小的專線永遠贏。',
       'Branch-RT：ip access-list extended BACKUP → permit ip host 10.2.0.20 host 10.1.0.20（只選 NAS 到備份伺服器）。',
       'route-map PBR-BACKUP permit 10 → match ip address BACKUP → set ip next-hop 10.255.2.1（寬頻那一端）。',
       '套用在流量「進來」的介面，也就是接分公司 LAN 的 Gi0/0/2：interface gi0/0/2 → ip policy route-map PBR-BACKUP。show route-map 的 Policy routing matches 會開始增加（也可以在「路由」分頁的政策路由卡片設定）。',

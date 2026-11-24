@@ -9,7 +9,7 @@ export const ROUTING = [
     ],
     steps: { t: '查路由（最長前綴比對）', items: ['把目的 IP 和每一筆的遮罩做 AND，看結果是不是那筆的網段。', '符合的裡面挑遮罩最長的（/32 > /24 > /16 > /0）：越具體越優先。', '遮罩一樣長時，比管理距離（AD）小的；再一樣，比 metric 小的。', '還是一樣：好幾條同時用（ECMP）。', '都不符合：有預設路由就走它，沒有就丟掉，回 ICMP「無法到達」。'] },
     fig: { type: 'table', head: ['目的 10.1.2.3 符合嗎', '下一站', '結果'], rows: [['0.0.0.0/0', '203.0.113.1', '符合（最後才用）'], ['10.0.0.0/8', '10.0.0.2', '符合'], ['10.1.2.0/24', '10.0.1.2', '符合，最長 → 選它'], ['10.1.3.0/24', '10.0.1.6', '不符合']] },
-    cmd: [{ v: 'Cisco IOS', c: ['show ip route', 'show ip route 10.1.2.3'] }, { v: 'Windows', c: ['route print'] }],
+    cmd: [{ v: 'Cisco IOS', c: ['show ip route', 'show ip route 10.1.2.3'] }, { v: 'Linux', c: ['ip route', 'ip route get 10.1.2.3'] }],
     see: ['ad', 'static-route', 'ospf', 'ecmp'],
   },
   {

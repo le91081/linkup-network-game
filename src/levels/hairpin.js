@@ -19,7 +19,7 @@ export const LEVELS52 = [
       { t: 'NAT hairpin', d: `內部的電腦去連「自己公司伺服器的公用位址」：封包從 inside 介面進到路由器，目的地卻是 ${PUB}。傳統的 inside / outside NAT 只轉換「從 outside 介面進來」的封包，這個封包不會被換成內部位址，連線就失敗了。這種情況叫 NAT hairpin（或 NAT loopback）。` },
       { t: 'split DNS', d: '最乾淨的解法：同一個名稱，內部的 DNS 回內部位址、外部的 DNS 回公用位址。內部的人直接連 DMZ，不用繞 NAT；外面的人照舊。很多公司的內部 DNS 本來就要放 AD、內部系統的名稱。' },
       { t: '其他做法', d: 'IOS 可以改用 NAT Virtual Interface（ip nat enable、ip nat source static），讓 hairpin 也能轉換；FortiGate 要讓 VIP 也套用在內部介面、再加一條 internal → internal 的政策。這些做法讓內部流量繞一圈 NAT，也比較難查。' },
-      { t: 'DNS 快取', d: '改了 DNS 記錄之後，電腦上已經記住的舊答案要等 TTL 到期才會更新；Windows 用 ipconfig /flushdns 立刻清掉。' },
+      { t: 'DNS 快取', d: '改了 DNS 記錄之後，電腦上已經記住的舊答案要等 TTL 到期才會更新；用 resolvectl flush-caches 立刻清掉。' },
     ],
     setup() {
       const s = makeState([
@@ -61,7 +61,7 @@ export const LEVELS52 = [
       `業務的電腦：nslookup ${SITE} 得到 ${PUB}（公用位址）。curl https://${SITE} 失敗，封包路徑停在 Edge-RT：從 inside 介面收到要給 ${PUB} 的封包，傳統 NAT 不轉換。`,
       `外面的人要用公用位址，裡面的人應該直接用內部位址 ${PRIV}：同一個名稱，內部 DNS 和外部 DNS 回不同的答案 (split DNS)。`,
       `內部 DNS 伺服器 →「DNS」分頁 → ${SITE} 的 A 記錄改成 ${PRIV}。`,
-      '業務的電腦已經把舊的答案記在快取裡（TTL 300 秒）：在它的終端機打 ipconfig /flushdns，或等 5 分鐘。',
+      '業務的電腦已經把舊的答案記在快取裡（TTL 300 秒）：在它的終端機打 resolvectl flush-caches，或等 5 分鐘。',
     ],
     solve(s) {
       rec(s).value = PRIV;

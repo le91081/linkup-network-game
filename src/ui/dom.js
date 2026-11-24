@@ -33,7 +33,7 @@ export function fill(el, ...kids) {
  * 只有 Esc 例外：讓外層把焦點移開，再按一次就取消選取設備。用 Tab 縮排的編輯器也靠 Esc 才離得開。
  */
 export const ownKeys = (e) => { if (e.key !== 'Escape') e.stopPropagation(); };
-/** 命令列的 Esc：有打字就先清掉這一行（和 Windows 的命令提示字元一樣），空的才離開輸入框。回傳 true 表示已經處理 */
+/** 命令列的 Esc：有打字就先清掉這一行（方便整行重打；bash 裡是 Ctrl+U），空的才離開輸入框。回傳 true 表示已經處理 */
 export function escLine(e, input) {
   if (e.key !== 'Escape' || !input.value) return false;
   input.value = '';

@@ -283,7 +283,7 @@ export const LEVELS15 = [
 
   // ─────────────────────────────────────────────── DNS 的 TTL 與快取
   {
-    id: 'l71', chapter: 10, title: 'DNS 改了，為什麼還連到舊的', subtitle: 'DNS 記錄、TTL 與用戶端快取', tags: ['DNS', 'TTL', 'CNAME', 'ipconfig /flushdns'], noDrill: true,
+    id: 'l71', chapter: 10, title: 'DNS 改了，為什麼還連到舊的', subtitle: 'DNS 記錄、TTL 與用戶端快取', tags: ['DNS', 'TTL', 'CNAME', 'resolvectl flush-caches'], noDrill: true,
     brief: '昨晚把公司網站從舊主機 (10.0.2.10) 搬到新主機 (10.0.2.20)，DNS 也在 23:00 改好了，舊主機已經關機。今天早上 PC-C 打得開網站，PC-A 和 PC-B 卻打不開；IT 用 nslookup 查，明明回答的就是新的位址。請讓大家都連得上，並把 DNS 調整好，下次搬家不要再發生。',
     given: [
       ['DNS 伺服器', '10.0.2.53'], ['www.corp.local', 'CNAME → web.corp.local'], ['web.corp.local', '舊 10.0.2.10（已關機）→ 新 10.0.2.20'],
@@ -292,7 +292,7 @@ export const LEVELS15 = [
     learn: [
       { t: '常見的 DNS 記錄', d: 'A：名稱 → IPv4 位址；AAAA：→ IPv6；CNAME：別名，指向另一個名稱；MX：這個網域的郵件伺服器；PTR：反查，IP → 名稱。' },
       { t: 'TTL 與快取', d: '每一筆回答都帶著 TTL（秒）。用戶端（和中間的 DNS 伺服器）會把答案記在快取裡，TTL 到之前都直接用快取，不會再問。TTL 是一天，改了記錄之後最久要一天大家才會看到。' },
-      { t: 'nslookup 不看快取', d: 'nslookup 自己就是一個 DNS 用戶端，直接問伺服器；ping、瀏覽器用的是作業系統的快取。所以「nslookup 是新的、瀏覽器還是舊的」幾乎都是快取還沒到期。ipconfig /displaydns 看快取、ipconfig /flushdns 清掉。' },
+      { t: 'nslookup 不看快取', d: 'nslookup 自己就是一個 DNS 用戶端，直接問伺服器；ping、瀏覽器用的是作業系統的快取。所以「nslookup 是新的、瀏覽器還是舊的」幾乎都是快取還沒到期。resolvectl show-cache 看快取、resolvectl flush-caches 清掉。' },
       { t: '搬家之前先調 TTL', d: '預計要換位址的記錄，前一天先把 TTL 調短（例如 300 秒）。等舊的長 TTL 都過期了再切換，大家幾分鐘內就會看到新的位址；穩定之後再調回來。' },
     ],
     setup() {
@@ -339,7 +339,7 @@ export const LEVELS15 = [
     ],
     hints: [
       'PC-A 的終端機：nslookup www.corp.local 回答的是 10.0.2.20（新的），可是 ping www.corp.local 卻是 10.0.2.10。nslookup 直接問伺服器；ping 和瀏覽器用的是本機的 DNS 快取。',
-      'ipconfig /displaydns：www.corp.local → 10.0.2.10，存留時間還有十幾個小時（TTL 86400 秒 = 一天）。在 PC-A、PC-B 上 ipconfig /flushdns。',
+      'resolvectl show-cache：www.corp.local IN A 10.0.2.10，還要幾萬秒才到期（TTL 86400 秒 = 一天）。在 PC-A、PC-B 上 resolvectl flush-caches。',
       'DNS 伺服器 →「DNS」分頁：www（CNAME）和 web（A）的 TTL 都改成 300。下次要搬家，前一天先把 TTL 調短。',
     ],
     solve(s) {

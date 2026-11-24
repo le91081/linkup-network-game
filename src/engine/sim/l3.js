@@ -45,7 +45,7 @@ function rememberLease(state, d, i, key, exp) {
   state.dyn.lease[d.id + '/' + i.id] = { ip: i.rt.ip, bits: i.rt.bits, gw: i.rt.gw, dns: i.rt.dns, tftp: i.rt.tftp || [], wlc: i.rt.wlc || [], server: i.rt.server, relay: i.rt.relay || null, key, exp };
   i.rt.exp = exp;
 }
-/** ipconfig /release：歸還位址，之後要 /renew 才會再去要 */
+/** dhclient -r：歸還位址，之後要再跑一次 dhclient 才會再去要 */
 export function dhcpRelease(state, devId) {
   const d = state.devices[devId];
   for (const i of d.ifaces) {
@@ -56,7 +56,7 @@ export function dhcpRelease(state, devId) {
     i.released = true;
   }
 }
-/** ipconfig /renew：馬上向伺服器續約（或重新要一個位址） */
+/** dhclient：馬上向伺服器續約（或重新要一個位址） */
 export function dhcpRenew(state, devId) {
   const d = state.devices[devId];
   for (const i of d.ifaces) {
@@ -513,7 +513,7 @@ export function routesAll(state) {
     if (Object.keys(now).length) since[d.id] = now; else delete since[d.id];
   }
 }
-/** DHCP 的四個步驟 (DORA)：依目前的租約重建過程，給動畫與終端機的 ipconfig /renew 用 */
+/** DHCP 的四個步驟 (DORA)：依目前的租約重建過程，給動畫與終端機的 dhclient 用 */
 export function dhcpTrace(state, devId) {
   const d = state.devices[devId];
   const log = [], hops = [];

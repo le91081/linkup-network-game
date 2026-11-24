@@ -370,7 +370,7 @@ test('IPv6 PD：R1 的 WAN 用 autoconfig 與 dhcp client pd 拿到 /56，LAN �
   await clickDevice(page, 'pc1');
   await page.locator('#panel .tab', { hasText: '終端機' }).click();
   await typeCmd(page, 'ping 2606:2800:220:1:248:1893:25c8:1946');
-  await expect(page.locator('#panel .term-out')).toContainText('回覆自 2606:2800:220:1:248:1893:25c8:1946');
+  await expect(page.locator('#panel .term-out')).toContainText('bytes from 2606:2800:220:1:248:1893:25c8:1946');
 });
 
 test('FortiGate IPv6：政策加上 IPv6 位址、dmz 用委派的前綴，辦公室與訪客都能用 IPv6 上網', async ({ page }) => {
@@ -392,7 +392,7 @@ test('FortiGate IPv6：政策加上 IPv6 位址、dmz 用委派的前綴，辦�
   await clickDevice(page, 'pc2');
   await page.locator('#panel .tab', { hasText: '終端機' }).click();
   await typeCmd(page, 'ping 2606:2800:220:1:248:1893:25c8:1946');
-  await expect(page.locator('#panel .term-out')).toContainText('回覆自 2606:2800:220:1:248:1893:25c8:1946');
+  await expect(page.locator('#panel .term-out')).toContainText('bytes from 2606:2800:220:1:248:1893:25c8:1946');
 });
 
 test('NAT64 / DNS64：DNS 伺服器開 DNS64、R1 設 NAT64，IPv6-only 的筆電查到合成的位址並 ping 得到', async ({ page }) => {
@@ -420,7 +420,7 @@ test('NAT64 / DNS64：DNS 伺服器開 DNS64、R1 設 NAT64，IPv6-only 的筆�
   await expect(out).toContainText('64:ff9b::5db8:d822');
   await expect(out).toContainText('2001:db8:a00:2::53');
   await typeCmd(page, 'ping 64:ff9b::5db8:d822');
-  await expect(out).toContainText('回覆自 64:ff9b::5db8:d822');
+  await expect(out).toContainText('bytes from 64:ff9b::5db8:d822');
   await clickDevice(page, 'r1');
   await page.locator('#panel .tab', { hasText: 'CLI' }).click();
   await typeCmd(page, 'show nat64 translations');
@@ -613,7 +613,7 @@ test('breakout：連接埠分頁把 Eth1/1 拆成 4 × 25G，GPU 伺服器接上
   await clickDevice(page, 'gpu1');
   await page.locator('#panel .tab', { hasText: '終端機' }).click();
   await typeCmd(page, 'ping 10.0.0.50');
-  await expect(page.locator('#panel .term-out')).toContainText('回覆自 10.0.0.50');
+  await expect(page.locator('#panel .term-out')).toContainText('bytes from 10.0.0.50');
 });
 
 test('存檔格式遷移：舊版本的存檔（DNS 用 dnsRecords、沒有版本號）重新整理之後照樣載入、升級成新格式', async ({ page }) => {
@@ -777,10 +777,10 @@ test('NAT 位址池：show ip nat statistics 看到位址借光，clear 之後�
   await clickDevice(page, 'pc5');
   await page.locator('#panel .tab', { hasText: '終端機' }).click();
   await typeCmd(page, 'ping 8.8.8.8');
-  await expect(page.locator('#panel .term-out')).toContainText('回覆自 8.8.8.8');
+  await expect(page.locator('#panel .term-out')).toContainText('bytes from 8.8.8.8');
 });
 
-test('NAT hairpin：nslookup 拿到公用位址連不上；DNS 分頁改成內部位址、ipconfig /flushdns 之後打得開', async ({ page }) => {
+test('NAT hairpin：nslookup 拿到公用位址連不上；DNS 分頁改成內部位址、resolvectl flush-caches 之後打得開', async ({ page }) => {
   await boot(page);
   await open(page, 'l132');
   await clickDevice(page, 'pc1');
@@ -797,8 +797,8 @@ test('NAT hairpin：nslookup 拿到公用位址連不上；DNS 分頁改成內�
   expect(await scan(page, '#panel', 'DNS 分頁（split DNS）')).toEqual([]);
   await clickDevice(page, 'pc1');
   await page.locator('#panel .tab', { hasText: '終端機' }).click();
-  await typeCmd(page, 'ipconfig /flushdns', 'ping www.example.org');
-  await expect(page.locator('#panel .term-out')).toContainText('回覆自 192.168.20.10');
+  await typeCmd(page, 'resolvectl flush-caches', 'ping www.example.org');
+  await expect(page.locator('#panel .term-out')).toContainText('bytes from www.example.org (192.168.20.10): icmp_seq=1');
 });
 
 test('DNS 過濾與防毒：安全設定檔分頁建立兩種設定檔、掛到政策上，nslookup 釣魚網站得到封鎖頁面的位址', async ({ page }) => {
@@ -868,7 +868,7 @@ test('MPLS L3VPN：BGP 卡片打開 allowas-in，分公司學到總公司的網�
   await clickDevice(page, 'pc');
   await page.locator('#panel .tab', { hasText: '終端機' }).click();
   await typeCmd(page, 'ping 10.1.0.10');
-  await expect(page.locator('#panel .term-out')).toContainText('回覆自 10.1.0.10');
+  await expect(page.locator('#panel .term-out')).toContainText('bytes from 10.1.0.10');
 });
 
 test('接觸不良的網路線：show logging 每分鐘一次 Gi0/5 up / down、CRC 一直增加；換線並開 PortFast 之後目標都過', async ({ page }) => {
@@ -898,7 +898,7 @@ test('封包擷取匯出 .pcap：開始擷取、ping、下載的檔案是 libpca
   await page.locator('#panel .btn', { hasText: '開始擷取' }).click();
   await page.locator('#panel .tab', { hasText: '終端機' }).click();
   await typeCmd(page, 'ping 8.8.8.8');
-  await expect(page.locator('#panel .term-out')).toContainText('回覆自 8.8.8.8');
+  await expect(page.locator('#panel .term-out')).toContainText('bytes from 8.8.8.8');
   await page.locator('#panel .tab', { hasText: '封包擷取' }).click();
   const [dl] = await Promise.all([page.waitForEvent('download'), page.locator('#panel .btn', { hasText: '匯出 .pcap' }).click()]);
   expect(dl.suggestedFilename()).toMatch(/\.pcap$/);

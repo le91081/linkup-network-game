@@ -9,22 +9,22 @@ const API = 'api.corp.local';
 export const LEVELS68 = [
   {
     id: 'l148', chapter: 11, title: '瀏覽器打得開，程式卻說憑證有問題', subtitle: '中繼 CA 與完整的憑證鏈', tags: ['TLS', '憑證', '中繼 CA', 'fullchain', 'curl'],
-    brief: `資訊組上週替訂單 API (${API}) 換了公司 CA 簽的新憑證。用 Windows 的瀏覽器打開完全正常，可是 Linux 上的出貨程式從那天起每次呼叫 API 都失敗：curl: (60) SSL certificate problem: unable to get local issuer certificate。出貨程式那台早就裝了公司的根憑證。請找出原因並修好，不要用 curl -k 之類略過檢查的方式。`,
+    brief: `資訊組上週替訂單 API (${API}) 換了公司 CA 簽的新憑證。同事用電腦上的瀏覽器打開完全正常，可是出貨伺服器上的程式從那天起每次呼叫 API 都失敗：curl: (60) SSL certificate problem: unable to get local issuer certificate。出貨程式那台早就裝了公司的根憑證。請找出原因並修好，不要用 curl -k 之類略過檢查的方式。`,
     given: [
       ['訂單 API', `${API}（10.0.20.10）· 憑證由 Corp Issuing CA 簽發`], ['公司的 CA', `根 CA：${CORP_CA}（離線保管）→ 中繼 CA：Corp Issuing CA（實際簽發憑證）`],
-      ['業務的電腦', 'Windows，加入網域（信任 Corp Root CA）'], ['出貨伺服器', 'Linux，已經安裝 Corp Root CA（update-ca-certificates）'],
+      ['業務的電腦', '用瀏覽器開訂單系統，信任 Corp Root CA'], ['出貨伺服器', '程式用 curl 呼叫 API，已經安裝 Corp Root CA（update-ca-certificates）'],
     ],
     learn: [
       { t: '中繼 CA', d: '根 CA 的私密金鑰最重要，平常離線保管；日常簽發憑證的是根 CA 簽出來的中繼 CA。用戶端只安裝根憑證，所以驗證時要把「網站憑證 → 中繼憑證 → 根憑證」整條鏈接起來。' },
       { t: '完整的憑證鏈 (fullchain)', d: '網站在 TLS 交握時要把自己的憑證和中繼憑證一起送出去。只裝了網站自己的憑證，用戶端就接不到根憑證。' },
-      { t: '為什麼瀏覽器沒事', d: 'Windows（瀏覽器、Schannel）會照憑證裡的 AIA 網址自己去下載缺少的中繼憑證，所以看起來正常；Linux 的 OpenSSL（curl、Python、Java、手機 App）不會，就失敗了。不能用「瀏覽器打得開」判斷憑證裝對了：openssl s_client -connect 看伺服器送出幾張。' },
+      { t: '為什麼瀏覽器沒事', d: '瀏覽器（Chrome、Edge）會照憑證裡的 AIA 網址自己去下載缺少的中繼憑證，所以看起來正常；OpenSSL（curl、Python、Java、手機 App）不會，就失敗了 — 在業務的電腦上打 curl 一樣會失敗。不能用「瀏覽器打得開」判斷憑證裝對了：用 curl -v，或 openssl s_client -connect 看伺服器送出幾張。' },
     ],
     setup() {
       const s = makeState([
         D('sw8', 'sw', { name: 'Switch', pos: [0, -2] }),
         D('tower', 'dns', { name: 'DNS 伺服器', pos: [-6, -5], ip: '10.0.20.53', services: [{ proto: 'udp', port: 53, name: 'DNS' }], init(d) { d.dnsZone = { records: [{ name: API, type: 'A', value: '10.0.20.10', ttl: 3600 }] }; } }),
         D('tower', 'api', { name: '訂單 API', pos: [6, -5], ip: '10.0.20.10', dns: '10.0.20.53', services: WEB }),
-        D('pc', 'pc', { name: '業務的電腦 (Windows)', pos: [-6, 3], ip: '10.0.20.21', dns: '10.0.20.53', init(d) { d.trust = [CORP_CA]; } }),
+        D('pc', 'pc', { name: '業務的電腦', pos: [-6, 3], ip: '10.0.20.21', dns: '10.0.20.53', init(d) { d.trust = [CORP_CA]; } }),
         D('tower', 'ship', { name: '出貨伺服器 (Linux)', pos: [6, 3], ip: '10.0.20.30', dns: '10.0.20.53', init(d) { d.os = 'linux'; d.trust = [CORP_CA]; } }),
       ], [['dns:eth0', 'sw:1'], ['api:eth0', 'sw:2'], ['pc:eth0', 'sw:3'], ['ship:eth0', 'sw:4']]);
       recompute(s);
@@ -33,7 +33,7 @@ export const LEVELS68 = [
       return s;
     },
     objectives: [
-      { type: 'https', from: 'pc', name: API, label: `業務的電腦（Windows）打得開 https://${API}` },
+      { type: 'https', from: 'pc', name: API, label: `業務的電腦用瀏覽器打得開 https://${API}` },
       { type: 'https', from: 'ship', name: API, strict: true, label: `出貨伺服器（Linux）呼叫 https://${API} 不再出現憑證錯誤` },
       {
         type: 'check', label: '網站憑證仍由中繼 CA 簽發（根 CA 不直接簽網站憑證）',

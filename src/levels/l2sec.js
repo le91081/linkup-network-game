@@ -301,7 +301,7 @@ export const LEVELS21 = [
       { t: 'RA 沒有驗證', d: 'IPv6 的主機靠 Router Advertisement 拿前綴（SLAAC）與預設閘道。任何設備都能送 RA，主機照單全收：每一個 RA 的前綴都會產生一個位址，預設閘道選優先權最高的那一台。冒牌的 RA 常常把優先權設成 High。' },
       { t: '後果', d: '主機的 IPv6 預設閘道變成冒牌的設備：它不轉送就是黑洞（整個網段的 IPv6 斷光），它轉送就是中間人。這和 IPv4 的冒牌 DHCP 是同一類問題。' },
       { t: 'RA Guard', d: '在交換器上把連接埠分成兩種：接電腦的埠 device-role host，從這裡進來的 RA 一律丟掉；接路由器的埠 device-role router。ipv6 nd raguard policy HOSTS → device-role host，再到介面上 ipv6 nd raguard attach-policy HOSTS。' },
-      { t: '雙協定的盲點', d: '很多網路只做了 DHCP Snooping，卻忘了 IPv6 也有一模一樣的攻擊面。就算公司沒有規劃 IPv6，Windows 與 macOS 預設都開著，冒牌的 RA 一樣有效。' },
+      { t: '雙協定的盲點', d: '很多網路只做了 DHCP Snooping，卻忘了 IPv6 也有一模一樣的攻擊面。就算公司沒有規劃 IPv6，Linux、Windows 與 macOS 預設都開著，冒牌的 RA 一樣有效。' },
     ],
     setup() {
       const s = makeState([
@@ -353,7 +353,7 @@ export const LEVELS21 = [
       },
     ],
     hints: [
-      '研發 A 的終端機：ipconfig，IPv6 位址有兩個，其中一個是 2001:db8:bad:: 開頭，預設閘道是一個 fe80:: 位址。用 R1 的 show ipv6 interface brief 比對：那不是 R1 的 link-local。',
+      '研發 A 的終端機：ip -6 addr，IPv6 位址有兩個，其中一個是 2001:db8:bad:: 開頭；ip -6 route 的 default via 是一個 fe80:: 位址。用 R1 的 show ipv6 interface brief 比對：那不是 R1 的 link-local。',
       'SW-RD：ipv6 nd raguard policy HOSTS → device-role host → exit → interface range gi0/1 - 8 → ipv6 nd raguard attach-policy HOSTS。從這些埠進來的 RA 全部丟掉。',
       '上行到 R1 的 Gi0/9 可以另外掛一個 device-role router 的政策（ipv6 nd raguard policy ROUTER → device-role router），或乾脆不掛。show ipv6 nd raguard policy 看得到每個政策套在哪些埠。（圖形介面：交換器「安全」分頁建立政策，有「套用到接電腦的埠」的按鈕）',
     ],

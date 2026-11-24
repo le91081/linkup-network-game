@@ -301,7 +301,7 @@ function dhcp6Find(state, client, ci) {
   return null;
 }
 
-/** DHCPv6 的四個訊息（stateful）或兩個訊息（stateless），給 ipconfig /renew6 與任務測試的紀錄用 */
+/** DHCPv6 的四個訊息（stateful）或兩個訊息（stateless），給 dhclient -6 與任務測試的紀錄用 */
 export function dhcp6Trace(state, devId) {
   const d = state.devices[devId], log = [];
   const i = d.ifaces.find((x) => x.rt.v6 && x.rt.v6.ra && (x.rt.v6.ra.M || x.rt.v6.ra.O));

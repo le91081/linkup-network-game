@@ -38,7 +38,7 @@ export const MORE = [
     steps: { t: '在公司裡打開 www.example.com', items: ['電腦看自己的快取，沒有就問設定的 DNS 伺服器（公司的那一台）。', '公司的 DNS 伺服器看自己負責的區域：corp.local 的名稱直接回答。', '不是自己的區域：看快取；沒有就轉送給上游的 DNS（或從根伺服器開始問）。', '上游把答案回給公司的 DNS 伺服器，它記進快取，再回給電腦。', '電腦也把答案快取起來，TTL 到期之前不會再問。'] },
     fig: { type: 'ladder', a: '電腦', b: '公司的 DNS', msgs: [{ from: 'a', t: 'www.example.com 的 A？' }, { from: 'b', t: '（不是我的區域，轉送給上游 8.8.8.8）' }, { from: 'b', t: '（上游回答 93.184.216.34，記進快取）' }, { from: 'b', t: 'A = 93.184.216.34，TTL 300' }] },
     pit: ['內部名稱查得到、外面的查不到：伺服器沒有開轉送，或它自己的 DNS 設定是空的。', '轉送器指向自己：查詢繞圈圈，最後逾時。', '防火牆沒有放行 DNS 伺服器對外的 53：症狀和沒開轉送一樣，但 nslookup 會等很久才失敗。'],
-    cmd: [{ v: 'Windows', c: ['nslookup www.example.com', 'nslookup www.example.com 8.8.8.8', 'ipconfig /displaydns'] }, { v: 'Cisco IOS（當 DNS 轉送）', c: ['ip dns server', 'ip name-server 8.8.8.8'] }],
+    cmd: [{ v: 'Linux', c: ['nslookup www.example.com', 'dig www.example.com', 'resolvectl status', 'resolvectl show-cache'] }, { v: 'Cisco IOS（當 DNS 轉送）', c: ['ip dns server', 'ip name-server 8.8.8.8'] }],
     see: ['dns', 'stateful-fw', 'ngfw', 'acl'],
   },
   {

@@ -23,7 +23,7 @@ export const BASICS = [
       '位址可以手動設定（固定 IP，伺服器、印表機、網路設備）或由 DHCP 自動發放（一般的電腦、手機）。',
     ],
     pit: ['同一個網段裡兩台設備用了同一個 IP（IP 衝突）：通訊會時好時壞，因為 ARP 一下指向這台、一下指向那台。', '把網段位址或廣播位址設給設備：作業系統會拒絕或不正常運作。'],
-    cmd: [{ v: 'Windows', c: ['ipconfig /all'] }, { v: 'Linux', c: ['ip addr'] }, { v: 'Cisco IOS', c: ['interface Gi0/0/1', ' ip address 192.168.1.1 255.255.255.0', ' no shutdown'] }],
+    cmd: [{ v: 'Linux', c: ['ip addr', 'ip route', 'nmcli device show'] }, { v: 'Cisco IOS', c: ['interface Gi0/0/1', ' ip address 192.168.1.1 255.255.255.0', ' no shutdown'] }],
     see: ['subnet', 'gateway', 'dhcp', 'private-ip'],
   },
   {
@@ -83,12 +83,12 @@ export const BASICS = [
     id: 'arp', t: 'ARP', en: 'Address Resolution Protocol', cat: 'basics', keys: ['ARP', 'ARP 快取', 'ARP 表'], tags: ['ARP'],
     sum: '知道對方的 IP、不知道它的 MAC 時，用廣播問「誰是 192.168.1.1？」，對方單點回覆自己的 MAC，結果記在 ARP 快取裡。',
     body: [
-      '要送給同網段的主機就問主機本身；要送到其他網段就問閘道。問到之後記在 ARP 快取（Windows 預設幾分鐘、Cisco 預設 4 小時），之後不用再問。',
+      '要送給同網段的主機就問主機本身；要送到其他網段就問閘道。問到之後記在 ARP 快取（電腦預設幾分鐘、Cisco 預設 4 小時），之後不用再問。',
       '「ARP 沒有回應」是第二層不通最常見的症狀：線沒接好、VLAN 不同、Trunk 沒有放行那個 VLAN、對方根本沒有這個 IP。',
     ],
     fig: { type: 'ladder', a: 'PC-A 192.168.1.10', b: '閘道 192.168.1.1', msgs: [{ from: 'a', t: 'ARP 請求（廣播）：誰是 192.168.1.1？請告訴 192.168.1.10' }, { from: 'b', t: 'ARP 回覆（單點）：192.168.1.1 在 00:1a:2b:3c:4d:5e' }, { from: 'a', t: '記進 ARP 快取，開始送真正的封包' }] },
     pit: ['ARP 沒有驗證機制：任何人都可以送假的回覆，把別人的流量騙到自己這裡（ARP 欺騙，用 DAI 防）。', 'IP 換了設備之後還連到舊的那台：對方的 ARP 快取還沒過期（可以 clear arp-cache）。'],
-    cmd: [{ v: 'Windows', c: ['arp -a'] }, { v: 'Cisco IOS', c: ['show ip arp', 'clear arp-cache'] }],
+    cmd: [{ v: 'Linux', c: ['ip neigh', 'sudo ip neigh flush all'] }, { v: 'Cisco IOS', c: ['show ip arp', 'clear arp-cache'] }],
     see: ['mac', 'gateway', 'dai'],
   },
   {
@@ -129,7 +129,7 @@ export const BASICS = [
     see: ['tcp-udp', 'nat', 'acl'],
   },
   {
-    id: 'icmp', t: 'ICMP、ping 與 traceroute', en: 'ICMP', cat: 'basics', keys: ['ICMP', 'ping', 'traceroute', 'tracert'], tags: ['ICMP', 'tracert'],
+    id: 'icmp', t: 'ICMP、ping 與 traceroute', en: 'ICMP', cat: 'basics', keys: ['ICMP', 'ping', 'traceroute', 'tracert'], tags: ['ICMP', 'traceroute'],
     sum: 'ICMP 是網路層的「回報」訊息：ping 用 echo 測試通不通，traceroute 利用 TTL 一站一站找出路徑。',
     body: [
       '每個 IP 封包都有 TTL，每經過一台路由器減 1，減到 0 就丟掉並回報「TTL 逾時」。traceroute 先送 TTL 1、再送 TTL 2…，每一站回報的位址就是路徑。',
@@ -137,7 +137,7 @@ export const BASICS = [
     ],
     steps: { t: 'traceroute 怎麼找出路徑', items: ['送出 TTL = 1 的封包：第一台路由器把 TTL 減成 0，丟掉並回報 ICMP Time Exceeded → 知道第一站。', '再送 TTL = 2：第二台回報 → 知道第二站。', '一直加，直到目的地回應（echo reply 或連接埠無法到達）。', '某一站顯示 * 表示那一站沒有回報（可能擋了 ICMP），不一定代表不通。'] },
     pit: ['ping 不通不一定是斷線：主機的防火牆常常擋 ping（Windows 預設不回 ping）。', '有些設備（FortiGate 的 wan、雲端的安全群組）預設不回 ping，要測試連線用 TCP 比較準。'],
-    cmd: [{ v: 'Windows', c: ['ping 8.8.8.8', 'tracert 8.8.8.8'] }, { v: 'Cisco IOS', c: ['ping 10.1.0.10 source Gi0/0/1', 'traceroute 10.1.0.10'] }],
+    cmd: [{ v: 'Linux', c: ['ping -c 4 8.8.8.8', 'traceroute 8.8.8.8'] }, { v: 'Cisco IOS', c: ['ping 10.1.0.10 source Gi0/0/1', 'traceroute 10.1.0.10'] }],
     see: ['mtu', 'tcp-udp', 'routing-table'],
   },
   {
@@ -149,7 +149,7 @@ export const BASICS = [
       'Jumbo Frame（9000）讓儲存、備份這類大流量更有效率，但整條路上每一台都要開，不然大的訊框會被當成 giant 丟掉（第二層不會回報 ICMP）。',
     ],
     pit: ['只開一端的 Jumbo Frame：小封包都正常，大的傳檔、vMotion 失敗。', '擋掉所有 ICMP：PMTUD 失效。'],
-    cmd: [{ v: 'Cisco IOS', c: ['interface Dialer1', ' mtu 1492', ' ip tcp adjust-mss 1452'] }, { v: 'Windows', c: ['ping 10.1.0.10 -f -l 1472'] }],
+    cmd: [{ v: 'Cisco IOS', c: ['interface Dialer1', ' mtu 1492', ' ip tcp adjust-mss 1452'] }, { v: 'Linux', c: ['ping -M do -s 1472 10.1.0.10'] }],
     see: ['icmp', 'pppoe', 'ipsec'],
   },
 ];

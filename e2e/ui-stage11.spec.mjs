@@ -165,24 +165,33 @@ test('HTTPS：curl 的憑證錯誤、-k 與 -v、換憑證、匯入根憑證、�
   o = await outOf(page, 'curl https://portal.corp.local');
   expect(o).toContain('HTTP/1.1 200 OK');
   expect(o).toContain('<title>員工入口網站</title>');
-  // 新同事的筆電：不信任 Corp Root CA，用 certutil 匯入
+  // 新同事的筆電：不信任 Corp Root CA，把根憑證放進 /usr/local/share/ca-certificates/ 再 update-ca-certificates
   await clickDevice(page, 'byod');
   await tab(page, '終端機');
   o = await outOf(page, 'curl https://intranet.corp.local');
   expect(o).toContain('unable to get local issuer certificate');
-  o = await outOf(page, 'certutil -addstore root corp-root-ca.cer');
-  expect(o).toContain('CertUtil: -addstore 命令已順利完成。');
+  o = await outOf(page, 'sudo update-ca-certificates');
+  expect(o).toContain('0 added, 0 removed; done.');
+  o = await outOf(page, 'cp corp-root-ca.crt /usr/local/share/ca-certificates/');
+  expect(o).toContain('Permission denied');
+  o = await outOf(page, 'sudo cp corp-root-ca.crt /usr/local/share/ca-certificates/ && sudo update-ca-certificates');
+  expect(o).toContain('1 added, 0 removed; done.');
+  o = await outOf(page, 'ls /etc/ssl/certs');
+  expect(o).toContain('Corp_Root_CA.pem');
   o = await outOf(page, 'curl https://intranet.corp.local');
   expect(o).toContain('HTTP/1.1 200 OK');
   // 會議室電腦：時間在 2024 年；在網路設定分頁打開自動校時
   await clickDevice(page, 'meet');
   await tab(page, '終端機');
   o = await outOf(page, 'date');
-  expect(o).toMatch(/^2024-/m);
+  expect(o).toMatch(/ CST 2024$/m);
   o = await outOf(page, 'curl https://portal.corp.local');
   expect(o).toContain('certificate is not yet valid');
-  o = await outOf(page, 'w32tm /resync');
-  expect(o).toContain('0x80070426');
+  o = await outOf(page, 'timedatectl');
+  expect(o).toContain('System clock synchronized: no');
+  expect(o).toContain('NTP service: inactive');
+  o = await outOf(page, 'timedatectl set-ntp true');
+  expect(o).toContain('Interactive authentication required');
   await tab(page, '網路設定');
   const tls = page.locator('#panel .card', { hasText: '憑證與時間' });
   await tls.scrollIntoViewIfNeeded();

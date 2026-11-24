@@ -24,7 +24,7 @@ export const LEVELS18 = [
       { t: 'MTU 與 Jumbo Frame', d: 'MTU 是一個訊框能裝的最大 IP 封包，乙太網路預設 1500。Jumbo Frame 加大到 9000：同樣的資料封包數少六倍，CPU 與中斷少很多，標頭佔的比例也從 5% 降到 1%。常用在儲存網路（iSCSI、NFS、備份）與 vMotion。' },
       { t: '整條路都要一樣大', d: '交換器收到比自己的 MTU 大的訊框，直接當成 giant 丟掉，不會通知任何人（第二層沒有 ICMP）。兩端開了、中間的交換器沒開：交握的小封包會通、ping 也通，資料一大就消失。' },
       { t: 'TCP 的 MSS', d: '建立連線時兩端各自告訴對方「我收得下多大」（MSS = MTU − 40），取小的那一個。所以 MTU 9000 的 NAS 和 1500 的管理電腦經過路由器講話沒有問題；同一個網段裡大家都說 9000、中間卻有設備只收 1500，才會出事。' },
-      { t: '怎麼測', d: 'ping -f -l 8972（Windows）或 ping -M do -s 8972（Linux）：8972 + 28 = 9000，設了 DF 不能分段。1472 會通、8972 逾時，就是中間有設備沒開。交換器 show interfaces 的 giants 計數器也會一直加。' },
+      { t: '怎麼測', d: 'ping -M do -s 8972（Windows 是 ping -f -l 8972）：8972 + 28 = 9000，設了 DF 不能分段。1472 會通、8972 逾時，就是中間有設備沒開。交換器 show interfaces 的 giants 計數器也會一直加。' },
       { t: '各家交換器的設定', d: 'Catalyst 2960：system mtu jumbo 9000，要 write memory 再 reload 才生效（show system mtu 會寫「On next reload」）。Catalyst 9300：system mtu 9198 馬上生效。Nexus：在每個介面上 mtu 9216。' },
     ],
     setup() {
@@ -55,7 +55,7 @@ export const LEVELS18 = [
       },
     ],
     hints: [
-      'BK-01 的終端機：ping -f -l 1472 10.0.50.20 會通，ping -f -l 8972 10.0.50.20 卻逾時，也沒有任何錯誤訊息。中間只有 SW-Storage：它的 show interfaces gi0/2 有一堆 giants。',
+      'BK-01 的終端機：ping -M do -s 1472 10.0.50.20 會通，ping -M do -s 8972 10.0.50.20 卻全部遺失，也沒有任何錯誤訊息。中間只有 SW-Storage：它的 show interfaces gi0/2 有一堆 giants。',
       'SW-Storage 的 CLI：show system mtu，Jumbo MTU 還是 1500。configure terminal → system mtu jumbo 9000。',
       'Catalyst 2960 改 Jumbo MTU 要重新開機才生效：end → write memory → reload（或在「連接埠」分頁最下面的 MTU 卡片設定，按磁片存檔、再按電源鈕重新開機）。開機要兩分鐘，可以用上方的時鐘快轉。',
     ],
@@ -79,7 +79,7 @@ export const LEVELS18 = [
       { t: 'IPsec 會讓封包變大', d: 'ESP 通道模式要再包一層 IP、ESP 標頭、IV、填充與驗證碼，大約多 73 位元組：1500 的封包加密之後放不進 1500 的線路，通道裡實際只放得下 1427。GRE 多 24、PPPoE 多 8。' },
       { t: 'PMTUD 黑洞', d: '「需要分段」的 ICMP 被 ACL 或防火牆擋掉，送的人永遠不知道要改小，一直重送一樣大的封包。症狀很典型：ping 通、TCP 連得上、小東西正常，大的傳輸卡住；而且常常只有一個方向壞（只有大封包那一端收不到 ICMP）。' },
       { t: '解法', d: '不要把 ICMP 全部擋掉，至少放行 packet-too-big（或 unreachable）。另外在 VPN 路由器的介面上加 ip tcp adjust-mss 1360，把經過的 SYN 裡的 MSS 改小，兩端一開始就送不超過 1400 的封包（只對 TCP 有用）。' },
-      { t: '怎麼找', d: '從分公司 ping -f -l 1472 <伺服器>：分公司的路由器會回「封包需要分段」，代表通道裡放不下 1500。再看大封包那一端（伺服器）回程的路上有沒有 ACL 擋 ICMP：show ip interface vlan 20、show access-lists。' },
+      { t: '怎麼找', d: '從分公司 ping -M do -s 1472 <伺服器>：分公司的路由器會回「Frag needed and DF set」（需要分段），代表通道裡放不下 1500。再看大封包那一端（伺服器）回程的路上有沒有 ACL 擋 ICMP：show ip interface vlan 20、show access-lists。' },
     ],
     setup() {
       const inet = D('internet', 'inet', { name: '網際網路', pos: [0, -9.5], ports: twoLines });
@@ -142,7 +142,7 @@ export const LEVELS18 = [
       { type: 'ping', from: 'pc', to: 'fs', expect: false, label: '伺服器網段還是擋 ping（ACL 不能整個拿掉）' },
     ],
     hints: [
-      '分公司 PC 的終端機：ping -f -l 1472 10.1.20.10 → Branch-RT 回「封包需要分段，但設定了 DF」：加密之後多 73 位元組，通道裡只放得下 1427。上傳的時候分公司 PC 收得到這個訊息，所以上傳正常。',
+      '分公司 PC 的終端機：ping -M do -s 1472 10.1.20.10 → Branch-RT 回「Frag needed and DF set (mtu = …)」：加密之後多 73 位元組，通道裡只放得下 1427。上傳的時候分公司 PC 收得到這個訊息，所以上傳正常。',
       '下載是檔案伺服器在送大封包：HQ-FW 回報的「需要分段」經過 HQ-Core 往 VLAN 20 送時，被 ACL SERVERS 的 deny icmp any any 擋掉（HQ-Core：show ip interface vlan 20、show access-lists）。伺服器不知道要改小，一直重送 → PMTUD 黑洞。',
       'HQ-Core：ip access-list extended SERVERS → 25 permit icmp any any packet-too-big（序號 25 會插在 deny 的前面；echo 還是擋著）。',
       '保險起見，Branch-RT 的 Gi0/0/1 再加 ip tcp adjust-mss 1360：分公司送出去的 SYN 裡的 MSS 被改成 1360，伺服器一開始就只送 1400 以下的封包，不用靠 ICMP。',

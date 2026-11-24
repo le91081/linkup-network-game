@@ -32,22 +32,26 @@ async function runAll(page) {
   await expect(page.locator('#modal-root .dialog')).toContainText('任務完成', { timeout: 30000 });
 }
 
-test('Jumbo Frame：ping -f -l 找出 MTU、giants、2960 要存檔重新開機才生效', async ({ page }, info) => {
+test('Jumbo Frame：ping -M do -s 找出 MTU、giants、2960 要存檔重新開機才生效', async ({ page }, info) => {
   await boot(page);
   await open(page, 'l75');
   await clickDevice(page, 'bk');
   // BK-01 有兩張網卡：接線的是第一張
   await expect(page.locator('#panel .field').filter({ has: page.locator('.f-label', { hasText: /^MTU$/ }) }).first().locator('select')).toHaveValue('9000');
   await tab(page, '終端機');
-  let o = await outOf(page, 'ping -f -l 1472 10.0.50.20');
-  expect(o).toContain('回覆自 10.0.50.20: 位元組=1472');
-  o = await outOf(page, 'ping -f -l 8972 10.0.50.20');
-  expect(o).toContain('要求等候逾時。');
+  let o = await outOf(page, 'ping -M do -s 1472 10.0.50.20');
+  expect(o).toContain('1480 bytes from 10.0.50.20: icmp_seq=1 ttl=64');
+  o = await outOf(page, 'ping -M do -s 8972 10.0.50.20');
+  expect(o).toContain('4 packets transmitted, 0 received, 100% packet loss');
   expect(o).toContain('giant');
-  o = await outOf(page, 'ping -f -l 9000 10.0.50.20');
-  expect(o).toContain('封包需要分段，但設定了 DF。');
+  o = await outOf(page, 'ping -M do -s 9000 10.0.50.20');
+  expect(o).toContain('ping: local error: message too long, mtu=9000');
+  o = await outOf(page, 'ip link');
+  expect(o).toMatch(/eth0: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 9000 /);
+  // Windows 的指令：照 bash 的說法找不到，並提示 Linux 上對應的指令
   o = await outOf(page, 'netsh interface ipv4 show subinterfaces');
-  expect(o).toMatch(/9000\s+1\s+\d+\s+\d+\s+乙太網路/);
+  expect(o).toContain('netsh: command not found');
+  expect(o).toContain('ip link');
   expect(await scan(page, '#panel', 'BK-01・終端機')).toEqual([]);
   // 交換器：giants、show system mtu，在 MTU 卡片改成 9000
   await clickDevice(page, 'sw');
@@ -76,9 +80,9 @@ test('PMTUD 黑洞：ping 回「需要分段」、ACL 擋掉 ICMP、在介面上
   await open(page, 'l76');
   await clickDevice(page, 'pc');
   await tab(page, '終端機');
-  let o = await outOf(page, 'ping -f -l 1472 10.1.20.10');
-  expect(o).toContain('回覆自 10.2.0.1: 封包需要分段，但設定了 DF。');
-  expect(o).toContain('已收到 = 4');
+  let o = await outOf(page, 'ping -M do -s 1472 10.1.20.10');
+  expect(o).toMatch(/From 10\.2\.0\.1 icmp_seq=1 Frag needed and DF set \(mtu = \d+\)/);
+  expect(o).toContain('4 packets transmitted, 0 received, +4 errors, 100% packet loss');
   o = await outOf(page, 'curl -k https://10.1.20.10');
   expect(o).toContain('PMTUD 黑洞');
   // 總公司的核心：伺服器網段的 ACL 擋掉了所有 ICMP

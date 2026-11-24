@@ -62,27 +62,21 @@ export function macOf(devId, key, model, idx = 0) {
   return oui + ':' + hex2([n >>> 16, (n >>> 8) & 255, n & 255]);
 }
 // ── 作業系統：送出的封包一開始的 TTL、用戶端連線用的來源埠，各家不一樣 ──
-const WIN_MODELS = new Set(['pc', 'laptop', 'laptop6e', 'tower', 'rack1u', 'vm']);
+// 遊戲裡的電腦與伺服器都是 Linux（終端機是 bash：ip addr、ip route、ping、traceroute…）
 const TTL255 = new Set(['isr4321', 'isr4331', 'c2960', 'c2960p', 'c9300', 'n93180', 'n9332', 'c9800', 'fg60f', 'fg100f', 'bigip', 'metroe', 'metroelan']);
-/** 這台主機跑的是 Linux（終端機是 bash）：自動化、容器、備份用的主機，或關卡指定 os: 'linux'。其他的電腦與伺服器是 Windows */
-export const isLinuxHost = (dev) => !!dev && (!!dev.ansible || !!dev.docker || !!dev.tf || !!dev.git || dev.os === 'linux');
-/** 'windows'（電腦、筆電、Windows 伺服器）、'net'（Cisco IOS / NX-OS、FortiOS、BIG-IP）、'linux'（其他：Linux、手機、NAS、印表機、Junos、RouterOS…） */
-export function osOf(dev) {
-  if (!dev) return 'linux';
-  if (dev.kind === 'host') return WIN_MODELS.has(dev.model) && !isLinuxHost(dev) ? 'windows' : 'linux';
-  return TTL255.has(dev.model) ? 'net' : 'linux';
-}
+/** 'net'（Cisco IOS / NX-OS、FortiOS、BIG-IP）或 'linux'（電腦、伺服器、手機、NAS、印表機、Junos、RouterOS…） */
+export const osOf = (dev) => (dev && dev.kind !== 'host' && TTL255.has(dev.model) ? 'net' : 'linux');
 /**
- * 送出的封包一開始的 TTL：Windows 128、Linux 與多數設備 64、Cisco / FortiGate / BIG-IP 255。
- * 所以從 ping 回來的 TTL 可以回推「對方大概是什麼系統、中間隔了幾台路由器」（126 = Windows、隔兩台）。
+ * 送出的封包一開始的 TTL：Linux 與多數設備 64、Cisco / FortiGate / BIG-IP 255（Windows 是 128，遊戲裡沒有）。
+ * 所以從 ping 回來的 TTL 可以回推「對方大概是什麼系統、中間隔了幾台路由器」（62 = Linux、隔兩台；253 = Cisco、隔兩台）。
  * ip：回應的是哪個位址 — 網際網路那一台，自己的介面是業者的路由器 (255)，上面的主機是伺服器 (64)
  */
 export function initTtl(dev, ip) {
   if (dev && dev.kind === 'internet') return ip == null || dev.ifaces.some((i) => i.rt && i.rt.ip === ip) ? 255 : 64;
-  return { windows: 128, net: 255, linux: 64 }[osOf(dev)];
+  return osOf(dev) === 'net' ? 255 : 64;
 }
-/** 用戶端的來源埠（暫時埠）：Windows 用 49152–65535，Linux 與多數設備用 32768–60999。n 是封包的流水號，換算成看起來不連續的埠 */
-export const ephPort = (dev, n) => (osOf(dev) === 'windows' ? 49152 + ((n * 7919) % 16384) : 32768 + ((n * 7919) % 28232));
+/** 用戶端的來源埠（暫時埠）：Linux 的範圍是 32768–60999（Windows 是 49152–65535）。n 是封包的流水號，換算成看起來不連續的埠 */
+export const ephPort = (dev, n) => 32768 + ((n * 7919) % 28232);
 
 export function ifaceMac(dev, i) {
   const b = i.bind;
