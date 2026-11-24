@@ -944,7 +944,7 @@ body.view2d #stage .scene-labels, body.view2d #stage canvas { visibility: hidden
 .save-text { width: 100%; min-height: 260px; resize: vertical; font-size: 12px; white-space: pre; }
 
 /* 文件產出：2D 拓撲圖上的工具列、IP 位址規劃表、匯出的圖片 */
-#topo2d .t2-tools { position: absolute; top: 112px; left: 50%; transform: translateX(-50%); display: flex; gap: 8px; z-index: 2; }
+#topo2d .t2-tools { position: absolute; top: 112px; left: 50%; transform: translateX(-50%); display: flex; flex-wrap: wrap; justify-content: center; gap: 6px 8px; width: max-content; z-index: 2; }
 .ipplan-wrap { max-height: 46vh; overflow: auto; border: 1px solid var(--line); border-radius: 8px; margin: 6px 0 12px; }
 table.ipplan { border-collapse: collapse; width: 100%; font-size: 12.5px; }
 table.ipplan th { position: sticky; top: 0; background: var(--panel-solid); color: var(--faint); font-weight: 700; text-align: left; padding: 6px 8px; white-space: nowrap; }
@@ -1217,7 +1217,7 @@ table.ipplan td { padding: 5px 8px; border-top: 1px solid var(--line); white-spa
 .lvp-search .ic { position: absolute; left: 11px; top: 50%; translate: 0 -50%; color: var(--faint); pointer-events: none; }
 .lvp-search .inp { width: 100%; height: 36px; padding-left: 34px; }
 .lvp-filter { flex: none; min-width: 216px; }
-.lvp-main { position: relative; flex: 1 1 0; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; gap: 18px; padding: 2px 6px 6px 2px; margin-right: -8px; scroll-behavior: smooth; }
+.lvp-main { position: relative; flex: 1 1 0; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; gap: 18px; padding: 2px 6px 6px 2px; margin-right: -8px; }
 .lvp-main > * { flex: none; }
 .lvp .lv-grid { grid-template-columns: repeat(auto-fill, minmax(226px, 1fr)); margin-top: 9px; }
 .lvp .lv-grid .lv { position: relative; min-height: 108px; padding: 11px 12px; gap: 5px; }
@@ -1323,3 +1323,4 @@ body.guide-fold { --side-r: 44px; }
 .ask-inp { height: 40px; font-size: 14px; }
 .sol-ans > div { display: flex; flex-direction: column; gap: 2px; padding: 6px 0; }
 .sol-ans > div + div { border-top: 1px dashed var(--line); }
+.lv .chip.hit { background: rgba(79, 216, 196, 0.18); border-color: rgba(79, 216, 196, 0.5); color: #c8fff5; }

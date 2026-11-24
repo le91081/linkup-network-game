@@ -40,14 +40,17 @@ export function openLevelMenu(app, ctx) {
     return undefined;
   };
 
-  const card = (lv, ord) => {
+  const card = (lv, ord, words) => {
     const d = done[lv.id];
+    // 搜尋時把符合關鍵字的標籤排到前面（卡片只放得下三個）
+    const hit = (t) => words && words.some((w) => t.toLowerCase().includes(w));
+    const tags = words ? [...lv.tags.filter(hit), ...lv.tags.filter((t) => !hit(t))] : lv.tags;
     return h('button', { type: 'button', class: `lv ${d ? 'done' : ''} ${lv === app.level ? 'cur' : ''}`, data: { lv: lv.id }, onclick: () => enter(lv) },
       h('div', { class: 'top' },
         h('span', { class: 'no' }, ord, levelNo(lv) + (d ? '  ✓' : '') + (d && d.best ? `  ${gradeOf(d.best)}` : '')),
         h('span', { class: 'stars' }, [1, 2, 3].map((s) => { const i = icon('star', 13); if (d && d.stars >= s) i.classList.add('on'); return i; }))),
       h('b', { text: lv.title }), h('p', { text: lv.subtitle }),
-      h('div', { class: 'chips' }, h('span', { class: 'lv-tags' }, lv.tags.slice(0, 3).map((t) => h('span', { class: 'chip', text: t }))),
+      h('div', { class: 'chips' }, h('span', { class: 'lv-tags' }, tags.slice(0, 3).map((t) => h('span', { class: 'chip' + (hit(t) ? ' hit' : ''), text: t }))),
         h('span', { class: 'lv-min', title: '依任務目標的數量估計的標準時間', text: `約 ${Math.round(parOf(lv) / 60)} 分` })));
   };
   const keep = (lv) => ui.filter === 'all' || (ui.filter === 'done') === !!done[lv.id];
@@ -90,7 +93,7 @@ export function openLevelMenu(app, ctx) {
     fill(side,
       h('div', { class: 'seg lvp-view' }, [['chapters', '章節'], ['paths', '學習路線']].map(([k, t]) => h('button', {
         type: 'button', class: ui.view === k ? 'on' : '', text: t,
-        onclick: () => { ui.view = k; if (k === 'chapters') ui.path = null; drawSide(); drawMain(); },
+        onclick: () => { ui.view = k; if (k === 'chapters') ui.path = null; drawSide(); drawMain(); if (k === 'chapters') toCurrent(); },
       }))),
       nx && h('button', { type: 'button', class: 'lvp-next', title: nx === app.level ? '回到正在做的這一關' : '開始下一個還沒完成的關卡', onclick: () => enter(nx) },
         h('span', { class: 'k', text: nx === app.level ? '繼續這一關' : total ? '下一關' : '從這裡開始' }),
@@ -108,16 +111,29 @@ export function openLevelMenu(app, ctx) {
         })));
   }
 
+  // 剛從左邊點的那一章：只要它還在畫面上就標它（最後幾章很短，捲到底也到不了最上面）
+  let picked = null;
   const jump = (chId) => {
     const el = main.querySelector(`.chapter[data-ch="${chId}"]`);
-    if (el) main.scrollTop = el.offsetTop - 2;
+    if (!el) return;
+    picked = String(chId);
+    main.scrollTop = el.offsetTop - 2;
     spy();
   };
   /** 捲動時，左邊標出現在看到的是哪一章 */
   function spy() {
     if (ui.view !== 'chapters') return;
+    const secs = [...main.querySelectorAll('.chapter')], top = main.scrollTop, bottom = top + main.clientHeight;
     let cur = null;
-    for (const el of main.querySelectorAll('.chapter')) { if (el.offsetTop <= main.scrollTop + 48) cur = el.dataset.ch; else break; }
+    if (picked) {
+      const el = secs.find((x) => x.dataset.ch === picked);
+      if (el && el.offsetTop >= top - 8 && el.offsetTop < bottom - 40) cur = picked; else picked = null;
+    }
+    if (!cur) {
+      for (const el of secs) { if (el.offsetTop <= top + 48) cur = el.dataset.ch; else break; }
+      if (secs.length && bottom >= main.scrollHeight - 4) cur = secs[secs.length - 1].dataset.ch; // 捲到底：最後一章
+      if (!cur && secs.length) cur = secs[0].dataset.ch;
+    }
     for (const r of side.querySelectorAll('.lvp-row[data-ch]')) r.classList.toggle('on', r.dataset.ch === cur);
   }
   main.addEventListener('scroll', spy, { passive: true });
@@ -130,7 +146,7 @@ export function openLevelMenu(app, ctx) {
       const words = query.split(/\s+/);
       const hit = LEVELS.filter((lv) => { const t = `${levelNo(lv)} ${lv.title} ${lv.subtitle} ${lv.tags.join(' ')}`.toLowerCase(); return words.every((w) => t.includes(w)); }).filter(keep);
       fill(main, h('div', { class: 'lvp-note', text: hit.length ? `找到 ${hit.length} 關` : '沒有符合的關卡。試試別的關鍵字（例如 VLAN、NAT、OSPF、Wi-Fi、憑證），或把「未完成 / 已完成」改回「全部」。' }),
-        h('div', { class: 'lv-grid' }, hit.map((lv) => card(lv))));
+        h('div', { class: 'lv-grid' }, hit.map((lv) => card(lv, null, words))));
       return;
     }
     if (ui.view === 'paths') { drawPaths(); return; }
@@ -179,6 +195,7 @@ export function openLevelMenu(app, ctx) {
   drawFilter();
   drawSide();
   drawMain();
-  // 打開時直接捲到現在這一關所在的章節
-  if (ui.view === 'chapters' && app.level && LEVELS.includes(app.level) && app.level.chapter > 1) jump(app.level.chapter);
+  // 打開時（或從路線切回章節時）直接捲到現在這一關所在的章節
+  function toCurrent() { if (app.level && LEVELS.includes(app.level) && app.level.chapter > 1) jump(app.level.chapter); }
+  if (ui.view === 'chapters') toCurrent();
 }

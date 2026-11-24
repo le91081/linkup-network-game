@@ -115,7 +115,8 @@ function missionFoot(app) {
 /** 觀察題的作答視窗：選擇題（單選 / 複選）或填空 */
 export function openAsk(app, i) {
   const o = app.objectives()[i];
-  if (!o || o.type !== 'ask' || app.running) return;
+  if (!o || o.type !== 'ask') return;
+  if (app.running) { toast('測試還在進行，等它跑完（或按空白鍵快轉）再作答'); return; }
   const opts = askOptions(app.state, o), cur = askGot(app.state, o);
   let pick = o.multi ? new Set([].concat(cur || []).map(String)) : cur != null ? String(cur) : null;
   const send = button('送出答案', { ic: 'check', kind: 'primary', onclick: () => submit() });

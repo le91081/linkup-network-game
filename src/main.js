@@ -244,7 +244,12 @@ const app = {
     el.root.hidden = !app.view2d;
     if (!app.view2d || !app.state) return;
     const ins = app.scene.insets, W = window.innerWidth, H = window.innerHeight;
-    renderTopo(app, el.svg, { x: ins.left, y: ins.top, w: W - ins.left - ins.right, h: H - ins.top - ins.bottom });
+    // 工具列放在場景（兩側面板之間）的正中間，放不下就換行；拓撲圖從工具列下面開始畫
+    const tools = el.root.querySelector('.t2-tools'), sw = W - ins.left - ins.right;
+    tools.style.left = ins.left + sw / 2 + 'px';
+    tools.style.maxWidth = Math.max(160, sw - 12) + 'px';
+    const top = Math.max(ins.top, tools.offsetTop + tools.offsetHeight + 8);
+    renderTopo(app, el.svg, { x: ins.left, y: top, w: sw, h: H - top - ins.bottom });
   },
   toggle2d(on = !app.view2d) {
     app.view2d = on;
@@ -410,7 +415,18 @@ const app = {
     }
     clearTimeout(app.saveTimer);
     app.saveTimer = setTimeout(() => { app.store.saves[app.level.id] = saveOf(app.state); app.saveStore(); }, 400);
-    app.run([i]);
+    // 馬上判定（不播動畫、不佔用「測試中」的狀態：答完一題可以立刻點下一題）
+    const r = runObjective(app.state, o);
+    app.results[i] = r;
+    app.con.clear();
+    $('console').classList.remove('min');
+    app.con.group(`目標 ${i + 1}　${o.label}`);
+    app.con.lines(r.log, app.state);
+    app.con.result(r.pass, r.pass ? '✔ 答對了' : '✘ ' + r.reason);
+    (r.pass ? sfx.ok : sfx.bad)(app);
+    hud.renderMission(app);
+    const objs = app.objectives();
+    if (!app.level.sandbox && objs.every((_, k) => app.results[k] && app.results[k].pass && !app.results[k].stale)) app.complete();
   },
 
   useHint() {
