@@ -5893,6 +5893,21 @@ console.log('\nSTP 經過不跑 STP 的交換器');
   ok(r.ok && t.devices.b.rt.stp.blocked.has('Gi0/2|1'), '兩台交換器隔著小交換器又直接相連：STP 看得到這條路，把 B 的 Gi0/2 擋下來，沒有迴圈');
 }
 
+console.log('\nE-LAN 與 L2PT');
+{
+  const { runObjective } = await import('../src/engine/sim/objectives.js');
+  const ok = (cond, title) => (cond ? console.log('  ✔ ' + title) : fail(title));
+  const lv = LEVELS.find((x) => x.id === 'l168');
+  const s = lv.setup(); settle(s);
+  ok(/廣播風暴/.test(runObjective(s, lv.objectives[0]).reason), '業者丟掉 BPDU：備援光纖和 E-LAN 形成 STP 看不見的迴圈');
+  const s2 = cloneState(s); s2.cut = { [s2.cables.find((c) => c.a.dev === 'hq' && c.a.port === 'Gi0/11').id]: true }; settle(s2);
+  ok(runObjective(s2, lv.objectives[0]).pass && lv.objectives[1].test(s2) !== true, '拔掉備援光纖就好了，但沒有備援');
+  s.devices.me.evc.l2pt = true; settle(s);
+  ok(s.devices.br.rt.stp.blocked.size > 0 && lv.objectives.every((o) => (o.type === 'check' ? o.test(s) : runObjective(s, o).pass) === true), '開通 L2PT：STP 看得到經過專線的路，擋下一條；兩個目標都通過');
+  const s3 = cloneState(s); s3.cut = { [s3.cables.find((c) => c.a.dev === 'hq' && c.a.port === 'Gi0/1').id]: true }; settle(s3);
+  ok(runObjective(s3, lv.objectives[0]).pass, '專線斷了：備援光纖接手');
+}
+
 console.log('\nNetFlow 與 QoS 的 police');
 {
   const sim = await import('../src/engine/sim.js');

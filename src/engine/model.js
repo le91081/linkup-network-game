@@ -187,6 +187,10 @@ export const CATALOG = {
     kind: 'mswitch', shape: 'switch-r', vendor: '電信業者', title: 'Metro Ethernet 專線（E-Line）', evc: true,
     tagline: '電信業者的第二層專線：兩個據點之間的 EVC，客戶端的介面叫 UNI', ports: [rj('uni-a', 'UNI A'), rj('uni-b', 'UNI B')],
   },
+  metroelan: {
+    kind: 'mswitch', shape: 'switch-r', vendor: '電信業者', title: 'Metro Ethernet 專線（E-LAN）', evc: true,
+    tagline: '電信業者的多點第二層專線：好幾個據點在同一個廣播網域（像一台很大的交換器）', ports: [rj('uni-a', 'UNI A'), rj('uni-b', 'UNI B'), rj('uni-c', 'UNI C'), rj('uni-d', 'UNI D')],
+  },
   ex2300: {
     kind: 'mswitch', shape: 'switch-r', vendor: 'Juniper', title: 'Juniper EX2300-24T', junos: true,
     tagline: '網管型 L2 交換器 · 24×GE + 4×10G SFP+ · Junos（commit 才生效、不會 DTP）',

@@ -561,10 +561,13 @@ function evcInfo(ctx, body) {
   const { dev } = ctx, e = dev.evc;
   body.append(note('warn', '這是電信業者的設備，看得到服務內容，不能改設定：要配合它設定自己的路由器。'),
     h('div', { class: 'card' }, cardHead('服務內容 (EVC)'), h('div', { class: 'kv' },
-      kv('服務類型', e.type === 'EPL' ? 'EPL（Port-based）：整個埠透通，帶什麼標籤都過' : 'EVPL（VLAN-based）：只有指定的 CE-VLAN 會送到對面'),
+      kv('服務類型', e.type === 'EPL' ? 'EPL（Port-based）：整個埠透通，帶什麼標籤都過' : e.type === 'EP-LAN' ? 'EP-LAN（多點、Port-based）：好幾個據點在同一個廣播網域' : 'EVPL（VLAN-based）：只有指定的 CE-VLAN 會送到對面'),
+      kv('L2PT（第二層協定透通）', e.l2pt ? '有：客戶的 STP BPDU、CDP、LLDP 會送到其他據點' : '沒有：業者的設備丟掉客戶的 BPDU、CDP、LLDP'),
       kv('對應的 CE-VLAN', e.type === 'EPL' ? '全部（all-to-one bundling）' : (e.ceVlans || []).join('、') + '（要帶 802.1Q 標籤；不帶標籤的訊框丟掉）'),
       kv('MTU', `${e.mtu || 1522} 位元組（含 802.1Q 標籤）`))),
-    h('div', { class: 'card' }, cardHead('UNI（接客戶的介面）'), dev.ports.map((p) => h('div', { class: 'line' }, h('b', { class: 'mono', text: p.label }), linkBadge(ctx, p.id)))));
+    h('div', { class: 'card' }, cardHead('UNI（接客戶的介面）'), dev.ports.map((p) => h('div', { class: 'line' }, h('b', { class: 'mono', text: p.label }), linkBadge(ctx, p.id)))),
+    h('div', { class: 'card' }, cardHead('向業者申請變更'), note('muted', '這台不是你的設備：要改服務內容，得向電信業者申請。L2PT 讓客戶的 STP BPDU 穿過業者的網路，客戶自己的 STP 才看得到經過專線的迴圈。'),
+      h('div', { class: 'addrow' }, button(e.l2pt ? '取消 L2PT' : '申請開通 L2PT（STP / CDP / LLDP 透通）', { small: true, onclick: () => { e.l2pt = !e.l2pt; toast(e.l2pt ? '業者已經開通 L2PT：客戶的 BPDU 會送到其他據點' : '業者已經取消 L2PT', 'ok', 3500); ctx.commit(true); } }))));
 }
 
 function hrWan(ctx, body) {

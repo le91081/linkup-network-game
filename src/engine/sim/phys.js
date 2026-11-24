@@ -131,7 +131,7 @@ export function prepPhysical(state) {
     const pc = d.sw.ports[pid], l = rt.links[d.id + ':' + pid];
     if (!l || !bpduGuardOn(d, pid, portfastOn(d, pc, pid)) || bpduFilterIf(d, pid)) return false;
     const x = state.devices[l.dev];
-    if (x && (x.kind === 'switch' || x.kind === 'hub')) return stpSegments(state).some((att) => att.some((a) => a.S === d && a.port === pid) && att.some((a) => !(a.S === d && a.port === pid) && !bpduFilterIf(a.S, a.port)));
+    if (x && (x.kind === 'switch' || x.kind === 'hub' || (x.evc && x.evc.l2pt))) return stpSegments(state).some((att) => att.some((a) => a.S === d && a.port === pid) && att.some((a) => !(a.S === d && a.port === pid) && !bpduFilterIf(a.S, a.port)));
     return isVlanSw(x) && !(x.sw.stp && x.sw.stp.on === false) && isBridgePort(x, l.port) && !bpduFilterIf(x, l.port);
   };
   // 第三方的收發器：Cisco 的交換器不接受（gbic-invalid），除非 service unsupported-transceiver
@@ -444,7 +444,7 @@ export function prepLag(state) {
  */
 export function stpSegments(state) {
   const rt = state.rt, down = state.down || {};
-  const transparent = (x) => x && !down[x.id] && !rt.off[x.id] && (x.kind === 'switch' || x.kind === 'hub');
+  const transparent = (x) => x && !down[x.id] && !rt.off[x.id] && (x.kind === 'switch' || x.kind === 'hub' || !!(x.evc && x.evc.l2pt)); // 業者的專線開了 L2PT：客戶的 BPDU 透通
   const seen = new Set(), out = [];
   for (const t of Object.values(state.devices)) {
     if (!transparent(t) || seen.has(t.id)) continue;
