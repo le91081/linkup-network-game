@@ -155,6 +155,10 @@ export const CATALOG = {
     tagline: '電信業者的光纖數據機 · PON + 4 LAN · 路由模式（撥接、NAT、DHCP）/ 橋接模式',
     ports: [rj('wan', 'PON（光纖）'), ...seq(4, (i) => rj('lan' + i, 'LAN ' + i))],
   },
+  hex: {
+    kind: 'router', shape: 'router-s', vendor: 'MikroTik', title: 'MikroTik hEX (RB750Gr3)', ros: true,
+    tagline: '5 埠 Gigabit 路由器 · RouterOS（指令改了立刻生效）', ports: seq(5, (i) => rj('ether' + i)),
+  },
   erx: {
     kind: 'router', shape: 'router-s', vendor: 'Ubiquiti', title: 'Ubiquiti EdgeRouter X',
     tagline: '5 埠 Gigabit 路由器', ports: seq(5, (i) => rj('eth' + i), 0),
@@ -364,6 +368,7 @@ export function makeDevice(model, id, o = {}) {
       d.ifaces = d.ports.map((p) => iface(p.id, p.label, { t: 'port', port: p.id }));
       d.routing = true; d.portForwards = []; d.vpns = []; d.ospfDefault = false; d.mgmt = mgmt();
       d.staticNat = []; d.routes6 = []; d.v6routing = false;
+      if (m.ros) d.ros = { identity: 'MikroTik', nat: [], dns: '' }; // MikroTik RouterOS（ui/roscli.js）
       break;
     case 'homerouter':
       d.sw = { mode: 'plain', ports: Object.fromEntries(d.ports.filter((p) => p.id !== 'wan').map((p) => [p.id, {}])) };

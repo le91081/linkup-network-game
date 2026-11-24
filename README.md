@@ -117,6 +117,7 @@ npm run build    # 輸出到 dist/
 - **Nexus 的 mgmt0**：Nexus 有帶外管理埠 mgmt0，在 vrf management 裡。NX-OS 的寫法：`vrf context management` → `ip route 0.0.0.0/0 <閘道>`、`interface mgmt0` → `vrf member management` → `ip address <IP>/<長度>`、`logging server <IP> 6 use-vrf management`、`ntp server <IP> use-vrf management`；running-config 也照 NX-OS 的格式。
 - **Juniper EX2300（Junos）**：設定都在「CLI (Junos)」分頁。`configure` 進入設定模式，`set` / `delete` 改的是候選設定，`commit` 才生效（`commit check`、`show | compare`、`rollback`、沒 commit 就離開會先問）；`show vlans`、`show interfaces terse`、`show ethernet-switching table`、`show configuration`。Junos 不送 DTP，trunk 預設沒有 native VLAN（`native-vlan-id`，那個 VLAN 也要在 `vlan members` 裡）。
 - **nmcli**：Linux 主機的終端機有 NetworkManager 的 `nmcli device status`、`nmcli connection show [eth0]`、`sudo nmcli connection modify eth0 ipv4.method manual ipv4.addresses <IP/長度> ipv4.gateway <閘道> ipv4.dns <DNS>`（只改設定檔；沒寫 /長度是 /32）、`sudo nmcli connection up eth0`（套用到網卡）。
+- **MikroTik RouterOS**：hEX 的「Terminal (RouterOS)」分頁：/ip address、/ip dhcp-client、/ip route、/ip firewall nat、/ip dns、/interface、/system identity 加上 print / add / remove / set（名稱=值），可以先切換到選單再下指令；改了立刻生效，/export 看整份設定，/ping 從路由器自己 ping。
 - **Metro Ethernet 專線**：電信業者的設備只能看「專線資訊」（EPL / EVPL、對應的 CE-VLAN、MTU、兩端 UNI 的燈號）。EVPL 依 802.1Q 標籤決定送到哪一條 EVC，不帶標籤的訊框丟掉。E-LAN（多點）預設丟掉客戶的 BPDU，可以在「專線資訊」向業者申請 L2PT。
 - **配線架**：24 埠 Cat6 配線架是被動元件，前面第 n 孔和後面第 n 孔直接相通：交換器經過它直接連到另一面的設備（燈號、鄰居都是那台）；只接一面就沒有燈號；整條通道超過 100 公尺不通。「配線」分頁替每一孔貼標籤（牆上網路孔的編號）。
 - **訊號量測**：上方的閃電按鈕打開量測模式，滑鼠移到地板上就顯示那個位置收到每台基地台的 5 GHz / 2.4 GHz 訊號強度（含牆的衰減），像現場勘測的 App。
@@ -144,12 +145,12 @@ npm run build    # 輸出到 dist/
 - **評分**：過關時依實際作答時間（畫面在前景、沒有開對話框才算；標準時間是 3 分鐘加上每個目標 1.5 分鐘）、看了幾個提示、跑了幾次完整測試給 S / A / B / C 與分數，關卡選單上顯示最佳等級。設定變更的次數只列出來參考。
 - **關卡編輯器**：自由模式的「關卡設計」可以寫關卡名稱、任務說明、提示，指定哪些設備鎖定（玩家看得到、不能設定），然後試玩、存成自訂關卡、或匯出成關卡檔分享；關卡選單的「自訂關卡」可以遊玩、匯出、刪除與匯入。
 
-## 關卡（17 章 168 關）
+## 關卡（17 章 169 關）
 
 | 章節 | 關卡數 | 主題 |
 | --- | --- | --- |
 | 1 家用網路 | 5 | Hub、Switch、固定 IP、DHCP、PPPoE、NAT、DNS；光纖數據機是路由模式、後面再接自己的路由器：兩層 NAT，連接埠轉發收不到外面的連線，數據機改成橋接、路由器自己撥 PPPoE |
-| 2 小型辦公室 | 5 | 固定 IP 線路、連接埠轉發、VLAN、Trunk、子介面；固定 IP 專線換成光世代：R1 改用 PPPoE 撥接，實體介面 `pppoe-client dial-pool-number 1`、Dialer1 的 `ip address negotiated` 與 `ppp chap`，NAT 與預設路由改到 Dialer1，`mtu 1492` 與 `ip tcp adjust-mss 1452` |
+| 2 小型辦公室 | 6 | 固定 IP 線路、連接埠轉發、VLAN、Trunk、子介面；固定 IP 專線換成光世代：R1 改用 PPPoE 撥接，實體介面 `pppoe-client dial-pool-number 1`、Dialer1 的 `ip address negotiated` 與 `ppp chap`，NAT 與預設路由改到 Dialer1，`mtu 1492` 與 `ip tcp adjust-mss 1452`；MikroTik 清成空白設定：RouterOS 的 /ip address、/ip dhcp-client、少了 masquerade 後面的電腦上不了網 |
 | 3 企業網路 | 6 | 防火牆政策與 DMZ、靜態路由與回程路由、一對一靜態 NAT；NAT 位址池沒有 overload：早到的四個人把公用位址借光，晚到的人上不了網（`show ip nat statistics` 的 allocated 100% 與 misses，規則還有轉換在用時要先 `clear ip nat translation *` 才能改）；公司網站用靜態 NAT，外面連得到、辦公室卻連不上：傳統的 inside / outside NAT 不處理 hairpin，改用 split DNS（內部 DNS 回內部位址，改完要 `ipconfig /flushdns` 或等 TTL）；郵件伺服器搬回公司的 DMZ：寄給客戶的信卡在佇列（DMZ → wan1 沒有放行 SMTP），客戶寄來的信進不來（MX 的公用位址沒有 VIP 轉 TCP 25、也沒有政策），而且只對外開 25 |
 | 4 資料中心 | 10 | ToR 與 SVI、Spine-Leaf 與 OSPF、銅纜 / 多模 / 單模光纖與距離；Jumbo Frame 要整條路一致（交換器默默丟掉 giant、`ping -f -l 8972`、2960 的 `system mtu jumbo` 要存檔重新開機）；光纖接好了燈還是不亮：第三方的收發器被關成 err-disabled (gbic-invalid)、兩端一端 10G 一端 1G、接頭髒了收到的光太弱（`show interfaces transceiver`、CRC）；A 路的電一跳機房就全黑：每台設備的兩個電源供應器要都裝上、都接電，而且分別接 A、B 兩路（`show environment power`、故障演練一路一路斷電）；新的 25G GPU 伺服器接不上只有 QSFP28 的 Nexus：`interface breakout module 1 port 1 map 25g-4x` 拆成 4 個 25G 的子埠，用分歧線接（10g-4x 只有 10G）；負載平衡器（F5 BIG-IP）：一臂式架構沒開 SNAT，伺服器的回應直接回給使用者（非對稱路由），SNAT Automap；tcp monitor 看不出應用程式回 500，自訂 http monitor 的 Receive String `200 OK`；Nexus 的 vPC：兩台 Leaf 上的 vPC 編號不一樣（一條 suspended）、peer-keepalive 打錯（peer-link 斷線時 dual-active），`show vpc`；UPS：停電時 B 路沒有 UPS，雙電源設備的負載全壓到 A 路的 UPS 而過載，不重要的設備改接 B 路，電池撐到發電機 |
 | 5 無線網路 | 7 | SSID、WPA2 / WPA3、PoE、頻道規劃、訪客 SSID 對應 VLAN；三台 AP 都開 80 MHz 互相重疊、會議室用 DFS 頻道被雷達打斷（改用 40 MHz 與非 DFS 頻道）；Wi-Fi 6E 的新筆電一直連在 5 GHz：6 GHz 規定要 WPA3，只支援 WPA2 的印表機讓 SSID 停在 WPA2（改成 WPA2 / WPA3 混合）；訪客入口 (Captive Portal) 設好了，登入頁面卻從來不跳出：認證前允許的位址沒有 DNS，手機查不到 captive.apple.com；Wi-Fi mesh：倉庫的基地台從 5 GHz 接回辦公室（mesh 金鑰、回程 -78 dBm 連不上，頻道寬度改成 40 MHz 多 3 dB），LAN 埠接印表機（無線橋接），測速看到回程是瓶頸 |
@@ -555,6 +556,7 @@ src/engine/   模擬引擎（不依賴瀏覽器，可直接用 Node 測試）
   vpc.js          Nexus 的 vPC：peer-link、peer-keepalive、角色、一致性檢查
   junos.js        Juniper 的 Junos：候選設定、commit、套用到交換器
   patch.js        配線架：前後同一孔相通、端對端的連線
+  (ui/roscli.js)  MikroTik RouterOS 的終端機
   docker.js       容器：映像檔、bridge 網路、連接埠發佈（只綁 127.0.0.1、埠對錯會被重設）
   web.js          網站與 HTTPS 憑證：信任的 CA、有效期間（用戶端的時鐘）、SAN 與萬用字元
   dns.js          DNS 伺服器的記錄、TTL 與用戶端快取

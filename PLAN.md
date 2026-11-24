@@ -48,7 +48,7 @@ README 說明「現在有什麼、怎麼玩」，這份文件說明「整體應�
 | 16. 工程品質 | 6 | 3 | 1 | 0 |
 | **合計** | **197** | **8** | **1** | **6** |
 
-另外：關卡 168 關（第 17 節）、證照條目涵蓋情形（第 18 節）、建議的實作順序（第 19 節）。
+另外：關卡 169 關（第 17 節）、證照條目涵蓋情形（第 18 節）、建議的實作順序（第 19 節）。
 
 範圍的調整（2026-11-22）：第 14 節遊戲系統還沒做完的項目暫時不做（⏸）；第 15 節的手機與平板、多語系、無障礙、主題從規劃中移除，不做。
 
@@ -257,7 +257,7 @@ README 說明「現在有什麼、怎麼玩」，這份文件說明「整體應�
 | 韌體與開機 | ✅ | flash / bootflash 的檔案與空間、`verify /md5`、`boot system`、開機時跳過不存在 / 損毀 / 平台不符的映像檔、ROMMON；FortiGate 的 `execute restore image` 與升級路徑 |
 | 設定管理進階 | ✅ | `archive`（path、maximum、write-memory 自動封存）、`show archive`、`show archive config differences`（Contextual Config Diffs）、`configure replace`（list、force）、`archive log config`（誰、從哪條線、打了什麼；notify syslog、hidekeys）；`time-period` 定時封存；IOS XE 的 install 模式（Catalyst 9300 出廠就是 INSTALL：從 packages.conf 開機）：`install add file … [activate commit]`、`install activate` / `commit`、`install remove inactive`（連還沒 add 的 .bin 也會刪）、`show install summary` 的 I / U / C、`show version` 的 INSTALL / BUNDLE；解開的套件要有空間，activate 會重新開機（沒存檔的設定會不見）→ 11-13 |
 | 監控 | ✅ | Syslog 伺服器、SNMP 網管（輪詢、使用率、Trap）；NetFlow（傳統與 Flexible NetFlow、快取、匯出到收集器、Top Talkers → 11-7） |
-| 其他廠牌的 CLI | 🟡 | Juniper EX2300 的 Junos：operational / 設定模式、set / delete 改候選設定、`commit`（`commit check` 的錯誤：未定義的 VLAN、access 模式多個 VLAN、native-vlan-id 沒放進 members）、`show | compare`、`rollback`、離開時提醒沒 commit 的設定；`show vlans`、`show interfaces terse`、`show ethernet-switching table`、`show configuration`、`show system commit`；不送 DTP、trunk 預設沒有 native VLAN → 10-13。Linux 的 `nmcli`：`device status`、`connection show [名稱]`、`connection modify`（ipv4.method / addresses / gateway / dns；沒寫 /長度是 /32；要 sudo）只改設定檔、`connection up` 才套用 → 11-16。還沒有 Aruba、MikroTik |
+| 其他廠牌的 CLI | 🟡 | Juniper EX2300 的 Junos：operational / 設定模式、set / delete 改候選設定、`commit`（`commit check` 的錯誤：未定義的 VLAN、access 模式多個 VLAN、native-vlan-id 沒放進 members）、`show | compare`、`rollback`、離開時提醒沒 commit 的設定；`show vlans`、`show interfaces terse`、`show ethernet-switching table`、`show configuration`、`show system commit`；不送 DTP、trunk 預設沒有 native VLAN → 10-13。Linux 的 `nmcli`：`device status`、`connection show [名稱]`、`connection modify`（ipv4.method / addresses / gateway / dns；沒寫 /長度是 /32；要 sudo）只改設定檔、`connection up` 才套用 → 11-16。MikroTik hEX 的 RouterOS：選單路徑（/ip address、/ip dhcp-client、/ip route、/ip firewall nat、/ip dns、/interface、/system identity，可以先切換選單再下指令）、print / add / remove / set、名稱=值的參數、改了立刻生效、/export、/ping → 2-6。還沒有 Aruba |
 | 文件產出 | ✅ | 2D 拓撲圖匯出成 SVG（樣式寫進檔案、裁到內容範圍、加上關卡名稱）與 PNG；IP 位址規劃表（設備、介面、位址、網段、來源、閘道、VLAN、VRF、說明，網段摘要），複製到試算表或下載 CSV；Artifact 版改成顯示內容讓人複製 |
 
 ## 12. 自動化、雲端與虛擬化
@@ -287,7 +287,7 @@ README 說明「現在有什麼、怎麼玩」，這份文件說明「整體應�
 | 語音與監控 | ✅ | Cisco IP Phone 8841、Yealink SIP-T54W（只有 LLDP-MED）；PoE 網路攝影機（Hikvision DS-2CD2043G2-I，Class 3）與 NVR（DS-7608NXI-K2，8 路）：攝影機送固定位元率的影像（H.264 / H.265、1080p 到 4K），NVR 的錄影分頁看每一路順不順 → 12-5 |
 | 無線控制器 | ✅ | Cisco Catalyst 9800-L（WLC）、Catalyst 9120AXI（輕量型 AP，802.3at PoE） |
 | 伺服器角色 | ✅ | 已有 RADIUS、DHCP、DNS、Syslog、NTP、TFTP、FTP、SNMP 網管、CUCM、網站（HTTPS 憑證）、Docker 主機；TFTP / FTP / 網管 / CUCM 可以自己啟用；Active Directory（網域控制站的使用者、群組、停用，LDAP 389 / LDAPS 636）與 FortiGate 的 `config user ldap`（服務帳號 bind、cnid、dn、secure ldaps）、使用者群組的 `config match` 對應 AD 的群組，SSL-VPN 用 AD 的帳號登入 → 7-15；郵件伺服器（網域、信箱、寄不出去的佇列與原因）：員工用 587 交給公司的伺服器，伺服器查 MX、用 TCP 25 交給對方，網際網路上也有別的公司的郵件伺服器與 MX 記錄；防火牆的服務多了 SMTP、SMTPS、IMAPS，VIP 的對外位址會回應 ARP → 3-6 |
-| 其他 | 🟡 | 負載平衡器（F5 BIG-IP，見第 4 節）、光纖數據機（ZTE F670L：出廠是路由模式，自己撥 PPPoE、NAT、LAN 發 192.168.1.x；橋接模式只把光纖轉成乙太網路，後面的路由器穿過它撥 PPPoE；兩層 NAT 時從外面連進來會被數據機擋下 → 1-5）、UPS（APC Smart-UPS 1500：供應 A 或 B 路、外接電池組；市電中斷時有 UPS 的那一路靠電池撐、沒有的那一路馬上斷電；負載依每台設備的耗電平均分給還有電的電源供應器；過載直接停止輸出、電池時間 = Wh × 0.9 ÷ 負載；「UPS」分頁、電源分頁的兩路狀態、故障演練的 `utility` 與 `wait` → 4-11）已完成；Juniper EX2300（Junos，見第 11 節的其他廠牌 CLI）也已完成；還沒有 Aruba、MikroTik |
+| 其他 | 🟡 | 負載平衡器（F5 BIG-IP，見第 4 節）、光纖數據機（ZTE F670L：出廠是路由模式，自己撥 PPPoE、NAT、LAN 發 192.168.1.x；橋接模式只把光纖轉成乙太網路，後面的路由器穿過它撥 PPPoE；兩層 NAT 時從外面連進來會被數據機擋下 → 1-5）、UPS（APC Smart-UPS 1500：供應 A 或 B 路、外接電池組；市電中斷時有 UPS 的那一路靠電池撐、沒有的那一路馬上斷電；負載依每台設備的耗電平均分給還有電的電源供應器；過載直接停止輸出、電池時間 = Wh × 0.9 ÷ 負載；「UPS」分頁、電源分頁的兩路狀態、故障演練的 `utility` 與 `wait` → 4-11）已完成；Juniper EX2300（Junos，見第 11 節的其他廠牌 CLI）也已完成；MikroTik hEX（RouterOS）也已完成；還沒有 Aruba |
 
 ## 14. 遊戲系統
 
@@ -295,7 +295,7 @@ README 說明「現在有什麼、怎麼玩」，這份文件說明「整體應�
 
 | 功能 | 狀態 | 說明 |
 | --- | --- | --- |
-| 關卡 | ✅ | 17 章 168 關（清單見第 17 節） |
+| 關卡 | ✅ | 17 章 169 關（清單見第 17 節） |
 | 任務目標 | ✅ | ping、TCP、UDP、DHCP、設定檢查、故障演練、IPv6 ping、傳輸速率、遠端登入（SSH / Telnet 帳號密碼）、IP 電話註冊、通話品質 (MOS)、HTTPS（連得上之後還要通過憑證驗證）、路徑（一定要經過 / 不能經過某台設備）；TCP 的目標交握完還會送一個裝滿的資料區段（設了 DF），MTU 的問題才看得出來 |
 | 提示與星等 | ✅ | 每關 3 個提示，看一個少一顆星 |
 | 學習卡 | ✅ | 每關 2 到 4 張觀念說明 |
@@ -354,12 +354,12 @@ README 說明「現在有什麼、怎麼玩」，這份文件說明「整體應�
 
 ## 17. 關卡規劃
 
-### 現有的 168 關
+### 現有的 169 關
 
 | 章 | 關卡 |
 | --- | --- |
 | 1 家用網路 | 第一條網路線、換上交換器、自動發 IP、連上網際網路、連接埠轉發設好了，外面還是連不進來（兩層 NAT） |
-| 2 小型辦公室 | 辦公室開張、部門隔離、跨樓層、跨 VLAN 路由、換成光世代，路由器要自己撥接（IOS 的 PPPoE 與 Dialer） |
+| 2 小型辦公室 | 辦公室開張、部門隔離、跨樓層、跨 VLAN 路由、換成光世代，路由器要自己撥接（IOS 的 PPPoE 與 Dialer）、路由器上得了網，電腦卻不行（MikroTik） |
 | 3 企業網路 | 守門員、總公司與分公司、對外伺服器群、十點以後進公司的人都上不了網（NAT 位址池與 overload）、在公司裡打不開自己的網站（NAT hairpin 與 split DNS）、公司自己架了郵件伺服器，信卻寄不出也收不到（SMTP、MX 與 DMZ 的 VIP） |
 | 4 資料中心 | 機櫃上線、Spine-Leaf、跨棟連線、一開 Jumbo Frame，備份就卡住、光纖接好了，燈還是不亮（收發器）、A 路的電一跳，機房就全黑了（雙電源）、新的 GPU 伺服器接不上（breakout）、三台伺服器，有時候會壞掉（負載平衡器）、兩台 Nexus，一條線在睡覺（vPC）、停電了，UPS 撐不到發電機（UPS 的負載與過載） |
 | 5 無線網路 | 家裡的 Wi-Fi、辦公室基地台、訪客 Wi-Fi、下午的視訊會議一直斷（頻道寬度與 DFS）、新筆電明明支援 Wi-Fi 6E（6 GHz 與 WPA3）、訪客連上 Wi-Fi，卻沒有跳出登入頁面（Captive Portal）、倉庫拉不到線（Wi-Fi mesh） |

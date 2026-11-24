@@ -5908,6 +5908,25 @@ console.log('\nE-LAN 與 L2PT');
   ok(runObjective(s3, lv.objectives[0]).pass, '專線斷了：備援光纖接手');
 }
 
+console.log('\nMikroTik RouterOS');
+{
+  const { runObjective } = await import('../src/engine/sim/objectives.js');
+  const { rosRun, rosSession } = await import('../src/ui/roscli.js');
+  const ok = (cond, title) => (cond ? console.log('  ✔ ' + title) : fail(title));
+  const lv = LEVELS.find((x) => x.id === 'l169');
+  const s = lv.setup(); settle(s);
+  const d = s.devices.mt, S = rosSession();
+  const ros = (...lines) => { const out = []; for (const l of lines) { const r = rosRun(s, d, S, l, (...t) => out.push(...t)); if (r.changed) settle(s); } return out.join('\n'); };
+  ros('/ip address add address=192.168.88.1/24 interface=ether2', '/ip dhcp-client add interface=ether1');
+  ok(/ether1\s+yes\s+yes\s+bound\s+203\.0\.113\.77\/24/.test(ros('/ip dhcp-client print')) && /received=3/.test(ros('/ping 8.8.8.8')), 'DHCP client 拿到位址，路由器自己 ping 得到 8.8.8.8');
+  ok(runObjective(s, lv.objectives[0]).pass && !runObjective(s, lv.objectives[1]).pass, '收銀機到得了閘道，但沒有 masquerade：私有位址出去被丟掉');
+  ros('/ip firewall nat', 'add chain=srcnat out-interface=ether1 action=masquerade');
+  ok(S.path.join(' ') === 'ip firewall nat' && lv.objectives.every((o) => (o.type === 'check' ? o.test(s) : runObjective(s, o).pass) === true), '進到 /ip firewall nat 選單再 add masquerade：三個目標都通過');
+  ok(/add action=masquerade chain=srcnat out-interface=ether1/.test(ros('/export')) && /bad command name/.test(ros('/ip bogus print')), '/export 是 RouterOS 的格式；打錯指令有錯誤訊息');
+  ros('/ip firewall nat remove 0');
+  ok(!runObjective(s, lv.objectives[1]).pass, 'remove 0：拿掉 masquerade，又上不了網');
+}
+
 console.log('\nNetFlow 與 QoS 的 police');
 {
   const sim = await import('../src/engine/sim.js');
