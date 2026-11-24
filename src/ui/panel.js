@@ -712,9 +712,9 @@ function tabsFor(dev, state) {
   // 在機房裡、只能遠端管理的設備：沒有設定分頁（用 SSH 或 Console 線）
   if (dev.remoteOnly) return [['info', '設備資訊', remoteOnlyInfo]];
   if (dev.junos) return [['jcli', 'CLI (Junos)', buildJunosCli], T.status]; // Juniper：設定都用 Junos 的 CLI
-  if (dev.evc) return [['evc', '專線資訊', evcInfo]];
-  if (dev.ros) return [['ros', 'Terminal (RouterOS)', buildRosCli], T.status];
-  if (CATALOG[dev.model].aoscx) return [['cx', 'CLI (AOS-CX)', buildCxCli], T.swports, T.status]; // Aruba：AOS-CX 的 CLI // MikroTik：設定都用 RouterOS 的指令 // 電信業者的 Metro Ethernet：只能看，不能改
+  if (dev.evc) return [['evc', '專線資訊', evcInfo]]; // 電信業者的 Metro Ethernet：只能看，不能改
+  if (dev.ros) return [['ros', 'Terminal (RouterOS)', buildRosCli], T.status]; // MikroTik：設定都用 RouterOS 的指令
+  if (CATALOG[dev.model].aoscx) return [['cx', 'CLI (AOS-CX)', buildCxCli], T.swports, T.status]; // Aruba：AOS-CX 的 CLI
   const t = baseTabs(dev);
   // 場景裡有只能遠端管理的設備時，筆電多一個 Console 分頁（接 Console 線）
   if (/^laptop/.test(dev.model) && state && needsConsole(state)) t.push(['con', 'Console', consoleTab]);
