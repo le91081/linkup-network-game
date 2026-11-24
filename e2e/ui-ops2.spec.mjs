@@ -638,7 +638,8 @@ test('存檔格式遷移：舊版本的存檔（DNS 用 dnsRecords、沒有版�
     const ds = Object.values(app.state.devices).filter((d) => d.dnsZone || d.dnsRecords);
     return { ver: app.store.ver, ok: ds.length > 0 && ds.every((d) => d.dnsZone && !d.dnsRecords), level: app.level.id };
   }, id);
-  expect(r).toEqual({ ver: 2, ok: true, level: id });
+  // 存檔格式目前是第 3 版（2 → 3：MAC 位址改成廠商碼）
+  expect(r).toEqual({ ver: 3, ok: true, level: id });
 });
 
 test('鍵盤快捷鍵：? 打開清單、] 選下一台設備、數字切分頁、T 切換 2D 拓撲圖、M 開關音效', async ({ page }) => {

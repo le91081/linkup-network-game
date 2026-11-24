@@ -283,7 +283,8 @@ test('DNS：nslookup 不看快取、ping 用快取、resolvectl show-cache 與 f
   await expect(out).toContainText(/Address: 10\.0\.2\.20/);
   await typeCmd(page, 'resolvectl show-cache');
   await expect(out).toContainText('www.corp.local IN A 10.0.2.10');
-  await typeCmd(page, 'resolvectl flush-caches', 'resolvectl show-cache');
+  await typeCmd(page, 'resolvectl flush-caches');
+  await typeCmd(page, 'resolvectl show-cache');
   await expect(out).toContainText('快取是空的');
   await typeCmd(page, 'nslookup -type=mx corp.local');
   await expect(out).toContainText(/mail exchanger = \d+ mail\.corp\.local\./);
