@@ -76,10 +76,25 @@ export function renderTopo(app, svg, rect) {
     const P = new Map(devs.map((d) => [d.id, { x: (d.pos[0] - (x0 + x1) / 2) * K, y: (d.pos[1] - (z0 + z1) / 2) * K }]));
     if (compact) {
       const ids = devs.map((d) => d.id);
+      // 設備很多時，每一輪先把方塊放進格子裡，只比較附近格子裡的（不然每輪都是 n² 對，幾百台要好幾百毫秒）
+      const big = ids.length > 60;
+      const cw = Math.max(...ids.map((id) => boxes.get(id).w)) + 14, ch = Math.max(...ids.map((id) => boxes.get(id).h)) + 22;
       for (let it = 0; it < 80; it++) {
         let moved = false;
+        let near = null;
+        if (big) {
+          const cell = new Map(), at = (x, y) => Math.floor(x / cw) + ',' + Math.floor(y / ch);
+          ids.forEach((id, n) => { const p = P.get(id), k = at(p.x, p.y); if (!cell.has(k)) cell.set(k, []); cell.get(k).push(n); });
+          near = (i) => {
+            const p = P.get(ids[i]), cx = Math.floor(p.x / cw), cy = Math.floor(p.y / ch), out = [];
+            for (let dx = -1; dx <= 1; dx++) for (let dy = -1; dy <= 1; dy++) for (const n of cell.get(cx + dx + ',' + (cy + dy)) || []) if (n > i) out.push(n);
+            return out.sort((x, y) => x - y);
+          };
+        }
         for (let i = 0; i < ids.length; i++) {
-          for (let j = i + 1; j < ids.length; j++) {
+          const js = near ? near(i) : null;
+          for (let jj = 0, jn = js ? js.length : ids.length - i - 1; jj < jn; jj++) {
+            const j = js ? js[jj] : i + 1 + jj;
             const a = P.get(ids[i]), b = P.get(ids[j]), A = boxes.get(ids[i]), B = boxes.get(ids[j]);
             const ox = (A.w + B.w) / 2 + 14 - Math.abs(a.x - b.x), oy = (A.h + B.h) / 2 + 22 - Math.abs(a.y - b.y);
             if (ox <= 0 || oy <= 0) continue;

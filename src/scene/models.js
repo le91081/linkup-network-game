@@ -1,6 +1,7 @@
 // 低多邊形風格的設備模型。每個模型都是一個 Group，原點在地板中心。
 import * as THREE from 'three';
 import { RoundedBoxGeometry } from 'three/addons/geometries/RoundedBoxGeometry.js';
+import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { CATALOG } from '../engine/model.js';
 import { isPublic, subnetOf } from '../engine/cloud.js';
 import { memberOfPort } from '../engine/stack.js';
@@ -24,8 +25,14 @@ function mat(color, o = {}) {
   }
   return matCache.get(key);
 }
-const glow = (color, intensity = 1.6) =>
-  new THREE.MeshStandardMaterial({ color, emissive: color, emissiveIntensity: intensity, roughness: 0.4 });
+// 發光的材質依顏色與亮度共用（燈號換顏色時換成另一個共用的材質，不會每次都新建一個）
+const glowCache = new Map();
+function glow(color, intensity = 1.6) {
+  const k = color + '|' + intensity;
+  let m = glowCache.get(k);
+  if (!m) { m = new THREE.MeshStandardMaterial({ color, emissive: color, emissiveIntensity: intensity, roughness: 0.4 }); m.userData.c = color; glowCache.set(k, m); }
+  return m;
+}
 
 function box(g, w, h, d, material, x = 0, y = 0, z = 0, r = 0.05) {
   const m = new THREE.Mesh(new RoundedBoxGeometry(w, h, d, 2, Math.min(r, w / 2, h / 2, d / 2)), material);
@@ -431,6 +438,8 @@ export function buildDevice(dev) {
     if (o.isMesh) { o.castShadow = true; o.receiveShadow = true; }
   });
   if (u.screen) u.screen.castShadow = false;
+  for (const m of Object.values(u.jackLed || {})) m.castShadow = false; // 燈號太小，影子看不出來
+  mergeStatic(g, u);
   const hit = new THREE.Mesh(
     new THREE.BoxGeometry(u.w + 0.5, u.h + 0.3, u.d + 0.5),
     new THREE.MeshBasicMaterial({ visible: false }),
@@ -441,6 +450,63 @@ export function buildDevice(dev) {
   u.hit = hit;
   g.position.set(dev.pos[0], 0, dev.pos[1]);
   return g;
+}
+
+/**
+ * 設備裡不會再變的零件（外殼、孔、標示…）依材質合併成一個 mesh：幾百台設備時，畫一次場景的次數少很多。
+ * userData 裡記著的（燈號、螢幕、會轉的地球、面板貼圖）保持獨立，之後還可以換顏色、轉動
+ */
+function mergeStatic(g, u) {
+  const keep = new Set();
+  const mark = (v, depth) => {
+    if (!v || depth > 3) return;
+    if (v.isObject3D) { v.traverse((o) => { if (o.isMesh) keep.add(o); }); return; }
+    if (Array.isArray(v)) { for (const x of v) mark(x, depth + 1); return; }
+    if (typeof v === 'object' && Object.getPrototypeOf(v) === Object.prototype) for (const x of Object.values(v)) mark(x, depth + 1);
+  };
+  mark(u, 0);
+  g.updateMatrixWorld(true);
+  const inv = new THREE.Matrix4().copy(g.matrixWorld).invert();
+  // 一般的（不發光）材質：顏色改放在頂點上，粗糙度與金屬感一樣的零件就能合成同一個 mesh；發光的照材質分
+  const plain = (m) => m.isMeshStandardMaterial && !m.vertexColors && m.emissive.getHex() === 0 && m.opacity === 1;
+  const groups = new Map();
+  g.traverse((o) => {
+    if (!o.isMesh || keep.has(o) || Array.isArray(o.material) || o.material.map || o.material.transparent) return;
+    for (let p = o; p; p = p.parent) if (!p.visible) return;
+    const m = o.material, kind = plain(m) ? `vc|${m.roughness}|${m.metalness}|${m.side}` : m.uuid;
+    const key = kind + '|' + Object.keys(o.geometry.attributes).sort().join(',') + '|' + o.castShadow + '|' + o.receiveShadow;
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(o);
+  });
+  const mtx = new THREE.Matrix4();
+  for (const list of groups.values()) {
+    const vc = plain(list[0].material);
+    if (list.length < 2) continue;
+    const geos = list.map((o) => {
+      const x = o.geometry.index ? o.geometry.toNonIndexed() : o.geometry.clone();
+      x.applyMatrix4(mtx.multiplyMatrices(inv, o.matrixWorld));
+      if (vc) {
+        // 材質的顏色已經是線性色彩空間，直接當頂點顏色（頂點顏色不再轉換）
+        const c = o.material.color, n = x.attributes.position.count, a = new Float32Array(n * 3);
+        for (let k = 0; k < n; k++) { a[k * 3] = c.r; a[k * 3 + 1] = c.g; a[k * 3 + 2] = c.b; }
+        x.setAttribute('color', new THREE.BufferAttribute(a, 3));
+      }
+      return x;
+    });
+    const merged = mergeGeometries(geos, false);
+    for (const x of geos) x.dispose();
+    if (!merged) continue;
+    const m = new THREE.Mesh(merged, vc ? vcMat(list[0].material) : list[0].material);
+    m.castShadow = list[0].castShadow; m.receiveShadow = list[0].receiveShadow;
+    for (const o of list) { o.parent.remove(o); o.geometry.dispose(); }
+    g.add(m);
+  }
+}
+const vcCache = new Map();
+function vcMat(m) {
+  const k = `${m.roughness}|${m.metalness}|${m.side}`;
+  if (!vcCache.has(k)) vcCache.set(k, new THREE.MeshStandardMaterial({ vertexColors: true, roughness: m.roughness, metalness: m.metalness, side: m.side }));
+  return vcCache.get(k);
 }
 
 /** 依目前狀態更新燈號 / 螢幕顏色。led(埠) 回傳 'up'、'amber' 或 '' */

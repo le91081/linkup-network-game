@@ -1,5 +1,6 @@
 // three.js 場景：等距視角的機房桌面、設備、網路線與封包動畫
 import * as THREE from 'three';
+import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { buildDevice, refreshDevice, glowTexture, PALETTE, ACCENT } from './models.js';
 import { CABLES, cableKind, CATALOG, primaryIface } from '../engine/model.js';
 import { apRange, rfAt, ssidsOf } from '../engine/sim.js';
@@ -735,9 +736,11 @@ export class Scene3D {
 
   clearCables() {
     for (const c of this.cables.values()) {
-      this.cableGroup.remove(c.mesh, c.pick, ...c.plugs);
+      this.cableGroup.remove(c.mesh, c.pick);
       c.mesh.geometry.dispose(); c.pick.geometry.dispose();
     }
+    for (const m of this.plugMeshes || []) { this.cableGroup.remove(m); m.geometry.dispose(); }
+    this.plugMeshes = [];
     this.cables.clear();
     this.hovCable = null;
   }
@@ -767,6 +770,7 @@ export class Scene3D {
     // 「看不到接線」的關卡：只有埠上的燈號，線藏在天花板裡
     if (state.hideCables) return;
     const lanes = {}; // 設備 → 每一側已經有幾條線繞過去
+    const plugGeo = { rj45: [], sfp: [] }; // 插頭不會再變：全部的插頭依種類合成一個 mesh（幾百條線時少畫幾百次）
     const plugMat = {
       rj45: new THREE.MeshStandardMaterial({ color: 0xe8edf6, roughness: 0.35, transparent: true, opacity: 0.92 }),
       sfp: new THREE.MeshStandardMaterial({ color: 0x9aa4b8, roughness: 0.35, metalness: 0.75 }),
@@ -813,16 +817,23 @@ export class Scene3D {
       const pick = new THREE.Mesh(new THREE.TubeGeometry(curve, clamp(Math.round(len / 0.4), 16, 80), 0.24, 5, false), new THREE.MeshBasicMaterial({ visible: false }));
       pick.userData.cableId = c.id;
       // 插頭：大小跟著孔走，一小截插在孔裡，其餘露在外面
-      const plugs = [ea, eb].map((e) => {
+      for (const e of [ea, eb]) {
         const fiber = e.media !== 'rj45';
         const w = Math.min(0.16, e.w * 0.86), h = Math.min(fiber ? 0.08 : 0.12, e.h * 0.86), l = 0.24;
-        const m = new THREE.Mesh(new THREE.BoxGeometry(e.n.x ? l : w, h, e.n.x ? w : l), fiber ? plugMat.sfp : plugMat.rj45);
-        m.position.copy(e.p).addScaledVector(e.n, l / 2 - 0.03);
-        m.castShadow = true;
-        return m;
-      });
-      this.cableGroup.add(mesh, pick, ...plugs);
-      this.cables.set(c.id, { a: c.a.dev, b: c.b.dev, curve, mesh, pick, plugs, waiting });
+        const geo = new THREE.BoxGeometry(e.n.x ? l : w, h, e.n.x ? w : l), at = e.p.clone().addScaledVector(e.n, l / 2 - 0.03);
+        geo.translate(at.x, at.y, at.z);
+        plugGeo[fiber ? 'sfp' : 'rj45'].push(geo);
+      }
+      this.cableGroup.add(mesh, pick);
+      this.cables.set(c.id, { a: c.a.dev, b: c.b.dev, curve, mesh, pick, waiting });
+    }
+    for (const [k, list] of Object.entries(plugGeo)) {
+      if (!list.length) continue;
+      const m = new THREE.Mesh(mergeGeometries(list, false), plugMat[k]);
+      for (const g of list) g.dispose();
+      m.castShadow = true;
+      this.cableGroup.add(m);
+      this.plugMeshes.push(m);
     }
   }
 
