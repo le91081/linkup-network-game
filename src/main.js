@@ -645,3 +645,6 @@ app.levels = LEVELS;
 app.engine = { recompute, runObjective, settle, rackSlots };
 app.hud = hud;
 window.linkup = app;
+// 啟動完成：載入畫面（index.html 的 #boot）淡出後拿掉
+const bootEl = document.getElementById('boot');
+if (bootEl) { bootEl.classList.add('done'); setTimeout(() => bootEl.remove(), 300); }

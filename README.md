@@ -22,7 +22,7 @@ npm run build    # 輸出到 dist/
 - 「匯出」不能下載檔案，改成把 JSON 顯示出來讓人複製（`src/ui/save.js`）；「匯入」照常用檔案。
 - 進度存在瀏覽者自己的瀏覽器裡，和本機 `localhost:5173` 的進度分開；網址的 `?profile=` 在 Artifact 裡沒有作用。
 
-`npm run preview:artifact` 可以先在本機（4520 埠）看打包出來的樣子。視窗寬度不到 900 像素時，畫面會提示要用電腦或把視窗拉寬。
+`npm run preview:artifact` 可以先在本機（4520 埠）看打包出來的樣子。視窗寬度不到 900 像素時，畫面會換成一張提示卡：顯示目前的寬度與需要的 900 像素（拉寬視窗時跟著變），並依裝置給建議（電腦拉寬視窗、直放的平板轉成橫向、手機改用大一點的螢幕）。這張提示卡與載入畫面的樣式直接寫在 `index.html` 裡，程式還沒載入之前就排好了，不會在載入時先閃出還沒排版的文字；程式沒有載入成功時，載入畫面會換成說明。
 
 ### 瀏覽器端測試（Playwright）
 
@@ -38,6 +38,7 @@ npm run build    # 輸出到 dist/
 - `e2e/ui-policy.spec.mjs`：在路由分頁設定路由重分配（搭配 CLI 寫的 prefix-list 與 route-map）、新增政策路由，並用 show 指令與 traceroute 確認。
 - `e2e/ui-mtu.spec.mjs`：`ping -M do -s` 找出 MTU、交換器的 giants 與 2960 的 Jumbo MTU（存檔、重新開機）、PMTUD 黑洞與 TCP MSS 調整。
 - `e2e/ui-stage11.spec.mjs`：VRF 的 CLI 與路由分頁、Docker 主機的終端機與分頁、HTTPS 憑證錯誤的排除（curl、換憑證、匯入根憑證、打開自動校時）。
+- `e2e/ui-boot.spec.mjs`：載入畫面（程式載入之前不會露出「視窗太窄」的提示、載入失敗的說明）與視窗太窄的提示卡（寬度跟著視窗變、900 像素的門檻、依裝置的建議）。
 
 失敗時的截圖與操作紀錄在 `e2e/.results/`，可以用 `npx playwright show-trace <trace.zip>` 一步一步回放。
 

@@ -5,6 +5,82 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>LinkUp — 從一條網路線到資料中心</title>
     <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%230f1630'/%3E%3Cpath d='M9 21c5 0 4-10 14-10' stroke='%234fd8c4' stroke-width='3' fill='none' stroke-linecap='round'/%3E%3Ccircle cx='9' cy='21' r='3.5' fill='%236ea8ff'/%3E%3Ccircle cx='23' cy='11' r='3.5' fill='%234fd8c4'/%3E%3C/svg%3E" />
+    <style>
+      /*
+       * 關鍵樣式直接寫在頁面裡。其他的樣式 (src/style.css) 要等程式載入之後才有，
+       * 在那之前不能露出還沒排版的內容：以前「需要比較寬的畫面」那段文字會在每次載入時先閃一下。
+       * 這裡只放載入畫面 (#boot) 與視窗太窄的提示 (#narrow)，顏色和 style.css 的變數一致。
+       */
+      html, body { height: 100%; margin: 0; background: #090d1a; color: #e9edf7; color-scheme: dark; }
+      #boot, #narrow {
+        position: fixed; inset: 0; box-sizing: border-box; align-items: center; justify-content: center;
+        font: 14px/1.65 'Inter', 'Segoe UI', 'Noto Sans TC', 'PingFang TC', 'Microsoft JhengHei', system-ui, sans-serif; color: #e9edf7;
+        background:
+          radial-gradient(900px 620px at 50% 38%, #1c2850 0%, rgba(20, 28, 58, 0.55) 45%, transparent 75%),
+          radial-gradient(700px 480px at 85% 100%, rgba(79, 216, 196, 0.08), transparent 70%),
+          #090d1a;
+      }
+      #boot em, #narrow em { font-style: normal; color: #4fd8c4; }
+
+      /* ── 載入畫面：程式準備好就淡出（main.js 的最後） ── */
+      #boot { display: flex; z-index: 900; pointer-events: none; transition: opacity 0.25s ease; }
+      #boot.done { opacity: 0; }
+      .bt { display: flex; flex-direction: column; align-items: center; gap: 14px; text-align: center; padding: 24px; }
+      .bt-logo { width: 60px; height: 60px; filter: drop-shadow(0 10px 26px rgba(79, 216, 196, 0.28)); }
+      .bt-name { font-weight: 800; font-size: 24px; letter-spacing: 0.02em; line-height: 1.2; }
+      .bt-bar { width: 168px; height: 3px; border-radius: 3px; background: rgba(150, 170, 225, 0.16); overflow: hidden; margin-top: 4px; }
+      .bt-bar i { display: block; width: 40%; height: 100%; border-radius: 3px; background: linear-gradient(90deg, #6ea8ff, #4fd8c4); animation: bt-slide 1.15s ease-in-out infinite; }
+      .bt-msg { color: #95a1bf; font-size: 12.5px; max-width: 30em; }
+      #boot.fail .bt-bar { display: none; }
+      #boot.fail .bt-msg { color: #ffb3bb; font-size: 13px; }
+      @keyframes bt-slide { from { transform: translateX(-110%); } to { transform: translateX(260%); } }
+
+      /* ── 視窗太窄：設定網路設備要同時看到任務、拓撲與設定面板 ── */
+      #narrow { display: none; }
+      @media (max-width: 899px) {
+        #narrow { display: flex; z-index: 1000; overflow: auto; padding: 24px max(18px, env(safe-area-inset-right, 0px)) 24px max(18px, env(safe-area-inset-left, 0px)); }
+        .nw {
+          margin: auto; width: 100%; max-width: 420px; box-sizing: border-box; display: flex; flex-direction: column; align-items: center; gap: 14px; text-align: center;
+          padding: 26px 24px 22px; border: 1px solid rgba(150, 170, 225, 0.16); border-radius: 22px; background: rgba(17, 23, 42, 0.78);
+          box-shadow: 0 28px 70px rgba(0, 0, 0, 0.4), inset 0 1px 0 rgba(255, 255, 255, 0.04);
+        }
+        .nw-brand { display: flex; align-items: center; gap: 9px; font-weight: 800; font-size: 17px; letter-spacing: 0.02em; }
+        .nw-brand svg { width: 26px; height: 26px; }
+        .nw-art { width: 100%; max-width: 300px; height: auto; margin: 2px 0 -2px; }
+        .nw-al { animation: nw-left 1.7s ease-in-out infinite; }
+        .nw-ar { animation: nw-right 1.7s ease-in-out infinite; }
+        .nw h1 { margin: 0; font-size: 20px; font-weight: 800; line-height: 1.4; letter-spacing: 0.01em; text-wrap: balance; }
+        .nw p { margin: -4px 0 0; color: #95a1bf; text-wrap: pretty; }
+        .nw-meter { width: 100%; margin-top: 2px; }
+        .nw-track { position: relative; height: 8px; border-radius: 8px; background: rgba(150, 170, 225, 0.14); }
+        .nw-track i { display: block; width: 60%; height: 100%; border-radius: 8px; background: linear-gradient(90deg, #6ea8ff, #4fd8c4); transition: width 0.15s ease; }
+        .nw-track::after { content: ''; position: absolute; right: -1px; top: -4px; width: 2px; height: 16px; border-radius: 2px; background: #4fd8c4; }
+        .nw-nums { display: flex; justify-content: space-between; gap: 12px; margin-top: 8px; font-size: 12.5px; color: #95a1bf; }
+        .nw-nums b { color: #e9edf7; font-weight: 700; font-variant-numeric: tabular-nums; }
+        .nw-nums span:last-child b { color: #4fd8c4; }
+        .nw-tips { list-style: none; margin: 2px 0 0; padding: 0; width: 100%; }
+        .nw-tips li { display: none; align-items: center; gap: 10px; text-align: left; padding: 11px 13px; border-radius: 12px; background: rgba(79, 216, 196, 0.08); border: 1px solid rgba(79, 216, 196, 0.22); color: #d9f7f2; font-size: 13.5px; line-height: 1.5; }
+        .nw-tips svg { flex: none; width: 22px; height: 22px; stroke: #4fd8c4; fill: none; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+        /* 依裝置給一個做得到的建議：電腦拉寬視窗、直放的平板轉成橫向、手機換大一點的螢幕 */
+        .nw-tips .t-resize { display: flex; }
+        @media (pointer: coarse) {
+          .nw-tips .t-resize { display: none; }
+          .nw-tips .t-device { display: flex; }
+        }
+        @media (pointer: coarse) and (orientation: portrait) and (min-height: 900px) {
+          .nw-tips .t-device { display: none; }
+          .nw-tips .t-rotate { display: flex; }
+        }
+        @media (max-height: 560px) { .nw-art { display: none; } .nw { gap: 11px; padding: 20px 22px 18px; } }
+      }
+      @keyframes nw-left { 50% { transform: translateX(-4px); } }
+      @keyframes nw-right { 50% { transform: translateX(4px); } }
+      @media (prefers-reduced-motion: reduce) {
+        .bt-bar i { animation: none; width: 100%; opacity: 0.55; }
+        .nw-al, .nw-ar { animation: none; }
+        #boot, .nw-track i { transition: none; }
+      }
+    </style>
   </head>
   <body>
     <div id="stage"></div>
@@ -14,12 +90,71 @@
     <section id="console"></section>
     <div id="toasts"></div>
     <div id="modal-root"></div>
-    <div id="narrow" role="alert">
-      <div>
-        <b>LinkUp 需要比較寬的畫面</b>
-        <p>設定網路設備時，要同時看到拓撲、任務與設備的設定面板。請用電腦開啟，或把視窗拉寬到 1024 像素以上。</p>
+    <div id="boot" role="status">
+      <div class="bt">
+        <svg class="bt-logo" viewBox="0 0 32 32" aria-hidden="true"><rect width="32" height="32" rx="9" fill="#111a38"/><path d="M9 21c5 0 4-10 14-10" stroke="#4fd8c4" stroke-width="3" fill="none" stroke-linecap="round"/><circle cx="9" cy="21" r="3.5" fill="#6ea8ff"/><circle cx="23" cy="11" r="3.5" fill="#4fd8c4"/></svg>
+        <div class="bt-name">Link<em>Up</em></div>
+        <div class="bt-bar" aria-hidden="true"><i></i></div>
+        <div class="bt-msg" id="boot-msg">載入中…</div>
+        <noscript><div class="bt-msg">LinkUp 需要 JavaScript 才能執行，請在瀏覽器的設定裡打開。</div></noscript>
       </div>
     </div>
+    <div id="narrow" role="alert">
+      <div class="nw">
+        <div class="nw-brand">
+          <svg viewBox="0 0 32 32" aria-hidden="true"><rect x="0.5" y="0.5" width="31" height="31" rx="9" fill="#18224a" stroke="rgba(150,170,225,0.28)"/><path d="M9 21c5 0 4-10 14-10" stroke="#4fd8c4" stroke-width="3" fill="none" stroke-linecap="round"/><circle cx="9" cy="21" r="3.5" fill="#6ea8ff"/><circle cx="23" cy="11" r="3.5" fill="#4fd8c4"/></svg>
+          <span>Link<em>Up</em></span>
+        </div>
+        <svg class="nw-art" viewBox="0 0 280 140" aria-hidden="true">
+          <!-- 需要的寬度（虛線）：兩側是任務與設定面板 -->
+          <rect x="8" y="16" width="264" height="108" rx="12" fill="rgba(110,168,255,0.05)" stroke="rgba(150,170,225,0.42)" stroke-width="1.2" stroke-dasharray="5 5"/>
+          <rect x="20" y="30" width="46" height="80" rx="6" fill="rgba(150,170,225,0.1)"/>
+          <rect x="27" y="39" width="32" height="5" rx="2.5" fill="rgba(150,170,225,0.22)"/><rect x="27" y="50" width="24" height="4" rx="2" fill="rgba(150,170,225,0.14)"/><rect x="27" y="59" width="28" height="4" rx="2" fill="rgba(150,170,225,0.14)"/>
+          <rect x="214" y="30" width="46" height="80" rx="6" fill="rgba(150,170,225,0.1)"/>
+          <rect x="221" y="39" width="32" height="5" rx="2.5" fill="rgba(150,170,225,0.22)"/><rect x="221" y="50" width="26" height="4" rx="2" fill="rgba(150,170,225,0.14)"/><rect x="221" y="59" width="20" height="4" rx="2" fill="rgba(150,170,225,0.14)"/>
+          <!-- 現在的視窗（實線），裡面是拓撲 -->
+          <rect x="92" y="6" width="96" height="128" rx="12" fill="#121930" stroke="#4fd8c4" stroke-width="1.6"/>
+          <circle cx="104" cy="18" r="2.2" fill="#ff6b7a"/><circle cx="112" cy="18" r="2.2" fill="#f5b547"/><circle cx="120" cy="18" r="2.2" fill="#4ade80"/>
+          <path d="M93 28h94" stroke="rgba(150,170,225,0.2)"/>
+          <path d="M118 100c24 0 18-42 44-42" stroke="#4fd8c4" stroke-width="3.2" fill="none" stroke-linecap="round"/>
+          <circle cx="118" cy="100" r="7.5" fill="#6ea8ff"/><circle cx="162" cy="58" r="7.5" fill="#4fd8c4"/>
+          <!-- 往兩邊拉開 -->
+          <g class="nw-al" stroke="#4fd8c4" stroke-width="2.2" fill="none" stroke-linecap="round" stroke-linejoin="round"><path d="M84 70H72"/><path d="M78 64l-6 6 6 6"/></g>
+          <g class="nw-ar" stroke="#4fd8c4" stroke-width="2.2" fill="none" stroke-linecap="round" stroke-linejoin="round"><path d="M196 70h12"/><path d="M202 64l6 6-6 6"/></g>
+        </svg>
+        <h1>畫面再寬一點，就可以開始了</h1>
+        <p>LinkUp 會同時顯示任務、網路拓撲與設備的設定面板，視窗太窄時排不下。</p>
+        <div class="nw-meter">
+          <div class="nw-track" aria-hidden="true"><i id="narrow-bar"></i></div>
+          <div class="nw-nums"><span>目前 <b id="narrow-now">不到 900</b> px</span><span>至少 <b>900</b> px</span></div>
+        </div>
+        <ul class="nw-tips">
+          <li class="t-resize"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 12h18"/><path d="M7 8l-4 4 4 4"/><path d="M17 8l4 4-4 4"/></svg><span>把瀏覽器的視窗拉寬，或直接放到最大</span></li>
+          <li class="t-rotate"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="7" y="3" width="10" height="18" rx="2"/><path d="M20.5 9a8.5 8.5 0 0 1-3 9.5"/><path d="M20 19.5l-2.5-1 1-2.5"/></svg><span>把平板轉成橫向，寬度就夠了</span></li>
+          <li class="t-device"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="12" rx="2"/><path d="M8 20h8"/><path d="M12 16v4"/></svg><span>這個螢幕不夠寬，請改用電腦，或橫放的平板</span></li>
+        </ul>
+      </div>
+    </div>
+    <script>
+      // 視窗太窄的提示：顯示目前的寬度（拉寬視窗時跟著變）。程式沒有載入成功時，把「載入中」換成說明
+      (function () {
+        var now = document.getElementById('narrow-now'), bar = document.getElementById('narrow-bar');
+        function size() {
+          var w = window.innerWidth;
+          now.textContent = w;
+          bar.style.width = Math.max(4, Math.min(100, (w / 900) * 100)) + '%';
+        }
+        size();
+        window.addEventListener('resize', size);
+        window.addEventListener('error', function (e) {
+          var boot = document.getElementById('boot'), msg = document.getElementById('boot-msg');
+          if (!boot || !msg) return; // 已經啟動完成
+          var load = e.target && e.target.tagName === 'SCRIPT';
+          boot.className = 'fail';
+          msg.textContent = load ? '程式沒有載入成功：請確認網路連線，再重新整理頁面。' : '啟動時發生錯誤：請重新整理頁面。' + (e.message ? '（' + e.message + '）' : '');
+        }, true);
+      })();
+    </script>
     <script type="module" src="/src/main.js"></script>
   </body>
 </html>
