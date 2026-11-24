@@ -6035,6 +6035,34 @@ console.log('\nSSL-VPN 的全通道');
   const s2 = lv.setup(); settle(s2); lv.solve(s2); settle(s2);
   ok(lv.objectives.every((o) => (o.type === 'check' ? o.test(s2) : runObjective(s2, o).pass) === true), 'solve() 之後三個目標都通過');
 }
+console.log('\n知識庫：資料與名詞連結');
+{
+  const { CONCEPTS, CATS, CONCEPT, KB_INDEX } = await import('../src/data/kb/index.js');
+  const M = await import('../src/data/kb/match.js');
+  const ok = (cond, title) => (cond ? console.log('  ✔ ' + title) : fail(title));
+  const ids = new Set(), bad = [];
+  for (const c of CONCEPTS) {
+    if (ids.has(c.id)) bad.push('重複的 id ' + c.id);
+    ids.add(c.id);
+    if (!CATS.some((x) => x.id === c.cat)) bad.push(`${c.id} 的分類 ${c.cat} 不存在`);
+    if (!c.t || !c.sum || !(c.body || []).length) bad.push(`${c.id} 少了標題、摘要或內文`);
+    for (const s of c.see || []) if (!CONCEPT[s]) bad.push(`${c.id} 的相關觀念 ${s} 不存在`);
+    for (const f of [].concat(c.fig || [])) if (!['table', 'fields', 'ladder', 'bits'].includes(f.type)) bad.push(`${c.id} 的圖種類 ${f.type} 不認得`);
+  }
+  const owner = new Map();
+  for (const c of CONCEPTS) for (const k of [c.t, ...(c.keys || [])]) { if (owner.has(k) && owner.get(k) !== c.id) bad.push(`關鍵字「${k}」同時屬於 ${owner.get(k)} 與 ${c.id}`); owner.set(k, c.id); }
+  ok(!bad.length && CONCEPTS.length >= 120 && CATS.every((x) => CONCEPTS.some((c) => c.cat === x.id)), `${CONCEPTS.length} 則觀念、${CATS.length} 個分類：id 不重複、相關觀念都存在、關鍵字不衝突${bad.length ? '：' + bad.slice(0, 3).join('；') : ''}`);
+  const none = LEVELS.filter((lv) => !M.levelConcepts(KB_INDEX, CONCEPTS, lv).length);
+  ok(!none.length, `每一關都至少對應到一則觀念${none.length ? '（沒有的：' + none.map((x) => x.id).join('、') + '）' : ''}`);
+  const seg = M.splitTerms(KB_INDEX, 'Trunk 要放行 VLAN 10；Native VLAN 兩端要一樣。VLAN 再出現一次不連結。NATT 不是 NAT-T。');
+  const linked = seg.filter((x) => x.id).map((x) => `${x.text}→${x.id}`);
+  ok(linked.join(' ') === 'Trunk→trunk VLAN→vlan Native VLAN→native-vlan NAT-T→nat-t' && seg.map((x) => x.text).join('') === 'Trunk 要放行 VLAN 10；Native VLAN 兩端要一樣。VLAN 再出現一次不連結。NATT 不是 NAT-T。',
+    '名詞連結：長的關鍵字優先（Native VLAN）、同一個觀念只連第一次、英文前後不能接英數字（NATT 不算 NAT）、文字一個字都不少');
+  ok(!M.splitTerms(KB_INDEX, 'spanning-tree portfast default').some((x) => x.id), '指令形式的小寫關鍵字（spanning-tree、portfast）不在文字裡連結，只給搜尋用');
+  ok(M.searchConcepts(CONCEPTS, '子介面')[0].id === 'subif' && M.searchConcepts(CONCEPTS, 'router-on-a-stick')[0].id === 'subif' && M.searchConcepts(CONCEPTS, 'dora').some((c) => c.id === 'dhcp'), '搜尋：中文名稱、英文說法、關鍵字（DORA）都找得到');
+  const l08 = LEVELS.find((x) => x.id === 'l08');
+  ok(M.levelConcepts(KB_INDEX, CONCEPTS, l08).slice(0, 3).some((c) => c.id === 'subif') && M.conceptLevels(KB_INDEX, CONCEPT.subif, LEVELS).includes(l08), '跨 VLAN 路由那一關會用到「子介面」，「子介面」的文章也列出這一關');
+}
 console.log('\nNetFlow 與 QoS 的 police');
 {
   const sim = await import('../src/engine/sim.js');

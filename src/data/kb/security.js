@@ -1,0 +1,118 @@
+// 知識庫：網路安全
+export const SECURITY = [
+  {
+    id: 'acl', t: 'ACL', en: 'Access control list', cat: 'security', keys: ['ACL', '存取控制清單', 'access-list', 'ip access-group', '隱含拒絕', '萬用遮罩', 'wildcard'], tags: ['ACL', 'established', 'Reflexive ACL', 'time-range', '無狀態過濾'],
+    sum: '路由器上由上往下比對的規則清單：第一條符合的就決定放行或丟掉，後面不再看；最後有一條看不見的「全部拒絕」。',
+    body: [
+      '標準 ACL（1–99）只看來源位址，要放在靠近目的地的地方；延伸 ACL（100–199 或命名）看來源、目的、協定與連接埠，放在靠近來源的地方，早點擋掉。',
+      '套在介面上要指定方向：in 是進入這個介面時比對，out 是離開時。萬用遮罩和子網路遮罩相反：0 表示要一樣、1 表示不管（0.0.0.255 = 前三段要一樣）。',
+      'ACL 沒有狀態：放行了去程，回程一樣要被放行（或用 established、reflexive ACL、ZBF / 防火牆的狀態檢查）。',
+    ],
+    steps: { t: '比對順序', items: ['從第一條開始，依序號由小到大比對。', '第一條符合的：permit 就放行、deny 就丟掉，結束。', '全部都不符合：隱含的 deny any，丟掉。', '介面上沒有套 ACL（或套了不存在的 ACL）：全部放行。'] },
+    pit: ['少了最後的 permit any：只想擋一台，結果全部被擋。', 'permit any 寫在最前面：後面的 deny 永遠不會被比對到。', '方向套反了（in / out）。'],
+    cmd: [{ v: 'Cisco IOS', c: ['ip access-list extended WEB-ONLY', ' permit tcp 10.2.0.0 0.0.0.255 host 10.1.0.10 eq 443', ' deny ip any any log', 'interface Gi0/0/1', ' ip access-group WEB-ONLY in', 'show access-lists'] }],
+    see: ['stateful-fw', 'zbf', 'ports'],
+  },
+  {
+    id: 'stateful-fw', t: '防火牆政策', en: 'Stateful firewall policy', cat: 'security', keys: ['防火牆政策', '有狀態防火牆', '連線表', 'implicit deny'], tags: ['Firewall', '防火牆政策', '有狀態防火牆', 'FortiGate'],
+    sum: '有狀態的防火牆依「從哪個介面到哪個介面、什麼來源到什麼目的、什麼服務」的政策放行新的連線，並記在連線表裡，回程自動放行。',
+    body: [
+      'FortiGate 的政策也是由上往下比對，第一條符合的生效，最後是隱含的拒絕（implicit deny）。政策上決定要不要 NAT、要不要套安全設定檔（網頁過濾、IPS）。',
+      '連線表的項目閒置太久會被移除：之後才出現、不是 SYN 開頭的 TCP 封包，防火牆不會當成新連線，直接丟掉（no session matched）。',
+    ],
+    pit: ['只寫了 internal → wan1 的政策，從 VPN 或 DMZ 來的流量就沒有政策可用。', '放行太寬（any → any、ALL）：最小權限原則是只放行真正需要的服務。'],
+    cmd: [{ v: 'FortiOS', c: ['config firewall policy', ' edit 0', '  set srcintf internal', '  set dstintf wan1', '  set srcaddr all', '  set dstaddr all', '  set action accept', '  set service ALL', '  set nat enable', ' next', 'end', 'diagnose sys session list'] }],
+    see: ['acl', 'dmz', 'nat', 'ngfw'],
+  },
+  {
+    id: 'dmz', t: 'DMZ', en: 'Demilitarized zone', cat: 'security', keys: ['DMZ'], tags: ['DMZ'],
+    sum: '放對外服務（網站、郵件）的獨立網段：外面可以連到 DMZ 的特定服務，但 DMZ 不能隨便連回內網，被攻破時損害有限。',
+    body: ['典型的政策：wan → DMZ 只開服務的連接埠（VIP）；internal → DMZ 管理用；DMZ → internal 原則上禁止（真的需要時只開到資料庫的那一個埠）；DMZ → wan 只開必要的（例如郵件伺服器送信的 TCP 25）。'],
+    see: ['stateful-fw', 'port-forward'],
+  },
+  {
+    id: 'zbf', t: 'ZBF（區域式防火牆）', en: 'Zone-Based Firewall', cat: 'security', keys: ['ZBF', 'zone-pair', 'Zone-Based Firewall', 'inspect'], tags: ['ZBF', 'zone', 'inspect'],
+    sum: 'Cisco 路由器上的有狀態防火牆：介面分進不同的 zone，zone 之間預設全部擋，用 zone-pair 加上 policy-map 決定放行（inspect 會記住連線、回程自動放行）。',
+    body: ['同一個 zone 的介面之間預設互通；介面一放進 zone，跟沒有 zone 的介面之間就完全不通。pass 是無狀態的放行（回程要另外寫），inspect 才有狀態。'],
+    cmd: [{ v: 'Cisco IOS', c: ['zone security INSIDE', 'zone security OUTSIDE', 'class-map type inspect match-any WEB', ' match protocol https', 'policy-map type inspect IN-OUT', ' class type inspect WEB', '  inspect', 'zone-pair security IN-OUT source INSIDE destination OUTSIDE', ' service-policy type inspect IN-OUT', 'interface Gi0/0/1', ' zone-member security INSIDE'] }],
+    see: ['acl', 'stateful-fw'],
+  },
+  {
+    id: 'port-security', t: 'Port Security', en: 'Port security', cat: 'security', keys: ['Port Security', 'port-security', 'sticky'], tags: ['Port Security'],
+    sum: '限制一個交換器埠能出現哪些、幾個 MAC 位址：超過或出現陌生的 MAC 就依設定丟掉、記錄，或把埠關掉（err-disabled）。',
+    body: ['sticky 讓交換器把學到的 MAC 記進設定（要 write memory 才會保存）。違規動作：protect（默默丟掉）、restrict（丟掉並記錄）、shutdown（關掉埠，預設）。'],
+    cmd: [{ v: 'Cisco IOS', c: ['interface Gi0/5', ' switchport mode access', ' switchport port-security', ' switchport port-security maximum 2', ' switchport port-security mac-address sticky', ' switchport port-security violation restrict', 'show port-security interface Gi0/5'] }],
+    see: ['mac-table', 'dot1x', 'l2-attacks'],
+  },
+  {
+    id: 'dhcp-snooping', t: 'DHCP Snooping', en: 'DHCP snooping', cat: 'security', keys: ['DHCP Snooping', 'Rogue DHCP', 'ip dhcp snooping', '信任埠'], tags: ['DHCP Snooping', 'Rogue DHCP', 'L2 安全'],
+    sum: '交換器只讓「信任埠」（往真正的 DHCP 伺服器的方向）送出 DHCP 回應：有人私接的家用路由器發的位址會被擋下來。',
+    body: ['同時建立「哪個 MAC / IP 在哪個埠」的綁定表，給 DAI 與 IP Source Guard 用。往上游的 Trunk 與接伺服器的埠要設成 trust，不然連正常的 DHCP 也被擋。'],
+    cmd: [{ v: 'Cisco IOS', c: ['ip dhcp snooping', 'ip dhcp snooping vlan 10,20', 'interface Gi0/24', ' ip dhcp snooping trust', 'show ip dhcp snooping binding'] }],
+    see: ['dhcp', 'dai'],
+  },
+  {
+    id: 'dai', t: 'DAI 與 ARP 欺騙', en: 'Dynamic ARP Inspection', cat: 'security', keys: ['DAI', 'ARP 欺騙', 'ARP Spoofing', '中間人攻擊'], tags: ['DAI', 'ARP Spoofing', '中間人攻擊'],
+    sum: '攻擊者送假的 ARP 回覆，宣稱自己是閘道，把大家的流量騙過去（中間人攻擊）；DAI 比對 DHCP Snooping 的綁定表，不符合的 ARP 直接丟掉。',
+    body: ['固定 IP 的設備不在 DHCP 的綁定表裡，要用 ARP ACL 另外加進去，或把那個埠設成 trust。'],
+    cmd: [{ v: 'Cisco IOS', c: ['ip arp inspection vlan 10', 'interface Gi0/24', ' ip arp inspection trust'] }],
+    see: ['arp', 'dhcp-snooping'],
+  },
+  {
+    id: 'dot1x', t: '802.1X 與 RADIUS', en: 'IEEE 802.1X / RADIUS', cat: 'security', keys: ['802.1X', 'RADIUS', 'EAP', 'EAP-TLS', 'WPA2-Enterprise', 'dot1x'], tags: ['802.1X', 'RADIUS', 'EAP-TLS', 'WPA2-Enterprise', 'ISE'],
+    sum: '設備接上網路（有線或 Wi-Fi）之後先要驗證：交換器或 AP 把帳號密碼（或憑證）轉給 RADIUS 伺服器，通過了才打開埠，還可以依身分指派 VLAN。',
+    body: [
+      '三個角色：請求者（電腦）、驗證者（交換器 / AP）、驗證伺服器（RADIUS，例如 ISE、NPS）。驗證通過前，埠只讓 EAP 的封包過。',
+      'EAP-TLS 用憑證驗證（最安全）；PEAP 用帳號密碼。交換器和 RADIUS 之間的共用金鑰要一樣，而且要連得到 RADIUS（UDP 1812）。',
+    ],
+    fig: { type: 'ladder', a: '電腦', b: '交換器 → RADIUS', msgs: [{ from: 'b', t: 'EAP 請你表明身分' }, { from: 'a', t: 'EAP 回應：我是 bob（交換器轉給 RADIUS）' }, { from: 'b', t: '驗證（密碼或憑證）…' }, { from: 'b', t: 'RADIUS Access-Accept → 交換器打開埠（可以帶 VLAN）' }] },
+    pit: ['RADIUS 伺服器自己接的埠也開了 802.1X：交換器連不到 RADIUS，誰都驗證不了。'],
+    cmd: [{ v: 'Cisco IOS', c: ['aaa new-model', 'aaa authentication dot1x default group radius', 'dot1x system-auth-control', 'radius server ISE', ' address ipv4 10.0.99.20 auth-port 1812', ' key ****', 'interface Gi0/5', ' authentication port-control auto', ' dot1x pae authenticator'] }],
+    see: ['aaa', 'wifi-security', 'pki'],
+  },
+  {
+    id: 'aaa', t: 'AAA 與 TACACS+', en: 'Authentication, Authorization, Accounting', cat: 'security', keys: ['AAA', 'TACACS+', '權限等級', 'privilege', '方法清單'], tags: ['AAA', 'TACACS+', '權限等級', '方法清單', 'LDAP', 'Active Directory'],
+    sum: '驗證（你是誰）、授權（你能做什麼）、記帳（你做了什麼）：網管登入設備時向 TACACS+ 或 RADIUS 驗證，依身分給權限等級，每個指令都記下來。',
+    body: ['方法清單決定順序：group tacacs+ local 表示先問 TACACS+，伺服器連不到才用本機帳號（伺服器回答「密碼錯」不會改用本機）。權限等級 15 是全部權限、1 只能看。'],
+    cmd: [{ v: 'Cisco IOS', c: ['aaa new-model', 'tacacs server ISE', ' address ipv4 10.0.99.20', ' key ****', 'aaa authentication login default group tacacs+ local', 'aaa authorization exec default group tacacs+ local', 'aaa accounting commands 15 default start-stop group tacacs+'] }],
+    see: ['dot1x', 'hardening'],
+  },
+  {
+    id: 'hardening', t: '設備加固', en: 'Device hardening', cat: 'security', keys: ['設備加固', 'enable secret', 'service password-encryption', 'type 7', 'login local', 'access-class', 'SSH', 'transport input ssh'], tags: ['設備加固', '加固', 'SSH', 'enable secret', 'type 7', 'service password-encryption', 'login local', 'access-class', 'RSA 金鑰', '密碼', '最小權限'],
+    sum: '把網路設備本身保護好：只用 SSH（不用 Telnet）、用 enable secret、限制只有管理網段能登入、關掉不用的服務、記錄登入。',
+    body: [
+      'SSH 的前置條件：hostname、ip domain-name、產生 RSA 金鑰、本機帳號（或 AAA），vty 設 transport input ssh 與 login local。',
+      'enable password 加上 service password-encryption 只是 type 7（可以直接還原），enable secret 才是雜湊（type 5 / 8 / 9）。vty 加 access-class 限定來源網段。',
+    ],
+    cmd: [{ v: 'Cisco IOS', c: ['hostname R1', 'ip domain-name corp.local', 'crypto key generate rsa modulus 2048', 'username admin privilege 15 secret ****', 'enable secret ****', 'ip access-list standard MGMT', ' permit 10.0.99.0 0.0.0.255', 'line vty 0 4', ' transport input ssh', ' login local', ' access-class MGMT in'] }],
+    see: ['aaa', 'oob'],
+  },
+  {
+    id: 'ngfw', t: 'NGFW', en: 'Next-generation firewall', cat: 'security', keys: ['NGFW', '網頁過濾', 'SSL 檢查', 'IPS', '應用程式控管', 'DNS 過濾', '防毒', 'UTM'], tags: ['NGFW', '網頁過濾', 'SSL 檢查', 'IPS', '應用程式控管', 'DNS 過濾', '防毒', 'FortiGuard'],
+    sum: '除了位址與連接埠，還看得懂內容：依網址分類過濾、辨識應用程式、比對攻擊特徵（IPS）、掃毒；HTTPS 的內容要先做 SSL 檢查才看得到。',
+    body: [
+      'SSL 檢查分兩種：certificate inspection 只看憑證與 SNI（知道是哪個網站，看不到內容）；deep inspection 在中間解密再加密，要讓用戶端信任防火牆的 CA，不然瀏覽器會警告。',
+      '這些功能都是掛在防火牆政策上的安全設定檔：沒有套用的政策就不會檢查。',
+    ],
+    see: ['stateful-fw', 'pki'],
+  },
+  {
+    id: 'pki', t: '憑證與 PKI', en: 'Certificates / PKI / TLS', cat: 'security', keys: ['憑證', 'PKI', 'TLS', 'HTTPS', 'CA', '中繼 CA', '中繼憑證', 'SAN', 'Let’s Encrypt', "Let's Encrypt", 'ACME', 'certbot'], tags: ['憑證', 'PKI', 'TLS', 'HTTPS', '中繼 CA', 'SAN', 'fullchain', 'ACME', 'certbot'],
+    sum: 'HTTPS 的伺服器出示憑證證明自己是誰：瀏覽器檢查它是不是由信任的 CA（經過中繼 CA）簽發、名稱（SAN）對不對、是不是在有效期間內、有沒有被撤銷。',
+    body: [
+      '伺服器要送出完整的鏈（自己的憑證 + 中繼憑證，fullchain）；只送自己的那一張，有些用戶端會補抓中繼憑證、有些（API、Java）直接失敗。',
+      '名稱要在 SAN 裡（萬用字元 *.example.com 只涵蓋一層）。用戶端的時鐘錯了，好好的憑證也會被當成過期或還沒生效。',
+      'Let’s Encrypt 的憑證只有 90 天，用 ACME（certbot）自動續約：HTTP-01 驗證要從網際網路連得到伺服器的 TCP 80。',
+    ],
+    steps: { t: '瀏覽器驗證憑證', items: ['名稱：網址要符合憑證的 SAN。', '期間：現在的時間在 Not Before 與 Not After 之間（看自己的時鐘）。', '信任鏈：伺服器憑證 → 中繼 CA → 根 CA，根 CA 要在信任清單裡，每一層的簽章都要對。', '撤銷：CA 沒有把它列進撤銷清單（CRL / OCSP）。'] },
+    pit: ['自動續約失敗沒人發現：防火牆或連接埠轉發擋住了 TCP 80，90 天後網站全部跳警告。'],
+    cmd: [{ v: 'Linux', c: ['sudo certbot certificates', 'sudo certbot renew --dry-run', 'curl -v https://www.example.com'] }],
+    see: ['ntp', 'ngfw', 'dot1x'],
+  },
+  {
+    id: 'l2-attacks', t: '第二層攻擊', en: 'VLAN hopping, MAC flooding', cat: 'security', keys: ['VLAN hopping', 'MAC flooding', '雙重標籤', 'macof'], tags: ['VLAN hopping', 'MAC flooding', '雙重標籤', 'L2 安全'],
+    sum: 'MAC flooding 用大量假的 MAC 塞滿交換器的表，讓流量全部泛洪、可以被側錄；VLAN hopping 假冒交換器談出 Trunk，或用雙重標籤跳進別的 VLAN。',
+    body: ['防禦：存取埠明確設成 access 並關掉 DTP、Native VLAN 用一個沒人用的 VLAN（或加標籤）、沒用的埠 shutdown 並放進沒用的 VLAN、Port Security 限制 MAC 數量。'],
+    see: ['mac-table', 'port-security', 'dtp', 'native-vlan'],
+  },
+];

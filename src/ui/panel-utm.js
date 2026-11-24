@@ -57,7 +57,7 @@ function addCard(ctx, body, { key, title, ph, make }) {
 
 /** 「安全設定檔」分頁 */
 export function utmTab(ctx, body) {
-  body.append(h('p', { class: 'tip', text: '安全設定檔掛在政策上才會作用：網頁過濾依 FortiGuard 的網站類別封鎖、應用程式控管依特徵辨識應用程式、IPS 比對攻擊特徵。HTTPS 要搭配 SSL 檢查（至少 certificate-inspection）才看得到是哪個網站。' }));
+  body.append(h('p', { class: 'tip', text: '安全設定檔掛在政策上才會作用：網頁過濾依 FortiGuard 的網站類別封鎖、應用程式控管依特徵辨識應用程式、IPS 比對攻擊特徵。HTTPS 要搭配 SSL 檢查（至少 certificate-inspection）才看得到是哪個網站。DNS 過濾在查名稱時就把網站換成封鎖頁面的位址，不用解密 HTTPS。' }));
   profileCards(ctx, body, { key: 'wf', title: '網頁過濾', field: 'block', used: 'wf', unit: '個類別', items: Object.keys(FG_CATS).filter((k) => k !== '0').map((k) => [+k, `${CAT_ZH[k]}（${k}）`, FG_CATS[k]]) });
   addCard(ctx, body, { key: 'wf', title: '新增網頁過濾設定檔', ph: '設定檔名稱，例如 corp-wf', make: () => ({ block: [] }) });
   profileCards(ctx, body, { key: 'appList', title: '應用程式控管', field: 'block', used: 'app', unit: '個類別', items: Object.keys(APP_CATS).map((k) => [+k, `${APP_CAT_ZH[k]}（${APP_CATS[k]}）`, `類別 ${k}`]) });
@@ -65,7 +65,7 @@ export function utmTab(ctx, body) {
   profileCards(ctx, body, { key: 'ips', title: 'IPS 感測器', field: 'sev', used: 'ips', unit: '種嚴重程度', items: IPS_SEV.map((s) => [s, `${SEV_ZH[s]}（${s}）`, `嚴重程度 ${s} 的攻擊直接封鎖`]) });
   addCard(ctx, body, { key: 'ips', title: '新增 IPS 感測器', ph: '感測器名稱，例如 protect-web', make: () => ({ sev: ['high', 'critical'] }) });
   profileCards(ctx, body, { key: 'dnsf', title: 'DNS 過濾', field: 'block', used: 'dnsf', unit: '個類別', items: Object.keys(FG_CATS).filter((k) => k !== '0').map((k) => [+k, `${CAT_ZH[k]}（${k}）`, FG_CATS[k]]) });
-  addCard(ctx, body, { key: 'dnsf', title: '新增 DNS 過濾設定檔（不用解密 HTTPS：查名稱時就換成封鎖頁面的位址）', ph: '設定檔名稱，例如 corp-dns', make: () => ({ block: [] }) });
+  addCard(ctx, body, { key: 'dnsf', title: '新增 DNS 過濾設定檔', ph: '設定檔名稱，例如 corp-dns', make: () => ({ block: [] }) });
   profileCards(ctx, body, { key: 'av', title: '防毒', field: 'scan', used: 'av', unit: '種協定', verb: '掃描', items: [['http', 'HTTP 下載', 'config http → set av-scan block'], ['ftp', 'FTP 下載', 'config ftp → set av-scan block']] });
   addCard(ctx, body, { key: 'av', title: '新增防毒設定檔', ph: '設定檔名稱，例如 corp-av', make: () => ({ scan: ['http'] }) });
 }

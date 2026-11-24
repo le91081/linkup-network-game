@@ -6,6 +6,7 @@ import { OPTICS, FIBER } from '../engine/optics.js';
 import { fmtIp } from '../engine/ip.js';
 import { pendingOf, fmtDur } from '../engine/sim.js';
 import { renderSandbox } from './sandbox.js';
+import { kbState, kbView, missionTabs, linkText, levelKb, openConcept } from './kb.js';
 import { LEVEL_CERTS } from '../data/certs.js';
 import { openQuiz, openCerts, openLevelQuiz, hasLevelQuiz, updateReviewBadge } from './quiz.js';
 import { openRacks } from './rackview.js';
@@ -56,9 +57,13 @@ export function updateHistory(app) {
 // ───────────── 任務面板 ─────────────
 export function renderMission(app) {
   const lv = app.level;
-  if (lv.sandbox) return renderSandbox(app);
-  const root = app.el.mission;
-  const keep = root.querySelector('.m-scroll')?.scrollTop || 0;
+  const root = app.el.mission, k = kbState(app);
+  if (k.tab === 'kb') {
+    root.replaceChildren(missionTabs(app), kbView(app), !lv.sandbox && missionFoot(app));
+    return;
+  }
+  if (lv.sandbox) { renderSandbox(app); root.prepend(missionTabs(app)); return; }
+  const keep = root.querySelector('.m-scroll:not(.kb-scroll)')?.scrollTop || 0;
   let anyStale = false;
   const objs = lv.objectives.map((o, i) => {
     const r = app.results[i];
@@ -78,18 +83,22 @@ export function renderMission(app) {
     LEVEL_CERTS[lv.id] && h('div', { class: 'chips', title: '這一關對應的證照考試條目（點一下開啟證照地圖）', onclick: () => openCerts(app) },
       LEVEL_CERTS[lv.id].slice(0, 4).map((t) => h('span', { class: 'chip cert', text: t })),
       LEVEL_CERTS[lv.id].length > 4 && h('span', { class: 'chip cert', text: `+${LEVEL_CERTS[lv.id].length - 4}` })),
-    h('p', { class: 'brief', text: lv.brief }),
+    h('p', { class: 'brief' }, linkText(lv.brief)),
     lv.given && h('h3', { class: 'sec', text: '已知資訊' }),
     lv.given && h('div', { class: 'given' }, lv.given.map(([k, v]) => h('div', { class: 'g-row' }, h('span', { text: k }), h('b', { class: 'mono', text: v, title: '點一下複製', onclick: copy(v) })))),
     h('h3', { class: 'sec', text: '任務目標' }),
     h('div', { class: 'objs' }, objs),
     anyStale && h('div', { class: 'stale-note', text: '設定已經變更，變淡的結果需要重新測試。' }),
   );
-  root.replaceChildren(scroll,
-    h('div', { class: 'm-foot' },
-      button(app.running ? '測試中… 按空白鍵快轉' : '執行測試', { ic: app.running ? 'fast' : 'play', kind: 'primary big', onclick: () => (app.running ? app.fastForward() : app.run()) }),
-      h('small', { text: '點單一目標可以只測試那一項' })));
+  root.replaceChildren(missionTabs(app), scroll, missionFoot(app));
   scroll.scrollTop = keep;
+}
+
+/** 任務面板最下面：執行測試（知識庫分頁也看得到） */
+function missionFoot(app) {
+  return h('div', { class: 'm-foot' },
+    button(app.running ? '測試中… 按空白鍵快轉' : '執行測試', { ic: app.running ? 'fast' : 'play', kind: 'primary big', onclick: () => (app.running ? app.fastForward() : app.run()) }),
+    h('small', { text: '點單一目標可以只測試那一項' }));
 }
 
 // ───────────── 右側：沒有選取設備時顯示學習筆記 ─────────────
@@ -100,7 +109,10 @@ export function renderGuide(app, root) {
     h('div', { class: 'p-head' }, h('div', { class: 'p-badge', text: '學習筆記' }),
       h('div', { class: 'p-title' }, h('h2', { text: '這一關的新觀念' }), h('p', { class: 'muted', text: '點場景中的設備，這裡會變成它的設定頁面' }))),
     h('div', { class: 'p-body' },
-      lv.learn.map((c) => h('div', { class: 'card learn' }, h('b', { text: c.t }), h('p', { text: c.d }))),
+      lv.learn.map((c) => h('div', { class: 'card learn' }, h('b', { text: c.t }), h('p', null, linkText(c.d)))),
+      levelKb(lv).length > 0 && h('div', { class: 'card kb-more' }, h('div', { class: 'card-h' }, icon('book', 15), h('b', { text: '想知道更多？' })),
+        h('p', { class: 'muted', text: '底線的名詞滑鼠移上去看摘要、點一下開完整的說明。這一關用到的觀念：' }),
+        h('div', { class: 'chips' }, levelKb(lv).slice(0, 8).map((c) => h('button', { type: 'button', class: 'chip kb-see', title: c.sum, onclick: () => openConcept(app, c.id) }, c.t)))),
       h('div', { class: 'card' }, h('div', { class: 'card-h' }, h('b', { text: '操作方式' })),
         h('div', { class: 'keys' },
           h('div', null, h('kbd', { text: '拖曳設備' }), '拉到另一台設備上放開 → 接上網路線'),
@@ -443,7 +455,7 @@ export function openHints(app) {
   const draw = () => modal([
     h('h2', { text: '提示' }),
     h('p', { class: 'muted', text: app.hintsShown ? '每看一個提示會少一顆星，最少保留一顆。' : '卡住了嗎？建議先按「執行測試」，看封包追蹤卡在哪一站。每看一個提示會少一顆星，最少保留一顆。' }),
-    lv.hints.slice(0, app.hintsShown).map((t, i) => h('div', { class: 'hint-item' }, h('b', { text: i + 1 }), h('span', { text: t }))),
+    lv.hints.slice(0, app.hintsShown).map((t, i) => h('div', { class: 'hint-item' }, h('b', { text: i + 1 }), h('span', null, linkText(t)))),
     // 提示都看完了還是卡住：可以看參考解法（演練與自訂關卡沒有參考解法）
     app.hintsShown >= lv.hints.length && typeof lv.solve === 'function' && !lv.drill && !lv.custom
       && h('p', { class: 'muted', style: { fontSize: '12.5px' }, text: '提示都看完了。還是卡住的話，可以看參考解法改了哪些地方，或讓它示範一次（示範不計星）。' }),
@@ -508,4 +520,11 @@ export function openComplete(app, stars, sc) {
           : lv.custom ? button('自訂關卡', { ic: 'grid', kind: 'primary', onclick: () => openCustomLevels(app) })
             : button('回到關卡選單', { ic: 'grid', kind: 'primary', onclick: () => openLevels(app) })),
   ]);
+}
+
+/** 左側面板切換「任務」與「知識庫」（K 鍵） */
+export function toggleKb(app) {
+  const k = kbState(app);
+  k.tab = k.tab === 'kb' ? 'mission' : 'kb';
+  renderMission(app);
 }

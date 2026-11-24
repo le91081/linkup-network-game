@@ -152,7 +152,7 @@ export const CATALOG = {
   },
   ont: {
     kind: 'homerouter', shape: 'router-s', vendor: 'ZTE', title: 'ZTE F670L 光纖數據機 (GPON ONT)', ont: true,
-    tagline: '電信業者的光纖數據機 · PON + 4 LAN · 路由模式（撥接、NAT、DHCP）/ 橋接模式',
+    tagline: '電信業者的光纖數據機 · PON + 4 LAN · 路由 / 橋接模式',
     ports: [rj('wan', 'PON（光纖）'), ...seq(4, (i) => rj('lan' + i, 'LAN ' + i))],
   },
   hex: {
@@ -184,25 +184,25 @@ export const CATALOG = {
   },
   patch24: {
     kind: 'patch', shape: 'switch-r', vendor: '配線架', title: '24 埠 Cat6 配線架 (Patch Panel)',
-    tagline: '被動元件：前面第 n 孔和後面第 n 孔直接相通（後面打線到牆上的網路孔，前面用跳線接交換器）',
+    tagline: '被動元件：前後同一孔直接相通',
     ports: [...seq(24, (i) => rj('f' + i, '前 ' + i)), ...seq(24, (i) => rj('r' + i, '後 ' + i))],
   },
   metroe: {
     kind: 'mswitch', shape: 'switch-r', vendor: '電信業者', title: 'Metro Ethernet 專線（E-Line）', evc: true,
-    tagline: '電信業者的第二層專線：兩個據點之間的 EVC，客戶端的介面叫 UNI', ports: [rj('uni-a', 'UNI A'), rj('uni-b', 'UNI B')],
+    tagline: '電信業者的點對點第二層專線（客戶端介面叫 UNI）', ports: [rj('uni-a', 'UNI A'), rj('uni-b', 'UNI B')],
   },
   metroelan: {
     kind: 'mswitch', shape: 'switch-r', vendor: '電信業者', title: 'Metro Ethernet 專線（E-LAN）', evc: true,
-    tagline: '電信業者的多點第二層專線：好幾個據點在同一個廣播網域（像一台很大的交換器）', ports: [rj('uni-a', 'UNI A'), rj('uni-b', 'UNI B'), rj('uni-c', 'UNI C'), rj('uni-d', 'UNI D')],
+    tagline: '電信業者的多點第二層專線（像一台很大的交換器）', ports: [rj('uni-a', 'UNI A'), rj('uni-b', 'UNI B'), rj('uni-c', 'UNI C'), rj('uni-d', 'UNI D')],
   },
   cx6100: {
     kind: 'mswitch', shape: 'switch-r', vendor: 'Aruba', title: 'Aruba CX 6100 24G', aoscx: true, lldp: true,
-    tagline: '網管型 L2 交換器 · 24×GE + 4×10G SFP+ · AOS-CX（只講 LLDP，不講 CDP、不會 DTP）',
+    tagline: '網管型 L2 交換器 · 24×GE + 4×10G SFP+ · AOS-CX',
     ports: [...seq(24, (i) => rj('1/1/' + i)), ...seq(4, (i) => sfp('1/1/' + i), 25)],
   },
   ex2300: {
     kind: 'mswitch', shape: 'switch-r', vendor: 'Juniper', title: 'Juniper EX2300-24T', junos: true, lldp: true,
-    tagline: '網管型 L2 交換器 · 24×GE + 4×10G SFP+ · Junos（commit 才生效、不會 DTP）',
+    tagline: '網管型 L2 交換器 · 24×GE + 4×10G SFP+ · Junos',
     ports: [...seq(24, (i) => rj('ge-0/0/' + i), 0), ...seq(4, (i) => sfp('xe-0/1/' + i), 0)],
   },
   c9300: {

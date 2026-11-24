@@ -11,6 +11,7 @@ export const SHORTCUTS = [
   ['/', '游標移到終端機或 CLI 的輸入列'],
   ['T', '切換 3D 場景與 2D 邏輯拓撲圖'],
   ['H', '提示'],
+  ['K', '左側切換「任務」與「知識庫」'],
   ['L', '關卡清單'],
   ['M', '音效開 / 關'],
   ['空白鍵', '測試進行中：快轉封包動畫'],
@@ -59,6 +60,7 @@ export function installShortcuts(app, hud) {
     if (low === 't') { app.toggle2d(); e.preventDefault(); }
     else if (low === 'h' && app.level && (app.level.hints || []).length) { hud.openHints(app); e.preventDefault(); }
     else if (low === 'l') { hud.openLevels(app); e.preventDefault(); }
+    else if (low === 'k') { hud.toggleKb(app); e.preventDefault(); }
     else if (low === 'm') { toast(toggleSound(app) ? '音效：開' : '音效：關'); e.preventDefault(); }
   });
 }

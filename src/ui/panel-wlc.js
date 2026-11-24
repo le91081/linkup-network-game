@@ -66,7 +66,7 @@ export function apsTab(ctx, body) {
     return h('div', { class: 'qos-pm' },
       h('div', { class: 'line' }, h('b', { text: ap.name }), h('span', { class: 'mono muted', text: ap.ifaces[0].rt.ip != null ? fmtIp(ap.ifaces[0].rt.ip) : '沒有 IP' }), h('span', { style: { marginLeft: 'auto' } }, st)),
       rec.joined && mine ? h('div', { class: 'kv ok' }, kv('找到控制器的方式', rec.how || '—'), kv('模式', ap.lwap.mode === 'flex' ? 'FlexConnect' : 'Local'),
-        ap.rt.rrm && kv('頻道（RRM 自動指定）', `2.4 GHz：${ap.rt.rrm.ch24}　5 GHz：${ap.rt.rrm.ch5}`), kv('用戶端', `${n} 台`))
+        ap.rt.rrm && kv('頻道（RRM 自動指定）', `2.4 GHz：${ap.rt.rrm.ch24} · 5 GHz：${ap.rt.rrm.ch5}`), kv('用戶端', `${n} 台`))
         : note(mine ? 'muted' : 'warn', rec.why || c.why || '還沒有加入'));
   }))));
 }

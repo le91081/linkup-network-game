@@ -173,6 +173,8 @@ npm run build    # 輸出到 dist/
 
 ## 學習輔助
 
+- **知識庫**：左側面板的第二個分頁（K 鍵切換），不會擋住場景，「執行測試」也一直在下面。129 則觀念、技術與演算法的說明，分成 11 類（網路基礎、IP 服務、交換與 VLAN、路由、網路安全、VPN 與廣域網路、無線、IPv6、實體層與機房、高可用與維運、自動化雲端與虛擬化）。每一則有一句話的摘要、說明、運作流程或演算法的步驟（STP 選根橋、OSPF 的 SPF、EIGRP 的 DUAL、BGP 挑路、traceroute、最長前綴比對…）、圖（封包欄位、訊息往來、對照表、子網路的 32 個位元）、常見的錯誤、各家設備的指令、相關的觀念與「在這些關卡練習」。最上面是這一關會用到的觀念，也可以搜尋（中文、英文縮寫、關鍵字都可以）。
+- **名詞連結**：關卡說明、學習筆記與提示裡提到的觀念有點狀底線，滑鼠移上去看一句話的摘要，點一下在知識庫打開完整的說明（提示視窗會自動關掉）。右側的學習筆記下面另外列出這一關用到的觀念。
 - **新手導覽**：第一次進第 1-1 關會一步一步帶著做（接線 → 點設備 → 設定 IP → 執行測試），每一步看遊戲真正的狀態自動前進；「說明」裡可以重看。
 - **2D 邏輯拓撲圖**：頂端列的按鈕切換。每台設備的位址、線上兩端的埠與 VLAN、線路狀態、無線與虛擬連線、VPN 通道，以及最近一次測試走過的路徑；滾輪縮放、拖曳平移、雙擊回到全圖，點設備開啟設定。
 - **文件產出**：2D 拓撲圖上方的「匯出圖片」把目前的拓撲圖（含位址、標註與關卡名稱）存成 SVG（向量，可以用 draw.io、Visio、Inkscape 再修改）或兩倍解析度的 PNG；「IP 位址表」列出每台設備每個介面的位址、網段、來源（固定 / DHCP）、預設閘道、VLAN、VRF 與說明，另有網段摘要，可以複製後直接貼到試算表或下載 CSV（Excel 打得開的 UTF-8）。
@@ -569,7 +571,7 @@ src/engine/   模擬引擎（不依賴瀏覽器，可直接用 Node 測試）
   dns.js          DNS 伺服器的記錄、TTL 與用戶端快取
   sim6.js         IPv6：SLAAC 與 DHCPv6（RA 的 M / O / A 旗標、relay、binding）、鄰居探索、靜態路由與 OSPFv3、IPv6 ACL、ICMPv6 / TCP / UDP
 src/levels/   關卡定義：設備、初始設定、任務目標、提示、參考解法（trouble.js 是故障排除章，maint.js 是維運章，voip.js 是語音與 QoS 章，routing.js 是進階路由章，ipv6.js 是 IPv6 章的補充，vpn2.js 是多站台 VPN，wireless.js 是無線控制器章，auto.js 是自動化章，cloud.js 是雲端章，virtual.js 是虛擬化章（vSwitch、VRF、容器），team.js 是 ESXi 的 NIC teaming，lb.js 是負載平衡器，stack.js 是交換器堆疊，mesh.js 是 Wi-Fi mesh，vpc.js 是 Nexus 的 vPC，tls.js 是 HTTPS 憑證，mtu.js 是 Jumbo Frame 與 PMTUD，redist.js 是路由重分配與政策路由，routing2.js 是 OSPF 的 stub / NSSA、iBGP、VRF 裡的 OSPF 與路由洩漏，tunnels.js 是 GRE、GRE over IPsec、VTI、DMVPN 與 NAT-T，ipv6b.js 是 AAAA 與雙協定、IPv6 經過 VPN，ha.js 是 BFD 與 GLBP，ops2.js 是 NetFlow 與 police，l2sec.js 是第二層的攻擊與防護（MAC flooding、雙重標籤、Storm Control、Private VLAN、RA Guard），resil.js / audit.js / trouble2.js 是各章的補充關卡）
-src/data/     題庫與證照對照表
+src/data/     題庫、證照對照表與知識庫（data/kb：每一類一個檔案，match.js 是名詞連結與搜尋）
 src/scene/    three.js 場景、設備模型、網路線、無線涵蓋範圍與封包動畫
 src/ui/       設定面板、終端機、CLI、任務面板、測驗、模擬考、故障演練、評分、自由模式與關卡編輯器、對話框
 test/         對每個關卡套用參考解法，並用負面案例確認引擎真的會擋

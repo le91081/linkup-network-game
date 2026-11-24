@@ -14,6 +14,8 @@ import * as hud from './ui/hud.js';
 import { renderDevicePanel } from './ui/panel.js';
 import { toast, sleep, h, button } from './ui/dom.js';
 import { SANDBOX, installSandbox, sandboxObjectives } from './ui/sandbox.js';
+import { installKb } from './ui/kb.js';
+import { installTables } from './ui/tables.js';
 import { isIos, iosDirty, saveStartup, restoreStartup } from './engine/ios.js';
 import { makeDrill, openDrillComplete, fmtSecs } from './ui/drill.js';
 import { scoreOf } from './ui/score.js';
@@ -514,6 +516,8 @@ app.scene = new Scene3D(app.el.stage, {
   },
 });
 installSandbox(app, { renderMission: () => hud.renderMission(app) });
+installTables(document.getElementById('panel'));
+installKb(app, { renderMission: () => hud.renderMission(app), levelNo: hud.levelNo, closeModal: hud.closeModal });
 hud.initClock(app);
 
 // 模擬時間跟著真實時間走（可以暫停或加速）。對話框開著、或分頁在背景時暫停

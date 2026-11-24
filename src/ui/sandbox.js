@@ -71,7 +71,7 @@ export function checkImport(data) {
 
 export function renderSandbox(app) {
   const lv = app.level, root = app.el.mission;
-  const keep = root.querySelector('.m-scroll')?.scrollTop || 0;
+  const keep = root.querySelector('.m-scroll:not(.kb-scroll)')?.scrollTop || 0;
   const devs = Object.values(app.state.devices).filter((d) => d.ifaces.length);
   const sbx = (app.sbx ||= { type: 'ping' });
   if (!devs.some((d) => d.id === sbx.from)) sbx.from = devs[0]?.id;
