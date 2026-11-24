@@ -1330,7 +1330,9 @@ const routeTail = (st, r) => {
   const m = `[${r.ad}/${r.metric}] via ${fmtIp(r.via)}`;
   if (r.type === 'O') return `${m}, ${rtAge(st, r)}, ${longIf(r.iface.label)}`;
   if (r.type === 'E') return `[${r.ad}/${r.real ?? r.metric}] via ${fmtIp(r.via)}, ${rtAge(st, r)}, ${longIf(r.iface.label)}`; // variance 的路：路由表照最佳的分流，顯示自己的 metric
-  if (r.type === 'B') return `[${r.ad}/${r.metric}] via ${fmtIp(r.bnh ?? r.via)}, ${rtAge(st, r)}`; // BGP 的下一站要再查一次路由表（遞迴），所以不寫介面
+  // 同一台 PE 上從另一個 VRF 匯入的直連網段（route-target 對得上）：和 IOS 一樣寫成 directly connected，後面是來源的介面
+  if (r.type === 'B' && r.leakVrf && r.via == null) return `is directly connected, ${rtAge(st, r)}, ${longIf(r.iface.label)}`;
+  if (r.type === 'B') return `[${r.ad}/${r.metric}] via ${fmtIp(r.bnh ?? r.via)}${r.leakVrf ? ` (${r.leakVrf})` : ''}, ${rtAge(st, r)}`; // BGP 的下一站要再查一次路由表（遞迴），所以不寫介面
   if (r.type === 'H') return `${m}, ${rtAge(st, r)}, ${longIf(r.iface.label)}`;
   if (r.type === 'R') return `${m}, ${hms(r.ripAge || 0)}, ${longIf(r.iface.label)}`; // RIP：距離上一次收到更新的時間（每 30 秒歸零）
   if (r.via == null && r.iface) return `is directly connected, ${longIf(r.iface.label)}`; // ip route … Tunnel0：只寫出口介面

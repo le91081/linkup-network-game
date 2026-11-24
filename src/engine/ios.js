@@ -1962,7 +1962,7 @@ export function iosSession(getDev, getState, who = null) {
         return undefined;
       }
       for (const i of d.ifaces) if (!i.vrf) i.ospf = false;
-      d.ospfDefault = false; d.ospfNets = [];
+      d.ospfDefault = false; delete d.ospfDefOpt; d.ospfNets = [];
       for (const k of ['ospfRedist', 'ospfRid', 'ospfAreas', 'ospfRanges', 'ospfAreaAuth', 'ospfPassive', 'ospfPassiveDefault', 'ospfNoPassive', 'ospfRefBw', 'ospfMaxPaths']) delete d[k];
       return undefined;
     }],
@@ -2319,9 +2319,13 @@ export function iosSession(getDev, getState, who = null) {
     ['track <n> interface <if> line-protocol', ([n, name]) => {
       const e = needRouting(); if (e) return e;
       if (!/^\d+$/.test(n) || +n < 1 || +n > 1000) return err('track 物件的編號是 1 – 1000');
-      const i = ifByName(name);
-      if (isErr(i)) return i;
-      (dev().track ||= {})[+n] = { type: 'iface', iface: i.id };
+      // 和 IOS 一樣可以追蹤任何介面：第三層介面，或還是交換埠的實體埠（看它的線有沒有通）。
+      // running-config 裡 track 排在 interface 前面，貼回去的時候那個埠還沒 no switchport
+      const t = resolveIf(dev(), name);
+      if (isErr(t)) return t;
+      const id = t.iface ? t.iface.id : t.port ? t.port.id : null;
+      if (!id) return err(`${t.name} 不能追蹤`);
+      (dev().track ||= {})[+n] = { type: 'iface', iface: id };
       enter('track', +n);
       return undefined;
     }],
@@ -2984,8 +2988,22 @@ export function iosSession(getDev, getState, who = null) {
         for (const i of d.ifaces) { const n = staticNet(i); if ((i.vrf || '') === v && i.ospf && n && netOf(n.ip, bits) === n0) { i.ospf = false; off++; } }
         return c.ospfNets.length < had || off ? undefined : err('沒有這一條 network 敘述');
       }],
-      ['default-information originate [...]', () => { oc().ospfDefault = true; }],
-      ['no default-information originate', () => { oc().ospfDefault = false; }],
+      ['default-information originate [...]', ([rest]) => {
+        // default-information originate [always] [metric <n>] [metric-type <1|2>]
+        const t = String(rest || '').trim().split(/\s+/).filter(Boolean), o = {};
+        for (let k = 0; k < t.length; k++) {
+          const w = t[k].toLowerCase();
+          if (w === 'always') o.always = true;
+          else if (w === 'metric') { const n = +t[++k]; if (!(Number.isInteger(n) && n >= 0 && n <= 16777214)) return err('metric 的範圍是 0 – 16777214'); o.metric = n; }
+          else if (w === 'metric-type') { const n = +t[++k]; if (n !== 1 && n !== 2) return err('metric-type 只有 1 或 2'); o.type = n; }
+          else return err("% Invalid input detected at '^' marker.（可用的選項：always、metric <n>、metric-type <1|2>）");
+        }
+        const c = oc();
+        c.ospfDefault = true;
+        if (Object.keys(o).length) c.ospfDefOpt = o; else delete c.ospfDefOpt;
+        return undefined;
+      }],
+      ['no default-information originate', () => { oc().ospfDefault = false; delete oc().ospfDefOpt; }],
       ['redistribute <src> [...]', ([src, rest]) => {
         const o = redistArgs(src, rest, 'ospf');
         if (isErr(o)) return o;
@@ -5323,7 +5341,7 @@ export function runningConfig(state, dev) {
     for (const n of stmts) o.push(` network ${fmtIp(n.net)} ${wild(n.bits)} area ${+(n.area || 0)}`);
     for (const i of os) o.push(i.bind.t === 'loop' ? ` network ${fmtIp(i.rt.ip)} 0.0.0.0 area ${+(i.ospfArea || 0)}` : ` network ${fmtIp(netOf(i.rt.ip, i.rt.bits))} ${wild(i.rt.bits)} area ${+(i.ospfArea || 0)}`);
     if (c.ospfMaxPaths) o.push(` maximum-paths ${c.ospfMaxPaths}`);
-    if (c.ospfDefault) o.push(' default-information originate');
+    if (c.ospfDefault) { const x = c.ospfDefOpt || {}; o.push(' default-information originate' + (x.always ? ' always' : '') + (x.metric != null ? ` metric ${x.metric}` : '') + (x.type ? ` metric-type ${x.type}` : '')); }
     o.push('!');
   }
   if (dev.rip) {

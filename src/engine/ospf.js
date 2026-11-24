@@ -3,7 +3,7 @@
 //
 // 設定（IOS）：
 //   d.ospfNets = [{ net, bits, area }]   router ospf 底下的 network 敘述
-//   d.ospfRid、d.ospfDefault、d.ospfRefBw（auto-cost reference-bandwidth，Mbps）、d.ospfMaxPaths
+//   d.ospfRid、d.ospfDefault（＋ d.ospfDefOpt = { always?, metric?, type? }）、d.ospfRefBw（auto-cost reference-bandwidth，Mbps）、d.ospfMaxPaths
 //   d.ospfPassive = [介面 id]、d.ospfPassiveDefault（passive-interface default）、d.ospfNoPassive = [介面 id]
 //   d.ospfRanges = [{ area, net, bits }]（area x range）、d.ospfAreaAuth = { 區域: 'md5' | 'plain' }
 //   d.ospfAreas = { 區域: { stub?, nssa?, noSum?, cost?, nssaDef?, nssaDefMetric?, nssaDefType?, noRedist? } }
@@ -235,6 +235,8 @@ const V4 = (ospfOn) => ({
   netOf,
   routes: (v) => v.dev.rt.routes,
   originates: (v) => !!(ospfProc(v.dev, v.vrf) || {}).ospfDefault,
+  // default-information originate 的選項：{ always, metric, type }
+  defOpt: (v) => (ospfProc(v.dev, v.vrf) || {}).ospfDefOpt || {},
   externals: (v) => ospfExternals(v.dev, ospfOn, v.vrf),
   // Type-7 的 forwarding address：ASBR 在那個 NSSA 裡的位址（Loopback 優先，再來是最大的介面位址）
   fa: (v, area) => {
@@ -268,6 +270,7 @@ const V6 = {
   netOf: net6,
   routes: (v) => v.dev.rt.routes6,
   originates: (v) => !!(v.dev.ospf6 || {}).default,
+  defOpt: () => ({}),
   externals: () => [],
   areaType: () => 'normal', areaCfg: () => ({}), fa: () => null,
 };
@@ -659,7 +662,10 @@ function computeOspfAf(state, af) {
   const ownDefault = (d) => af.routes(d).some((r) => (r.vrf || '') === d.vrf && r.bits === 0 && !r.bad && r.type !== 'O');
   const normalAreas = (id) => areasOf(id).filter((a) => atype(id, a) === 'normal');
   const nssaAreas = (id) => areasOf(id).filter((a) => atype(id, a) === 'nssa');
-  const extsOf = (d) => [...(af.originates(d) && ownDefault(d) ? [{ net: af.zero, bits: 0, metric: 1, type: 2, tag: 0, def: true }] : []), ...af.externals(d)];
+  // 預設路由：自己的路由表裡要有一條（不是 OSPF 學來的）才送，加了 always 就一定送；metric 預設 1、E2。
+  // 兩個出口各送一條時，E2 只比這個 metric：主線設小的、備援設大的
+  const defOf = (d) => { const o = af.defOpt(d); return { net: af.zero, bits: 0, metric: o.metric ?? 1, type: o.type ?? 2, tag: 0, def: true }; };
+  const extsOf = (d) => [...(af.originates(d) && (ownDefault(d) || af.defOpt(d).always) ? [defOf(d)] : []), ...af.externals(d)];
   const extList = new Map(nodes.map((d) => [d, extsOf(d)]));
   // 送得出 Type-5 的 ASBR：至少要有一個一般區域（骨幹也算）。只在 stub 區域裡的路由器重分配了也送不出去
   const asbr5 = nodes.filter((d) => extList.get(d).length && normalAreas(d.id).length);

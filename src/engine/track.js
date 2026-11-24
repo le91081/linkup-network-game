@@ -36,7 +36,9 @@ export function trackUp(state, d, n) {
   if (!t) return { up: false, why: `track ${n} 沒有定義`, missing: true };
   if (t.type === 'iface') {
     const i = d.ifaces.find((x) => x.id === t.iface);
-    const up = !!(i && i.rt && i.rt.link && i.rt.active !== false && !i.shut);
+    // 還是交換埠的實體埠（沒有第三層介面）：線有通、沒有 shutdown 就是 up
+    const pc = !i && d.sw && d.sw.ports ? d.sw.ports[t.iface] : null;
+    const up = i ? !!(i.rt && i.rt.link && i.rt.active !== false && !i.shut) : !!(pc && !pc.shut && state.rt && state.rt.links && state.rt.links[d.id + ':' + t.iface]);
     return { up, why: up ? '' : `${i ? longIf(i.label) : t.iface} 的線路協定 down` };
   }
   const op = (d.sla || {})[t.sla];

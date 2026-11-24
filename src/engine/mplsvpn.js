@@ -11,6 +11,7 @@
 //   每台 PE 把 VRF 裡的直連 / 靜態路由（有 redistribute 的）帶上 RD 與匯出的 RT，變成 VPNv4 路由；
 //   兩台 PE 之間的 BGP 是 Established、兩端都在 vpnv4 啟用了對方：對面就收到這些路由，
 //   RT 和自己某個 VRF 的匯入 RT 對得上才放進那個 VRF 的路由表（type 'B'，下一站是對面 PE 的 Loopback）。
+//   同一台 PE 上的兩個 VRF 之間也一樣照 RT 匯入（route.leakVrf：來源的 VRF；直接從那個 VRF 的介面送出去，不貼標籤）。
 // 轉送（sim/forward.js）：VRF 的路由帶著 mpls 的話，封包貼上 VPN 標籤、在全域的路由表走到對面的 PE；
 //   路上每一段兩端都要有 mpls ip（LDP 才有標籤），不然在那一站被丟掉。
 import { parseIp, fmtIp, netOf } from './ip.js';
@@ -109,12 +110,25 @@ export function computeVpn(state, { lookupRoute }) {
       }
     }
   }
+  // 同一台 PE 上的 VRF 之間：一個 VRF 匯出的路，RT 和「同一台」另一個 VRF 的匯入清單對得上，一樣會被匯進去
+  // （在 BGP 裡完成，封包不出這台設備、也不貼標籤）。共用服務的 VRF 和客戶接在同一台 PE 時就是靠這個
+  for (const d of pes) {
+    for (const r of d.rt.vpn.sent) {
+      const src = (d.rt.routes || []).find((x) => !x.bad && !x.mpls && !x.leakVrf && (x.vrf || '') === r.vrf && x.net === r.net && x.bits === r.bits && (x.type === 'C' || x.type === 'S'));
+      if (!src) continue;
+      for (const [v, cfg] of Object.entries(d.vrfs || {})) {
+        if (v === r.vrf || !(cfg.rtImp || []).some((x) => r.rts.includes(x))) continue;
+        d.rt.routes.push({ net: r.net, bits: r.bits, via: src.via ?? null, iface: src.iface, type: 'B', ad: 20, metric: 0, vrf: v, leakVrf: r.vrf });
+        (r.localInto ||= []).push(v);
+      }
+    }
+  }
 }
 
 /** show bgp vpnv4 unicast all 的資料：自己送出的（下一站 0.0.0.0）加上收到的 */
 export function vpnTable(d) {
   const v = d.rt && d.rt.vpn;
   if (!v) return null;
-  return [...v.sent.map((r) => ({ ...r, nh: 0, local: true, into: [r.vrf] })), ...v.table];
+  return [...v.sent.map((r) => ({ ...r, nh: 0, local: true, into: [r.vrf, ...(r.localInto || [])] })), ...v.table];
 }
 export const fmtPfx = (r) => `${fmtIp(netOf(r.net, r.bits))}/${r.bits}`;
