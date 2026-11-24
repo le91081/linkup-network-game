@@ -27,7 +27,7 @@ npm run build    # 輸出到 dist/
 ### 瀏覽器端測試（Playwright）
 
 `npm run test:e2e` 用電腦上已經安裝的 Google Chrome（`channel: 'chrome'`）跑，不另外下載瀏覽器；
-安裝套件時可以設 `PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1`。測試會自己開一個 4519 埠的開發伺服器，
+安裝套件時可以設 `PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1`。測試會先建置一份（`vite build --mode e2e` → `dist-e2e/`，附 source map、不註冊 service worker），再開一個 4519 埠的伺服器提供它（`PW_DEV=1` 改用開發伺服器直接測原始碼；`PW_WORKERS=4` 指定平行數，預設是邏輯核心數的一半、最多 8 個；失敗的測試會自動重跑一次並錄下 trace，重跑才過的一樣算失敗），
 和平常玩的 5173 是不同的來源，所以不會動到你的遊戲進度。
 
 - `e2e/levels.spec.mjs`：每一關都打開、每台設備的每個分頁都畫一次，執行目標、套用參考解法、再執行到跳出過關視窗；

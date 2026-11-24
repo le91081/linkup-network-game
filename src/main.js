@@ -23,6 +23,7 @@ import { customLevel } from './ui/editor.js';
 import { renderTopo, bindTopoView, topoPacket, topoPulse } from './ui/topo2d.js';
 import { exportTopoDialog, ipPlanDialog } from './ui/docexport.js';
 import { tutorialTick } from './ui/tutorial.js';
+import { rackSlots } from './engine/rack.js';
 
 // 網址加上 ?profile=名稱 就會用另一份獨立的進度（多人共用一台電腦，或測試時不想動到自己的存檔）
 const PROFILE = (new URLSearchParams(location.search).get('profile') || '').replace(/[^\w-]/g, '').slice(0, 24);
@@ -620,8 +621,8 @@ window.addEventListener('keydown', (e) => {
 // 其他快捷鍵（? 看清單）
 installShortcuts(app, hud);
 
-// 離線使用 (PWA)：正式建置才註冊 service worker（開發伺服器、Claude Artifact 不用）
-if (import.meta.env.PROD && import.meta.env.MODE !== 'artifact' && 'serviceWorker' in navigator && /^https?:$/.test(location.protocol)) {
+// 離線使用 (PWA)：正式建置才註冊 service worker（開發伺服器、Claude Artifact、瀏覽器端測試用的建置不用）
+if (import.meta.env.PROD && import.meta.env.MODE !== 'artifact' && import.meta.env.MODE !== 'e2e' && 'serviceWorker' in navigator && /^https?:$/.test(location.protocol)) {
   const link = document.createElement('link');
   link.rel = 'manifest'; link.href = './manifest.webmanifest';
   document.head.append(link);
@@ -639,4 +640,8 @@ hud.openLevels(app);
 app.levelNo = hud.levelNo;
 if (app.store.view2d) app.toggle2d(true);
 app.levels = LEVELS;
-window.linkup = app; // 方便在主控台除錯，瀏覽器端測試（e2e/）也從這裡切換關卡
+// 方便在主控台除錯，瀏覽器端測試（e2e/）也從這裡切換關卡。
+// 測試要用的引擎函式與介面函式掛在這裡：測試不能在頁面裡 import('/src/…')，打包之後沒有那些路徑（而且會載入第二份模組）
+app.engine = { recompute, runObjective, settle, rackSlots };
+app.hud = hud;
+window.linkup = app;

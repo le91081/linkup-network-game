@@ -20,7 +20,7 @@ async function typeCmd(page, ...cmds) {
 }
 // 每個目標現在通過了沒（check 型的直接呼叫 test，其他的用引擎的 runObjective）
 const runAll = async (page) => page.evaluate(async () => {
-  const sim = await import('/src/engine/sim.js'), app = window.linkup;
+  const app = window.linkup, sim = app.engine;
   sim.settle(app.state);
   return app.level.objectives.map((o) => (o.type === 'check' ? o.test(app.state) === true : sim.runObjective(app.state, o).pass));
 });
@@ -62,7 +62,7 @@ test('機櫃立面圖：自動上架，UPS 在最下面；搬上去會提醒', a
   const dlg = page.locator('#modal-root .dialog');
   await expect(dlg).toContainText('機櫃立面圖');
   await dlg.getByRole('button', { name: '自動上架' }).click();
-  await expect(dlg.locator('.r-unit')).toHaveCount(await page.evaluate(async () => (await import('/src/engine/rack.js')).rackSlots(window.linkup.state, 'A').length));
+  await expect(dlg.locator('.r-unit')).toHaveCount(await page.evaluate(() => window.linkup.engine.rackSlots(window.linkup.state, 'A').length));
   expect(await page.evaluate(() => Object.values(window.linkup.state.devices).find((d) => d.model === 'ups').u)).toBe(1);
   await expect(dlg).toContainText('沒有問題');
   await dlg.locator('.r-unit', { hasText: 'UPS' }).click();

@@ -47,6 +47,8 @@ const artifactPage = () => ({
 
 export default defineConfig(({ mode }) => {
   const artifact = mode === 'artifact';
+  // 瀏覽器端測試用的建置（vite build --mode e2e）：輸出到 dist-e2e/，附 source map（測試失敗時看得懂是哪一行），不註冊 service worker
+  const e2e = mode === 'e2e';
   return {
     base: './',
     server: { port: 5173, strictPort: true },
@@ -54,7 +56,8 @@ export default defineConfig(({ mode }) => {
     build: {
       target: 'es2022',
       chunkSizeWarningLimit: 700,
-      outDir: artifact ? OUT_ARTIFACT : 'dist',
+      outDir: artifact ? OUT_ARTIFACT : e2e ? 'dist-e2e' : 'dist',
+      sourcemap: e2e,
       rollupOptions: {
         external: artifact ? [/^three(\/.*)?$/] : [],
         output: { manualChunks: chunkOf },

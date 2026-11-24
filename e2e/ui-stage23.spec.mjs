@@ -20,7 +20,7 @@ async function typeCmd(page, ...cmds) {
 }
 // 每個目標現在通過了沒（check 型的直接呼叫 test，其他的用引擎的 runObjective）
 const runAll = async (page) => page.evaluate(async () => {
-  const sim = await import('/src/engine/sim.js'), app = window.linkup;
+  const app = window.linkup, sim = app.engine;
   return app.level.objectives.map((o) => (o.type === 'check' ? o.test(app.state) === true : sim.runObjective(app.state, o).pass));
 });
 

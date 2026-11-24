@@ -302,15 +302,14 @@ test('收發器：光纖的選單換掉兩端速率不同的收發器就連上�
   await open(page, 'l115');
   await page.evaluate(async () => {
     const app = window.linkup, c = app.state.cables.find((x) => x.kind === 'mmf' && [x.a.dev, x.b.dev].includes('sw-w'));
-    const { openCableMenu } = await import('/src/ui/hud.js');
-    openCableMenu(app, c.id, 300, 200);
+    app.hud.openCableMenu(app, c.id, 300, 200);
   });
   const pop = page.locator('.popover');
   await expect(pop).toContainText('速率不同（SFP-10G-SR 是 10G、GLC-SX-MMD 是 1G）');
   expect(await scan(page, '.popover', '光纖的選單')).toEqual([]);
   await pop.locator('select.xcvr-sel').first().selectOption('GLC-SX-MMD');
   await expect(page.locator('.popover')).toContainText('自動協商：1 Gbps');
-  await page.evaluate(async () => { const { closePopover } = await import('/src/ui/hud.js'); closePopover(); });
+  await page.evaluate(() => window.linkup.hud.closePopover());
   await expect(page.locator('.popover')).toHaveCount(0);
   await clickDevice(page, 'sw-r');
   await page.locator('#panel .tab', { hasText: 'CLI' }).click();
