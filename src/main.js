@@ -394,6 +394,25 @@ const app = {
     });
   },
 
+  /** 觀察題作答：答案存進狀態（可以復原、跟著存檔）。網路沒有變，其他目標的測試結果照舊，只重測這一題 */
+  answer(i, value) {
+    const o = app.objectives()[i];
+    if (!o || o.type !== 'ask' || app.running) return;
+    app.state.answers = { ...(app.state.answers || {}), [o.id]: value };
+    const now = snapOf(app.state);
+    if (now !== app.snap) {
+      if (app.attempt) app.attempt.changes++;
+      app.undoStack.push(app.snap);
+      if (app.undoStack.length > 80) app.undoStack.shift();
+      app.redoStack = [];
+      app.snap = now;
+      hud.updateHistory(app);
+    }
+    clearTimeout(app.saveTimer);
+    app.saveTimer = setTimeout(() => { app.store.saves[app.level.id] = saveOf(app.state); app.saveStore(); }, 400);
+    app.run([i]);
+  },
+
   useHint() {
     app.hintsShown = Math.min(app.level.hints.length, app.hintsShown + 1);
     app.store.hints[app.level.id] = app.hintsShown;

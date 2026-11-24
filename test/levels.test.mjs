@@ -2497,9 +2497,9 @@ console.log('\n參考解法與錯題本');
   const ok = (cond, title) => (cond ? console.log('  ✔ ' + title) : fail(title));
   const bad = [];
   for (const lv of LEVELS) {
-    try { const c = solutionChanges(lv); if (!c.cables.length && !c.devs.length) bad.push(lv.id + '（沒有任何變更）'); } catch (e) { bad.push(`${lv.id}：${e.message.split('\n')[0]}`); }
+    try { const c = solutionChanges(lv); if (!c.cables.length && !c.devs.length && !c.answers.length) bad.push(lv.id + '（沒有任何變更）'); } catch (e) { bad.push(`${lv.id}：${e.message.split('\n')[0]}`); }
   }
-  ok(!bad.length, `每一關的參考解法都整理得出「改了哪些地方」${bad.length ? '：' + bad.join('、') : ''}`);
+  ok(!bad.length, `每一關的參考解法都整理得出「改了哪些地方」（觀察題是題目與答案）${bad.length ? '：' + bad.join('、') : ''}`);
   const l06 = solutionChanges(LEVELS.find((l) => l.id === 'l06'));
   ok(l06.devs[0].ios && l06.devs[0].lines.includes('interface GigabitEthernet0/1') && l06.devs[0].lines.includes(' +switchport access vlan 10'), 'Cisco 設備用 running-config 的差異呈現（介面底下 +switchport access vlan 10）');
   const l01 = solutionChanges(LEVELS.find((l) => l.id === 'l01'));
@@ -6096,6 +6096,121 @@ console.log('\nNetFlow 與 QoS 的 police');
   const rc = runningConfig(s2, s2.devices.br).join('\n');
   ok(/flow exporter NMS\n destination 10\.10\.0\.50\n transport udp 2055/.test(rc) && /flow monitor WAN\n exporter NMS\n record netflow ipv4 original-input/.test(rc) && / ip flow monitor WAN input/.test(rc), 'running-config：flow exporter、flow monitor、ip flow monitor … input');
   ok(/% Flow Monitor: NOPE does not exist/.test(C('configure terminal', 'interface Gi0/0/1', 'ip flow monitor NOPE input', 'end')), '介面上套用不存在的 flow monitor：IOS 拒絕');
+}
+
+// ── 觀察題（type: 'ask'）與封包實驗室 ──
+console.log('\n觀察題與封包實驗室');
+{
+  const { askCheck, askNorm, askText, askWant, askOptions } = await import('../src/engine/ask.js');
+  const { solutionChanges } = await import('../src/ui/solution.js');
+  const { drillable } = await import('../src/engine/faults.js');
+  const ok = (cond, title) => (cond ? console.log('  ✔ ' + title) : fail(title));
+  const labs = LEVELS.filter((l) => l.chapter === 18);
+  ok(labs.length === 5 && labs.every((l) => l.objectives.some((o) => o.type === 'ask') && !drillable(l)), '封包實驗室有 5 關，每一關都有觀察題，而且不拿來做故障演練');
+  // 每一題：答案算得出來、選擇題的正確答案在選項裡、每個錯的選項都有自己的說明、題目的 id 不重複
+  const bad = [];
+  for (const lv of labs) {
+    const s = lv.setup(); recompute(s);
+    const seen = new Set();
+    for (const o of lv.objectives.filter((x) => x.type === 'ask')) {
+      if (seen.has(o.id)) bad.push(`${lv.id} 的題目 id 重複：${o.id}`);
+      seen.add(o.id);
+      const want = askWant(s, o), opts = askOptions(s, o);
+      if (want == null || want === '' || (Array.isArray(want) && !want.length)) bad.push(`${lv.id}/${o.id} 算不出答案`);
+      if (!o.explain) bad.push(`${lv.id}/${o.id} 少了答對之後的說明`);
+      if (!opts) { if (!o.input || !o.miss) bad.push(`${lv.id}/${o.id} 填空題要有 input 與 miss`); continue; }
+      const ws = new Set([].concat(want).map(String));
+      for (const w of ws) if (!opts.some((x) => String(x.v) === w)) bad.push(`${lv.id}/${o.id} 的答案 ${w} 不在選項裡`);
+      for (const x of opts) if (!ws.has(String(x.v)) && !x.why) bad.push(`${lv.id}/${o.id} 的選項「${x.t}」選錯時沒有說明`);
+      if (!o.multi) for (const x of opts) {
+        s.answers = { [o.id]: x.v };
+        const r = askCheck(s, o);
+        if (r.pass !== ws.has(String(x.v))) bad.push(`${lv.id}/${o.id} 選「${x.t}」的判定不對`);
+      }
+      delete s.answers;
+    }
+  }
+  ok(!bad.length, `每一題：答案算得出來、在選項裡，錯的選項各有說明${bad.length ? '：' + bad.slice(0, 4).join('；') : ''}`);
+
+  const l173 = LEVELS.find((l) => l.id === 'l173'), s = l173.setup(); recompute(s);
+  const q = (id) => l173.objectives.find((o) => o.id === id);
+  ok(evaluate(s, l173.objectives).map((r) => r.pass).join() === 'true,false,false,false,false' && evaluate(s, l173.objectives)[1].empty === true, '18-1 一開始：ping 會通，觀察題還沒作答（不算通過）');
+  const mac = askWant(s, q('smac'));
+  ok(/^02(:[0-9a-f]{2}){5}$/.test(mac) && mac === s.devices.r2.ifaces.find((i) => i.id === 'Gi0/0/1').rt.mac, '「到達伺服器時的來源 MAC」的答案是 R2 Gi0/0/1 的 MAC（從網路算出來的）');
+  const tryAns = (o, v) => { s.answers = { [o.id]: v }; return askCheck(s, o); };
+  ok(tryAns(q('smac'), mac.toUpperCase().replace(/:/g, '-')).pass && tryAns(q('smac'), mac.replace(/:/g, '').replace(/(.{4})(?=.)/g, '$1.')).pass, 'MAC 位址不管分隔符號與大小寫：02-EF-…、02ef.a9ad.ba0d 都算對');
+  ok(/PC-A 的 MAC/.test(tryAns(q('smac'), s.devices['pc-a'].ifaces[0].rt.mac).reason) && /R1 的介面/.test(tryAns(q('smac'), s.devices.r1.ifaces[0].rt.mac).reason), '填了 PC-A 或 R1 的 MAC：回饋說明這個位址只出現在哪一段');
+  ok(askWant(s, q('ttl')) === 62 && tryAns(q('ttl'), '62').pass && tryAns(q('ttl'), ' 062 ').pass && !tryAns(q('ttl'), '64').pass, 'TTL 的答案是實際送一個封包量出來的（64 − 兩台路由器 = 62）');
+  ok(/ARP 是廣播/.test(tryAns(q('dmac'), 'srv').reason) && tryAns(q('dmac'), 'r1').pass && askText(s, q('dmac')) === 'R1 的 Gi0/0/0（PC-A 的預設閘道）', '選擇題：選錯有那個選項自己的說明；任務清單顯示的是選項的文字');
+  ok(askNorm({ input: 'port' }, 'GigabitEthernet0/6') === askNorm({ input: 'port' }, 'gi 0/6') && askNorm({ input: 'port' }, 'Gi0/6') !== askNorm({ input: 'port' }, 'Fa0/6') && askNorm({ input: 'ip' }, ' 203.0.113.25/29 ') === '203.0.113.25', '埠名（GigabitEthernet0/6 = gi 0/6 ≠ Fa0/6）與 IP（忽略空白與 /前綴）的比對');
+  // 18-2：答案跟著接線走
+  const l174 = LEVELS.find((l) => l.id === 'l174'), t = l174.setup(); recompute(t);
+  const pq = l174.objectives.find((o) => o.id === 'port');
+  ok(askWant(t, pq) === 'Gi0/6', '18-2：印表機接在 Gi0/6');
+  const c = t.cables.find((x) => x.a.dev === 'prn' || x.b.dev === 'prn');
+  (c.a.dev === 'sw' ? c.a : c.b).port = 'Gi0/3'; recompute(t);
+  ok(askWant(t, pq) === 'Gi0/3' && t.hideCables === true, '把印表機的線換到 Gi0/3：正確答案跟著變（答案不是寫死的）；這一關看不到接線');
+  // 18-3：複選題的答案從廣播網域算出來
+  const l175 = LEVELS.find((l) => l.id === 'l175'), u = l175.setup(); recompute(u);
+  const bq = l175.objectives.find((o) => o.id === 'bcast');
+  ok(askWant(u, bq).join() === 'pc2,pc3,r1a', '18-3：PC-1 的廣播到得了 PC-2、PC-3 與 R1 的 Gi0/0/0，到不了 VLAN 20');
+  u.answers = { bcast: ['pc3', 'pc2', 'r1a'] };
+  const okAny = askCheck(u, bq).pass;
+  u.answers = { bcast: ['pc2', 'pc3'] };
+  const less = askCheck(u, bq).reason;
+  u.answers = { bcast: ['pc2', 'pc3', 'r1a', 'pc4'] };
+  ok(okAny && /少了 1 個/.test(less) && /VLAN 20 是另一個廣播網域/.test(askCheck(u, bq).reason), '複選：順序不拘；少選說少幾個、多選說哪一個不該選');
+  u.devices.sw.sw.ports['Gi0/3'].vlan = 10; recompute(u);
+  ok(askWant(u, bq).includes('pc4'), '把 PC-4 的埠改到 VLAN 10：它就收得到廣播，答案跟著變');
+  // 18-4：被拒絕與逾時是兩種結果
+  const l176 = LEVELS.find((l) => l.id === 'l176'), w = l176.setup(); recompute(w);
+  const t22 = transact(w, 'pc', { proto: 'tcp', dst: parseIp('10.2.2.80'), dport: 22 }), t3389 = transact(w, 'pc', { proto: 'tcp', dst: parseIp('10.2.2.80'), dport: 3389 });
+  ok(!t22.ok && /連線被拒絕/.test(t22.reason) && t22.failDev === 'srv' && !t3389.ok && /ACL/.test(t3389.reason) && t3389.failDev === 'r1', '18-4：22 埠是伺服器拒絕（沒有服務），3389 是在 R1 被 ACL 丟掉');
+  // 參考解法列出題目與答案；存檔讀回來答案還在
+  const ch = solutionChanges(l173);
+  ok(ch.answers.length === 4 && ch.answers[1].a === mac && !ch.cables.length && !ch.devs.length, '參考解法：沒有設定變更，列出四題的題目、答案與說明');
+  const z = l173.setup(); recompute(z); l173.solve(z);
+  const z2 = cloneState(z); recompute(z2);
+  ok(evaluate(z2, l173.objectives).every((r) => r.pass) && z2.answers.dmac === 'r1', '答案存在狀態裡：存檔讀回來還在、照樣通過');
+  // 封包追蹤的每一段記著埠號與 ACK（動畫的標籤用）
+  const h = transact(w, 'pc', { proto: 'tcp', dst: parseIp('10.2.2.80'), dport: 443 }).hops.filter((x) => !x.wave);
+  ok(h[0].port === 443 && !h[0].reply && h.some((x) => x.reply && x.port === 443) && h.some((x) => x.ack), 'TCP 的每一段行程記著埠號、回應與 ACK（封包動畫的標籤：TCP 443 · SYN / SYN-ACK / ACK）');
+}
+
+// ── 3-7：DNS 轉送器，三個環節一個一個修 ──
+{
+  const ok = (cond, title) => (cond ? console.log('  ✔ ' + title) : fail(title));
+  const lv = LEVELS.find((l) => l.id === 'l178');
+  const s = lv.setup(); recompute(s);
+  const res = () => { recompute(s); return evaluate(s, lv.objectives); };
+  let r = res();
+  ok(r.map((x) => x.pass).join() === 'true,false,false,true,true' && /NXDOMAIN/.test(r[1].reason), '3-7 開場：內部的名稱查得到，外面的名稱 DNS 伺服器回 NXDOMAIN（沒有開轉送）');
+  s.devices.dns.dnsForward = true; r = res();
+  ok(!r[1].pass && /DNS 伺服器 沒有設定 DNS 伺服器/.test(r[1].reason), '開了轉送：伺服器自己沒有設上游的 DNS，還是問不出去');
+  s.devices.dns.ifaces[0].dns = '8.8.8.8'; r = res();
+  ok(!r[1].pass && /implicit deny/.test(r[1].reason) && r[1].failDev === 'fw', '設了上游：DNS 伺服器的查詢被防火牆擋下（internal → wan1 只放行 HTTP / HTTPS）');
+  s.devices.fw.policies.push({ name: 'DNS 全開', srcIf: 'internal', dstIf: 'wan1', src: 'any', dst: 'any', service: 'DNS', action: 'accept', nat: true }); r = res();
+  ok(r[1].pass && r[2].pass && !r[3].pass && !r[4].pass && /所有的電腦/.test(r[4].reason), '政策的來源寫 any：網站打得開了，但使用者的電腦也可以自己問外面的 DNS → 不過');
+  s.devices.fw.policies.pop();
+  s.devices.fw.policies.push({ name: 'DNS 伺服器', srcIf: 'internal', dstIf: 'wan1', src: '192.168.1.53', dst: 'any', service: 'DNS', action: 'accept', nat: true }); r = res();
+  ok(r.every((x) => x.pass), '來源只寫 DNS 伺服器：全部通過');
+}
+
+// ── 學習路線 ──
+{
+  const { PATHS, pathIds } = await import('../src/data/paths.js');
+  const ids = new Set(LEVELS.map((l) => l.id));
+  const bad = [];
+  for (const p of PATHS) {
+    if (!p.id || !p.t || !p.who || !p.d || !p.steps.length) bad.push(`${p.id} 少了欄位`);
+    for (const st of p.steps) { if (!st.t || !st.d || !st.ids.length) bad.push(`${p.id} 的階段「${st.t}」少了欄位`); for (const id of st.ids) if (!ids.has(id)) bad.push(`${p.id} 引用了不存在的關卡 ${id}`); }
+    if (pathIds(p).length !== p.steps.flatMap((x) => x.ids).length) bad.push(`${p.id} 裡同一關出現兩次`);
+  }
+  const used = new Set(PATHS.flatMap(pathIds));
+  if (bad.length) fail('學習路線：' + bad.slice(0, 4).join('；'));
+  else console.log(`  ✔ ${PATHS.length} 條學習路線：關卡都存在、同一條路線裡不重複（共用到 ${used.size} 關）`);
+  const start = PATHS.find((p) => p.id === 'start');
+  if (!['l01', 'l173', 'l174', 'l175', 'l176', 'l177'].every((id) => pathIds(start).includes(id))) fail('新手入門路線要包含第一關與封包實驗室的五關');
 }
 
 // ── 題庫與證照對照表的資料檢查 ──

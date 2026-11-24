@@ -25,6 +25,7 @@ import { IPV6 } from './ipv6.js';
 import { PHYSICAL } from './physical.js';
 import { OPS } from './ops.js';
 import { CLOUD } from './cloud.js';
+import { MORE } from './more.js';
 import { buildIndex } from './match.js';
 
 export const CATS = [
@@ -41,6 +42,6 @@ export const CATS = [
   { id: 'cloud', name: '自動化、雲端與虛擬化', desc: 'RESTCONF、Ansible、Terraform、VPC、虛擬交換器' },
 ];
 
-export const CONCEPTS = [...BASICS, ...SERVICES, ...SWITCHING, ...ROUTING, ...SECURITY, ...WAN, ...WIRELESS, ...IPV6, ...PHYSICAL, ...OPS, ...CLOUD];
+export const CONCEPTS = [...BASICS, ...SERVICES, ...SWITCHING, ...ROUTING, ...SECURITY, ...WAN, ...WIRELESS, ...IPV6, ...PHYSICAL, ...OPS, ...CLOUD, ...MORE];
 export const CONCEPT = Object.fromEntries(CONCEPTS.map((c) => [c.id, c]));
 export const KB_INDEX = buildIndex(CONCEPTS);

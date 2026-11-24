@@ -149,4 +149,4 @@ export function injectFaults(state, objectives, { count = 2, seed = 1, maxTries 
 
 /** 這一關能不能拿來做故障演練：參考解法要能讓目標全部通過，而且目標不能依賴「做過什麼操作」 */
 export const drillable = (lv) => !lv.noDrill && !lv.sandbox && typeof lv.solve === 'function' && lv.objectives.length >= 2
-  && !lv.objectives.some((o) => o.type === 'roam' || o.type === 'after');
+  && !lv.objectives.some((o) => o.type === 'roam' || o.type === 'after' || o.type === 'ask');

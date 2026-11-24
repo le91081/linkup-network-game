@@ -1304,3 +1304,22 @@ body.guide-fold { --side-r: 44px; }
 .p-unfold span { writing-mode: vertical-rl; letter-spacing: 0.2em; font-weight: 700; font-size: 12.5px; }
 .p-unfold .ic:last-child { rotate: 180deg; }
 .port-tag i { font: normal 600 11px/15px var(--sans); margin: 0 5px; color: var(--muted); }
+
+/* ───────── 觀察題（看懂網路之後作答的任務目標） ───────── */
+.obj.ask .st { border-style: dashed; color: var(--muted); }
+.obj.ask.pass .st, .obj.ask.fail .st { border-style: solid; }
+.obj.ask.pass .st { color: #05301a; }
+.obj.ask.fail .st { color: #3b060d; }
+.obj .ans { grid-column: 2; font-size: 12px; color: var(--muted); line-height: 1.5; margin-top: 1px; overflow-wrap: anywhere; }
+.obj .ans b { color: #d9e6ff; font-weight: 600; }
+.obj .ans.none { color: var(--accent); font-weight: 600; }
+.obj .why.ok { color: #b8f5cf; }
+.ask-top { display: flex; align-items: center; gap: 10px; }
+.ask-top .p-badge { margin: 0; }
+.ask-tip { display: flex; gap: 9px; align-items: flex-start; padding: 9px 12px; border-radius: 11px; font-size: 12.5px; line-height: 1.6; color: #c9d6f5; background: rgba(110, 168, 255, 0.08); border: 1px solid rgba(110, 168, 255, 0.22); }
+.ask-tip .ic { margin-top: 3px; color: var(--blue); }
+.qopt.on { border-color: var(--accent); background: rgba(79, 216, 196, 0.1); }
+.qopt.on .ql { background: var(--accent); color: var(--accent-ink); }
+.ask-inp { height: 40px; font-size: 14px; }
+.sol-ans > div { display: flex; flex-direction: column; gap: 2px; padding: 6px 0; }
+.sol-ans > div + div { border-top: 1px dashed var(--line); }

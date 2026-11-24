@@ -15,6 +15,7 @@ import { resolveName } from './resolve.js';
 import { throughput } from './bandwidth.js';
 import { transact, flowSend } from './transact.js';
 import { httpStatus } from '../ltm.js';
+import { askCheck } from '../ask.js';
 
 // ───────────────────────────── 任務目標 ─────────────────────────────
 
@@ -29,6 +30,7 @@ import { httpStatus } from '../ltm.js';
  *    feed:['A'] 某一路電斷了（設備的電源供應器接在哪一路，見 engine/power.js）
  *    keep:{ from, ip, port } 取代 test：故障之前先建立 TCP 連線，故障之後在同一條連線上繼續送資料（連線表要跟著換手）
  *  { type:'http'|'https', … } 連得上之後還要看網站回應的狀態碼（4xx、5xx 算失敗）；https 還要驗證憑證
+ *  { type:'ask', id, options | input, answer } 觀察題：玩家看懂網路之後作答，答案存在 state.answers（見 engine/ask.js）
  *  tries: n 同一個測試做 n 次（例如使用者重新整理好幾次：負載平衡器每次可能交給不同的伺服器），每一次都要通過
  */
 export function runObjective(state, o) {
@@ -55,6 +57,10 @@ export function runObjective(state, o) {
     if (op.conn) remoteClose(state, op.conn);
     const pass = ok === expect;
     return { pass, ok, reason: pass ? '' : expect ? reason : `${proto === 'ssh' ? 'SSH' : 'Telnet'} 登入成功了，但這應該要被擋下`, failDev: o.from, log: op.res ? op.res.log : [], hops: op.res ? op.res.hops : [] };
+  }
+  if (o.type === 'ask') {
+    const r = askCheck(state, o);
+    return { pass: r.pass, ok: r.pass, empty: !!r.empty, reason: r.reason, log: r.pass && o.explain ? [{ dev: o.dev, kind: 'ok', text: o.explain }] : [], hops: [] };
   }
   if (o.type === 'check') {
     const r = o.test(state);

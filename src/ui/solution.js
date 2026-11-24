@@ -7,6 +7,7 @@ import { settle } from '../engine/sim.js';
 import { isIos, runningConfig } from '../engine/ios.js';
 import { cfgDiff } from '../engine/archive.js';
 import { certSelf, fmtDate } from '../engine/web.js';
+import { askText } from '../engine/ask.js';
 
 const SKIP = new Set(['rt', 'pos', 'ports', 'startup', 'flash', 'fw', 'fwNext', 'note', 'locked', 'model', 'kind', 'id', 'seq', 'files', 'sshKey']);
 const LABEL = {
@@ -146,7 +147,9 @@ export function solutionChanges(lv) {
     if (lines.length) devs.push({ name: b.name, ios: false, lines });
   }
   if (JSON.stringify(s0.down || {}) !== JSON.stringify(s1.down || {})) devs.push({ name: '電源', ios: false, lines: [`關機中的設備：${Object.keys(s1.down || {}).map((id) => name(s1, id)).join('、') || '（無）'}`] });
-  return { cables, devs };
+  // 觀察題：題目、答案與說明
+  const answers = lv.objectives.filter((o) => o.type === 'ask').map((o) => ({ q: o.q || o.label, a: askText(s1, o), why: o.explain || '' }));
+  return { cables, devs, answers };
 }
 
 /** 參考解法的對話框 */
@@ -160,7 +163,8 @@ export function openSolution(app, { modal, closeModal }) {
     ch.cables.length ? h('section', { class: 'sol-sec' }, h('h3', { text: '接線' }), h('div', { class: 'sol-list' }, ch.cables.map((t) => h('div', { text: t })))) : null,
     ...ch.devs.map((d) => h('section', { class: 'sol-sec' }, h('h3', null, d.name, d.ios && h('span', { class: 'chip tiny', text: 'running-config 的差異' })),
       h('div', { class: 'sol-list' + (d.ios ? ' mono' : '') }, d.lines.map((t) => h('div', { class: d.ios ? (/^\s*\+/.test(t) ? 'add' : /^\s*-/.test(t) ? 'del' : 'ctx') : '', text: t }))))),
-    !ch.cables.length && !ch.devs.length ? h('p', { class: 'muted', text: '參考解法沒有改任何設定（這一關的答案在操作上，例如清除快取、重新開機）。看看提示的最後一個。' }) : null,
+    ch.answers.length ? h('section', { class: 'sol-sec' }, h('h3', { text: '觀察題的答案' }), h('div', { class: 'sol-list sol-ans' }, ch.answers.map((x) => h('div', null, h('span', { class: 'muted', text: x.q }), h('b', { text: x.a }), x.why && h('span', { text: x.why }))))) : null,
+    !ch.cables.length && !ch.devs.length && !ch.answers.length ? h('p', { class: 'muted', text: '參考解法沒有改任何設定（這一關的答案在操作上，例如清除快取、重新開機）。看看提示的最後一個。' }) : null,
     h('p', { class: 'muted', style: { fontSize: '12px' }, text: 'running-config 的差異：+ 是要加上的設定、- 是要拿掉的設定，前面沒有符號的那一行是它所在的區塊（例如哪一個介面）。' }),
     h('div', { class: 'd-actions' }, button('關閉', { kind: 'ghost', onclick: closeModal }),
       button('示範一次（重置並套用，不計星）', { ic: 'play', kind: 'primary', onclick: () => { closeModal(); demo(app); } })),

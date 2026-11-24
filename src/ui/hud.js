@@ -15,6 +15,7 @@ import { openCustomLevels } from './editor.js';
 import { drillable } from '../engine/faults.js';
 import { openSolution } from './solution.js';
 import { startTutorial } from './tutorial.js';
+import { askOptions, askText, askGot } from '../engine/ask.js';
 import { openLevelMenu } from './levels-menu.js';
 
 const LOGO =
@@ -70,6 +71,16 @@ export function renderMission(app) {
     const st = r === 'running' ? 'running' : !r ? '' : r.pass ? 'pass' : 'fail';
     if (r && r.stale) anyStale = true;
     const why = st !== 'fail' ? '' : o.expect === false ? '這條連線應該被擋下來，但現在是通的。' : r.reason;
+    // 觀察題：點一下是作答，不是測試；答對之後把說明留在下面
+    if (o.type === 'ask') {
+      const mine = askText(app.state, o);
+      return h('button', { type: 'button', class: `obj ask ${st} ${r && r.stale ? 'old' : ''}`, title: '點一下作答', onclick: () => openAsk(app, i) },
+        h('span', { class: 'st' }, st === 'pass' ? icon('check', 13) : st === 'fail' ? icon('x', 13) : icon('edit', 11)),
+        h('span', { class: 'lb', text: o.label }),
+        h('span', { class: 'ans' + (mine ? '' : ' none') }, mine ? ['你的答案：', h('b', { text: mine })] : '觀察題 · 點一下作答'),
+        why && !(r && r.empty) && h('span', { class: 'why', text: why }),
+        st === 'pass' && o.explain && h('span', { class: 'why ok', text: o.explain }));
+    }
     return h('button', { type: 'button', class: `obj ${st} ${r && r.stale ? 'old' : ''}`, title: '點一下只測試這一項', onclick: () => app.run([i]) },
       h('span', { class: 'st' }, st === 'pass' ? icon('check', 13) : st === 'fail' ? icon('x', 13) : null),
       h('span', { class: 'lb', text: o.label }),
@@ -98,7 +109,50 @@ export function renderMission(app) {
 function missionFoot(app) {
   return h('div', { class: 'm-foot' },
     button(app.running ? '測試中… 按空白鍵快轉' : '執行測試', { ic: app.running ? 'fast' : 'play', kind: 'primary big', onclick: () => (app.running ? app.fastForward() : app.run()) }),
-    h('small', { text: '點單一目標可以只測試那一項' }));
+    h('small', { text: app.level && !app.level.sandbox && app.level.objectives.some((o) => o.type === 'ask') ? '點目標可以只測試那一項；觀察題點一下作答' : '點單一目標可以只測試那一項' }));
+}
+
+/** 觀察題的作答視窗：選擇題（單選 / 複選）或填空 */
+export function openAsk(app, i) {
+  const o = app.objectives()[i];
+  if (!o || o.type !== 'ask' || app.running) return;
+  const opts = askOptions(app.state, o), cur = askGot(app.state, o);
+  let pick = o.multi ? new Set([].concat(cur || []).map(String)) : cur != null ? String(cur) : null;
+  const send = button('送出答案', { ic: 'check', kind: 'primary', onclick: () => submit() });
+  const HINT = { mac: '例如 00:1A:2B:3C:4D:5E（分隔符號與大小寫都可以）', ip: '例如 192.168.1.10', number: '填數字', port: '例如 Gi0/3', text: '' };
+  const input = !opts && h('input', {
+    class: 'inp mono ask-inp', type: 'text', spellcheck: 'false', autocomplete: 'off', value: cur != null ? String(cur) : '', placeholder: HINT[o.input] || '',
+    oninput: () => { send.disabled = !input.value.trim(); },
+    onkeydown: (e) => { if (e.key === 'Enter' && input.value.trim()) { e.preventDefault(); submit(); } else if (e.key !== 'Escape') e.stopPropagation(); },
+  });
+  const list = h('div', { class: 'qopts' });
+  const draw = () => {
+    if (!opts) return;
+    list.replaceChildren(...opts.map((x, n) => {
+      const on = o.multi ? pick.has(String(x.v)) : pick === String(x.v);
+      return h('button', { type: 'button', class: 'qopt' + (on ? ' on' : ''), 'aria-pressed': on ? 'true' : 'false', onclick: () => {
+        if (o.multi) { if (on) pick.delete(String(x.v)); else pick.add(String(x.v)); } else pick = String(x.v);
+        send.disabled = o.multi ? !pick.size : pick == null;
+        draw();
+      } }, h('span', { class: 'ql', text: o.multi ? (on ? '✓' : '') : 'ABCDEFGH'[n] }), h('span', { text: x.t }));
+    }));
+  };
+  function submit() {
+    const v = opts ? (o.multi ? opts.map((x) => String(x.v)).filter((k) => pick.has(k)) : (opts.find((x) => String(x.v) === pick) || {}).v) : input.value.trim();
+    if (v == null || v === '' || (Array.isArray(v) && !v.length)) return;
+    closeModal();
+    app.answer(i, v);
+  }
+  send.disabled = opts ? (o.multi ? !pick.size : pick == null) : !(cur != null);
+  draw();
+  modal([
+    h('div', { class: 'ask-top' }, h('span', { class: 'p-badge', text: o.multi ? '觀察題 · 複選' : '觀察題' }), h('span', { class: 'muted', text: `目標 ${i + 1}` })),
+    h('h2', { class: 'qq' }, linkText(o.q || o.label)),
+    o.tip && h('div', { class: 'ask-tip' }, icon('search', 14), h('span', null, linkText(o.tip))),
+    opts ? list : h('label', { class: 'field' }, h('span', { class: 'f-label', text: '你的答案' }), input),
+    h('div', { class: 'd-actions' }, button('先去觀察', { kind: 'ghost', onclick: closeModal }), send),
+  ]);
+  if (input) setTimeout(() => input.focus(), 30);
 }
 
 // ───────────── 右側：沒有選取設備時顯示學習筆記 ─────────────

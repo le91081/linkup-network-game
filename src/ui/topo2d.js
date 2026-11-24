@@ -153,9 +153,19 @@ export function renderTopo(app, svg, rect) {
   const placed = []; // 已經放好的埠名標籤（避免疊在一起）
   const vlans = app.t2vlan === false ? new Map() : vlanMap(st);
   // 線路（「看不到接線」的關卡不畫）
+  // 同一對設備之間有好幾條線（EtherChannel、一個 VLAN 一條線）：往兩旁錯開，不要疊成一條
+  const pk = (c) => (c.a.dev < c.b.dev ? c.a.dev + '|' + c.b.dev : c.b.dev + '|' + c.a.dev);
+  const sibs = new Map();
+  for (const c of st.cables) { const k = pk(c); if (!sibs.has(k)) sibs.set(k, []); sibs.get(k).push(c.id); }
   for (const c of st.hideCables ? [] : st.cables) {
     if (!P.has(c.a.dev) || !P.has(c.b.dev)) continue;
     const cs = st.rt.cable[c.id] || 'down', e = edge(c.a.dev, c.b.dev);
+    const sib = sibs.get(pk(c));
+    if (sib.length > 1) {
+      const off = (sib.indexOf(c.id) - (sib.length - 1) / 2) * Math.min(12, 44 / sib.length) * (c.a.dev < c.b.dev ? 1 : -1);
+      const nx = (-e.dy / e.len) * off, ny = (e.dx / e.len) * off;
+      e.pa = { x: e.pa.x + nx, y: e.pa.y + ny }; e.pb = { x: e.pb.x + nx, y: e.pb.y + ny };
+    }
     const virt = c.media === 'virt';
     const A = st.devices[c.a.dev], B = st.devices[c.b.dev];
     // Access 埠的線照 VLAN 上色、Trunk 畫粗一點：一眼看出哪些設備在同一個廣播網域
