@@ -35,7 +35,7 @@ export const LEVELS77 = [
             d.psu = AB();
           },
         }),
-        D('c9300', 'core', { name: '核心交換器', pos: [0, -1], init(d) { d.psu = AB(); } }),
+        D('c9300', 'core', { name: '核心交換器', host: 'CORE-SW', pos: [0, -1], init(d) { d.psu = AB(); } }),
         D('rack1u', 'srv1', { name: '網站伺服器', pos: [-6.5, 4], ip: '10.0.0.11', gw: '10.0.0.1', dns: '8.8.8.8', services: [{ proto: 'tcp', port: 443, name: 'HTTPS' }], init(d) { d.psu = AB(); } }),
         D('rack1u', 'bak', { name: '備份伺服器', pos: [0, 4.5], ip: '10.0.0.21', gw: '10.0.0.1', services: [{ proto: 'tcp', port: 445, name: 'SMB' }], init(d) { d.psu = AB(); } }),
         D('esxi', 'lab', { name: '實驗室 ESXi', pos: [6.5, 4], init(d) { d.psu = AB(); Object.assign(d.ifaces[0], { ip: '10.0.0.31', mask: '255.255.255.0', gateway: '10.0.0.1' }); } }),

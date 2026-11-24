@@ -102,7 +102,7 @@ export const LEVELS4 = [
       { t: '常用的 show 指令', d: 'CLI 分頁的 show interfaces status、show vlan brief、show interfaces trunk，是排查第二層問題最常用的三個指令。' },
     ],
     setup: () => {
-      const vl = (d) => d.sw.vlans.push({ id: 10, name: '業務' }, { id: 20, name: '研發' });
+      const vl = (d) => d.sw.vlans.push({ id: 10, name: 'SALES' }, { id: 20, name: 'RD' });
       return makeState([
         D('c2960', 'sw1', {
           name: 'SW-1F', pos: [-5.5, -1.5],
@@ -112,7 +112,7 @@ export const LEVELS4 = [
           name: 'SW-2F', pos: [5.5, -1.5],
           init(d) {
             vl(d);
-            d.sw.vlans.push({ id: 99, name: '舊管理' });
+            d.sw.vlans.push({ id: 99, name: 'OLD-MGMT' });
             Object.assign(d.sw.ports['Gi0/1'], { vlan: 10, shut: true }); // 被停用
             d.sw.ports['Gi0/2'].vlan = 10; // 研發的電腦被放進業務的 VLAN
             Object.assign(d.sw.ports['Gi0/9'], { mode: 'trunk', allowed: '10', native: 99 }); // 允許清單少了 20、Native 不一致

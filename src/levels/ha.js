@@ -100,7 +100,7 @@ export const LEVELS24 = [
     ],
     setup() {
       const s = makeState([
-        D('isr4331', 'r0', { name: '總部路由器', pos: [0, -8] }),
+        D('isr4331', 'r0', { name: '總部路由器', host: 'HQ-RT', pos: [0, -8] }),
         D('isr4331', 'r1', { name: 'R1', pos: [-5, -4] }), D('isr4331', 'r2', { name: 'R2', pos: [5, -4] }),
         D('sw8', 'sw', { name: 'SW-Office', pos: [0, 0] }),
         D('tower', 'srv', { name: '總部的伺服器', pos: [7, -8], ip: '10.99.0.10', gw: '10.99.0.1', services: [{ proto: 'tcp', port: 443, name: 'HTTPS' }] }),

@@ -305,7 +305,7 @@ export const LEVELS = [
   {
     id: 'l06', chapter: 2, title: '部門隔離', subtitle: 'VLAN 與 Access Port', tags: ['VLAN', '網管型交換器'],
     brief: '研發部抱怨：業務部的電腦竟然可以直接連到他們的測試機。公司只有一台交換器，請用 VLAN 把兩個部門切成兩個互不相通的網路。',
-    given: [['業務部', 'VLAN 10（PC-S1、PC-S2）'], ['研發部', 'VLAN 20（PC-R1、PC-R2）']],
+    given: [['業務部', 'VLAN 10，名稱 SALES（PC-S1、PC-S2）'], ['研發部', 'VLAN 20，名稱 RD（PC-R1、PC-R2）']],
     learn: [
       { t: 'VLAN', d: '把一台實體交換器切成好幾台「虛擬交換器」。不同 VLAN 的埠就像插在不同的交換器上，彼此完全不通。' },
       { t: 'Access Port', d: '接終端設備的埠。它只屬於一個 VLAN，電腦本身完全不知道 VLAN 的存在。' },
@@ -335,12 +335,12 @@ export const LEVELS = [
       },
     ],
     hints: [
-      '點交換器 →「VLAN」分頁，新增 VLAN 10（業務）和 VLAN 20（研發）。',
+      '點交換器 →「VLAN」分頁，新增 VLAN 10（名稱 SALES）和 VLAN 20（名稱 RD）。名稱只是給人看的，但真的交換器只收英文字母、數字與符號，不能打中文或空白。',
       '到「連接埠」分頁，把 Gi0/1、Gi0/2 的 VLAN 改成 10，Gi0/3、Gi0/4 改成 20。',
       'Catalyst 的埠出廠是 dynamic auto，接電腦時會以 Access 運作；正式環境習慣明確設成 Access（switchport mode access）。Trunk 是下一關的事。',
     ],
     solve(s) {
-      addVlan(s, 'sw', 10, '業務'); addVlan(s, 'sw', 20, '研發');
+      addVlan(s, 'sw', 10, 'SALES'); addVlan(s, 'sw', 20, 'RD');
       swp(s, 'sw', 'Gi0/1').vlan = 10; swp(s, 'sw', 'Gi0/2').vlan = 10;
       swp(s, 'sw', 'Gi0/3').vlan = 20; swp(s, 'sw', 'Gi0/4').vlan = 20;
     },
@@ -358,7 +358,7 @@ export const LEVELS = [
       D('c2960', 'sw1', {
         name: 'SW-1F', pos: [-5.5, -1.5],
         init(d) {
-          d.sw.vlans.push({ id: 10, name: '業務' }, { id: 20, name: '研發' });
+          d.sw.vlans.push({ id: 10, name: 'SALES' }, { id: 20, name: 'RD' });
           d.sw.ports['Gi0/1'].vlan = 10; d.sw.ports['Gi0/2'].vlan = 20;
         },
       }),
@@ -385,7 +385,7 @@ export const LEVELS = [
       '兩台交換器的 Gi0/9 都把模式改成 Trunk（允許的 VLAN 保持 all 即可）。',
     ],
     solve(s) {
-      addVlan(s, 'sw2', 10, '業務'); addVlan(s, 'sw2', 20, '研發');
+      addVlan(s, 'sw2', 10, 'SALES'); addVlan(s, 'sw2', 20, 'RD');
       swp(s, 'sw2', 'Gi0/1').vlan = 10; swp(s, 'sw2', 'Gi0/2').vlan = 20;
       link(s, 'sw1:Gi0/9', 'sw2:Gi0/9');
       swp(s, 'sw1', 'Gi0/9').mode = 'trunk'; swp(s, 'sw2', 'Gi0/9').mode = 'trunk';
@@ -396,8 +396,8 @@ export const LEVELS = [
     id: 'l08', chapter: 2, title: '跨 VLAN 路由', subtitle: 'Router-on-a-Stick 與子介面', tags: ['子介面', 'Inter-VLAN', 'DHCP'],
     brief: '部門隔開之後，大家卻連不到檔案伺服器了。VLAN 之間要互通必須經過路由器。路由器只剩一個埠可用，請用子介面讓它同時當三個 VLAN 的閘道，並替兩個部門發 DHCP。',
     given: [
-      ['VLAN 10 業務', '192.168.10.0/24 · 閘道 .1'], ['VLAN 20 研發', '192.168.20.0/24 · 閘道 .1'],
-      ['VLAN 30 伺服器', '192.168.30.0/24 · 閘道 .1'], ['檔案伺服器', '192.168.30.10（固定）'], ['DHCP 範圍', '各 VLAN 的 .100 – .199'],
+      ['VLAN 10 業務 (SALES)', '192.168.10.0/24 · 閘道 .1'], ['VLAN 20 研發 (RD)', '192.168.20.0/24 · 閘道 .1'],
+      ['VLAN 30 伺服器 (SERVERS)', '192.168.30.0/24 · 閘道 .1'], ['檔案伺服器', '192.168.30.10（固定）'], ['DHCP 範圍', '各 VLAN 的 .100 – .199'],
     ],
     learn: [
       { t: 'VLAN 之間不通', d: '不同 VLAN 是不同的網段，要互通就得經過第三層設備（路由器或 L3 交換器）。' },
@@ -408,7 +408,7 @@ export const LEVELS = [
       D('c2960', 'sw', {
         name: 'Switch', pos: [0, -1.5],
         init(d) {
-          d.sw.vlans.push({ id: 10, name: '業務' }, { id: 20, name: '研發' }, { id: 30, name: '伺服器' });
+          d.sw.vlans.push({ id: 10, name: 'SALES' }, { id: 20, name: 'RD' }, { id: 30, name: 'SERVERS' });
           d.sw.ports['Gi0/1'].vlan = 10; d.sw.ports['Gi0/2'].vlan = 20; d.sw.ports['Gi0/3'].vlan = 30;
         },
       }),

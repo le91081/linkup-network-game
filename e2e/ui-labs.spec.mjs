@@ -181,8 +181,8 @@ test('2D 拓撲圖：設備圖示、VLAN 配色與圖例、平行的線錯開、
   const colours = await svg.locator('line.t2-link.up[style*="stroke"]').evaluateAll((els) => [...new Set(els.map((e) => e.style.stroke))]);
   expect(colours.length).toBe(2);
   const legend = page.locator('#topo2d .t2-legend');
-  await expect(legend).toContainText('VLAN 10 辦公室');
-  await expect(legend).toContainText('VLAN 20 會計');
+  await expect(legend).toContainText('VLAN 10 OFFICE');
+  await expect(legend).toContainText('VLAN 20 ACCT');
   // 圖例不會蓋到兩側的面板
   expect(await page.evaluate(() => {
     const l = document.querySelector('.t2-legend').getBoundingClientRect(), m = document.querySelector('#mission').getBoundingClientRect(), p = document.querySelector('#panel').getBoundingClientRect();

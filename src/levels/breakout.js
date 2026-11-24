@@ -25,7 +25,7 @@ export const LEVELS48 = [
     ],
     setup() {
       return makeState([
-        D('n9332', 'tor', { name: 'ToR (Nexus 9332C)', pos: [0, -3], init(d) { breakoutPort(null, d, 'Eth1/32', '25g-4x'); } }),
+        D('n9332', 'tor', { name: 'ToR (Nexus 9332C)', host: 'TOR-1', pos: [0, -3], init(d) { breakoutPort(null, d, 'Eth1/32', '25g-4x'); } }),
         D('rack1u', 'store', { name: '儲存伺服器', pos: [7, 2], ip: STORE, services: [{ proto: 'tcp', port: 2049, name: 'NFS' }] }),
         D('rack1u', 'gpu1', { name: 'GPU 伺服器 1', pos: [-7.5, 3.5], ip: '10.0.0.11' }),
         D('rack1u', 'gpu2', { name: 'GPU 伺服器 2', pos: [-1.5, 5.5], ip: '10.0.0.12' }),

@@ -34,7 +34,7 @@ export const LEVELS45 = [
             d.psu = [{ on: true, feed: 'A' }, { on: true, feed: 'A' }]; // 兩個都插在 A 路的 PDU 上
           },
         }),
-        D('c9300', 'core', { name: '核心交換器', pos: [0, -1], init(d) { d.psu = [{ on: true, feed: 'A' }, { on: false, feed: '' }]; } }),
+        D('c9300', 'core', { name: '核心交換器', host: 'CORE-SW', pos: [0, -1], init(d) { d.psu = [{ on: true, feed: 'A' }, { on: false, feed: '' }]; } }),
         D('rack1u', 'srv1', { name: '網站伺服器', pos: [-5, 4], ip: '10.0.0.11', gw: '10.0.0.1', dns: '8.8.8.8', services: [{ proto: 'tcp', port: 443, name: 'HTTPS' }], init(d) { d.psu = [{ on: true, feed: 'A' }, { on: true, feed: 'B' }]; } }),
         D('rack1u', 'srv2', { name: '資料庫伺服器', pos: [5, 4], ip: '10.0.0.12', gw: '10.0.0.1', dns: '8.8.8.8', services: [{ proto: 'tcp', port: 5432, name: 'PostgreSQL' }], init(d) { d.psu = [{ on: true, feed: 'A' }, { on: true, feed: '' }]; } }),
       ], [['inet:line1', 'fg:wan1'], ['fg:x1', 'core:Te1/1/1'], ['srv1:eth0', 'core:Te1/1/2'], ['srv2:eth0', 'core:Te1/1/3']]);

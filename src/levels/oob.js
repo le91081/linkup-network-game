@@ -35,7 +35,7 @@ export const LEVELS62 = [
         }),
         D('pc', 'user', { name: '使用者 PC', pos: [-8, 2], ip: '10.10.10.21', gw: '10.10.10.1' }),
         D('sw8', 'osw', { name: '管理交換器', pos: [2, -6] }),
-        D('isr4321', 'ort', { name: '管理路由器', pos: [6, -3], init(d) { Object.assign(d.ifaces[0], { ip: '192.168.100.1', mask: '255.255.255.0' }); Object.assign(d.ifaces[1], { ip: '192.168.200.1', mask: '255.255.255.0' }); } }),
+        D('isr4321', 'ort', { name: '管理路由器', host: 'OOB-RT', pos: [6, -3], init(d) { Object.assign(d.ifaces[0], { ip: '192.168.100.1', mask: '255.255.255.0' }); Object.assign(d.ifaces[1], { ip: '192.168.200.1', mask: '255.255.255.0' }); } }),
         D('sw8', 'nsw', { name: '網管中心交換器', pos: [6, 2] }),
         D('pc', 'noc', { name: '網管工作站', pos: [3, 6], ip: '192.168.200.10', gw: '192.168.200.1' }),
         D('tower', 'bk', { name: '備份伺服器', pos: [9, 6], ip: BK, gw: '192.168.200.1', services: [{ proto: 'udp', port: 69, name: 'TFTP' }] }),

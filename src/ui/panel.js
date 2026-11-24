@@ -304,12 +304,14 @@ function swVlans(ctx, body) {
   const quiet = { commit() {} };
   const draft = { id: '', name: '' };
   const idInp = inp(quiet, ...bind(draft, 'id'), { ph: 'ID，例如 10', check: isNum(2, 4094) });
-  const nmInp = inp(quiet, ...bind(draft, 'name'), { ph: '名稱（選填）', mono: false });
+  const nmInp = inp(quiet, ...bind(draft, 'name'), { ph: '名稱，例如 SALES（選填）', mono: false });
   const add = () => {
     const id = +idInp.value.trim(), name = nmInp.value.trim();
     if (!Number.isInteger(id) || id < 2 || id > 4094) return toast('VLAN ID 必須是 2 – 4094 的整數', 'bad');
     if (sw.vlans.some((v) => v.id === id)) return toast(`VLAN ${id} 已經存在`, 'bad');
-    sw.vlans.push({ id, name: name || 'VLAN' + id });
+    // 和真的交換器一樣：名稱是 1 – 32 個 ASCII 字元、不能有空白；沒填的話是 VLAN0010 這種預設名稱
+    if (name && (/[^!-~]/.test(name) || name.length > 32)) return toast('VLAN 名稱只能用英文字母、數字與符號（最長 32 個字，不能有中文或空白），例如 SALES、RD、GUEST-WIFI', 'bad', 5000);
+    sw.vlans.push({ id, name: name || 'VLAN' + String(id).padStart(4, '0') });
     ctx.commit(true);
   };
   for (const el of [idInp, nmInp]) el.addEventListener('keydown', (e) => { if (e.key === 'Enter') add(); });

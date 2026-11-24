@@ -215,7 +215,7 @@ const SEC = {
     write(d, key, f) {
       const a = (f.admintimeout || [])[0];
       if (a != null && (!/^\d+$/.test(a) || +a < 1 || +a > 480)) return ERR('admintimeout 必須是 1 – 480 分鐘（預設 5）');
-      if (f.hostname && f.hostname.length) d.name = f.hostname.join(' ');
+      if (f.hostname && f.hostname.length) { d.name = f.hostname.join(' '); delete d.host; }
       if (d.mgmt) { if (a == null || +a === 5) delete d.mgmt.adminTimeout; else d.mgmt.adminTimeout = +a; }
       return undefined;
     },

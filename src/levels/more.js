@@ -77,11 +77,11 @@ export const LEVELS3 = [
     ],
     setup: () => {
       const s = makeState([
-        D('c9300', 'core-a', { name: 'A 棟核心', pos: [-7, -3] }),
+        D('c9300', 'core-a', { name: 'A 棟核心', host: 'CORE-A', pos: [-7, -3] }),
         D('tower', 'srv', { name: '伺服器', pos: [-10.5, 2.5], ip: '192.168.1.10' }),
-        D('c9300', 'sw-b', { name: 'B 棟交換器', pos: [7.5, -3] }),
+        D('c9300', 'sw-b', { name: 'B 棟交換器', host: 'SW-B', pos: [7.5, -3] }),
         D('pc', 'pc-b', { name: 'B 棟 PC', pos: [7.5, 2.5], ip: '192.168.1.21' }),
-        D('c2960', 'sw-w', { name: '倉庫交換器', pos: [0, 4] }),
+        D('c2960', 'sw-w', { name: '倉庫交換器', host: 'SW-WH', pos: [0, 4] }),
         D('pc', 'pc-w', { name: '倉庫 PC', pos: [0, 8.8], ip: '192.168.1.31' }),
       ], [['srv:eth0', 'core-a:Gi1/0/1'], ['pc-b:eth0', 'sw-b:Gi1/0/1'], ['pc-w:eth0', 'sw-w:Gi0/1'], ['core-a:Gi1/0/24', 'sw-b:Gi1/0/24']]);
       s.dist = { 'core-a|sw-b': 800, 'core-a|sw-w': 250, 'sw-b|sw-w': 700 };
@@ -179,7 +179,7 @@ export const LEVELS3 = [
         D('nas', 'srv', { name: '檔案伺服器', pos: [6.5, -7.5], ip: '192.168.1.10' }),
         D('c2960', 'sw-a', { name: 'SW-A', pos: [0, -0.5], init: tr }),
         D('pc', 'pc-a', { name: 'PC-A', pos: [-6.5, 4], ip: '192.168.1.21' }),
-        D('c2960', 'rogue', { name: '不明的交換器', pos: [4.5, 3.6], locked: true, init(d) { d.sw.stp.prio = 0; } }),
+        D('c2960', 'rogue', { name: '不明的交換器', host: 'Switch', pos: [4.5, 3.6], locked: true, init(d) { d.sw.stp.prio = 0; } }),
         D('laptop', 'bad', { name: '不明筆電', pos: [8.6, 7], ip: '192.168.1.66', locked: true }),
       ], [['sw-c:Gi0/9', 'sw-a:Gi0/9'], ['srv:eth0', 'sw-c:Gi0/1'], ['pc-a:eth0', 'sw-a:Gi0/1'], ['rogue:Gi0/1', 'sw-a:Gi0/5'], ['bad:eth0', 'rogue:Gi0/2']]);
     },

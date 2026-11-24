@@ -194,7 +194,7 @@ function route(state, d, method, rest, body, user) {
     if (method === 'PATCH' || method === 'PUT') {
       const v = body['Cisco-IOS-XE-native:hostname'];
       if (typeof v !== 'string' || !/^[A-Za-z][\w-]{0,62}$/.test(v)) return reply(400, errBody('invalid-value', 'invalid hostname'), '內容要是 {"Cisco-IOS-XE-native:hostname": "新名稱"}（英文字母開頭，只能有英數字、- 與 _）');
-      d.name = v;
+      d.name = v; delete d.host;
       changed(state, d, user);
       return reply(204, null);
     }

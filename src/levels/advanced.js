@@ -313,7 +313,7 @@ export const LEVELS2 = [
       D('c2960', 'sw', {
         name: 'Switch', pos: [-3, 0],
         init(d) {
-          d.sw.vlans.push({ id: 10, name: '員工' }, { id: 20, name: '訪客' });
+          d.sw.vlans.push({ id: 10, name: 'STAFF' }, { id: 20, name: 'GUEST' });
           d.sw.ports['Gi0/1'].vlan = 10; d.sw.ports['Gi0/2'].vlan = 10; d.sw.ports['Gi0/3'].vlan = 20;
           d.sw.ports['Gi0/9'].mode = 'trunk';
         },
@@ -371,7 +371,7 @@ export const LEVELS2 = [
       D('c2960', 'sw', {
         name: 'Switch', pos: [0, -1.5],
         init(d) {
-          d.sw.vlans.push({ id: 10, name: '使用者' }, { id: 99, name: '管理' });
+          d.sw.vlans.push({ id: 10, name: 'USERS' }, { id: 99, name: 'MGMT' });
           d.sw.ports['Gi0/1'].vlan = 99; d.sw.ports['Gi0/2'].vlan = 10; d.sw.ports['Gi0/3'].vlan = 99;
           d.sw.ports['Gi0/9'].mode = 'trunk';
         },
@@ -650,7 +650,7 @@ export const LEVELS2 = [
       const sw = (id, name, pos, init) => D('c2960', id, {
         name, pos,
         init(d) {
-          d.sw.vlans.push({ id: 10, name: '辦公室' });
+          d.sw.vlans.push({ id: 10, name: 'OFFICE' });
           d.sw.ports['Gi0/9'].mode = 'trunk'; d.sw.ports['Gi0/10'].mode = 'trunk';
           init(d);
         },
@@ -770,7 +770,7 @@ export const LEVELS2 = [
       D('c9300', 'core', {
         name: 'Core', pos: [0, -3.5],
         init(d) {
-          d.sw.vlans.push({ id: 10, name: '業務' }, { id: 20, name: '研發' }, { id: 99, name: '伺服器' });
+          d.sw.vlans.push({ id: 10, name: 'SALES' }, { id: 20, name: 'RD' }, { id: 99, name: 'SERVERS' });
           d.sw.ports['Gi1/0/1'].vlan = 10; d.sw.ports['Gi1/0/2'].vlan = 20; d.sw.ports['Gi1/0/24'].vlan = 99;
           for (const v of [10, 20, 99]) d.ifaces.push(newIface('vlan' + v, 'Vlan' + v, { t: 'svi', vlan: v }, { ip: `10.0.${v}.1`, mask: '255.255.255.0' }));
         },
@@ -815,7 +815,7 @@ export const LEVELS2 = [
     ],
     setup: () => {
       const r = (id, name, pos, ips, ospf) => D('isr4331', id, {
-        name, pos,
+        name, host: id.toUpperCase(), pos, // 命令列上是 R-TPE、R-TXG、R-KHH
         init(d) { ips.forEach(([ip, mask], n) => Object.assign(d.ifaces[n], { ip, mask, ospf })); },
       });
       const P = '255.255.255.252', L = '255.255.255.0';

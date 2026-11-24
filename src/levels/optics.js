@@ -29,13 +29,13 @@ export const LEVELS35 = [
     ],
     setup() {
       const s = makeState([
-        D('c9300', 'core', { name: 'A 棟核心', pos: [-7, -3] }),
+        D('c9300', 'core', { name: 'A 棟核心', host: 'CORE-A', pos: [-7, -3] }),
         D('tower', 'srv', { name: '伺服器', pos: [-11, 2.5], ip: '192.168.1.10' }),
-        D('c9300', 'sw-b', { name: 'B 棟交換器', pos: [8, -4] }),
+        D('c9300', 'sw-b', { name: 'B 棟交換器', host: 'SW-B', pos: [8, -4] }),
         D('pc', 'pc-b', { name: 'B 棟 PC', pos: [11.5, 1], ip: '192.168.1.21' }),
-        D('c2960', 'sw-w', { name: '倉庫交換器', pos: [1, 4.5] }),
+        D('c2960', 'sw-w', { name: '倉庫交換器', host: 'SW-WH', pos: [1, 4.5] }),
         D('pc', 'pc-w', { name: '倉庫 PC', pos: [1, 9], ip: '192.168.1.31' }),
-        D('c9300', 'sw-r', { name: '研發機房', pos: [-6, 7] }),
+        D('c9300', 'sw-r', { name: '研發機房', host: 'SW-RD', pos: [-6, 7] }),
         D('pc', 'pc-r', { name: '研發 PC', pos: [-10, 10], ip: '192.168.1.41' }),
       ], [
         ['srv:eth0', 'core:Gi1/0/1'], ['pc-b:eth0', 'sw-b:Gi1/0/1'], ['pc-w:eth0', 'sw-w:Gi0/1'], ['pc-r:eth0', 'sw-r:Gi1/0/1'],

@@ -189,7 +189,7 @@ export const LEVELS93 = [
     id: 'l175', chapter: 18, title: '廣播會傳到哪裡？', subtitle: '廣播網域與碰撞網域：Hub、交換器、VLAN、路由器', tags: ['廣播網域', '碰撞網域', 'Hub', 'VLAN', 'ARP'], noDrill: true,
     brief: '同事說「同一台交換器上的設備都收得到廣播」，另一個說「路由器會把廣播轉到另一邊」。兩個都不完全對。這個網路有一台 Hub、一台切了兩個 VLAN 的交換器和一台路由器，請讓 PC-1 送出廣播，看看到底誰收得到。',
     given: [
-      ['VLAN 10 辦公室', '192.168.10.0/24 · 閘道 192.168.10.1（R1 Gi0/0/0）'], ['VLAN 20 會計', '192.168.20.0/24 · 閘道 192.168.20.1（R1 Gi0/0/1）'],
+      ['VLAN 10 辦公室 (OFFICE)', '192.168.10.0/24 · 閘道 192.168.10.1（R1 Gi0/0/0）'], ['VLAN 20 會計 (ACCT)', '192.168.20.0/24 · 閘道 192.168.20.1（R1 Gi0/0/1）'],
       ['Hub', 'PC-1（.10.11）、PC-2（.10.12），上行接 SW 的 Gi0/1'], ['SW', 'Gi0/2 PC-3（.10.13）· Gi0/3 PC-4（.20.14）'],
     ],
     learn: [
@@ -208,7 +208,7 @@ export const LEVELS93 = [
         D('pc', 'pc3', { name: 'PC-3', pos: [1.5, 5], ip: '192.168.10.13', gw: '192.168.10.1' }),
         D('pc', 'pc4', { name: 'PC-4', pos: [8.5, 4], ip: '192.168.20.14', gw: '192.168.20.1' }),
       ], [['pc1:eth0', 'hub:1'], ['pc2:eth0', 'hub:2'], ['hub:4', 'sw:Gi0/1'], ['pc3:eth0', 'sw:Gi0/2'], ['pc4:eth0', 'sw:Gi0/3'], ['sw:Gi0/9', 'r1:Gi0/0/0'], ['sw:Gi0/10', 'r1:Gi0/0/1']]);
-      addVlan(s, 'sw', 10, '辦公室'); addVlan(s, 'sw', 20, '會計');
+      addVlan(s, 'sw', 10, 'OFFICE'); addVlan(s, 'sw', 20, 'ACCT');
       for (const [p, v] of [['Gi0/1', 10], ['Gi0/2', 10], ['Gi0/9', 10], ['Gi0/3', 20], ['Gi0/10', 20]]) Object.assign(swp(s, 'sw', p), { mode: 'access', vlan: v });
       return s;
     },

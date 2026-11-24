@@ -116,7 +116,7 @@ export const LEVELS8 = [
     ],
     setup: () => {
       const r = (id, name, pos, lan4, ifs) => D('isr4331', id, {
-        name, pos,
+        name, host: id.toUpperCase(), pos,
         init(d) {
           d.v6routing = true;
           rif(d, 0, { ...(lan4 ? { ip: lan4, mask: '255.255.255.0' } : {}), ip6: ifs[0], ra: true });

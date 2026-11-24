@@ -291,6 +291,8 @@ export function makeDevice(model, id, o = {}) {
     ifaces: [], routes: [], services: [...(m.services || []), ...(o.services || [])],
     locked: !!o.locked, note: o.note || '',
   };
+  // 命令列上的主機名稱（hostname）：畫面上的名稱是中文或有空白時另外指定，真的設備只能用英數與連字號
+  if (o.host) d.host = o.host;
   switch (m.kind) {
     case 'host':
       if (m.phone) {

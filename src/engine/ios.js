@@ -102,7 +102,8 @@ export function iosDirty(state, dev) {
 
 /** 跑 IOS XE 的型號（有 RESTCONF / NETCONF） */
 export const IOS_XE = new Set(['isr4321', 'isr4331', 'c9300', 'c9800']);
-export const hostName = (dev) => dev.name.replace(/[^\w-]+/g, '-').replace(/^-+|-+$/g, '') || 'Device';
+/** 命令列上的主機名稱：有另外指定 (dev.host) 就用它，否則把畫面上的名稱整理成英數與連字號 */
+export const hostName = (dev) => dev.host || dev.name.replace(/[^\w-]+/g, '-').replace(/^-+|-+$/g, '') || 'Device';
 export const aclName = (i, dir) => (i.aclNames && i.aclNames[dir]) || `${i.label.replace(/[^\w.]+/g, '_')}_${dir}`.toUpperCase();
 export const poolName = (i) => (i.dhcp && i.dhcp.pool) || i.label.replace(/[^\w.]+/g, '_').toUpperCase();
 
@@ -1453,7 +1454,12 @@ export function iosSession(getDev, getState, who = null) {
     return (x) => (x.vrf || '') === v && x.dst === net && parseMask(x.mask || '') === maskBits(mask) && (!via || x.via === via) && (!outIf || x.outIf === outIf);
   };
   const CONFIG = [
-    ['hostname <name>', ([name]) => { dev().name = name; }],
+    ['hostname <name>', ([name]) => {
+      // 真的 IOS：開頭要是字母、結尾是字母或數字，中間只能有字母、數字與連字號，最長 63 個字
+      if (!/^[A-Za-z]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?$/.test(name)) return err('% Hostname contains one or more illegal characters.（主機名稱開頭要是英文字母，只能用英文字母、數字與連字號，最長 63 個字）');
+      dev().name = name; delete dev().host;
+      return undefined;
+    }],
     ['mls qos', () => { if (dev().kind !== 'mswitch') return err('mls qos 是 Catalyst 2960 這類交換器的指令（路由器用 class-map / policy-map）'); const sw = dev().sw; sw.qos = { ...(sw.qos || {}), on: true }; return '（開了 mls qos 之後，沒有設定 trust 的埠會把收到的 DSCP 與 CoS 全部改成 0）'; }],
     ['no mls qos', () => { const sw = dev().sw; if (sw && sw.qos) { sw.qos.on = false; if (!sw.qos.cosDscp) delete sw.qos; } }],
     ['mls qos map cos-dscp <...>', ([list]) => {
@@ -2923,7 +2929,13 @@ export function iosSession(getDev, getState, who = null) {
   const SUB = {
     if: IF,
     vlan: [
-      ['name <...>', ([name]) => { S.cur.name = name; }],
+      ['name <...>', ([name]) => {
+        // 真的 IOS：VLAN 名稱是 1 – 32 個 ASCII 字元，中間不能有空白
+        if (/\s/.test(name)) return err("% Invalid input detected at '^' marker.（VLAN 名稱不能有空白，用連字號或底線代替）");
+        if (/[^\x21-\x7e]/.test(name) || name.length > 32) return err('% VLAN name must be 1 - 32 ASCII characters（VLAN 名稱只能用英文字母、數字與符號，最長 32 個字）');
+        S.cur.name = name;
+        return undefined;
+      }],
       ['private-vlan <t>', ([t]) => {
         if (!pvlanOk()) return err('% Private VLANs are not supported on this platform（Catalyst 2960 只有 switchport protected）');
         const v = ['primary', 'isolated', 'community'].find((x) => x.startsWith(t.toLowerCase()));
