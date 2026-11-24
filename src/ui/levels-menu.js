@@ -123,6 +123,8 @@ export function openLevelMenu(app, ctx) {
   /** 捲動時，左邊標出現在看到的是哪一章 */
   function spy() {
     if (ui.view !== 'chapters') return;
+    // 搜尋的時候右邊不分章節，左邊就不標
+    if (query) { for (const r of side.querySelectorAll('.lvp-row.on')) r.classList.remove('on'); return; }
     const secs = [...main.querySelectorAll('.chapter')], top = main.scrollTop, bottom = top + main.clientHeight;
     let cur = null;
     if (picked) {
@@ -147,6 +149,7 @@ export function openLevelMenu(app, ctx) {
       const hit = LEVELS.filter((lv) => { const t = `${levelNo(lv)} ${lv.title} ${lv.subtitle} ${lv.tags.join(' ')}`.toLowerCase(); return words.every((w) => t.includes(w)); }).filter(keep);
       fill(main, h('div', { class: 'lvp-note', text: hit.length ? `找到 ${hit.length} 關` : '沒有符合的關卡。試試別的關鍵字（例如 VLAN、NAT、OSPF、Wi-Fi、憑證），或把「未完成 / 已完成」改回「全部」。' }),
         h('div', { class: 'lv-grid' }, hit.map((lv) => card(lv, null, words))));
+      spy();
       return;
     }
     if (ui.view === 'paths') { drawPaths(); return; }

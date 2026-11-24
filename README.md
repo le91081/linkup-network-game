@@ -513,7 +513,7 @@ npm run build    # 輸出到 dist/
 
 1. VXLAN / EVPN 的實作關卡（現在只有知識庫的文章與題目；引擎還沒有 VTEP 的封裝）。
 2. DoS：SYN flood 把連線表塞滿、FortiGate 的 DoS 政策（引擎還沒有攻擊流量與連線表的容量）。
-3. 「Wi-Fi 很慢」的故障排除關卡（同頻干擾與最低資料速率對速率的影響）。
+3. Wi-Fi 的空中時間：遠處的低速用戶端拖慢整台基地台、最低資料速率（同頻干擾與頻道寬度已經在 5-4）。
 4. FortiGate HA 的 Active-Active、OSPF point-to-multipoint、OCSP。
 
 遊戲系統（成就、預算與採購、名詞表、帳號與雲端存檔、多人）暫時不做；手機與平板、多語系、無障礙、淺色主題不在規劃內。

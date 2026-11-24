@@ -143,7 +143,7 @@ export const LEVELS93 = [
         answer: 'smac', explain: '交換器靠來源 MAC 學習、靠目的 MAC 轉送。所以沒有送過訊框的設備，表裡找不到。',
       },
       {
-        type: 'ask', id: 'flood', label: '查不到目的 MAC 的訊框會怎麼處理？', tip: '先在 SW-Office 的「狀態」分頁按「清除」把 MAC 位址表清空，再讓 PC-A ping 印表機，看封包追蹤的說明。',
+        type: 'ask', id: 'flood', label: '查不到目的 MAC 的訊框會怎麼處理？', tip: '先讓 PC-A ping 一次印表機（電腦記住了對方的 MAC），接著在 SW-Office 的「狀態」分頁按「清除」清空 MAC 位址表，兩分鐘內再 ping 一次：這次不用 ARP，交換器卻不知道印表機在哪個埠。看封包追蹤的說明，還有多跑到其他設備的那幾顆淡淡的光點。',
         q: '交換器收到一個單點傳送的訊框，但是 MAC 位址表裡查不到它的目的 MAC（unknown unicast）。交換器會怎麼做？',
         options: [
           { v: 'flood', t: '送往同一個 VLAN 的其他所有埠（泛洪）' },

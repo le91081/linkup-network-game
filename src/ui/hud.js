@@ -180,6 +180,7 @@ export function renderGuide(app, root) {
           h('div', null, h('kbd', { text: '拖曳設備' }), '拉到另一台設備上放開 → 接上網路線'),
           h('div', null, h('kbd', { text: '點設備' }), '開啟設定頁面'),
           h('div', null, h('kbd', { text: '點網路線' }), '查看速率與距離、拔除'),
+          h('div', null, h('kbd', { text: '選取設備' }), '它的每條線中間會標出兩端的埠名；滑鼠移到線上也看得到'),
           h('div', null, h('kbd', { text: '點追蹤紀錄' }), '標著「封包」的那幾行可以打開，看 MAC / IP / 埠號'),
           h('div', null, h('kbd', { text: 'Ctrl + Z' }), '復原上一個變更，Ctrl + Y 重做'),
           h('div', null, h('kbd', { text: '時鐘' }), '場景上方的時鐘可以暫停、加速，或快轉到網路穩定'),
@@ -469,6 +470,7 @@ export function openHelp(app) {
       step('mouse', '2. 設定', '點一下設備，右側會出現它的管理頁面：IP、DHCP、VLAN、路由、NAT、防火牆政策…'),
       step('play', '3. 測試', '按「執行測試」，看封包沿著網路線一站一站前進。卡住的地方會直接告訴你原因。'),
       step('terminal', '4. 除錯', '打開電腦的「終端機」分頁，用 ping、tracert、ipconfig、nslookup 自己找問題。')),
+    h('p', { class: 'muted', text: '不知道先玩哪一關？關卡選單左邊的「學習路線」有排好順序的路（新手入門、CCNA 重點、故障排除…）。場景太擠的話，學習筆記右上角的箭頭可以把它收起來。' }),
     h('p', { class: 'muted', text: '鍵盤：按 ? 看所有快捷鍵（Ctrl + Enter 執行測試、[ ] 切換設備、T 切換 2D 拓撲圖、M 開關音效）。' }),
     h('div', { class: 'd-actions' }, button('從第 1-1 關跟著做一次（互動導覽）', { ic: 'mouse', kind: 'ghost', onclick: () => { closeModal(); startTutorial(app); } }), button('開始', { kind: 'primary', onclick: closeModal })),
   ]);
