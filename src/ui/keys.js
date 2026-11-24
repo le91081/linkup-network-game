@@ -11,7 +11,7 @@ export const SHORTCUTS = [
   ['/', '游標移到終端機或 CLI 的輸入列'],
   ['T', '切換 3D 場景與 2D 邏輯拓撲圖'],
   ['H', '提示'],
-  ['K', '左側切換「任務」與「知識庫」'],
+  ['K', '打開 / 關閉知識庫（釘在左側時是切換「任務」與「知識庫」）'],
   ['L', '關卡清單'],
   ['M', '音效開 / 關'],
   ['空白鍵', '測試進行中：快轉封包動畫'],
@@ -31,6 +31,8 @@ export function openShortcuts() {
 export function installShortcuts(app, hud) {
   window.addEventListener('keydown', (e) => {
     const tag = document.activeElement && document.activeElement.tagName;
+    // 知識庫的閱讀視窗開著的時候，K 再按一次就關掉（其他視窗開著時快捷鍵都不作用）
+    if (hud.modalOpen() && !(tag === 'INPUT' || tag === 'TEXTAREA') && !e.ctrlKey && !e.metaKey && !e.altKey && e.key.toLowerCase() === 'k' && document.querySelector('#modal-root .dialog.kbr')) { hud.toggleKb(app); e.preventDefault(); return; }
     if (tag === 'INPUT' || tag === 'SELECT' || tag === 'TEXTAREA' || hud.modalOpen()) return;
     if (e.altKey) return;
     if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') { e.preventDefault(); app.run(); return; }

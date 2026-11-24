@@ -6,7 +6,7 @@ import { OPTICS, FIBER } from '../engine/optics.js';
 import { fmtIp } from '../engine/ip.js';
 import { pendingOf, fmtDur } from '../engine/sim.js';
 import { renderSandbox } from './sandbox.js';
-import { kbState, kbView, missionTabs, linkText, levelKb, openConcept } from './kb.js';
+import { kbState, kbView, missionTabs, linkText, levelKb, openConcept, kbDocked, toggleKb as kbToggle } from './kb.js';
 import { LEVEL_CERTS } from '../data/certs.js';
 import { openQuiz, openCerts, openLevelQuiz, hasLevelQuiz, updateReviewBadge } from './quiz.js';
 import { openRacks } from './rackview.js';
@@ -59,7 +59,8 @@ export function updateHistory(app) {
 export function renderMission(app) {
   const lv = app.level;
   const root = app.el.mission, k = kbState(app);
-  if (k.tab === 'kb') {
+  // 知識庫釘在左側的時候才顯示在這個面板裡（預設是開閱讀視窗）
+  if (k.tab === 'kb' && kbDocked(app)) {
     root.replaceChildren(missionTabs(app), kbView(app), !lv.sandbox && missionFoot(app));
     return;
   }
@@ -547,9 +548,5 @@ export function openComplete(app, stars, sc) {
   ]);
 }
 
-/** 左側面板切換「任務」與「知識庫」（K 鍵） */
-export function toggleKb(app) {
-  const k = kbState(app);
-  k.tab = k.tab === 'kb' ? 'mission' : 'kb';
-  renderMission(app);
-}
+/** K 鍵：開 / 關知識庫的閱讀視窗（釘在左側時是切換「任務」與「知識庫」） */
+export function toggleKb(app) { kbToggle(app); }

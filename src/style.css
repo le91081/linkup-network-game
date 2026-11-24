@@ -1338,3 +1338,98 @@ body.guide-fold { --side-r: 44px; }
 .dos-row { grid-template-columns: minmax(0, 1.25fr) minmax(0, 1fr) 116px; }
 @container pbody (max-width: 389px) { .dos-row { grid-template-columns: minmax(0, 1fr) 112px; } }
 .anomaly-log .logline { font-size: 11px; line-height: 1.5; color: #ffd9a0; padding: 5px 0; border-top: 1px dashed var(--line); overflow-wrap: anywhere; user-select: text; }
+
+/* ───────── 知識庫的閱讀視窗 ───────── */
+.dialog.wide.kbr { width: min(1240px, 100%); height: calc(100vh - 48px); overflow: hidden; padding: 0; gap: 0; }
+.kbr-head { flex: none; display: flex; align-items: center; gap: 12px; padding: 14px 18px; border-bottom: 1px solid var(--line); }
+.kbr-brand { flex: none; display: flex; align-items: center; gap: 11px; padding: 0; border: 0; background: transparent; text-align: left; color: var(--text); }
+.kbr-brand b { display: block; font-size: 17px; line-height: 1.2; }
+.kbr-brand small { display: block; color: var(--faint); font-size: 11.5px; }
+.kbr-brand:hover b { color: #c8fff5; }
+.kbr-search { flex: 1; min-width: 0; max-width: 520px; margin-left: 8px; }
+.kbr-head > .btn { margin-left: auto; flex: none; }
+.kbr-x { width: 32px; height: 32px; }
+.dialog.kbr > .kbr-body { flex: 1 1 0; min-height: 0; display: grid; grid-template-columns: 256px minmax(0, 1fr); }
+.kbr-nav { min-height: 0; overflow-y: auto; padding: 12px 10px 18px 14px; border-right: 1px solid var(--line); display: flex; flex-direction: column; gap: 3px; background: rgba(6, 10, 22, 0.25); }
+.kbr-nav > * { flex: none; }
+.kbr-nav h3.sec { margin: 8px 4px 4px; }
+.kbr-grp { display: flex; flex-direction: column; gap: 1px; margin-bottom: 4px; }
+.kbr-grp h3.sec { margin-top: 0; }
+.kbr-item { display: block; width: 100%; text-align: left; padding: 5px 9px; border: 0; border-radius: 8px; background: transparent; color: #c3cbe2; font-size: 13px; line-height: 1.45; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.kbr-item:hover { background: var(--card); color: var(--text); }
+.kbr-item.on { background: rgba(79, 216, 196, 0.14); color: #c8fff5; font-weight: 700; }
+.kbr-cat-h { display: grid; grid-template-columns: 14px minmax(0, 1fr) auto; align-items: center; gap: 6px; width: 100%; padding: 6px 8px 6px 4px; border: 0; border-radius: 8px; background: transparent; color: var(--text); text-align: left; }
+.kbr-cat-h:hover { background: var(--card); }
+.kbr-cat-h b { font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.kbr-cat-h em { font: 700 10.5px var(--mono); font-style: normal; color: var(--faint); }
+.kbr-cat-h .ic { color: var(--faint); transition: transform 0.15s; }
+.kbr-cat.open .kbr-cat-h .ic { transform: rotate(90deg); }
+.kbr-cat-b { display: flex; flex-direction: column; gap: 1px; padding: 1px 0 6px 14px; }
+.kbr-main { min-height: 0; overflow-y: auto; container: kbmain / inline-size; }
+.kbr-pad { padding: 26px 34px 40px; display: flex; flex-direction: column; gap: 26px; }
+.kbr-hero h1 { font-size: 28px; }
+.kbr-hero p { color: var(--muted); font-size: 14px; line-height: 1.8; max-width: 760px; margin-top: 6px; }
+.kbr-sec { display: flex; flex-direction: column; gap: 11px; }
+.kbr-h2 { font-size: 17px; display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; }
+.kbr-h2 small { color: var(--muted); font-size: 12.5px; font-weight: 500; }
+.kbr-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); gap: 10px; }
+.kbr-card { display: flex; flex-direction: column; gap: 5px; padding: 12px 14px; border-radius: 13px; border: 1px solid var(--line); background: var(--card); color: var(--text); text-align: left; transition: border-color 0.14s, background 0.14s; }
+.kbr-card:hover { border-color: rgba(79, 216, 196, 0.5); background: var(--card-2); }
+.kbr-card-h { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+.kbr-card-h b { font-size: 14.5px; }
+.kbr-card-h small { color: var(--faint); font: 11px var(--mono); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.kbr-card-s { color: var(--muted); font-size: 12.5px; line-height: 1.65; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+.kbr-art { padding: 22px 38px 44px; display: flex; flex-direction: column; gap: 16px; max-width: 1040px; }
+.kbr-crumb { display: flex; align-items: center; gap: 8px; color: var(--faint); font-size: 12.5px; flex-wrap: wrap; }
+.kbr-crumb .kb-back { margin-right: 6px; padding: 0 9px; max-width: 100%; }
+.kbr-crumb .kb-back span { overflow: hidden; text-overflow: ellipsis; }
+.kbr-link { padding: 0; border: 0; background: transparent; color: var(--muted); font-size: 12.5px; }
+.kbr-link:hover { color: var(--accent); }
+.kbr .kb-title h1 { font-size: 30px; line-height: 1.25; }
+.kbr .kb-title p { font-size: 13px; margin-top: 4px; }
+.kbr .kb-lead { font-size: 16px; line-height: 1.8; padding: 13px 17px; }
+.kbr-cols { display: grid; grid-template-columns: minmax(0, 1fr) 248px; gap: 30px; align-items: start; }
+.kbr-text { display: flex; flex-direction: column; gap: 15px; min-width: 0; }
+.kbr .kb-p { font-size: 14.5px; line-height: 1.9; color: #d3daee; }
+.kbr .kb-steps, .kbr .kb-pit { font-size: 14px; line-height: 1.8; gap: 7px; padding-left: 24px; }
+.kbr .kb-box { padding: 14px 17px; gap: 9px; }
+.kbr .kb-box-t { font-size: 14px; }
+.kbr .kb-table { font-size: 13.5px; }
+.kbr .kb-table th, .kbr .kb-table td { padding: 9px 12px; }
+.kbr .kb-table td:first-child { font-size: 13px; }
+.kbr .kb-fig-t { font-size: 13px; }
+.kbr .kb-field { padding: 9px 11px; flex-basis: 84px; }
+.kbr .kb-field b { font-size: 13px; }
+.kbr .kb-field small { font-size: 11.5px; }
+.kbr .kb-fig-notes { font-size: 13px; line-height: 1.75; }
+.kbr .kb-cmd pre { font-size: 13px; line-height: 1.7; padding: 11px 14px; }
+.kbr .kb-cmd-v { font-size: 12px; padding: 6px 14px; }
+.kbr-rail { display: flex; flex-direction: column; gap: 20px; position: sticky; top: 4px; }
+.kbr-rail-b { display: flex; flex-direction: column; gap: 6px; }
+.kbr-rail-b h3.sec { margin: 0 0 2px; }
+.kbr-rel { display: flex; flex-direction: column; gap: 2px; padding: 8px 11px; border-radius: 10px; border: 1px solid var(--line); background: var(--card); color: var(--text); text-align: left; }
+.kbr-rel:hover { border-color: rgba(79, 216, 196, 0.5); background: var(--card-2); }
+.kbr-rel b { font-size: 13px; }
+.kbr-rel span { color: var(--muted); font-size: 11.5px; line-height: 1.5; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.kbr-pn { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-top: 10px; padding-top: 18px; border-top: 1px solid var(--line); }
+.kbr-pnb { display: flex; flex-direction: column; gap: 2px; padding: 11px 14px; border-radius: 12px; border: 1px solid var(--line); background: var(--card); color: var(--text); text-align: left; }
+.kbr-pnb.next { text-align: right; }
+.kbr-pnb:hover { border-color: rgba(79, 216, 196, 0.5); background: var(--card-2); }
+.kbr-pnb small { color: var(--faint); font-size: 11.5px; }
+.kbr-pnb b { font-size: 14px; }
+@container kbmain (max-width: 820px) {
+  .kbr-cols { grid-template-columns: minmax(0, 1fr); gap: 22px; }
+  .kbr-rail { position: static; }
+  .kbr-rail-b:first-child { display: grid; grid-template-columns: repeat(auto-fill, minmax(210px, 1fr)); gap: 8px; }
+  .kbr-rail-b:first-child h3.sec { grid-column: 1 / -1; }
+  .kbr-art { padding: 18px 24px 36px; }
+  .kbr-pad { padding: 20px 24px 32px; }
+}
+@media (max-width: 1180px) {
+  .dialog.kbr > .kbr-body { grid-template-columns: 220px minmax(0, 1fr); }
+  .kbr-brand small { display: none; }
+}
+/* 左側面板：知識庫沒有釘住時，分頁上有一個「開視窗」的小圖示；釘住時最上面有一列可以放大回去 */
+.m-tab-open { display: inline-grid; place-items: center; color: var(--faint); font-style: normal; }
+.m-tabs .tab:hover .m-tab-open { color: var(--accent); }
+.kb-dock { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin: -4px -4px 0; padding: 4px 4px 4px 10px; border-radius: 10px; background: rgba(110, 168, 255, 0.07); border: 1px solid rgba(110, 168, 255, 0.18); color: var(--muted); font-size: 11.5px; font-weight: 600; }

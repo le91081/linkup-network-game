@@ -566,7 +566,7 @@ app.scene = new Scene3D(app.el.stage, {
 });
 installSandbox(app, { renderMission: () => hud.renderMission(app) });
 installTables(document.getElementById('panel'));
-installKb(app, { renderMission: () => hud.renderMission(app), levelNo: hud.levelNo, closeModal: hud.closeModal });
+installKb(app, { renderMission: () => hud.renderMission(app), levelNo: hud.levelNo, closeModal: hud.closeModal, modal: hud.modal });
 hud.initClock(app);
 
 // 模擬時間跟著真實時間走（可以暫停或加速）。對話框開著、或分頁在背景時暫停
