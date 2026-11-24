@@ -22,6 +22,7 @@ const LABEL = {
   secret: '共用密鑰', dot1x: '802.1X', ospfNets: 'OSPF network 敘述', ospfPassive: 'OSPF 被動介面', ospfDefault: '發布預設路由', ospfRid: 'Router ID', bgp: 'BGP',
   neighbors: '鄰居', line: '線路', wan: 'WAN', lan: 'LAN', speed: '速率', duplex: '雙工', poe: 'PoE', dnsCache: 'DNS 快取', vpc: 'VPC', instances: 'EC2', subnets: '子網路',
   sgs: '安全群組', rules: '規則', tables: '路由表', inet: '網際網路', fault: '骨幹故障', archive: '設定封存', log: '紀錄',
+  dos: 'DoS 政策', iface: '介面', anomaly: '異常', action: '動作', threshold: '門檻', dnsForward: '轉送查不到的名稱 (forwarder)', srcIf: '來源介面', dstIf: '目的介面', src: '來源', service: '服務',
 };
 const lab = (k) => LABEL[k] || k;
 const show = (v) => {
