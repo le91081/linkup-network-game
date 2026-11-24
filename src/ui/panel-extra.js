@@ -680,8 +680,9 @@ export function vpnTab(ctx, body) {
       field('位址池起始', inp(ctx, ...bind(vs, 'start'), { ph: '例如 10.99.0.10', check: isIp })),
       field('位址池結束', inp(ctx, ...bind(vs, 'end'), { ph: '例如 10.99.0.50', check: isIp }))),
     grid2(
-      field('VPN 用戶可以存取的內部網段', inp(ctx, ...bind(vs, 'subnets'), { ph: '例如 10.1.0.0/24', check: isCidrList })),
+      vs.full ? field('VPN 用戶可以存取的內部網段', h('div', { class: 'muted', text: '全通道：所有流量都走 VPN' })) : field('VPN 用戶可以存取的內部網段', inp(ctx, ...bind(vs, 'subnets'), { ph: '例如 10.1.0.0/24', check: isCidrList })),
       field('連接埠', inp(ctx, ...bind(vs, 'port'), { ph: '10443', check: isPortNo }))),
+    h('div', { class: 'toggles' }, toggle(ctx, () => !vs.full, (v) => { if (v) delete vs.full; else vs.full = true; }, '分割通道（只有內部網段走 VPN；關掉就是全通道，連上網都經過公司的防火牆）', { rerender: true })),
     h('div', { class: 'thead c-user' }, h('span', { text: '帳號' }), h('span', { text: '密碼' }), h('span')));
     vs.users.forEach((u, n) => card.append(h('div', { class: 'trow c-user' },
       inp(ctx, ...bind(u, 'user'), { ph: '帳號', mono: false }), inp(ctx, ...bind(u, 'pass'), { ph: '密碼' }),
@@ -691,7 +692,7 @@ export function vpnTab(ctx, body) {
         const e = Object.entries((state.vpnLeases || {})[dev.id] || {});
         return e.length ? note('ok', '已連線：' + e.map(([id, ip]) => `${nameOf(ctx, id)} ${fmtIp(ip)}`).join('、')) : note('muted', '目前沒有使用者連線。');
       }),
-      note('muted', '還要有一條政策：來源介面選「遠端使用者 VPN」，只放行使用者真正需要的服務。'));
+      note('muted', vs.full ? '還要有政策：「遠端使用者 VPN」→ internal 只放行需要的服務；全通道時再加一條「遠端使用者 VPN」→ wan1（要 NAT），使用者連著 VPN 才上得了網。' : '還要有一條政策：來源介面選「遠端使用者 VPN」，只放行使用者真正需要的服務。'));
   }
   body.append(card);
 }
@@ -711,10 +712,10 @@ export function vpnClientTab(ctx, body) {
     ctx.live(() => {
       const v = dev.rt.vpn;
       if (!v) return null;
-      if (v.up) return h('div', { class: 'kv ok' }, kv('虛擬 IP', fmtIp(v.vip)), kv('VPN 伺服器', nameOf(ctx, v.server)), kv('通道', 'SSL-VPN (TLS 加密)'));
+      if (v.up) return h('div', { class: 'kv ok' }, kv('虛擬 IP', fmtIp(v.vip)), kv('VPN 伺服器', nameOf(ctx, v.server)), kv('通道', 'SSL-VPN (TLS 加密)'), kv('路由', v.full ? '全通道：所有流量都走 VPN（自己的區域網路除外）' : '分割通道：只有公司的網段走 VPN'));
       return note(c.on ? 'warn' : 'muted', v.why);
     })),
-  h('p', { class: 'tip', text: '連上之後，往公司內部網段的流量會走加密通道，其他上網流量仍然直接從這裡出去（分割通道）。' }));
+  h('p', { class: 'tip', text: '連上之後，往公司內部網段的流量會走加密通道。分割通道時其他上網流量仍然直接從這裡出去；公司設成全通道的話，連上網也會經過公司的防火牆。' }));
 }
 
 // ───────────────────────── DHCP 伺服器的位址範圍 ─────────────────────────

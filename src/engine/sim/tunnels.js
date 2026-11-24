@@ -1,6 +1,6 @@
 // VPN 通道：IKE 的兩個階段、提案與金鑰比對、SA 的壽命與 DPD、封包要走哪一條通道
 // （從 sim.js 拆出來的一部分；其他程式一律從 engine/sim.js 引入，不直接引入這裡）
-import { fmtIp, parseIp } from '../ip.js';
+import { fmtIp, netOf, parseIp } from '../ip.js';
 import { cidrList, selMatch } from './core.js';
 import { findOwner } from './forward.js';
 import { leaseFrom, lookupRoute } from './l3.js';
@@ -343,16 +343,19 @@ export function prepTunnels(state) {
     // 帳號：FortiGate 本機的使用者，或群組對應到的 LDAP (AD)
     const auth = vpnLogin(state, sd, c.user, c.pass);
     if (!auth.ok) { d.rt.vpn.why = auth.why; continue; }
-    const subnets = cidrList(vs.subnets);
+    // 分割通道：只有內部網段走 VPN；全通道（split-tunneling disable）：所有流量都走 VPN，只留下用戶端自己的區域網路
+    const full = !!vs.full;
+    const subnets = full ? [{ net: 0, bits: 0 }] : cidrList(vs.subnets);
     if (!subnets.length) { d.rt.vpn.why = `${sd.name} 沒有設定 VPN 用戶可以存取的內部網段`; continue; }
+    const lan = full ? d.ifaces.filter((i) => i.rt.ip != null && i.rt.src !== 'apipa').map((i) => ({ net: netOf(i.rt.ip, i.rt.bits), bits: i.rt.bits })) : null;
     const key = sd.id;
     const st = { leases: state.vpnLeases };
     const vip = leaseFrom(st, old, key, parseIp(vs.start || ''), parseIp(vs.end || ''), null, d.id);
     if (vip == null) { d.rt.vpn.why = `${sd.name} 的 VPN 位址池還沒設定或已用完`; continue; }
     const mine = [{ net: vip, bits: 32 }];
-    d.rt.tunnels.push({ name: 'VPN', dev: d.id, up: true, vip, localIp: res.srcIp, peerIp: server, local: mine, remote: subnets, iface: tunIface('vpn0', 'VPN') });
+    d.rt.tunnels.push({ name: 'VPN', dev: d.id, up: true, vip, localIp: res.srcIp, peerIp: server, local: mine, remote: subnets, ...(lan ? { exclude: lan } : {}), iface: tunIface('vpn0', 'VPN') });
     sd.rt.tunnels.push({ name: 'ra:' + d.id, dev: sd.id, up: true, localIp: server, peerIp: res.seenSrc, local: subnets, remote: mine, iface: tunIface('vpn:remote', '遠端使用者 VPN') });
-    d.rt.vpn = { up: true, vip, server: sd.id };
+    d.rt.vpn = { up: true, vip, server: sd.id, full };
   }
 }
 
@@ -361,6 +364,7 @@ export function findTunnel(dev, pkt) {
   for (const t of dev.rt.tunnels) {
     if (t.vti || (t.proto && pkt.proto !== t.proto)) continue; // VTI 只加密路由到 Tunnel 介面的封包；GRE 的 proxy ID 只比對 GRE
     if (!selMatch(t.local, pkt.src) || !selMatch(t.remote, pkt.dst)) continue;
+    if (t.exclude && selMatch(t.exclude, pkt.dst)) continue; // 全通道的 VPN：用戶端自己的區域網路還是直接走
     // 用 CLI 建立的 FortiGate 通道是 route-based：除了第二階段的網段要符合，還要有一筆靜態路由把目的地指向通道
     if (t.cfg && t.cfg.manualRoute && !selMatch(cidrList((t.cfg.routes || []).join(',')), pkt.dst)) continue;
     if (t.up) return t;

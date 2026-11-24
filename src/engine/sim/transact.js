@@ -104,7 +104,7 @@ function transactInner(state, fromId, spec) {
       ctx.log.push({ dev: fromId, kind: 'ok', text: `${fmtIp(spec.dst)} 就是自己，本機迴路成功` });
       return done({ ok: true, responder: fromId });
     }
-    const t = src.rt.tunnels.find((x) => x.up && x.vip != null && selMatch(x.remote, spec.dst));
+    const t = src.rt.tunnels.find((x) => x.up && x.vip != null && selMatch(x.remote, spec.dst) && !(x.exclude && selMatch(x.exclude, spec.dst)));
     const r = t ? null : lookupRoute(src, spec.dst, undefined, spec.vrf || '');
     if (!t && !r) {
       const reason = state.rt.off[fromId] ? (state.rt.offWhy || {})[fromId] || `${src.name} 沒有電` : noRouteReason(state, src, spec.dst);

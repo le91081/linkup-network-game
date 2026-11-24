@@ -6009,6 +6009,32 @@ console.log('\n業者的 MPLS 骨幹：VRF、RT、VPNv4 與 LDP');
   const s2 = lv.setup(); settle(s2); lv.solve(s2); settle(s2);
   ok(lv.objectives.every((o) => (o.type === 'check' ? o.test(s2) : runObjective(s2, o).pass) === true), 'solve() 之後三個目標都通過');
 }
+console.log('\nSSL-VPN 的全通道');
+{
+  const { runObjective } = await import('../src/engine/sim/objectives.js');
+  const { fortiSession } = await import('../src/engine/fortios.js');
+  const ok = (cond, title) => (cond ? console.log('  ✔ ' + title) : fail(title));
+  const lv = LEVELS.find((x) => x.id === 'l172');
+  const s = lv.setup(); settle(s);
+  const nb = s.devices.nb, fw = s.devices.hq;
+  ok(nb.rt.vpn.up && nb.rt.vpn.full && runObjective(s, lv.objectives[0]).pass, '全通道：Amy 連上 VPN，ERP 照樣打得開');
+  const r1 = runObjective(s, lv.objectives[1]);
+  ok(!r1.pass && /遠端使用者 VPN → wan1.*implicit deny/.test(r1.reason) && r1.log.some((l) => l.kind === 'dns' && /192\.168\.50\.1/.test(l.text)) && !r1.log.some((l) => /10\.99\.0\.10 → 192\.168\.50\.1/.test(l.text)),
+    '上網的流量進了 VPN，到 HQ-FW 沒有 VPN → wan1 的政策；問家用路由器的 DNS 還是直接走（自己的區域網路不進通道）');
+  fw.policies.push({ name: 'VPN 上網（忘了 NAT）', srcIf: 'vpn:remote', dstIf: 'wan1', src: 'any', dst: 'any', service: 'ALL', action: 'accept', nat: false }); settle(s);
+  ok(/10\.99\.0\.10 是私有 IP/.test(runObjective(s, lv.objectives[1]).reason), '有政策但沒有 NAT：10.99.0.x 是私有位址，出了 wan1 就被丟掉');
+  fw.policies[fw.policies.length - 1].nat = true; settle(s);
+  ok(lv.objectives.every((o) => (o.type === 'check' ? o.test(s) : runObjective(s, o).pass) === true), 'VPN → wan1 開 NAT：三個目標都通過（上網經過 HQ-FW）');
+  // FortiOS 的 CLI：split-tunneling enable / disable
+  const S = fortiSession(() => s.devices.hq, () => s);
+  const cli = (...lines) => { const o = []; for (const l of lines) o.push(...S.exec(l).out); settle(s); return o.join('\n'); };
+  ok(/set split-tunneling disable/.test(cli('show vpn ssl web portal')), 'show vpn ssl web portal：set split-tunneling disable');
+  cli('config vpn ssl web portal', 'edit full-access', 'set split-tunneling enable', 'set split-tunneling-routing-address all', 'end');
+  ok(fw.vpnServer.full, 'split-tunneling enable 卻沒有指定網段（all）：被拒絕，還是全通道');
+  ok(lv.objectives[2].test(s) === true, '檢查目標：仍然是全通道');
+  const s2 = lv.setup(); settle(s2); lv.solve(s2); settle(s2);
+  ok(lv.objectives.every((o) => (o.type === 'check' ? o.test(s2) : runObjective(s2, o).pass) === true), 'solve() 之後三個目標都通過');
+}
 console.log('\nNetFlow 與 QoS 的 police');
 {
   const sim = await import('../src/engine/sim.js');

@@ -719,14 +719,18 @@ const SEC = {
     only: (d) => !!d.vpnServer, fields: { 'tunnel-mode': 'b', 'ip-pools': 'q', 'split-tunneling': 'b', 'split-tunneling-routing-address': 'q', 'web-mode': 'b' },
     read(d) {
       const vs = d.vpnServer, nets = list(vs.subnets).filter(normCidr);
-      if (!vs.on || !nets.length) return [];
+      if (!vs.on || (!nets.length && !vs.full)) return [];
+      if (vs.full) return [{ key: vs.portal || 'full-access', f: { 'tunnel-mode': ['enable'], ...(vs.start && vs.end ? { 'ip-pools': [poolName(vs)] } : {}), 'split-tunneling': ['disable'] } }];
       return [{ key: vs.portal || 'full-access', f: { 'tunnel-mode': ['enable'], ...(vs.start && vs.end ? { 'ip-pools': [poolName(vs)] } : {}), 'split-tunneling': ['enable'], 'split-tunneling-routing-address': nets.map((n) => addrName(d, n)) } }];
     },
     write(d, key, f) {
       const vs = d.vpnServer;
+      // split-tunneling disable：全通道，所有流量都經過這台（要另外有往 wan 的政策才上得了網）
+      if ((f['split-tunneling'] || [])[0] === 'disable') { Object.assign(vs, { full: true, portal: key }); return undefined; }
       const nets = resolveSpec(d, f['split-tunneling-routing-address'] || []);
       if (nets == null) return notFound('split-tunneling-routing-address 裡有不存在的位址物件');
       if (!nets || nets === 'any') return ERR('請用 set split-tunneling-routing-address 指定 VPN 用戶可以存取的內部網段（位址物件）');
+      delete vs.full;
       Object.assign(vs, { subnets: nets, portal: key });
       return undefined;
     },
