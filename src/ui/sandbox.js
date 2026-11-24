@@ -8,12 +8,12 @@ import { isIos, saveStartup } from '../engine/ios.js';
 import { editorSection } from './editor.js';
 import { SAVE_VER, migrateState } from '../engine/migrate.js';
 
-const VENDOR = /^(Cisco|TP-Link|Ubiquiti|Fortinet|NETGEAR|ASUS|Dell|Lenovo|Apple|HP|Synology|VMware|Hikvision|F5|ZTE|APC|Juniper|MikroTik) /;
+const VENDOR = /^(Cisco|TP-Link|Ubiquiti|Fortinet|NETGEAR|ASUS|Dell|Lenovo|Apple|HP|Synology|VMware|Hikvision|F5|ZTE|APC|Juniper|MikroTik|Aruba) /;
 const HOST_NAME = { ups: 'UPS', pc: 'PC', laptop: '筆電', phone: '手機', printer: '印表機', wprinter: '無線印表機', nas: 'NAS', tower: '伺服器', rack1u: '機架伺服器', vm: 'VM', ipcam: '攝影機', nvr: 'NVR' };
 const GROUPS = [
   ['終端設備', ['pc', 'laptop', 'phone', 'printer', 'nas', 'tower', 'rack1u']],
   ['監控', ['ipcam', 'nvr']],
-  ['交換器', ['hub4', 'sw5', 'sw8', 'c2960', 'c2960p', 'c9300', 'ex2300', 'n93180', 'n9332']],
+  ['交換器', ['hub4', 'sw5', 'sw8', 'c2960', 'c2960p', 'c9300', 'ex2300', 'cx6100', 'n93180', 'n9332']],
   ['路由器與防火牆', ['ont', 'homerouter', 'hex', 'erx', 'isr4321', 'isr4331', 'fg60f', 'fg100f']],
   ['無線與外部線路', ['ap', 'internet']],
   ['虛擬化與負載平衡', ['esxi', 'vm', 'bigip']],

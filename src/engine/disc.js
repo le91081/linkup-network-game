@@ -21,9 +21,9 @@ const isPhone = (d) => !!(CATALOG[d.model] || {}).phone;
 const ciscoAp = (d) => d.kind === 'ap' && (CATALOG[d.model] || {}).vendor === 'Cisco';
 export const speaksCdp = (d) => isCiscoOs(d) || ciscoAp(d) || (isPhone(d) && CATALOG[d.model].vendor === 'Cisco');
 /** 會講 LLDP 的設備：上面那些，加上基地台 */
-export const speaksLldp = (d) => speaksCdp(d) || isPhone(d) || d.kind === 'ap';
+export const speaksLldp = (d) => speaksCdp(d) || isPhone(d) || d.kind === 'ap' || !!(CATALOG[d.model] || {}).lldp; // Juniper、Aruba：只講 LLDP
 // 原廠預設：IOS 的設備 CDP 開、LLDP 關（要 lldp run）；Nexus 兩個都開；IP 電話兩個都開；UniFi 基地台只有 LLDP
-const lldpDefault = (d) => PLATFORM[d.model] === 'n9k' || isPhone(d) || d.kind === 'ap';
+const lldpDefault = (d) => PLATFORM[d.model] === 'n9k' || isPhone(d) || d.kind === 'ap' || !!(CATALOG[d.model] || {}).lldp;
 
 export const CDP_TIMER = 60, CDP_HOLD = 180, LLDP_TIMER = 30, LLDP_HOLD = 120;
 

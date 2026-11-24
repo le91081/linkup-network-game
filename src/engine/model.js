@@ -195,8 +195,13 @@ export const CATALOG = {
     kind: 'mswitch', shape: 'switch-r', vendor: '電信業者', title: 'Metro Ethernet 專線（E-LAN）', evc: true,
     tagline: '電信業者的多點第二層專線：好幾個據點在同一個廣播網域（像一台很大的交換器）', ports: [rj('uni-a', 'UNI A'), rj('uni-b', 'UNI B'), rj('uni-c', 'UNI C'), rj('uni-d', 'UNI D')],
   },
+  cx6100: {
+    kind: 'mswitch', shape: 'switch-r', vendor: 'Aruba', title: 'Aruba CX 6100 24G', aoscx: true, lldp: true,
+    tagline: '網管型 L2 交換器 · 24×GE + 4×10G SFP+ · AOS-CX（只講 LLDP，不講 CDP、不會 DTP）',
+    ports: [...seq(24, (i) => rj('1/1/' + i)), ...seq(4, (i) => sfp('1/1/' + i), 25)],
+  },
   ex2300: {
-    kind: 'mswitch', shape: 'switch-r', vendor: 'Juniper', title: 'Juniper EX2300-24T', junos: true,
+    kind: 'mswitch', shape: 'switch-r', vendor: 'Juniper', title: 'Juniper EX2300-24T', junos: true, lldp: true,
     tagline: '網管型 L2 交換器 · 24×GE + 4×10G SFP+ · Junos（commit 才生效、不會 DTP）',
     ports: [...seq(24, (i) => rj('ge-0/0/' + i), 0), ...seq(4, (i) => sfp('xe-0/1/' + i), 0)],
   },

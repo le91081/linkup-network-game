@@ -5927,6 +5927,33 @@ console.log('\nMikroTik RouterOS');
   ok(!runObjective(s, lv.objectives[1]).pass, 'remove 0：拿掉 masquerade，又上不了網');
 }
 
+console.log('\nAruba AOS-CX');
+{
+  const { runObjective } = await import('../src/engine/sim/objectives.js');
+  const { cxRun, cxSession } = await import('../src/ui/cxcli.js');
+  const { iosSession } = await import('../src/engine/ios.js');
+  const { neighbors } = await import('../src/engine/disc.js');
+  const ok = (cond, title) => (cond ? console.log('  ✔ ' + title) : fail(title));
+  const lv = LEVELS.find((x) => x.id === 'l170');
+  const s = lv.setup(); settle(s);
+  const d = s.devices.cx, S = cxSession();
+  const cx = (...lines) => { const out = []; for (const l of lines) { const r = cxRun(s, d, S, l, (...t) => out.push(...t)); if (r.changed) settle(s); } return out.join('\n'); };
+  const pass = (i) => { const o = lv.objectives[i]; return (o.type === 'check' ? o.test(s) : runObjective(s, o).pass) === true; };
+  ok(/1\/1\/24\s.*access/i.test(cx('show interface brief')) && !pass(0) && !pass(1), '一開始 1/1/24 還是 access、VLAN 1：兩台 PC 都到不了閘道');
+  ok(/VLAN 20 does not exist/.test(cx('configure terminal', 'interface 1/1/24', 'vlan trunk native 1', 'vlan trunk allowed 10,20')) && d.sw.ports['1/1/24'].mode === 'trunk' && d.sw.ports['1/1/24'].allowed === '1', 'VLAN 20 還沒建：vlan trunk allowed 10,20 被拒絕（AOS-CX 不會自動建 VLAN）');
+  cx('exit', 'vlan 20', 'name RD', 'exit', 'interface 1/1/24', 'vlan trunk allowed 10,20');
+  ok(pass(0) && !pass(1) && /vlan trunk allowed 10,20/.test(cx('show running-config')), '建好 VLAN 20 再允許：PC-A 通了，PC-B 的埠還在 VLAN 1');
+  cx('exit', 'interface 1/1/2', 'vlan access 20', 'end');
+  ok(pass(0) && pass(1) && !pass(2), 'PC-B 改到 VLAN 20 也通了；SW-Core 的鄰居表還看不到 SW-2F');
+  const core = iosSession(() => s.devices.core, () => s); const iosOut = (l) => { const r = core.exec(l); settle(s); return [].concat(r && r.out || r || []).join('\n'); };
+  ['enable', 'configure terminal', 'lldp run', 'end'].forEach(iosOut);
+  advance(s, 31);
+  const nb = neighbors(s, s.devices.core, 'lldp').find((n) => n.dev === 'cx');
+  ok(pass(2) && nb && nb.pid === 'Gi0/8' && nb.port === '1/1/24' && !neighbors(s, s.devices.core, 'cdp').some((n) => n.dev === 'cx'), 'lldp run 之後 30 秒內，SW-Core 的 LLDP 鄰居表出現 SW-2F（Gi0/8 ↔ 1/1/24）；CDP 永遠看不到');
+  ok(/SW-Core/.test(cx('show lldp neighbor-info')), 'SW-2F 的 show lldp neighbor-info 看得到 SW-Core');
+  const s2 = lv.setup(); settle(s2); lv.solve(s2); settle(s2); advance(s2, 31);
+  ok(lv.objectives.every((o) => (o.type === 'check' ? o.test(s2) : runObjective(s2, o).pass) === true), 'solve() 之後三個目標都通過');
+}
 console.log('\nNetFlow 與 QoS 的 police');
 {
   const sim = await import('../src/engine/sim.js');
