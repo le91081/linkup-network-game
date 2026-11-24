@@ -3,6 +3,7 @@
 import { BCAST, onHop } from '../wire.js';
 import { HSRP_HOLD, fhrpDecrement, fhrpGroup, fhrpPreempt, fhrpProto, trackUp } from '../track.js';
 import { computeBgp } from '../bgp.js';
+import { computeVpn } from '../mplsvpn.js';
 import { computeOspf, ospfArea } from '../ospf.js';
 import { computeEigrp } from '../eigrp.js';
 import { computeRip } from '../rip.js';
@@ -462,6 +463,7 @@ function routesOnce(state, quiet) {
     for (const d of devs) if (d.rt && d.rt.routes) d.rt.routes = d.rt.routes.filter((r) => r.type !== 'O');
     computeOspf(state, ospfOn);
   }
+  computeVpn(state, { lookupRoute }); // MPLS L3VPN：PE 之間的 VPNv4 路由放進各自的 VRF
 }
 
 // OSPF / BGP 跨次計算的狀態：試算之前先存起來，試算完還原（不然鄰居的計時會被試算打斷）

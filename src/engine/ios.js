@@ -1,6 +1,7 @@
 // IOS 風格的設定指令：把 configure terminal 之後輸入的指令套用到設備的設定物件上。
 // 不依賴瀏覽器，可以直接用 Node 測試。支援的範圍就是 show running-config 會印出來的那些指令，
 // 所以把一台設備的 running-config 整份貼到另一台同型號的設備上，會得到相同的設定。
+import { validRt } from './mplsvpn.js';
 import { isStack } from './stack.js';
 import { isMgmtPort, mgmtVrf } from './mgmtsrc.js';
 import { parseIp, fmtIp, parseMask, fmtMask, maskOf, netOf, bcastOf, parseVlanList } from './ip.js';
@@ -721,6 +722,9 @@ export function iosSession(getDev, getState, who = null) {
       return r;
     }],
     ['no ip address', () => onL3((i) => { Object.assign(i, { mode: 'static', ip: '', mask: '' }); })],
+    // MPLS：介面上啟用 LDP（兩端都要，才會成為 LDP 鄰居、交換標籤）
+    ['mpls ip', () => onL3((i) => { if (i.vrf) return err(`% ${longIf(i.label)} 在 VRF ${i.vrf} 裡：mpls ip 用在業者骨幹（全域）的介面，接客戶的介面不用`); i.mpls = true; return undefined; })],
+    ['no mpls ip', () => onL3((i) => { delete i.mpls; })],
     ...[['vrf forwarding <v>', 'def'], ['ip vrf forwarding <v>', 'ip']].map(([pat, style]) => [pat, ([v], out) => {
       if (v !== mgmtVrf(dev()) && S.cur.some((t) => t.port && isMgmtPort(dev(), t.port.id))) return err(`% 帶外管理埠只能在 ${mgmtVrf(dev())} 裡`);
       const vd = (dev().vrfs || {})[v];
@@ -1825,7 +1829,11 @@ export function iosSession(getDev, getState, who = null) {
       d.routes6 = d.routes6.filter((r) => { const c = parseCidr6(r.dst); return !(c && c.ip === want.ip && c.bits === want.bits && (via == null || parseIp6(r.via) === via)); });
       return d.routes6.length < n ? undefined : err('沒有這一筆 IPv6 靜態路由');
     }],
+    ['mpls label protocol <...>', ([p]) => (/^ldp$/i.test(p) ? undefined : err('這個模擬只有 LDP'))],
+    ['mpls ldp router-id <...>', ([t]) => { dev().ldpRid = t; }],
+    ['no mpls ldp router-id [...]', () => { delete dev().ldpRid; }],
     ['router bgp <asn>', ([asn]) => {
+      S.bgpAf = null;
       const d = dev();
       if (!d.routing || d.kind !== 'router') return err('這個模擬只有路由器能跑 BGP');
       if (!(+asn >= 1 && +asn <= 4294967295)) return err('AS 號碼的範圍是 1 – 4294967295');
@@ -3538,13 +3546,67 @@ export function iosSession(getDev, getState, who = null) {
     ],
     vrfaf: [
       ['exit-address-family', () => { enter('vrfdef', S.cur); return undefined; }],
-      ['route-target <...>', () => undefined],
+      ['no route-target <...>', ((neg) => ([rest]) => {
+        // route-target {import | export | both} <ASN:編號>（沒寫方向就是 both）
+        const t = String(rest || '').trim().split(/\s+/);
+        let dir = 'both', val = t[0];
+        if (/^(import|export|both)$/i.test(t[0])) { dir = t[0].toLowerCase(); val = t[1]; }
+        if (!validRt(val)) return err('用法：route-target {import | export | both} <ASN:編號>，例如 route-target both 64500:1');
+        const v = dev().vrfs[S.cur];
+        for (const k of dir === 'both' ? ['rtImp', 'rtExp'] : [dir === 'import' ? 'rtImp' : 'rtExp']) {
+          const l = v[k] || [];
+          v[k] = neg ? l.filter((x) => x !== val) : l.includes(val) ? l : [...l, val];
+          if (!v[k].length) delete v[k];
+        }
+        return undefined;
+      })(true)],
+      ['route-target <...>', ((neg) => ([rest]) => {
+        // route-target {import | export | both} <ASN:編號>（沒寫方向就是 both）
+        const t = String(rest || '').trim().split(/\s+/);
+        let dir = 'both', val = t[0];
+        if (/^(import|export|both)$/i.test(t[0])) { dir = t[0].toLowerCase(); val = t[1]; }
+        if (!validRt(val)) return err('用法：route-target {import | export | both} <ASN:編號>，例如 route-target both 64500:1');
+        const v = dev().vrfs[S.cur];
+        for (const k of dir === 'both' ? ['rtImp', 'rtExp'] : [dir === 'import' ? 'rtImp' : 'rtExp']) {
+          const l = v[k] || [];
+          v[k] = neg ? l.filter((x) => x !== val) : l.includes(val) ? l : [...l, val];
+          if (!v[k].length) delete v[k];
+        }
+        return undefined;
+      })(false)],
     ],
     ipvrf: [
       ['rd <rd>', ([rd]) => (/^(\d+|\d+\.\d+\.\d+\.\d+):\d+$/.test(rd) ? void (dev().vrfs[S.cur].rd = rd) : err('用法：rd <ASN:編號>，例如 rd 65000:1'))],
       ['no rd [...]', () => { delete dev().vrfs[S.cur].rd; }],
       ['description <...>', ([t]) => { dev().vrfs[S.cur].desc = t; }],
-      ['route-target <...>', () => undefined],
+      ['no route-target <...>', ((neg) => ([rest]) => {
+        // route-target {import | export | both} <ASN:編號>（沒寫方向就是 both）
+        const t = String(rest || '').trim().split(/\s+/);
+        let dir = 'both', val = t[0];
+        if (/^(import|export|both)$/i.test(t[0])) { dir = t[0].toLowerCase(); val = t[1]; }
+        if (!validRt(val)) return err('用法：route-target {import | export | both} <ASN:編號>，例如 route-target both 64500:1');
+        const v = dev().vrfs[S.cur];
+        for (const k of dir === 'both' ? ['rtImp', 'rtExp'] : [dir === 'import' ? 'rtImp' : 'rtExp']) {
+          const l = v[k] || [];
+          v[k] = neg ? l.filter((x) => x !== val) : l.includes(val) ? l : [...l, val];
+          if (!v[k].length) delete v[k];
+        }
+        return undefined;
+      })(true)],
+      ['route-target <...>', ((neg) => ([rest]) => {
+        // route-target {import | export | both} <ASN:編號>（沒寫方向就是 both）
+        const t = String(rest || '').trim().split(/\s+/);
+        let dir = 'both', val = t[0];
+        if (/^(import|export|both)$/i.test(t[0])) { dir = t[0].toLowerCase(); val = t[1]; }
+        if (!validRt(val)) return err('用法：route-target {import | export | both} <ASN:編號>，例如 route-target both 64500:1');
+        const v = dev().vrfs[S.cur];
+        for (const k of dir === 'both' ? ['rtImp', 'rtExp'] : [dir === 'import' ? 'rtImp' : 'rtExp']) {
+          const l = v[k] || [];
+          v[k] = neg ? l.filter((x) => x !== val) : l.includes(val) ? l : [...l, val];
+          if (!v[k].length) delete v[k];
+        }
+        return undefined;
+      })(false)],
     ],
     track: [
       ['delay <...>', () => err('這個模擬沒有 track 的 delay：狀態一改變就生效')],
@@ -3601,9 +3663,28 @@ export function iosSession(getDev, getState, who = null) {
       ['no bgp router-id [...]', () => { delete dev().bgp.rid; }],
       ['bgp log-neighbor-changes', () => undefined],
       ['no bgp default ipv4-unicast', () => undefined],
-      ['address-family ipv4 [...]', () => undefined],
-      ['exit-address-family', () => undefined],
-      ['neighbor <ip> activate', () => undefined],
+      // MP-BGP：address-family vpnv4（PE 之間交換 VPN 的路）、address-family ipv4 vrf <名稱>（這個 VRF 要送出去的路）
+      ['address-family vpnv4 [...]', () => { S.bgpAf = 'vpnv4'; return undefined; }],
+      ['address-family ipv4 vrf <v>', ([v]) => {
+        const vd = (dev().vrfs || {})[v];
+        if (!vd) return err(`% VRF ${v} does not exist（先用 vrf definition ${v} 建立）`);
+        if (!vd.rd) return err(`% VRF ${v} does not have an RD configured.（vrf definition ${v} 底下要先有 rd）`);
+        ((dev().bgp.vrfAf ||= {})[v] ||= {});
+        S.bgpAf = { vrf: v };
+        return undefined;
+      }],
+      ['no address-family ipv4 vrf <v>', ([v]) => { const a = dev().bgp.vrfAf; if (a) { delete a[v]; if (!Object.keys(a).length) delete dev().bgp.vrfAf; } }],
+      ['address-family ipv4 [...]', () => { S.bgpAf = null; return undefined; }],
+      ['exit-address-family', () => { S.bgpAf = null; return undefined; }],
+      ['neighbor <ip> activate', ([ip]) => {
+        if (S.bgpAf !== 'vpnv4') return undefined;
+        const n = dev().bgp.neighbors.find((x) => x.ip === ip);
+        if (!n) return err('% Specify remote-as or peer-group commands first');
+        if (+n.remoteAs !== +dev().bgp.asn) return err('這個模擬的 VPNv4 只在業者自己的 PE 之間（iBGP）');
+        n.vpnv4 = true; delete n.vpnNoExt; // IOS 在 vpnv4 啟用鄰居時，自動加上 send-community extended（RT 靠它帶過去）
+        return undefined;
+      }],
+      ['no neighbor <ip> activate', ([ip]) => { if (S.bgpAf === 'vpnv4') return nb(ip, (n) => { delete n.vpnv4; delete n.vpnNoExt; }); return undefined; }],
       ['neighbor <ip> remote-as <asn>', ([ip, asn]) => {
         if (parseIp(ip) == null) return err('用法：neighbor <IP> remote-as <AS>');
         if (!(+asn >= 1)) return err('AS 號碼的範圍是 1 – 4294967295');
@@ -3648,8 +3729,8 @@ export function iosSession(getDev, getState, who = null) {
       ['neighbor <ip> fall-over bfd [...]', ([ip]) => nb(ip, (n) => { n.bfd = true; })],
       ['no neighbor <ip> fall-over [...]', ([ip]) => nb(ip, (n) => { delete n.bfd; })],
       ['no neighbor <ip> disable-connected-check', ([ip]) => nb(ip, (n) => { delete n.dcc; })],
-      ['neighbor <ip> send-community [...]', ([ip, k]) => nb(ip, (n) => { n.sendComm = /^(both|extended)$/i.test(k || '') ? k.toLowerCase() : 'standard'; })],
-      ['no neighbor <ip> send-community [...]', ([ip]) => nb(ip, (n) => { delete n.sendComm; })],
+      ['neighbor <ip> send-community [...]', ([ip, k]) => nb(ip, (n) => { if (S.bgpAf === 'vpnv4') { if (/^(both|extended)$/i.test(k || '')) delete n.vpnNoExt; return; } n.sendComm = /^(both|extended)$/i.test(k || '') ? k.toLowerCase() : 'standard'; })],
+      ['no neighbor <ip> send-community [...]', ([ip, k]) => nb(ip, (n) => { if (S.bgpAf === 'vpnv4') { if (!k || /^(both|extended)$/i.test(k)) n.vpnNoExt = true; return; } delete n.sendComm; })],
       ['no neighbor <ip> weight [...]', ([ip]) => nb(ip, (n) => { delete n.weight; })],
       ['no neighbor <ip> default-originate', ([ip]) => nb(ip, (n) => { delete n.defOrig; })],
       ['bgp redistribute-internal', () => { dev().bgp.redistInternal = true; }],
@@ -3670,12 +3751,19 @@ export function iosSession(getDev, getState, who = null) {
       }],
       ['no network <ip> mask <mask>', ([ip, mask]) => { const n = parseIp(ip), bits = maskBits(mask); const b = dev().bgp; b.networks = b.networks.filter((x) => !(x.net === netOf(n, bits) && x.bits === bits)); }],
       ['redistribute <src> [...]', ([src, rest]) => {
+        if (S.bgpAf && S.bgpAf.vrf) {
+          const af = dev().bgp.vrfAf[S.bgpAf.vrf], k = String(src).toLowerCase();
+          if ('connected'.startsWith(k) && k.length >= 4) { af.conn = true; return undefined; }
+          if ('static'.startsWith(k) && k.length >= 2) { af.static = true; return undefined; }
+          return err('這個模擬的 VRF 只支援 redistribute connected 與 redistribute static（PE 與 CE 之間用靜態路由）');
+        }
         const o = redistArgs(src, rest, 'bgp');
         if (isErr(o)) return o;
         upsertRedist((dev().bgp.redist ||= []), o);
         return o.rm && !(dev().routeMaps || {})[o.rm] ? `（route-map ${o.rm} 還不存在：在它建立之前，什麼路都不會被重分配）` : undefined;
       }],
       ['no redistribute <src> [...]', ([src]) => {
+        if (S.bgpAf && S.bgpAf.vrf) { const af = dev().bgp.vrfAf[S.bgpAf.vrf], k = String(src).toLowerCase(); if (k.startsWith('conn')) delete af.conn; else if (k.startsWith('st')) delete af.static; return undefined; }
         const b = dev().bgp, n = (b.redist || []).length;
         b.redist = (b.redist || []).filter((x) => !x.src.startsWith(String(src).toLowerCase()));
         if (!b.redist.length) delete b.redist;
@@ -4205,6 +4293,7 @@ export function iosSession(getDev, getState, who = null) {
       return done(touched);
     };
     if (match(tok, 'end') || t0 === '^z') { S.mode = 'exec'; S.cur = null; return leave(); }
+    if (match(tok, 'exit') && S.mode === 'bgp' && S.bgpAf) { S.bgpAf = null; return done(false); }
     if (match(tok, 'exit') && S.mode === 'pmapc') { S.mode = 'pmap'; S.cur = { pm: S.cur.pm }; return done(false); }
     if (match(tok, 'exit') && S.mode === 'ipmapc') { S.mode = 'ipmap'; S.cur = { pm: S.cur.pm }; return done(false); }
     if (match(tok, 'exit') && S.mode === 'kckey') { S.mode = 'keychain'; S.cur = S.cur.chain; return done(false); }
@@ -4693,7 +4782,7 @@ export function iosSession(getDev, getState, who = null) {
   return {
     exec,
     complete,
-    prompt: () => ((((getState().dyn || {}).clk || {})[dev().id] || {}).rommon ? 'rommon 1 >' : S.pending ? '' : hostName(dev()) + (S.mode === 'exec' && S.priv < 15 ? '>' : PROMPT[S.mode])),
+    prompt: () => ((((getState().dyn || {}).clk || {})[dev().id] || {}).rommon ? 'rommon 1 >' : S.pending ? '' : hostName(dev()) + (S.mode === 'exec' && S.priv < 15 ? '>' : S.mode === 'bgp' && S.bgpAf ? '(config-router-af)#' : PROMPT[S.mode])),
     get pending() { return S.pending; },
     help: () => HELP[S.mode] || [],
     get mode() { return S.mode; },
@@ -4987,6 +5076,7 @@ export function runningConfig(state, dev) {
     else if (i.bind.t === 'dialer') l.push(...(i.dialer.negotiated ? [' ip address negotiated'] : [' no ip address']));
     else if (i.ip && parseMask(i.mask) != null) l.push(vst === 'ctx' ? ` ip address ${i.ip}/${parseMask(i.mask)}` : ` ip address ${i.ip} ${fmtMask(parseMask(i.mask))}`);
     else l.push(' no ip address');
+    if (i.mpls) l.push(' mpls ip');
     if (i.nvi) l.push(' ip nat enable');
     else if (anyNat) l.push(natOut(i) ? ' ip nat outside' : i.ip || i.mode !== 'static' ? ' ip nat inside' : null);
     if (i.helper) l.push(` ip helper-address ${i.helper}`);
@@ -5057,9 +5147,10 @@ export function runningConfig(state, dev) {
     return l.filter(Boolean);
   };
   for (const [n, v] of Object.entries(dev.vrfs || {})) {
-    if (v.style === 'ip') o.push(`ip vrf ${n}`, ...(v.desc ? [` description ${v.desc}`] : []), ...(v.rd ? [` rd ${v.rd}`] : []), '!');
+    const rtl = (ind) => [...(v.rtExp || []).filter((x) => !(v.rtImp || []).includes(x)).map((x) => `${ind}route-target export ${x}`), ...(v.rtImp || []).filter((x) => !(v.rtExp || []).includes(x)).map((x) => `${ind}route-target import ${x}`), ...(v.rtImp || []).filter((x) => (v.rtExp || []).includes(x)).flatMap((x) => [`${ind}route-target export ${x}`, `${ind}route-target import ${x}`])];
+    if (v.style === 'ip') o.push(`ip vrf ${n}`, ...(v.desc ? [` description ${v.desc}`] : []), ...(v.rd ? [` rd ${v.rd}`] : []), ...rtl(' '), '!');
     else if (v.style === 'ctx') o.push(`vrf context ${n}`, ...(dev.routes || []).filter((r) => r.vrf === n && r.dst && r.via && parseMask(r.mask || '') != null).map((r) => ` ip route ${r.dst}/${parseMask(r.mask)} ${r.via}`), '!');
-    else o.push(`vrf definition ${n}`, ...(v.desc ? [` description ${v.desc}`] : []), ...(v.rd ? [` rd ${v.rd}`] : []), ...(v.af4 ? [' !', ' address-family ipv4', ' exit-address-family'] : []), '!');
+    else o.push(`vrf definition ${n}`, ...(v.desc ? [` description ${v.desc}`] : []), ...(v.rd ? [` rd ${v.rd}`] : []), ...(v.af4 ? [' !', ' address-family ipv4', ...rtl('  '), ' exit-address-family'] : []), '!');
   }
   o.push(...archiveLines(dev));
   {
@@ -5268,6 +5359,14 @@ export function runningConfig(state, dev) {
       if (n.flOut) o.push(` neighbor ${n.ip} filter-list ${n.flOut} out`);
       if (n.rmIn) o.push(` neighbor ${n.ip} route-map ${n.rmIn} in`);
       if (n.rmOut) o.push(` neighbor ${n.ip} route-map ${n.rmOut} out`);
+    }
+    if (b.neighbors.some((n) => n.vpnv4)) {
+      o.push(' !', ' address-family vpnv4');
+      for (const n of b.neighbors.filter((x) => x.vpnv4)) o.push(`  neighbor ${n.ip} activate`, ...(n.vpnNoExt ? [] : [`  neighbor ${n.ip} send-community extended`]));
+      o.push(' exit-address-family');
+    }
+    for (const [v, af] of Object.entries(b.vrfAf || {})) {
+      o.push(' !', ` address-family ipv4 vrf ${v}`, ...(af.conn ? ['  redistribute connected'] : []), ...(af.static ? ['  redistribute static'] : []), ' exit-address-family');
     }
     o.push('!');
   }

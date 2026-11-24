@@ -256,6 +256,13 @@ export function runObjective(state, o) {
     }
     log.push({ dev: o.from, kind: 'ok', text: `收到 ${s.line}（${srv.name}）` });
   }
+  // exact：連到的一定要是 o.to 那一台（同一個位址可能有另一台，例如兩家公司重疊的網段混在一起）
+  if (r.ok && o.exact && o.to && r.responder && r.responder !== o.to) {
+    const got = state.devices[r.responder], want = state.devices[o.to];
+    const reason = `連線是通的，但連到的是 ${got ? got.name : r.responder}（同一個位址 ${fmtIp(dst)} 的另一台設備），不是 ${want.name}`;
+    log.push({ dev: r.responder, kind: 'drop', text: reason });
+    return { pass: false, ok: true, reason, failDev: r.responder, log, hops };
+  }
   if (r.ok && (o.via || o.avoid)) {
     const seen = new Set();
     for (const h of r.hops) if (!h.reply && !h.wave) { seen.add(h.from); seen.add(h.to); }

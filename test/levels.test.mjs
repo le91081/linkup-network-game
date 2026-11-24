@@ -5976,6 +5976,39 @@ console.log('\n機櫃立面圖');
   R.removeRack(s, 'B');
   ok(!sw.rack && R.unracked(s).includes(sw), '拆掉機櫃 B：裡面的設備一起下架');
 }
+console.log('\n業者的 MPLS 骨幹：VRF、RT、VPNv4 與 LDP');
+{
+  const { runObjective } = await import('../src/engine/sim/objectives.js');
+  const { iosRun } = await import('../src/ui/cli.js');
+  const { iosSession } = await import('../src/engine/ios.js');
+  const ok = (cond, title) => (cond ? console.log('  ✔ ' + title) : fail(title));
+  const lv = LEVELS.find((x) => x.id === 'l171');
+  const s = lv.setup(); settle(s);
+  const sess = {};
+  const cli = (id, ...lines) => { const S = (sess[id] ||= iosSession(() => s.devices[id], () => s)); const o = []; for (const l of lines) iosRun({ state: s }, id, S, l, (t) => o.push(t)); settle(s); return o.join('\n'); };
+  const res = (i) => { const o = lv.objectives[i]; return o.type === 'check' ? o.test(s) : runObjective(s, o); };
+  ok(/^10\.255\.0\.3\s+4\s+64500 .* 00:21:14\s+4$/m.test(cli('pe1', 'show bgp vpnv4 unicast all summary')) && /^B\s+10\.2\.0\.0 \[200\/0\] via 10\.255\.0\.3/m.test(cli('pe1', 'show ip route vrf CUST-B')),
+    '控制平面都好好的：PE1 的 VPNv4 鄰居 Established、收到了路，VRF CUST-B 有 10.2.0.0/24（下一站是 PE2 的 Loopback）');
+  ok(!res(1).pass && /P1.*Gi0\/0\/1 沒有 mpls ip/.test(res(1).reason) && /Pop Label\s+10\.255\.0\.2\/32/.test(cli('pe1', 'show mpls forwarding-table')),
+    '資料平面不通：P1 往 PE2 那一段沒有 LDP，帶著 VPN 標籤的封包在 P1 被丟掉；PE1 往 P1 Loopback 的是 Pop Label');
+  const nb = cli('p1', 'show mpls ldp neighbor');
+  ok(/Peer LDP Ident: 10\.255\.0\.1:0/.test(nb) && !/10\.255\.0\.3:0/.test(nb) && !/GigabitEthernet0\/0\/1/.test(cli('p1', 'show mpls interfaces')), 'P1：LDP 鄰居只有 PE1，show mpls interfaces 少了 Gi0/0/1');
+  cli('p1', 'configure terminal', 'interface Gi0/0/1', 'mpls ip', 'end');
+  ok(res(1).pass && /Peer LDP Ident: 10\.255\.0\.3:0/.test(cli('p1', 'show mpls ldp neighbor')), 'P1 的 Gi0/0/1 → mpls ip：B 公司通了');
+  const ra = res(0);
+  ok(!ra.pass && /B 公司/.test(ra.reason), 'A 公司台中的 PC 的封包跑進了 B 公司的網路（同一組位址）：PE2 的 CUST-A 匯入了 B 公司的 RT');
+  ok(/Import VPN route-target communities\s+RT:64500:2/.test(cli('pe2', 'show vrf detail CUST-A')) && /CUST-A 收進了 CUST-B 的路/.test(res(2)), 'show vrf detail CUST-A：import 的 RT 是 64500:2；檢查目標也抓到 VRF 混在一起');
+  cli('pe2', 'configure terminal', 'vrf definition CUST-A', 'address-family ipv4', 'no route-target import 64500:2', 'route-target import 64500:1', 'end');
+  ok(lv.objectives.every((o, i) => (o.type === 'check' ? res(i) : res(i).pass) === true), 'route-target import 64500:1：三個目標都通過');
+  const rc = cli('pe2', 'show running-config');
+  ok(/vrf definition CUST-A\n rd 64500:1\n !\n address-family ipv4\n  route-target export 64500:1\n  route-target import 64500:1/.test(rc) && /address-family vpnv4\n  neighbor 10\.255\.0\.1 activate\n  neighbor 10\.255\.0\.1 send-community extended/.test(rc) && /interface GigabitEthernet0\/0\/0\n[^!]* mpls ip/.test(rc),
+    'running-config：route-target、address-family vpnv4（自動加上 send-community extended）、mpls ip');
+  ok(/does not have an RD configured/.test(cli('pe1', 'configure terminal', 'vrf definition CUST-C', 'exit', 'router bgp 64500', 'address-family ipv4 vrf CUST-C', 'end')), '沒有 RD 的 VRF 不能在 BGP 底下開 address-family ipv4 vrf');
+  cli('pe1', 'configure terminal', 'router bgp 64500', 'address-family vpnv4', 'no neighbor 10.255.0.3 send-community extended', 'end');
+  ok(!runObjective(s, lv.objectives[1]).pass && /沒有 RT/.test(cli('pe2', 'show bgp vpnv4 unicast all')), 'PE1 不送 extended community：路的 RT 不見了，PE2 收到也不會匯入任何 VRF');
+  const s2 = lv.setup(); settle(s2); lv.solve(s2); settle(s2);
+  ok(lv.objectives.every((o) => (o.type === 'check' ? o.test(s2) : runObjective(s2, o).pass) === true), 'solve() 之後三個目標都通過');
+}
 console.log('\nNetFlow 與 QoS 的 police');
 {
   const sim = await import('../src/engine/sim.js');

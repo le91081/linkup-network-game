@@ -40,6 +40,7 @@ import { xcvrAt, xcvrSerial, MEDIA_TYPE } from '../engine/optics.js';
 import { PLATFORM as PID_OF } from '../engine/dnac.js';
 import { showSwitch, showSwitchDetail, showStackPorts, showRedundancy, stackChassis } from './cli-stack.js';
 import { showVpc, showVpcKeepalive, showVpcConsistency } from './cli-vpc.js';
+import { showLdpNeighbor, showMplsInterfaces, showMplsForwarding, showVpnv4, showVrfDetail } from './cli-mpls.js';
 import { iosSession, runningConfig, startupConfig, hostName as host, aclName, aclLine, aclSeqs } from '../engine/ios.js';
 import { ipMtu, l2Mtu, jumboNow, isCat2960, isCat9300, isNexus } from '../engine/mtu.js';
 import { tunByName, tunnelDetail, dmvpnLines, nhrpLines, nhsLines, ipsecProfileLines, cryptoSessionLines, transformSetLines, bfdLines, pkiCertLines, pkiTrustpointLines } from './cli-tun.js';
@@ -913,6 +914,14 @@ const SHOW = {
     return o;
   },
   'show switch': (st, d) => showSwitch(st, d),
+  'show mpls ldp neighbor': (st, d) => showLdpNeighbor(st, d),
+  'show mpls interfaces': (st, d) => showMplsInterfaces(st, d),
+  'show mpls forwarding-table': (st, d) => showMplsForwarding(st, d),
+  'show bgp vpnv4 unicast all': (st, d) => showVpnv4(st, d, false),
+  'show bgp vpnv4 unicast all summary': (st, d) => showVpnv4(st, d, true),
+  'show ip bgp vpnv4 all': (st, d) => showVpnv4(st, d, false),
+  'show ip bgp vpnv4 all summary': (st, d) => showVpnv4(st, d, true),
+  'show vrf detail': (st, d) => showVrfDetail(st, d),
   'show vpc': (st, d) => showVpc(st, d),
   'show vpc brief': (st, d) => showVpc(st, d),
   'show vpc peer-keepalive': (st, d) => showVpcKeepalive(st, d),
@@ -2261,6 +2270,11 @@ function showOrPing(app, devId, line, print) {
     if (!v || !(d.vrfs || {})[v]) { print(v ? `% VRF ${v} does not exist` : '用法：show ip protocols vrf <名稱>', 'warn'); return true; }
     protocolLines(st, d, v).forEach((l) => print(l, l.startsWith('（') ? 'hint' : 'pre'));
     return true;
+  }
+  // show vrf detail <名稱>
+  {
+    const m = line.trim().match(/^sh(?:o(?:w)?)?\s+vrf\s+detail\s+(\S+)$/i);
+    if (m) { showVrfDetail(st, d, m[1]).forEach((l) => print(l, l.startsWith('（') ? 'hint' : 'pre')); return true; }
   }
   // show vpc consistency-parameters vpc <編號>（NX-OS）
   {

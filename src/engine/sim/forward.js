@@ -16,6 +16,7 @@ import { PBR_HITS, PROTO_NUM, QUIET, cidrList, denyLog, fmtDur, hash, hit, ipLen
 import { answerMac, arpTtl, floodPorts, l2Explore, learnPath, learns, macAgeOf, macKnown, reversed } from './l2.js';
 import { daiBlock } from './auth.js';
 import { findTunnel } from './tunnels.js';
+import { ldpId, mplsOn } from '../mplsvpn.js';
 import { lookupRoute } from './l3.js';
 import { GRE_OVERHEAD, greRx, greTarget, isTun, nhrpRedirect, tunMode } from './gre.js';
 import { haLostNote } from '../ha.js';
@@ -347,6 +348,7 @@ function deliver(dev, inIf, pkt) {
     const t = cand.find((x) => x.peer && hash(x.peer.dev + '/' + x.peer.name) === pkt.spi) || cand[0];
     return t ? { ok: true, dev: dev.id, tun: t } : no(`${dev.name} 收到來源不明的加密封包，直接丟棄`);
   }
+  if (pkt.proto === 'mpls') return { ok: true, dev: dev.id, mpls: true };
   if (pkt.proto === 'gre' || pkt.proto === 'ipv6ip') {
     const g = greRx(null, dev, pkt);
     return g.iface ? { ok: true, dev: dev.id, gre: g.iface } : no(g.why);
@@ -463,7 +465,7 @@ export function forward(state, ctx, startId, pkt) {
           : pkt.proto === 'tcp' ? ` flag [${pkt.data ? 'P.' : pkt.ack ? '.' : pkt.reply ? 'S.' : 'S'}], seq 1, ack ${pkt.ack || pkt.reply ? 1 : 0}, win 64240` : '';
         T('print_pkt_detail', `vd-root:0 received a packet(proto=${n}, ${fmtIp(pkt.src)}:${pkt.sport}->${fmtIp(pkt.dst)}:${dp}) tun_id=0.0.0.0 from ${inIf.id.replace(/^vpn:/, '')}.${extra}`);
       }
-      const deny = aclCheck(inIf.aclIn, pkt, { state, dev });
+      const deny = pkt.mpls ? null : aclCheck(inIf.aclIn, pkt, { state, dev });
       if (deny) {
         D('packet', `IP: s=${fmtIp(pkt.src)} (${longIf(inIf.label)}), d=${fmtIp(pkt.dst)}, len ${ipLen(pkt)}, access denied`);
         return drop(`${dev.name} 的 ${inIf.label}（進入方向）：${deny}`);
@@ -630,6 +632,18 @@ export function forward(state, ctx, startId, pkt) {
       D('packet', `IP: s=${fmtIp(pkt.src)} (${inIf ? longIf(inIf.label) : 'local'}), d=${fmtIp(pkt.dst)}, len ${ipLen(pkt)}, unroutable`);
       return drop(noRouteReason(state, dev, pkt.dst));
     }
+    if (route.mpls && !pkt.mpls) {
+      const L = route.mpls, pe = state.devices[L.pe];
+      if (!pe) return drop(`${dev.name}：VPNv4 路由的 PE 不存在`);
+      log.push({ dev: dev.id, kind: 'vpn', text: `MPLS L3VPN：VRF ${vrfNow} 往 ${fmtIp(pkt.dst)} 的路是 ${pe.name}（${fmtIp(L.nh)}）送來的 VPNv4 路由（RD ${L.rd}）：封包貼上 VPN 標籤 ${L.label}，外面再貼一層往 ${fmtIp(L.nh)} 的 LDP 標籤，走業者的骨幹。核心的路由器只看外層的標籤，看不到客戶的位址` });
+      const r = forward(state, ctx, dev.id, { proto: 'mpls', src: ldpId(dev) ?? 0, dst: L.nh, sport: 0, dport: 0, ttl: 255, reply: pkt.reply, outer: true, mpls: { label: L.label, vrf: L.vrf }, len: ipLen(pkt) + 8 });
+      if (!r.ok) return r;
+      if (r.dev !== pe.id) return drop(`帶著 VPN 標籤 ${L.label} 的封包到了 ${state.devices[r.dev].name}，不是送出這條路的 ${pe.name}`);
+      dev = pe;
+      inIf = { id: 'mpls:' + L.vrf, label: `MPLS（VPN 標籤 ${L.label}）`, vrf: L.vrf, bind: { t: 'mpls' }, rt: { ip: L.nh, vips: [], link: true } };
+      log.push({ dev: dev.id, kind: 'vpn', text: `${pe.name} 收到：外層標籤在上一站已經拿掉（PHP），看 VPN 標籤 ${L.label} 知道是 VRF ${L.vrf}，用 ${L.vrf} 的路由表繼續轉送` });
+      continue;
+    }
     const outIf = route.iface;
     const nh = route.via ?? pkt.dst;
     // ICMP Redirect：從同一個介面進出、下一站和來源在同一個網段 → 照樣轉送，同時告訴來源以後直接送給下一站
@@ -700,7 +714,7 @@ export function forward(state, ctx, startId, pkt) {
       }
     }
     if (inIf) {
-      const deny = aclCheck(outIf.aclOut, pkt, { state, dev });
+      const deny = pkt.mpls ? null : aclCheck(outIf.aclOut, pkt, { state, dev });
       if (deny) return drop(`${dev.name} 的 ${outIf.label}（離開方向）：${deny}`);
     }
     // TCP 的 SYN / SYN-ACK 經過時記下 MSS 的上限（ip tcp adjust-mss、家用路由器自動調整）
@@ -788,6 +802,11 @@ export function forward(state, ctx, startId, pkt) {
       }
     }
     if (!tgt) return drop(dai || arpFail(state, dev, outIf, nh, route.via != null, eps));
+    if (pkt.mpls && !(mplsOn(outIf) && mplsOn(tgt.iface))) {
+      const nx = state.devices[tgt.dev];
+      const where = !mplsOn(outIf) ? `${dev.name} 的 ${outIf.label}` : `${nx.name} 的 ${tgt.iface.label}`;
+      return drop(`${where} 沒有 mpls ip：${dev.name} 和 ${nx.name} 之間沒有 LDP 鄰居，${dev.name} 沒有往 ${fmtIp(pkt.dst)} 的標籤可以換（LFIB 是 No Label）。拿掉外層標籤之後只剩 VPN 標籤，${nx.name} 不認得這個標籤，封包被丟掉。骨幹的每一段線，兩端都要 mpls ip`);
+    }
     const tmac = gl ? gl.mac : answerMac(tgt, nh);
     if (!needArp) known.t = state.clock; // 有流量在走，項目就會一直被確認、不會過期
     if (needArp) {
