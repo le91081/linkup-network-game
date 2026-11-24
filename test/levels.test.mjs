@@ -5954,6 +5954,30 @@ console.log('\nAruba AOS-CX');
   const s2 = lv.setup(); settle(s2); lv.solve(s2); settle(s2); advance(s2, 31);
   ok(lv.objectives.every((o) => (o.type === 'check' ? o.test(s2) : runObjective(s2, o).pass) === true), 'solve() 之後三個目標都通過');
 }
+console.log('\n機櫃立面圖');
+{
+  const R = await import('../src/engine/rack.js');
+  const ok = (cond, title) => (cond ? console.log('  ✔ ' + title) : fail(title));
+  const lv = LEVELS.find((x) => x.id === 'l157'); // UPS 那一關：有伺服器、交換器、UPS
+  const s = lv.setup(); settle(s);
+  const all = R.unracked(s);
+  ok(all.length > 0 && all.every((d) => R.rackable(d)) && !Object.values(s.devices).some((d) => d.kind === 'pc' && R.rackable(d)), '只有機架式（或放層板的桌上型）設備可以上架，電腦不行');
+  const n = R.autoRack(s);
+  const ups = Object.values(s.devices).find((d) => d.model === 'ups');
+  const slots = R.rackSlots(s, 'A');
+  ok(n === all.length && !R.unracked(s).length && ups.u === 1 && R.mountOf(ups).ru === 2, '自動上架：全部裝進機櫃 A，2U 的 UPS 在最下面（U1–U2）');
+  ok(slots.every((x, i) => i === 0 || x.top < slots[i - 1].u) && slots[0].top === 42, '由上往下排、沒有重疊，最上面那台在 U42');
+  const sw = slots[0].d;
+  ok(/已經裝了/.test(R.canMount(s, ups, 'A', slots[0].u - 1)) && /最高只能從 U41/.test(R.canMount(s, ups, 'A', 42)) && /不是機架式/.test(R.canMount(s, Object.values(s.devices).find((d) => !R.rackable(d)), 'A', 10)), '裝不下的原因：位置已經有設備、超出機櫃頂端、不是機架式');
+  ok(R.mount(s, ups, 'A', 30) === '' && R.rackIssues(s).some((i) => i.kind === 'warn' && /UPS 的電池很重/.test(i.text)), 'UPS 搬到 U30：檢查提醒重的要放下面');
+  R.mount(s, ups, 'A', 1);
+  const b = R.addRack(s); R.mount(s, sw, b.id, 20);
+  ok(b.id === 'B' && R.crossRackCables(s).length > 0 && !R.rackIssues(s).length, '把交換器搬到機櫃 B：它的線變成跨機櫃的線，其他沒有問題');
+  const p = R.rackPower(s, 'A');
+  ok(p.w > 0 && p.pct < 80, `機櫃 A 的用電 ${p.w} W，PDU 負載 ${p.pct}%`);
+  R.removeRack(s, 'B');
+  ok(!sw.rack && R.unracked(s).includes(sw), '拆掉機櫃 B：裡面的設備一起下架');
+}
 console.log('\nNetFlow 與 QoS 的 police');
 {
   const sim = await import('../src/engine/sim.js');

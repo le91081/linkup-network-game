@@ -122,6 +122,7 @@ npm run build    # 輸出到 dist/
 - **Metro Ethernet 專線**：電信業者的設備只能看「專線資訊」（EPL / EVPL、對應的 CE-VLAN、MTU、兩端 UNI 的燈號）。EVPL 依 802.1Q 標籤決定送到哪一條 EVC，不帶標籤的訊框丟掉。E-LAN（多點）預設丟掉客戶的 BPDU，可以在「專線資訊」向業者申請 L2PT。
 - **配線架**：24 埠 Cat6 配線架是被動元件，前面第 n 孔和後面第 n 孔直接相通：交換器經過它直接連到另一面的設備（燈號、鄰居都是那台）；只接一面就沒有燈號；整條通道超過 100 公尺不通。「配線」分頁替每一孔貼標籤（牆上網路孔的編號）。
 - **訊號量測**：上方的閃電按鈕打開量測模式，滑鼠移到地板上就顯示那個位置收到每台基地台的 5 GHz / 2.4 GHz 訊號強度（含牆的衰減），像現場勘測的 App。
+- **實體配置**：上方的機櫃按鈕。「機櫃立面圖」是每個 42U 機櫃的前視圖（U1 在最下面）：點還沒上架的設備、再點空的那一格裝上去，點已經裝好的設備可以搬動或下架；「自動上架」把配線架與交換器放上面、伺服器在中間、UPS 放最下面。檢查重的 UPS 有沒有放在下方、每個機櫃的用電佔 16 A PDU 的幾 %、哪些線跨機櫃。桌上型的設備（hEX、FortiGate 60F、NAS）放在層板上。「樓層平面圖」從正上方看整層樓：牆依材質上色、設備、線路（依線材上色）、機櫃的位置，以及 5 GHz / 2.4 GHz 的訊號熱圖（穿牆的衰減照牆的材質算），滑鼠移上去看那一點收到每台基地台的訊號。
 - **自由模式畫牆**：左側的「牆與訊號」選一種材質（石膏板、玻璃、磚牆、混凝土、金屬…），在地板上拖曳就畫出一道牆；有牆的時候基地台的訊號畫成熱力圖。
 - **Let's Encrypt 與憑證撤銷**：Linux 伺服器的終端機有 `sudo certbot certificates`、`sudo certbot renew [--dry-run]`：HTTP-01 驗證真的從網際網路連到這台的 TCP 80，失敗時顯示 certbot 的錯誤訊息。被撤銷的憑證：Windows 查 CRL / OCSP 會擋下，Linux 的 curl 預設不查。
 - **UDLD**：`udld enable` / `udld aggressive`（所有光纖埠）、介面 `udld port [aggressive | disable]`；單向的連線（一芯斷了）兩端都開 UDLD 才偵測得到，偵測到就 err-disable（原因 udld），`udld reset`、`show udld [neighbors]`。沒開 UDLD 的話，收不到 BPDU 的那一端會打開轉送造成迴圈（Loop Guard 擋得住）。
@@ -557,6 +558,7 @@ src/engine/   模擬引擎（不依賴瀏覽器，可直接用 Node 測試）
   vpc.js          Nexus 的 vPC：peer-link、peer-keepalive、角色、一致性檢查
   junos.js        Juniper 的 Junos：候選設定、commit、套用到交換器
   patch.js        配線架：前後同一孔相通、端對端的連線
+  rack.js         機櫃：設備裝在第幾 U、放不放得下、UPS 放下面、PDU 的負載
   (ui/roscli.js)  MikroTik RouterOS 的終端機
   (ui/cxcli.js)   Aruba AOS-CX 的 CLI
   docker.js       容器：映像檔、bridge 網路、連接埠發佈（只綁 127.0.0.1、埠對錯會被重設）
