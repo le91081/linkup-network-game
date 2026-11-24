@@ -11,11 +11,11 @@ import { LEVEL_CERTS } from '../data/certs.js';
 import { openQuiz, openCerts, openLevelQuiz, hasLevelQuiz, updateReviewBadge } from './quiz.js';
 import { openRacks } from './rackview.js';
 import { openDrillPicker, randomSeed } from './drill.js';
-import { openExamPicker } from './exam.js';
 import { openCustomLevels } from './editor.js';
 import { drillable } from '../engine/faults.js';
 import { openSolution } from './solution.js';
 import { startTutorial } from './tutorial.js';
+import { openLevelMenu } from './levels-menu.js';
 
 const LOGO =
   '<svg viewBox="0 0 32 32"><rect width="32" height="32" rx="9" fill="#111a38"/><path d="M9 21c5 0 4-10 14-10" stroke="#4fd8c4" stroke-width="3" fill="none" stroke-linecap="round"/><circle cx="9" cy="21" r="3.5" fill="#6ea8ff"/><circle cx="23" cy="11" r="3.5" fill="#4fd8c4"/></svg>';
@@ -105,8 +105,15 @@ function missionFoot(app) {
 export function renderGuide(app, root) {
   const lv = app.level;
   root.dataset.view = '';
+  const fold = (v) => { app.store.guideFold = v; app.saveStore(); app.renderPanel(); };
+  // 收起來：只留一條窄窄的邊，場景多出一大塊空間；點設備時設定頁面照樣會展開
+  if (app.store.guideFold) {
+    root.replaceChildren(h('button', { type: 'button', class: 'p-unfold', title: '展開學習筆記', onclick: () => fold(false) }, icon('book', 16), h('span', { text: '學習筆記' }), icon('chevron', 14)));
+    return;
+  }
   root.replaceChildren(
     h('div', { class: 'p-head' }, h('div', { class: 'p-badge', text: '學習筆記' }),
+      h('button', { type: 'button', class: 'mini p-fold', title: '收起學習筆記，讓場景寬一點（點設備時，設定頁面照樣會出現）', onclick: () => fold(true) }, icon('chevron', 15)),
       h('div', { class: 'p-title' }, h('h2', { text: '這一關的新觀念' }), h('p', { class: 'muted', text: '點場景中的設備，這裡會變成它的設定頁面' }))),
     h('div', { class: 'p-body' },
       lv.learn.map((c) => h('div', { class: 'card learn' }, h('b', { text: c.t }), h('p', null, linkText(c.d)))),
@@ -392,45 +399,7 @@ function giveUp(app) {
 }
 
 export function openLevels(app) {
-  const done = app.store.done;
-  const n = LEVELS.filter((l) => done[l.id]).length;
-  modal([
-    h('div', { class: 'hero' }, h('div', { html: LOGO }),
-      h('div', null, h('h1', { html: 'Link<em>Up</em>' }), h('p', { text: '從一條網路線到一座資料中心 — 親手接線、親手設定，讓封包抵達目的地。' })),
-      h('div', { class: 'prog' }, h('b', { text: `${n} / ${LEVELS.length}` }), h('span', { text: '已完成關卡' }))),
-    h('button', { type: 'button', class: 'lv sbx-card' + (app.level && app.level.sandbox ? ' cur' : ''), onclick: () => { closeModal(); app.openSandbox(); } },
-      h('div', { class: 'top' }, h('span', { class: 'no', text: '∞  自由模式' })),
-      h('b', { text: '自己擺設備、自由接線' }), h('p', { text: '沒有任務目標的沙盒。所有設備與功能都可以用，適合自己練習拓撲或重現工作上遇到的情境。' })),
-    h('div', { class: 'mode-cards' },
-      h('button', { type: 'button', class: 'lv mode-card', onclick: () => openDrillPicker(app, { modal, closeModal, levelNo }) },
-        h('div', { class: 'top' }, h('span', { class: 'no' }, icon('bolt', 13), ' 故障演練')),
-        h('b', { text: '隨機改壞一個做好的網路' }), h('p', { text: '閘道打錯、VLAN 放錯、Trunk 少了 VLAN、介面被關、路由被刪…每次都不一樣，可以限時。' })),
-      h('button', { type: 'button', class: 'lv mode-card', onclick: () => openExamPicker(app, { modal, closeModal }) },
-        h('div', { class: 'top' }, h('span', { class: 'no' }, icon('clock', 13), ' 模擬考')),
-        h('b', { text: 'CCNA / Network+ 限時模擬考' }), h('p', { text: '依考試領域的比重抽題、交卷後才看答案，依領域分析強弱。' })),
-      (app.store.custom || []).length ? h('button', { type: 'button', class: 'lv mode-card', onclick: () => openCustomLevels(app) },
-        h('div', { class: 'top' }, h('span', { class: 'no' }, icon('edit', 13), ' 自訂關卡')),
-        h('b', { text: `${app.store.custom.length} 個自己做的關卡` }), h('p', { text: '在自由模式設計、匯入別人分享的關卡。' })) : null),
-    CHAPTERS.map((ch) => h('section', { class: 'chapter' },
-      h('h2', null, `第 ${ch.id} 章　${ch.title}`, h('small', { text: ch.desc })),
-      h('div', { class: 'lv-grid' }, LEVELS.filter((l) => l.chapter === ch.id).map((lv) => {
-        const d = done[lv.id];
-        return h('button', {
-          type: 'button', class: `lv ${d ? 'done' : ''} ${lv === app.level ? 'cur' : ''}`,
-          onclick: () => {
-            closeModal();
-            if (lv.id === 'l01' && app.store.tutorial == null && !app.store.done.l01) return startTutorial(app);
-            app.loadLevel(LEVELS.indexOf(lv));
-            if (!app.store.seenHelp) openHelp(app);
-            return undefined;
-          },
-        },
-        h('div', { class: 'top' }, h('span', { class: 'no', text: levelNo(lv) + (d ? '  ✓' : '') + (d && d.best ? `  ${gradeOf(d.best)}` : '') }),
-          h('span', { class: 'stars' }, [1, 2, 3].map((s) => { const i = icon('star', 13); if (d && d.stars >= s) i.classList.add('on'); return i; }))),
-        h('b', { text: lv.title }), h('p', { text: lv.subtitle }),
-        h('div', { class: 'chips' }, lv.tags.slice(0, 3).map((t) => h('span', { class: 'chip', text: t }))));
-      })))),
-  ], { wide: true });
+  openLevelMenu(app, { modal, closeModal, levelNo, openHelp, logo: LOGO });
 }
 
 export function openHelp(app) {
@@ -499,7 +468,6 @@ export function confirmPowerOff(name, onSave, onDiscard) {
   ]);
 }
 
-const gradeOf = (score) => (score >= 950 ? 'S' : score >= 850 ? 'A' : score >= 700 ? 'B' : 'C');
 export function openComplete(app, stars, sc) {
   const lv = app.level;
   const next = lv.custom ? null : LEVELS[app.levelIdx + 1];

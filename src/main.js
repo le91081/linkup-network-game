@@ -20,7 +20,7 @@ import { isIos, iosDirty, saveStartup, restoreStartup } from './engine/ios.js';
 import { makeDrill, openDrillComplete, fmtSecs } from './ui/drill.js';
 import { scoreOf } from './ui/score.js';
 import { customLevel } from './ui/editor.js';
-import { renderTopo, bindTopoView } from './ui/topo2d.js';
+import { renderTopo, bindTopoView, topoPacket, topoPulse } from './ui/topo2d.js';
 import { exportTopoDialog, ipPlanDialog } from './ui/docexport.js';
 import { tutorialTick } from './ui/tutorial.js';
 
@@ -255,7 +255,15 @@ const app = {
   },
 
   renderPanel() {
-    if (!renderDevicePanel(app, app.el.panel)) hud.renderGuide(app, app.el.panel);
+    const dev = renderDevicePanel(app, app.el.panel);
+    if (!dev) hud.renderGuide(app, app.el.panel);
+    // 學習筆記收起來的時候右邊只留一條窄邊：場景變寬，鏡頭跟著重新對焦
+    const fold = !dev && !!app.store.guideFold;
+    if (document.body.classList.contains('guide-fold') !== fold) {
+      document.body.classList.toggle('guide-fold', fold);
+      updateInsets();
+      if (app.state) { app.scene.fit(true); app.render2d(); }
+    }
   },
 
   select(id) {
@@ -467,7 +475,8 @@ function topoEl() {
   root.append(h('div', { class: 't2-tools' },
     button('匯出圖片', { ic: 'download', small: true, onclick: () => exportTopoDialog(app, svg) }),
     button('IP 位址表', { ic: 'grid', small: true, onclick: () => ipPlanDialog(app) }),
-    button('流量熱圖', { ic: 'bolt', small: true, onclick: (e) => { app.heat = !app.heat; e.currentTarget.classList.toggle('on', app.heat); app.render2d(); } })));
+    button('流量熱圖', { ic: 'bolt', small: true, onclick: (e) => { app.heat = !app.heat; e.currentTarget.classList.toggle('on', app.heat); app.render2d(); } }),
+    button('VLAN 配色', { ic: 'grid', small: true, kind: 'on', title: 'Access 埠的線照 VLAN 上色，一眼看出哪些設備在同一個廣播網域', onclick: (e) => { app.t2vlan = app.t2vlan === false; e.currentTarget.classList.toggle('on', app.t2vlan !== false); app.render2d(); } })));
   document.body.append(root);
   // 點設備：和 3D 場景一樣打開設定；點空白處取消選取（拖曳平移結束時的那一下不算）
   svg.addEventListener('click', (e) => {
@@ -497,6 +506,9 @@ for (const k of ['topbar', 'mission', 'panel', 'console']) app.el[k].classList.a
 app.con = hud.initConsole(app);
 app.scene = new Scene3D(app.el.stage, {
   onSelect: (id) => app.select(id),
+  // 2D 拓撲圖開著的時候，封包動畫與到站的閃光也畫在 2D 圖上
+  onPacket: (p) => { if (topo && (app.view2d || !p)) topoPacket(topo.svg, p); },
+  onPulse: (id, color) => { if (topo && app.view2d) topoPulse(topo.svg, id, color); },
   onLink: (a, b) => app.link(a, b),
   onCable: (id, x, y) => hud.openCableMenu(app, id, x, y),
   canMove: () => !!app.level.sandbox,

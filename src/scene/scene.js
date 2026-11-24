@@ -1,6 +1,8 @@
 // three.js 場景：等距視角的機房桌面、設備、網路線與封包動畫
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
+import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
+import { devIcon } from '../ui/devicons.js';
 import { buildDevice, refreshDevice, glowTexture, PALETTE, ACCENT } from './models.js';
 import { CABLES, cableKind, CATALOG, primaryIface } from '../engine/model.js';
 import { apRange, rfAt, ssidsOf } from '../engine/sim.js';
@@ -90,6 +92,19 @@ class CableCurve extends THREE.Curve {
 
 const PKT_COLOR = { req: 0x7df3ff, reply: 0x7dffb0, dns: 0xc9b0ff, esp: 0xffc857, arp: 0xff9f5a, dhcp: 0xff8fd0, gre: 0x9fd4ff };
 const PKT_TAG = { arp: 'ARP', dhcp: 'DHCP', gre: 'GRE' };
+const hex = (c) => '#' + (c >>> 0).toString(16).padStart(6, '0');
+/** 封包旁邊的小標籤：這一段送的是什麼（協定、埠號、三向交握的哪一步、VLAN 標籤） */
+function pktText(h, esp) {
+  let t;
+  if (esp) t = h.ssl ? 'TLS 加密' : h.natt ? 'ESP 加密 (UDP 4500)' : 'ESP 加密';
+  else if (PKT_TAG[h.proto]) t = PKT_TAG[h.proto] + (h.proto === 'arp' ? ' 回覆' : '');
+  else if (h.proto === 'icmp') t = h.reply ? 'ICMP 回應' : 'ICMP 請求';
+  else if (h.proto === 'icmp6') t = h.reply ? 'ICMPv6 回應' : 'ICMPv6 請求';
+  else if (h.proto === 'udp') t = h.port === 53 ? (h.reply ? 'DNS 回應' : 'DNS 查詢') : 'UDP' + (h.port ? ' ' + h.port : '');
+  else if (h.proto === 'tcp') t = 'TCP' + (h.port ? ' ' + h.port : '') + ' · ' + (h.ack ? 'ACK' : h.reply ? 'SYN-ACK' : 'SYN');
+  else t = (h.proto || '').toUpperCase();
+  return [t, h.tag != null ? 'VLAN ' + h.tag : ''].filter(Boolean).join(' · ');
+}
 
 export class Scene3D {
   constructor(host, handlers) {
@@ -126,7 +141,14 @@ export class Scene3D {
 
     this.scene = new THREE.Scene();
     this.cam = new THREE.OrthographicCamera(-1, 1, 1, -1, 0.1, 400);
-    this.scene.add(new THREE.HemisphereLight(0xd6e4ff, 0x1c2540, 1.25));
+    // 環境光：金屬的機殼才有東西可以反射（沒有的話金屬感越高的零件越黑）
+    try {
+      const pm = new THREE.PMREMGenerator(this.renderer);
+      this.scene.environment = pm.fromScene(new RoomEnvironment(), 0.04).texture;
+      this.scene.environmentIntensity = 0.42;
+      pm.dispose();
+    } catch { /* 沒有環境光也能畫 */ }
+    this.scene.add(new THREE.HemisphereLight(0xd6e4ff, 0x1c2540, 1.05));
     this.sun = new THREE.DirectionalLight(0xffffff, 2.3);
     this.sun.position.set(-9, 20, 11);
     this.sun.castShadow = true;
@@ -463,11 +485,14 @@ export class Scene3D {
       const now = dev && this.labels.get(dev);
       if (now) now.el.classList.add('hov');
     }
+    const devChanged = this.tagHov !== dev;
+    this.tagHov = dev;
     if (this.hovCable !== cable) {
       if (this.hovCable && this.cables.has(this.hovCable)) { const m = this.cables.get(this.hovCable).mesh; m.material.emissiveIntensity = m.userData.emis; }
       this.hovCable = cable;
       if (cable && this.cables.has(cable)) this.cables.get(cable).mesh.material.emissiveIntensity = 1.1;
-    }
+      this.rebuildPortTags();
+    } else if (devChanged) this.rebuildPortTags();
     if (!this.down) this.canvas.style.cursor = dev || cable ? 'pointer' : '';
   }
 
@@ -488,6 +513,42 @@ export class Scene3D {
     if (this.hovered === id) this.hovRing.visible = false;
     for (const [k, l] of this.labels) l.el.classList.toggle('sel', k === id);
     this.emphasizeRing();
+    this.rebuildPortTags();
+  }
+
+  /**
+   * 連接埠的小標籤：選取（或滑鼠移到）一台設備時，它的每一條線中間標出兩端的埠名（自己這一端寫在前面）；
+   * 滑鼠移到一條線上也一樣。不用點開每條線，就看得出「Gi0/1 接到對面的哪一個埠」。
+   */
+  rebuildPortTags() {
+    for (const t of this.portTags || []) t.el.remove();
+    this.portTags = [];
+    const st = this.state;
+    if (!st || st.hideCables) return;
+    const devs = new Set([this.selected, this.hovered].filter(Boolean));
+    // 只有一個網路孔的電腦不用標埠名（標了也只是「乙太網路」）
+    const name = (end) => {
+      const d = st.devices[end.dev], port = d && d.ports.find((x) => x.id === end.port);
+      return !port || (d.kind === 'host' && d.ports.length === 1) ? '' : port.label;
+    };
+    for (const c of st.cables) {
+      const rec = this.cables.get(c.id);
+      if (!rec || !(devs.has(c.a.dev) || devs.has(c.b.dev) || this.hovCable === c.id)) continue;
+      // 自己這一端寫在前面：選取的優先，其次是滑鼠指著的
+      const near = [this.selected, this.hovered].find((id) => id === c.a.dev || id === c.b.dev);
+      const [x, y] = near === c.b.dev ? [c.b, c.a] : [c.a, c.b];
+      const names = [name(x), name(y)].filter(Boolean);
+      if (!names.length) continue;
+      const el = document.createElement('div');
+      const cs = st.rt.cable[c.id];
+      el.className = 'port-tag' + (cs === 'down' ? ' down' : cs === 'blocked' ? ' blocked' : '');
+      names.forEach((t, n) => {
+        if (n) { const sep = document.createElement('i'); sep.textContent = '↔'; el.append(sep); }
+        el.append(t);
+      });
+      this.labelLayer.append(el);
+      this.portTags.push({ el, pos: rec.curve.getPointAt(0.5) });
+    }
   }
 
   // ───────────── Wi-Fi 視覺化 ─────────────
@@ -636,6 +697,7 @@ export class Scene3D {
     this.hideGhosts();
     this.tagPos = null;
     this.tagEl.style.display = 'none';
+    this.emit(null);
     this.state = state;
 
     let x0 = Infinity, x1 = -Infinity, z0 = Infinity, z1 = -Infinity;
@@ -650,6 +712,7 @@ export class Scene3D {
       el.className = 'dev-label k-' + d.kind;
       el.dataset.dev = d.id;
       el.innerHTML = '<span class="dot"></span><span class="nm"></span><span class="sub"></span>';
+      el.querySelector('.dot').append(devIcon(d, 13));
       this.labelLayer.append(el);
       this.labels.set(d.id, { el, nm: el.querySelector('.nm'), sub: el.querySelector('.sub') });
     }
@@ -840,7 +903,7 @@ export class Scene3D {
   sync(state) {
     this.state = state;
     const sig = (state.hideCables ? 'H|' : '') + state.cables.map((c) => `${c.id}:${c.a.dev}.${c.a.port}-${c.b.dev}.${c.b.port}:${state.rt.cable[c.id]}:${c.kind}:${state.rt.wait && state.rt.wait[c.id] > 0 ? 'w' : ''}`).join('|');
-    if (sig !== this.cableSig) { this.cableSig = sig; this.rebuildCables(state); }
+    if (sig !== this.cableSig) { this.cableSig = sig; this.rebuildCables(state); this.rebuildPortTags(); }
     const wsig = JSON.stringify([
       Object.values(state.devices).filter((d) => d.wifi).map((d) => [d.id, apRange(d), !!state.rt.off[d.id] || !!(state.down || {})[d.id] || (state.rt.booting || {})[d.id] > 0, ssidsOf(state, d).filter((x) => !x.off && x.name).length, ...((state.walls || []).length ? d.pos.map((v) => Math.round(v * 4)) : [])]),
       (state.walls || []).map((w) => [w.a, w.b, w.mat]),
@@ -917,6 +980,7 @@ export class Scene3D {
     const r0 = Math.hypot(u.w, u.d) / 2 + 0.2;
     this.fx.add(m);
     this.pulses.push({ m, t0: performance.now(), dur: big ? 900 : 520, r0, r1: r0 + (big ? 2.2 : 0.9) });
+    this.h.onPulse?.(devId, color);
   }
 
   bubble(devId, text, kind = 'fail', ms = 5200) {
@@ -970,10 +1034,15 @@ export class Scene3D {
 
   hideGhosts() { for (const g of this.ghosts) g.visible = false; }
 
-  setTag(text, cls) {
+  setTag(text, color) {
     this.tagEl.style.display = text ? 'block' : 'none';
     this.tagEl.textContent = text;
-    this.tagEl.className = 'pkt-tag' + (cls ? ' ' + cls : '');
+    if (color != null) this.tagEl.style.background = hex(color);
+  }
+
+  /** 封包現在在哪裡（2D 拓撲圖跟著畫同一顆）：items = [{ a, b, t }]，沒有封包時是 null */
+  emit(items, color, tag) {
+    if (this.h.onPacket) this.h.onPacket(items ? { items, color, tag } : null);
   }
 
   /** 沿著網路線播放封包的每一段行程 */
@@ -991,15 +1060,17 @@ export class Scene3D {
         this.packet.visible = false;
         this.tail.forEach((t) => (t.visible = false));
         for (const level of h.wave) {
-          const segs = level.map((x) => ({ to: x.to, s: this.seg(x) })).filter((y) => y.s);
+          const segs = level.map((x) => ({ from: x.from, to: x.to, s: this.seg(x) })).filter((y) => y.s);
           if (!segs.length) continue;
           const gs = segs.map((_, i) => this.ghost(i, color));
           this.tagPos = gs[0].position;
-          this.setTag((PKT_TAG[h.proto] || '') + ' 廣播', h.proto);
+          const wtag = (PKT_TAG[h.proto] || '') + ' 廣播';
+          this.setTag(wtag, color);
           const len = Math.max(...segs.map((y) => y.s.curve.getLength()));
           await this.anim(clamp(len * 46, 220, 560), (k) => {
             if (token !== this.playToken) return;
             segs.forEach((y, i) => place(gs[i], y.s, y.s.fwd ? k : 1 - k));
+            this.emit(segs.map((y) => ({ a: y.from, b: y.to, t: k })), color, wtag);
           });
           if (token !== this.playToken) return false;
           this.hideGhosts();
@@ -1007,6 +1078,7 @@ export class Scene3D {
         }
         this.tagPos = null;
         this.setTag('');
+        this.emit(null);
         continue;
       }
       const c = this.seg(h);
@@ -1017,10 +1089,11 @@ export class Scene3D {
       this.pktGlow.material.color.setHex(color);
       this.packet.visible = true;
       this.tail.forEach((t) => (t.visible = true));
-      const kind = PKT_TAG[h.proto];
-      this.setTag([esp ? (h.ssl ? 'TLS 加密' : 'ESP 加密') : '', kind ? kind + (h.proto === 'arp' ? ' 回覆' : '') : '', h.tag != null ? 'VLAN ' + h.tag : ''].filter(Boolean).join(' · '), esp ? 'esp' : kind ? h.proto : '');
+      const ptag = pktText(h, esp);
+      this.setTag(ptag, color);
       // Hub 會把同一份訊框複製到其他每一個埠
-      const leaks = (h.leak || []).map((x) => this.seg(x)).filter(Boolean);
+      const leakHops = (h.leak || []).filter((x) => this.seg(x));
+      const leaks = leakHops.map((x) => this.seg(x));
       const lg = leaks.map((_, i) => this.ghost(i, color, 0.55));
       const len = c.curve.getLength();
       await this.anim(clamp(len * 46, 190, 560), (k) => {
@@ -1029,6 +1102,7 @@ export class Scene3D {
         place(this.packet, c, t);
         this.tail.forEach((m, i) => place(m, c, t + (c.fwd ? -1 : 1) * 0.045 * (i + 1)));
         leaks.forEach((s, i) => place(lg[i], s, s.fwd ? k : 1 - k));
+        this.emit([{ a: h.from, b: h.to, t: k }, ...leakHops.map((x) => ({ a: x.from, b: x.to, t: k }))], color, ptag);
       });
       if (token !== this.playToken) return false;
       this.hideGhosts();
@@ -1040,6 +1114,7 @@ export class Scene3D {
     this.hideGhosts();
     this.tagPos = null;
     this.setTag('');
+    this.emit(null);
     return true;
   }
 
@@ -1097,6 +1172,10 @@ export class Scene3D {
       const s = this.toScreen(v);
       n.el.style.transform = `translate(-12%, -100%) translate(${s.x.toFixed(1)}px, ${s.y.toFixed(1)}px)`;
     }
+    for (const t of this.portTags || []) {
+      const s = this.toScreen(t.pos);
+      t.el.style.transform = `translate(-50%, -50%) translate(${s.x.toFixed(1)}px, ${(s.y - 11).toFixed(1)}px)`;
+    }
     for (const f of this.frames || []) {
       const s = this.toScreen(f.corner);
       f.el.style.transform = `translate(0, -100%) translate(${s.x.toFixed(1)}px, ${(s.y - 2).toFixed(1)}px)`;
@@ -1108,7 +1187,11 @@ export class Scene3D {
       if (!g) continue;
       v.set(g.position.x, g.userData.h + 0.35, g.position.z);
       const s = this.toScreen(v);
-      b.el.style.transform = `translate(-50%, -100%) translate(${s.x.toFixed(1)}px, ${s.y.toFixed(1)}px)`;
+      // 說明泡泡不要跑到兩側面板底下：整個推回可視範圍（尖角跟著指回設備）
+      if (!b.w) { b.w = b.el.offsetWidth; b.hh = b.el.offsetHeight; }
+      const bw = b.w / 2, bx = xr - xl > b.w ? Math.min(Math.max(s.x, xl + bw), xr - bw) : s.x, by = Math.max(s.y, ins.top + b.hh + 4);
+      b.el.style.setProperty('--tip', (Math.max(-bw + 14, Math.min(bw - 14, s.x - bx))).toFixed(1) + 'px');
+      b.el.style.transform = `translate(-50%, -100%) translate(${bx.toFixed(1)}px, ${by.toFixed(1)}px)`;
     }
     if ((this.packet.visible || this.tagPos) && this.tagEl.style.display !== 'none') {
       const s = this.toScreen(this.tagPos || this.packet.position);

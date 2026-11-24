@@ -865,7 +865,7 @@ export function forward(state, ctx, startId, pkt) {
         leaked = true;
         log.push({ dev: h.from, kind: 'info', text: `${state.devices[h.from].name} 是 Hub：訊框被複製到其他所有連接埠，${leak.map((x) => state.devices[x.to].name).join('、')} 也收到了，發現不是給自己的就丟棄` });
       }
-      hops.push({ ...h, reply: pkt.reply, proto: pkt.proto, ssl: !!pkt.ssl, leak, ...(pkt.natt ? { natt: true } : {}) });
+      hops.push({ ...h, reply: pkt.reply, proto: pkt.proto, ssl: !!pkt.ssl, leak, ...(pkt.natt ? { natt: true } : {}), ...(pkt.proto === 'tcp' || pkt.proto === 'udp' ? { port: pkt.reply ? pkt.sport : pkt.dport } : {}), ...(pkt.ack ? { ack: true } : {}) });
       if (!QUIET) {
         onHop(state, h, {
           proto: pkt.proto, smac: outIf.rt.mac, dmac: tmac, src: pkt.src, dst: pkt.dst, sport: pkt.sport, dport: pkt.dport, ttl: pkt.ttl,
