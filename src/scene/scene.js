@@ -888,7 +888,7 @@ export class Scene3D {
         plugGeo[fiber ? 'sfp' : 'rj45'].push(geo);
       }
       this.cableGroup.add(mesh, pick);
-      this.cables.set(c.id, { a: c.a.dev, b: c.b.dev, curve, mesh, pick, waiting });
+      this.cables.set(c.id, { a: c.a.dev, b: c.b.dev, curve, mesh, pick, waiting, flood: st !== 'down' && !!this.floodCables && this.floodCables.has(c.id) });
     }
     for (const [k, list] of Object.entries(plugGeo)) {
       if (!list.length) continue;
@@ -902,7 +902,11 @@ export class Scene3D {
 
   sync(state) {
     this.state = state;
-    const sig = (state.hideCables ? 'H|' : '') + state.cables.map((c) => `${c.id}:${c.a.dev}.${c.a.port}-${c.b.dev}.${c.b.port}:${state.rt.cable[c.id]}:${c.kind}:${state.rt.wait && state.rt.wait[c.id] > 0 ? 'w' : ''}`).join('|');
+    // DoS：攻擊流量走過的線、被塞滿的主機
+    const dos = state.rt.dos || { list: [], hit: {} };
+    this.floodCables = new Set(dos.list.flatMap((e) => e.cables));
+    const victims = new Set(Object.values(dos.hit).map((e) => e.victim));
+    const sig = (state.hideCables ? 'H|' : '') + state.cables.map((c) => `${c.id}:${c.a.dev}.${c.a.port}-${c.b.dev}.${c.b.port}:${state.rt.cable[c.id]}:${c.kind}:${state.rt.wait && state.rt.wait[c.id] > 0 ? 'w' : ''}${this.floodCables.has(c.id) ? 'F' : ''}`).join('|');
     if (sig !== this.cableSig) { this.cableSig = sig; this.rebuildCables(state); this.rebuildPortTags(); }
     const wsig = JSON.stringify([
       Object.values(state.devices).filter((d) => d.wifi).map((d) => [d.id, apRange(d), !!state.rt.off[d.id] || !!(state.down || {})[d.id] || (state.rt.booting || {})[d.id] > 0, ssidsOf(state, d).filter((x) => !x.off && x.name).length, ...((state.walls || []).length ? d.pos.map((v) => Math.round(v * 4)) : [])]),
@@ -946,6 +950,7 @@ export class Scene3D {
         }
         else if (!i) { sub = wl && wl.wifi.ssid && !wl.rt.assoc ? 'Wi-Fi 未連線' : '未設定 IP'; cls = 'off'; }
         else if (!i.rt.link) { sub = fmtIp(i.rt.ip) + ' · 未連線'; cls = 'off'; }
+        else if (victims.has(d.id)) { sub = fmtIp(i.rt.ip) + ' · 被 SYN flood 塞滿'; cls = 'warn'; }
         else { sub = fmtIp(i.rt.ip) + (d.rt.vpn && d.rt.vpn.up ? ' · VPN' : ''); cls = i.rt.src === 'apipa' ? 'warn' : 'on'; }
       } else {
         sub = CATALOG[d.model].title.replace(/^(Cisco|TP-Link|Ubiquiti|Fortinet|NETGEAR|ASUS) /, '');
@@ -1140,6 +1145,8 @@ export class Scene3D {
     if (this.selRing.visible) this.selRing.material.opacity = 0.75 + 0.2 * Math.sin(now / 260);
     // 還在 STP listening / learning 的線：像交換器上的琥珀色燈號一樣閃爍
     for (const c of this.cables.values()) if (c.waiting) c.mesh.material.emissiveIntensity = 0.12 + 0.45 * (0.5 + 0.5 * Math.sin(now / 170));
+    // 攻擊流量：線快速地閃紅色
+    for (const c of this.cables.values()) if (c.flood) { c.mesh.material.emissive.setHex(0xff2d46); c.mesh.material.emissiveIntensity = 0.35 + 1.25 * (0.5 + 0.5 * Math.sin(now / 55)); }
 
     this.renderer.render(this.scene, this.cam);
 

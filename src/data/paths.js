@@ -59,7 +59,7 @@ export const PATHS = [
       { t: '第二層的攻擊與防護', d: 'DHCP、ARP、MAC flooding、VLAN hopping、生成樹', ids: ['l16', 'l31', 'l17', 'l83', 'l46', 'l84', 'l32', 'l86'] },
       { t: '你是誰：身分與存取', d: '802.1X、RADIUS、EAP-TLS、TACACS+、AD', ids: ['l33', 'l102', 'l116', 'l146'] },
       { t: '設備加固', d: '管理介面、密碼、帶外管理', ids: ['l19', 'l149', 'l126'] },
-      { t: '次世代防火牆', d: '網頁過濾、SSL 檢查、應用程式控管、IPS、防毒', ids: ['l124', 'l127', 'l133'] },
+      { t: '次世代防火牆', d: '網頁過濾、SSL 檢查、應用程式控管、IPS、防毒、DoS 政策', ids: ['l124', 'l127', 'l133', 'l179'] },
       { t: 'VPN 與憑證', d: 'IPsec、SSL-VPN、PKI、HTTPS', ids: ['l20', 'l21', 'l89', 'l101', 'l74', 'l165'] },
     ],
   },

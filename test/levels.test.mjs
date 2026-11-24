@@ -6196,6 +6196,66 @@ console.log('\n觀察題與封包實驗室');
   ok(r.every((x) => x.pass), '來源只寫 DNS 伺服器：全部通過');
 }
 
+// ── 6-21：SYN flood 與 DoS 政策 ──
+console.log('\nSYN flood 與 FortiGate 的 DoS 政策');
+{
+  const D = await import('../src/engine/dos.js');
+  const { fortiSession, fortiConfig } = await import('../src/engine/fortios.js');
+  const ok = (cond, title) => (cond ? console.log('  ✔ ' + title) : fail(title));
+  const lv = LEVELS.find((l) => l.id === 'l179');
+  const s = lv.setup(); recompute(s);
+  const fw = s.devices.fw, syn = () => fw.dos[0].anomaly.tcp_syn_flood, e = () => s.rt.dos.list[0];
+  const res = () => { recompute(s); return evaluate(s, lv.objectives); };
+  let r = res();
+  ok(r.map((x) => x.pass).join() === 'false,false,false,true' && /SYN flood 塞滿/.test(r[0].reason) && r[0].failDev === 'web' && e().victim === 'web' && !e().stop,
+    '開場：攻擊打得到 Web 伺服器，內外的新連線都排不進去（原因寫明是 SYN flood）');
+  ok(/wan1 上沒有 DoS 政策/.test(r[2].reason) && /pps=0 /.test(D.diagAnomaly(s, fw).join('\n')) && !(s.dyn.log.fw || []).some((l) => /anomaly/.test(l.line)), '政策掛在 dmz：量到的 pps 是 0、沒有任何異常紀錄');
+  ok(transact(s, 'pc-1', { proto: 'icmp', dst: parseIp('8.8.8.8') }).ok && transact(s, 'web', { proto: 'icmp', dst: parseIp('172.16.1.1') }).ok, '只有被打的那個服務不通：公司照樣上得了網、伺服器 ping 得到自己的閘道');
+  fw.dos[0].iface = 'wan1'; r = res();
+  ok(!r[0].pass && /動作是 pass/.test(r[2].reason) && e().seen[0].over && !e().seen[0].drop && /pps=12000 freq=12000 threshold=2000 action=pass/.test(D.diagAnomaly(s, fw).join('\n')),
+    '介面改成 wan1：偵測到了（diagnose ips anomaly list 看得到每秒 12000），但動作是 pass，網站還是不通');
+  ok((s.dyn.log.fw || []).filter((l) => /attack="tcp_syn_flood" action="detected" count=12000/.test(l.line)).length === 1 && D.floodSessions(s, fw) === 120000, '紀錄多一筆 anomaly … action="detected"（重算不會重複記）；連線表多了 12 萬筆半開連線');
+  recompute(s);
+  ok((s.dyn.log.fw || []).filter((l) => /anomaly/.test(l.line)).length === 1, '狀況沒變：不會每次重算都再記一筆');
+  syn().threshold = 20000; r = res();
+  ok(!r[0].pass && /門檻是 20000，比攻擊的量/.test(r[2].reason), '門檻比攻擊的量還高：不會觸發');
+  syn().threshold = 100; syn().action = 'block'; r = res();
+  ok(r[0].pass && r[1].pass && r[2].pass && !r[3].pass && /比正常的尖峰還低/.test(r[3].reason), 'block、門檻 100：擋下來了，但門檻比正常的尖峰還低 → 不過');
+  syn().threshold = 2000; r = res();
+  ok(r.every((x) => x.pass) && e().stop.dev === 'fw' && !e().victim && e().cables.length === 1 && D.floodSessions(s, fw) === 0 && (s.dyn.log.fw || []).some((l) => /action="clear_session"/.test(l.line)),
+    'block、門檻 2000：全部通過；攻擊只走到防火牆為止、連線表不再被佔用、紀錄是 clear_session');
+  syn().on = false; r = res();
+  ok(!r[0].pass && /沒有啟用/.test(r[2].reason), '把 tcp_syn_flood 的 status 關掉：又不通了');
+  syn().on = true; fw.dos[0].on = false; r = res();
+  ok(!r[0].pass, '整條 DoS 政策停用：不通');
+  fw.dos[0].on = true;
+  s.attacks[0].on = false; r = res();
+  ok(r[0].pass && r[1].pass && !s.rt.dos.list.length, '攻擊停了：不用 DoS 政策也通');
+  s.attacks[0].on = true;
+  // 沒有 VIP 的話根本打不到
+  const t = lv.setup(); t.devices.fw.portForwards = []; recompute(t);
+  ok(!t.rt.dos.list[0].reach && !Object.keys(t.rt.dos.hit).length, '沒有對外的 VIP：攻擊打不到伺服器（reach = false）');
+  // CLI：config firewall DoS-policy 與設定檔來回
+  const u = lv.setup(); recompute(u);
+  const S = fortiSession(() => u.devices.fw, () => u);
+  const run = (...lines) => lines.flatMap((l) => S.exec(l).out);
+  const cfg0 = fortiConfig(u, u.devices.fw).join('\n');
+  ok(/config firewall DoS-policy\n {4}edit 1\n {8}set name "protect-web"\n {8}set interface "dmz"\n[\s\S]*edit "tcp_syn_flood"\n {16}set status enable\n {16}set log enable\n {16}set threshold 2000/.test(cfg0) && !/set action pass/.test(cfg0), 'show：DoS 政策印在防火牆政策後面，action 是預設的 pass 就不印');
+  ok(/entry not found/.test(run('config firewall DoS-policy', 'edit 1', 'set interface "wan9"', 'next', 'end').join('\n')) && u.devices.fw.dos[0].iface === 'dmz', '不存在的介面：整段不套用');
+  ok(/這個模擬認得的異常/.test(run('config firewall DoS-policy', 'edit 1', 'config anomaly', 'edit "tcp_fin_scan"', 'end', 'next', 'end').join('\n')), '不認得的異常名稱：錯誤訊息列出認得的');
+  run('config firewall DoS-policy', 'edit 1', 'set interface "wan1"', 'config anomaly', 'edit "tcp_syn_flood"', 'set status enable', 'set action block', 'set threshold 1500', 'next', 'edit "icmp_flood"', 'set status enable', 'next', 'end', 'next', 'end');
+  recompute(u);
+  ok(u.devices.fw.dos[0].iface === 'wan1' && u.devices.fw.dos[0].anomaly.tcp_syn_flood.threshold === 1500 && u.devices.fw.dos[0].anomaly.icmp_flood.threshold === 250 && evaluate(u, lv.objectives).every((x) => x.pass), '用 CLI 改介面、action block、threshold 1500：過關；icmp_flood 的門檻是預設的 250');
+  ok(/id=tcp_syn_flood +ip=203\.0\.113\.18 dos_id=1 exp=1 pps=12000 freq=12000 threshold=1500 action=block/.test(run('diagnose ips anomaly list').join('\n')), 'diagnose ips anomaly list');
+  const text = fortiConfig(u, u.devices.fw);
+  const v = lv.setup(); recompute(v);
+  const S2 = fortiSession(() => v.devices.fw, () => v);
+  for (const l of text) S2.exec(l);
+  ok(JSON.stringify(v.devices.fw.dos) === JSON.stringify(u.devices.fw.dos), '整份設定貼回另一台：DoS 政策一模一樣');
+  ok(/entry not found/.test(run('config firewall DoS-policy', 'delete 9', 'end').join('\n')) && !run('config firewall DoS-policy', 'delete 1', 'end').length && !u.devices.fw.dos, 'delete：不存在的編號報錯，刪掉最後一條之後 dos 整個拿掉');
+  ok(/沒有 set interface/.test(run('config firewall DoS-policy', 'edit 0', 'next', 'end').join('\n')), '新的 DoS 政策沒有指定介面：不套用');
+}
+
 // ── 學習路線 ──
 {
   const { PATHS, pathIds } = await import('../src/data/paths.js');

@@ -34,7 +34,7 @@ README 說明「現在有什麼、怎麼玩」，這份文件說明「整體應�
 | 2. 第二層：交換 | 17 | 0 | 0 | 0 |
 | 3. 第三層：路由 | 17 | 0 | 0 | 0 |
 | 4. IP 服務 | 15 | 0 | 0 | 0 |
-| 5. 網路安全 | 17 | 0 | 0 | 0 |
+| 5. 網路安全 | 18 | 0 | 0 | 0 |
 | 6. VPN 與廣域網路 | 13 | 0 | 0 | 0 |
 | 7. 無線網路 | 10 | 0 | 0 | 0 |
 | 8. IPv6 | 8 | 0 | 0 | 0 |
@@ -46,9 +46,9 @@ README 說明「現在有什麼、怎麼玩」，這份文件說明「整體應�
 | 14. 遊戲系統 | 19 | 0 | 0 | 5 |
 | 15. 介面與體驗 | 13 | 0 | 0 | 0 |
 | 16. 工程品質 | 7 | 3 | 0 | 0 |
-| **合計** | **209** | **3** | **0** | **5** |
+| **合計** | **210** | **3** | **0** | **5** |
 
-另外：關卡 178 關（第 17 節）、證照條目涵蓋情形（第 18 節）、建議的實作順序（第 19 節）。
+另外：關卡 179 關（第 17 節）、證照條目涵蓋情形（第 18 節）、建議的實作順序（第 19 節）。
 
 範圍的調整（2026-11-22）：第 14 節遊戲系統還沒做完的項目暫時不做（⏸）；第 15 節的手機與平板、多語系、無障礙、主題從規劃中移除，不做。
 
@@ -156,6 +156,7 @@ README 說明「現在有什麼、怎麼玩」，這份文件說明「整體應�
 | TACACS+ 與 AAA | ✅ | `aaa new-model`、`tacacs server`（address、key）、`ip tacacs source-interface`；`aaa authentication login` 方法清單（伺服器連不到或沒回應才換下一個，FAIL 直接拒絕）、`login authentication`；`aaa authorization exec`（權限由伺服器或本機帳號決定，沒設定一律 1 級）、`aaa authorization commands 15`（Command authorization failed.）、`aaa accounting commands 15`；TACACS+ 伺服器（ISE）的分頁：共用密鑰、登記的網路設備、帳號的權限與指令範圍、指令記錄 → 11-10 |
 | IOS 進階過濾 | ✅ | Zone-Based Firewall 已完成：zone security、zone-member security、class-map type inspect（match protocol、match access-group）、policy-map type inspect（inspect 有狀態、pass 單向、drop、class-default）、zone-pair 與 self zone、有 zone 和沒 zone 的介面不通；`show zone security`、`show zone-pair security`、`show policy-map type inspect zone-pair sessions`；ACL 分頁的簡化編輯器 → 6-14。時間型 ACL（`time-range` 的 periodic、規則後面的 `time-range`、`show time-range`、(active) / (inactive)，照設備的時鐘與時區）→ 6-18；`established`（只比對有 ACK / RST 的 TCP）與 Reflexive ACL（具名 ACL 的 `permit … reflect <名稱> [timeout <秒>]` 記下反過來的暫時規則、`evaluate <名稱>` 比對，TCP / UDP / ICMP 都適用，閒置 300 秒消失、`ip reflexive-list timeout`，`show access-lists` 列出暫時規則與剩下的秒數）→ 6-19 |
 | NGFW / UTM | ✅ | 網頁過濾已完成：FortiGuard 類別（設定檔、`config webfilter profile` 的 ftgd-wf filters）、政策的 utm-status / webfilter-profile / ssl-ssh-profile、SSL 檢查（no-inspection 看不到 HTTPS、certificate-inspection 看 SNI、deep-inspection 用 Fortinet_CA_SSL 重新簽憑證，電腦要信任）、HTTP 的封鎖頁面、「安全設定檔」分頁 → 6-15；應用程式控管（`config application list`，依類別封鎖 P2P / Proxy…）、IPS 感測器（`config ips sensor`，依嚴重程度封鎖 Log4Shell 這類攻擊）、政策的 application-list / ips-sensor → 6-16。DNS 過濾（`config dnsfilter profile` 的 ftgd-dns filters、政策的 dnsfilter-profile，擋下的名稱回 208.91.112.55，不用解密）、防毒（`config antivirus profile` 的 http / ftp av-scan、政策的 av-profile，EICAR 測試檔，HTTPS 要 deep-inspection 才掃得到）、「安全設定檔」分頁的兩種設定檔 → 6-17。還沒有 DoH 的偵測、沙箱 (FortiSandbox) 與郵件過濾 |
+| DoS 防護 | ✅ | SYN flood：關卡放進來的攻擊流量（`state.attacks`），每次重算時照轉送規則看它打不打得到、路上的 FortiGate 有沒有擋；沒擋下來，目的主機那個埠的新連線全部排不進去。FortiGate 的 DoS 政策（`config firewall DoS-policy`、圖形介面）：看進來的介面、每一種異常的開關 / pass 或 block / 門檻，`diagnose ips anomaly list`、異常紀錄、連線表被佔了幾筆；場景上攻擊走過的線閃紅色 → 6-21。UDP / ICMP flood 只能設定，沒有效果；SYN cookie、流量型攻擊沒有做 |
 | IPv6 安全 | ✅ | IPv6 ACL（見第 8 節）；冒牌的 Router Advertisement（主機用每一個 RA 的前綴各產生一個位址、預設閘道選 Router Preference 最高的）與 RA Guard（`ipv6 nd raguard policy` / `device-role host \| router` / `attach-policy`、`show ipv6 nd raguard policy`） |
 | 憑證與 PKI | ✅ | 公開 CA 與公司內部的 CA（公開 CA 不簽 .local、效期上限）、用戶端的信任清單（加入網域的電腦自動有公司的根憑證，`certutil -addstore root` 匯入）、有效期間用用戶端自己的時鐘判斷（`w32tm`、`timedatectl`、自動設定時間）、SAN 與萬用字元；中繼 CA（公司的 Corp Issuing CA、公開 CA 的中繼）：網站要送出完整的憑證鏈，Windows 會照 AIA 自己補、Linux 的 OpenSSL 不會 → 11-14；憑證撤銷（Windows 的瀏覽器與 Schannel 查 CRL / OCSP 會擋下，Linux 的 curl 預設不查）、ACME（Let's Encrypt R11 → ISRG Root X1，`sudo certbot certificates`、`sudo certbot renew [--dry-run]`：HTTP-01 驗證真的從網際網路連 TCP 80，失敗時是 certbot 的錯誤訊息，成功換成 90 天的新憑證）→ 11-17，用在 802.1X 的 EAP-TLS（→ 6-13）與 IOS 的 IKEv2 rsa-sig（trustpoint、SCEP、revocation-check → 7-12） |
 
@@ -295,7 +296,7 @@ README 說明「現在有什麼、怎麼玩」，這份文件說明「整體應�
 
 | 功能 | 狀態 | 說明 |
 | --- | --- | --- |
-| 關卡 | ✅ | 18 章 178 關（清單見第 17 節） |
+| 關卡 | ✅ | 18 章 179 關（清單見第 17 節） |
 | 任務目標 | ✅ | ping、TCP、UDP、DHCP、設定檢查、故障演練、IPv6 ping、傳輸速率、遠端登入（SSH / Telnet 帳號密碼）、IP 電話註冊、通話品質 (MOS)、HTTPS（連得上之後還要通過憑證驗證）、路徑（一定要經過 / 不能經過某台設備）；TCP 的目標交握完還會送一個裝滿的資料區段（設了 DF），MTU 的問題才看得出來 |
 | 觀察題 | ✅ | 任務目標的一種（`type: 'ask'`，engine/ask.js）：玩家觀察之後作答，不是把網路弄通。單選、複選、填空（MAC、IP、埠名、數字，比對前先正規化）；正確答案由關卡給的函式從目前的網路算出來（換了接線、VLAN，答案跟著變）；每個錯的選項有自己的說明，填空題可以針對常見的錯誤答案給回饋；答案存在 `state.answers`（存檔、復原、參考解法都看得到）。作答馬上判定，不影響其他目標的結果 → 第 18 章 |
 | 提示與星等 | ✅ | 每關 3 個提示，看一個少一顆星 |
@@ -359,7 +360,7 @@ README 說明「現在有什麼、怎麼玩」，這份文件說明「整體應�
 
 ## 17. 關卡規劃
 
-### 現有的 178 關
+### 現有的 179 關
 
 | 章 | 關卡 |
 | --- | --- |
@@ -368,7 +369,7 @@ README 說明「現在有什麼、怎麼玩」，這份文件說明「整體應�
 | 3 企業網路 | 守門員、總公司與分公司、對外伺服器群、十點以後進公司的人都上不了網（NAT 位址池與 overload）、在公司裡打不開自己的網站（NAT hairpin 與 split DNS）、公司自己架了郵件伺服器，信卻寄不出也收不到（SMTP、MX 與 DMZ 的 VIP）、內部網站打得開，外面的全部打不開（DNS 轉送器、伺服器自己的上游、只放行它的防火牆政策） |
 | 4 資料中心 | 機櫃上線、Spine-Leaf、跨棟連線、一開 Jumbo Frame，備份就卡住、光纖接好了，燈還是不亮（收發器）、A 路的電一跳，機房就全黑了（雙電源）、新的 GPU 伺服器接不上（breakout）、三台伺服器，有時候會壞掉（負載平衡器）、兩台 Nexus，一條線在睡覺（vPC）、停電了，UPS 撐不到發電機（UPS 的負載與過載） |
 | 5 無線網路 | 家裡的 Wi-Fi、辦公室基地台、訪客 Wi-Fi、下午的視訊會議一直斷（頻道寬度與 DFS）、新筆電明明支援 Wi-Fi 6E（6 GHz 與 WPA3）、訪客連上 Wi-Fi，卻沒有跳出登入頁面（Captive Portal）、倉庫拉不到線（Wi-Fi mesh） |
-| 6 網路安全 | 只開了 TCP、誰在發 IP？、不速之客、存取控制清單、管理介面加固、冒牌閘道、搶走根橋、你是誰？、偽裝成交換器、交換器變成了 Hub（MAC flooding）、跳進伺服器 VLAN 的封包（雙重標籤）、飯店的房間網路（Private VLAN）、星期一早上，有線網路全部登不進去（EAP-TLS）、分公司只有一台路由器，也要當防火牆（ZBF）、上班時間有人在玩線上博弈（網頁過濾與 SSL 檢查）、防火牆擋得住位址，擋不住應用程式（應用程式控管與 IPS）、同事點了釣魚信的連結（DNS 過濾與防毒）、午休才開放的影音網站，晚上八點才打得開（時間型 ACL 與時區）、網頁打得開，名稱卻查不到（established 與 Reflexive ACL）、稽核報告：設定檔裡的密碼看得一清二楚（enable secret 與 service password-encryption） |
+| 6 網路安全 | 只開了 TCP、誰在發 IP？、不速之客、存取控制清單、管理介面加固、冒牌閘道、搶走根橋、你是誰？、偽裝成交換器、交換器變成了 Hub（MAC flooding）、跳進伺服器 VLAN 的封包（雙重標籤）、飯店的房間網路（Private VLAN）、星期一早上，有線網路全部登不進去（EAP-TLS）、分公司只有一台路由器，也要當防火牆（ZBF）、上班時間有人在玩線上博弈（網頁過濾與 SSL 檢查）、防火牆擋得住位址，擋不住應用程式（應用程式控管與 IPS）、同事點了釣魚信的連結（DNS 過濾與防毒）、午休才開放的影音網站，晚上八點才打得開（時間型 ACL 與時區）、網頁打得開，名稱卻查不到（established 與 Reflexive ACL）、稽核報告：設定檔裡的密碼看得一清二楚（enable secret 與 service password-encryption）、網站沒有壞，卻沒有人連得上（SYN flood 與 DoS 政策） |
 | 7 VPN 與廣域備援 | 站對站 VPN、在家上班、雙線路備援、三個據點，一個中心、線路燈還亮著（IP SLA）、小檔案可以，大檔案卡住（PMTUD 黑洞）、兩個分公司的連線一下通一下斷（GRE 與 recursive routing）、稽核報告（GRE over IPsec）、每加一個網段就要改兩邊的 ACL（VTI）、門市之間的監視器畫面（DMVPN）、新分公司在共享辦公室裡（NAT-T）、換了主機板電池，VPN 就起不來了（IKEv2 的憑證驗證）、下午一塞車電話就斷斷續續（SD-WAN）、換成 MPLS 專線之後互相看不到（MPLS L3VPN 與 allowas-in）、離職的同事還連得上 VPN（SSL-VPN 改用 AD 的帳號）、專線拉好了，兩邊卻不通（Metro Ethernet）、多拉一條備援，兩邊一起停擺（E-LAN 與 L2PT）、兩家客戶，同一組位址（業者的 MPLS 骨幹）、連上 VPN 就不能上網（SSL-VPN 的全通道） |
 | 8 高可用與進階路由 | 迴圈與生成樹、EtherChannel、閘道備援、集中式 DHCP、OSPF 路徑選擇、切蛋糕、閘道還活著，但出不去（HSRP 追蹤）、主線斷了，電話斷了四十秒（BFD）、兩台閘道，只有一台在做事（GLBP）、防火牆一壞，全公司就斷網（FortiGate HA）、兩台核心說好分擔，結果全擠在 Core-1（MST）、備援線一接上，整棟樓斷網（BPDU Filter 與 Loop Guard）、兩台疊成一台，壞一台全公司斷線（交換器堆疊）、燈都亮著，網路卻一直風暴（UDLD）、會議室的小交換器（BPDU Filter 與 Guard） |
 | 9 IPv6 | IPv6 初體驗、雙協定、位址從哪裡來？、IPv6 也要動態路由、封了 IPv4，忘了 IPv6、IPv6 的預設閘道被搶走了（RA Guard）、內部網站加了 IPv6 之後（AAAA 與 Happy Eyeballs）、IPv6 過不了 VPN（VTI 只載 IPv4）、換了 ISP，IPv6 就上不了網（DHCPv6 PD）、防火牆開了 IPv6，網站卻都打不開（FortiGate 的 IPv6 政策）、新大樓只有 IPv6，網站卻大多只有 IPv4（NAT64 與 DNS64） |
@@ -390,7 +391,7 @@ README 說明「現在有什麼、怎麼玩」，這份文件說明「整體應�
 | --- | --- | --- |
 | 補進第 15 章 | （NETCONF、Catalyst Center 的範本、用 Git 管理設定已補上 15-4 到 15-6） | 第 12 節 |
 | 補進第 16 章 | （負載平衡器、peering 與 Transit Gateway、Terraform 已補上 16-3 到 16-5） | 第 12 節 |
-| 補進第 6 章 | SYN flood 與 DoS 政策（防毒已補上 6-17；ZBF、網頁過濾、應用程式控管與 IPS 已補上 6-14 到 6-16） | 攻擊流量、連線表的容量（還沒有） |
+| 補進第 6 章 | （SYN flood 與 DoS 政策已補上 6-21；防毒 6-17；ZBF、網頁過濾、應用程式控管與 IPS 6-14 到 6-16）流量型的 DoS、SYN cookie | 線路被灌滿對其他流量的影響、主機的 SYN cookie（還沒有） |
 | 補進第 7 章 | （GRE over IPsec、VTI、DMVPN、NAT-T、憑證驗證已補上 7-7 到 7-12） | 第 6 節 |
 | 補進第 9 章 | （Prefix Delegation、FortiGate 的 IPv6 政策、NAT64 / DNS64 已補上 9-9 到 9-11） | 第 8 節 |
 | 補進第 10 章 | Wi-Fi 很慢（隨機故障已經由故障演練提供） | 第 7、14 節 |
@@ -442,6 +443,6 @@ CCNA v2.0 預計在 2027 年 2 月取代 v1.1，改版後整張對照表要重�
 | 22（已完成） | FortiGate HA（已完成 → 8-10）、堆疊 / vPC（已完成 → 8-13、4-9）、電力備援（已完成 → 4-6）；IPv6 的網際網路與 DHCPv6-PD（已完成 → 9-9）、FortiGate 的 IPv6 政策（已完成 → 9-10）、NAT64 / DNS64（已完成 → 9-11）；實體層與其他：收發器不相容（已完成 → 4-5）、breakout（已完成 → 4-7）、Console 與帶外管理（Console 線已完成 → 11-11）、STP 進階（MST → 8-11、BPDU Filter 與 Loop Guard → 8-12 已完成）、VTP（已完成 → 10-10）、EIGRP / RIP（已完成 → 13-11、13-12）、多播（IGMP snooping 與 querier → 10-12、PIM → 13-13 已完成）、TACACS+ 與權限等級（已完成 → 11-10）、ZBF（已完成 → 6-14）、NGFW（網頁過濾與 SSL 檢查 → 6-15、應用程式控管與 IPS → 6-16、DNS 過濾與防毒 → 6-17 已完成）、SD-WAN（已完成 → 7-13）、MPLS L3VPN 觀念（已完成 → 7-14）、NAT 位址池與 hairpin（已完成 → 3-4、3-5）、其他設備與廠牌（負載平衡器 → 4-8、光纖數據機 → 1-5、UPS → 4-10、配線架 → 10-14、Juniper → 10-13、MikroTik → 2-6、Aruba → 10-15 已完成） | 剩下的引擎項目 |
 | 23（大部分完成） | 介面與體驗（第 15 節：鍵盤操作、標註、音效、離線使用，已完成）；工程品質（第 16 節：存檔格式遷移、大型拓撲效能（377 台：DHCP 每次重算約 85 ms、3D 場景每一幀約 24 ms、2D 拓撲圖約 80 ms）、ESLint，已完成）。CI 與部署的 workflow 已經寫好，推上 GitHub 才會開始跑；型別檢查還沒有做 | 引擎穩定之後再整理介面與工程 |
 | 24（已完成） | 補完各節最後幾個部分完成的項目：NIC teaming（→ 17-4、17-6）、vMotion（→ 17-5）、Wi-Fi mesh（→ 5-7）、Nexus 的 mgmt0 與 vrf management（→ 11-15）、Linux 的 nmcli（→ 11-16）、ACME 自動續約與憑證撤銷（→ 11-17）、UDLD（→ 8-14）、STP 穿過非網管交換器（→ 8-15）、Metro Ethernet 的 E-Line 與 E-LAN / L2PT（→ 7-16、7-17）、業者的 MPLS 骨幹：VRF、route-target、VPNv4、LDP（→ 7-18）、SSL-VPN 的全通道（→ 7-19）；機櫃立面圖與樓層平面圖（訊號熱圖） | 狀態表裡的 🟡 只剩第 16 節的三項 |
-| 25（已完成） | 學習體驗：關卡選單重做（章節導覽、搜尋、學習路線）、觀察題與第 18 章封包實驗室（封裝、MAC 學習、廣播網域、TCP、NAT）、DNS 轉送器（→ 3-7）、2D 拓撲圖的設備符號 / VLAN 配色 / 封包動畫、3D 的埠名標示與協定標籤、收合學習筆記；知識庫補 12 則、題庫補 21 題（含 CCNA 5.2） | 關卡多到找不到下一步；基礎觀念原本只有文字，沒有動手觀察的關卡 |
+| 25（已完成） | 學習體驗：關卡選單重做（章節導覽、搜尋、學習路線）、觀察題與第 18 章封包實驗室（封裝、MAC 學習、廣播網域、TCP、NAT）、DNS 轉送器（→ 3-7）、SYN flood 與 FortiGate 的 DoS 政策（→ 6-21）、2D 拓撲圖的設備符號 / VLAN 配色 / 封包動畫、3D 的埠名標示與協定標籤、收合學習筆記；知識庫補 12 則、題庫補 21 題（含 CCNA 5.2） | 關卡多到找不到下一步；基礎觀念原本只有文字，沒有動手觀察的關卡 |
 | 暫停 | 遊戲系統（第 14 節）：成就、預算與採購、帳號與雲端存檔、多人、關卡編輯器補齊（學習卡、已知資訊、設定檢查目標） | 依使用者的決定暫時不做 |
-| 剩下 | VXLAN / EVPN 與 SYN flood 的實作關卡（要先有引擎功能）、Wi-Fi 的空中時間與最低資料速率（同頻干擾與頻道寬度已經在 5-4）；CI 與部署（推上 GitHub 才會跑）、型別檢查（整個專案是沒有型別註記的 JavaScript，工程很大）；CCNA v2.0（預計 2027 年 2 月）上路後重新檢查第 18 節的對照表 | CI 與部署要遠端儲存庫，要另外決定 |
+| 剩下 | VXLAN / EVPN 的實作關卡（要先有 VTEP 的封裝）、流量型的 DoS 與 SYN cookie、Wi-Fi 的空中時間與最低資料速率（同頻干擾與頻道寬度已經在 5-4）；CI 與部署（推上 GitHub 才會跑）、型別檢查（整個專案是沒有型別註記的 JavaScript，工程很大）；CCNA v2.0（預計 2027 年 2 月）上路後重新檢查第 18 節的對照表 | CI 與部署要遠端儲存庫，要另外決定 |

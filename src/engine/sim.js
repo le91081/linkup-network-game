@@ -21,6 +21,7 @@ import { capwapTick, prepWifi, wlcVlans } from './sim/wifi.js';
 import { computeAuth } from './sim/auth.js';
 import { dnsList, hash, ifaceMac, isVlanSw, vrfOf } from './sim/core.js';
 import { flowsTick } from './sim/bandwidth.js';
+import { computeDos, dosLog } from './dos.js';
 import { ifaceActive, isBridgePort, l2Explore, macAgeOf, prepL2Attacks } from './sim/l2.js';
 import { prepMcast } from './sim/mcast.js';
 export { isMcast, snoopOn, querierOf } from './sim/mcast.js';
@@ -137,6 +138,11 @@ export function recompute(state) {
     state.rt.ltmOk = true; // 路由算好了：負載平衡器的健康檢查從這裡開始算一次就留著用
     background(state, { isBridge: isBridgePort, ospfOn, uptime0: UPTIME0 });
     flowsTick(state);
+    // DoS：攻擊流量打不打得到、有沒有被 DoS 政策丟掉（要等路由與政策都算好）
+    if ((state.attacks || []).length) {
+      state.rt.dos = computeDos(state, (from, spec) => transact(state, from, spec));
+      dosLog(state, (d, sev, forti) => logEvent(state, d, sev, '', '', forti));
+    }
     opsAfter(state);
   } finally {
     if (realDown === undefined) delete state.down; else state.down = realDown;

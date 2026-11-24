@@ -171,7 +171,8 @@ export function renderTopo(app, svg, rect) {
     // Access 埠的線照 VLAN 上色、Trunk 畫粗一點：一眼看出哪些設備在同一個廣播網域
     const va = portVlan(A, c.a.port), vb = portVlan(B, c.b.port), acc = typeof va === 'number' ? va : typeof vb === 'number' ? vb : null;
     const trunk = va === 'trunk' || vb === 'trunk', vc = cs === 'up' && !virt && acc != null && vlans.get(acc);
-    const cls = `t2-link ${virt ? 'virt' : cs}${trunk && !virt ? ' trunk' : ''}${hot.has(c.id) ? ' hot' : ''}`;
+    const flood = ((st.rt.dos || {}).list || []).some((x) => x.cables.includes(c.id));
+    const cls = `t2-link ${virt ? 'virt' : cs}${trunk && !virt ? ' trunk' : ''}${hot.has(c.id) ? ' hot' : ''}${flood && cs !== 'down' ? ' flood' : ''}`;
     const why = (st.rt.why || {})[c.id];
     const tip = `${A.name} ${portTag(st, A, c.a.port) || c.a.port} ↔ ${B.name} ${portTag(st, B, c.b.port) || c.b.port} · ${MEDIA[c.media || 'rj45'].cable}${cs === 'blocked' ? ' · 被 STP 封鎖' : cs === 'down' ? ' · 沒有燈號' : ''}${why ? '\n' + why : ''}`;
     if (app.heat && !virt && cs === 'up') {
@@ -179,7 +180,7 @@ export function renderTopo(app, svg, rect) {
       const L = cableLoad(st, c), col = heatColor(L.pct);
       parts.push(`<line class="t2-link heat" style="stroke:${col};stroke-width:${2.5 + (L.pct / 100) * 5}" x1="${e.pa.x}" y1="${e.pa.y}" x2="${e.pb.x}" y2="${e.pb.y}"><title>${esc(`${tip}\n目前 ${fmtMbps(L.mbps)}（${Math.round(L.pct)}%，${L.speed >= 1000 ? L.speed / 1000 + ' Gbps' : L.speed + ' Mbps'} 線路）`)}</title></line>`);
       if (L.mbps >= 0.5) parts.push(`<text class="t2-heat" x="${(e.pa.x + e.pb.x) / 2}" y="${(e.pa.y + e.pb.y) / 2 - 6}" fill="${col}">${esc(`${fmtMbps(L.mbps)} · ${Math.round(L.pct)}%`)}</text>`);
-    } else parts.push(`<line class="${cls}"${vc && !hot.has(c.id) ? ` style="stroke:${vc.color}"` : ''} x1="${e.pa.x}" y1="${e.pa.y}" x2="${e.pb.x}" y2="${e.pb.y}"><title>${esc(tip + (vc ? `\nVLAN ${acc}${vc.name ? '（' + vc.name + '）' : ''}` : trunk ? '\nTrunk：同時載好幾個 VLAN' : ''))}</title></line>`);
+    } else parts.push(`<line class="${cls}"${vc && !hot.has(c.id) && !flood ? ` style="stroke:${vc.color}"` : ''} x1="${e.pa.x}" y1="${e.pa.y}" x2="${e.pb.x}" y2="${e.pb.y}"><title>${esc(tip + (vc ? `\nVLAN ${acc}${vc.name ? '（' + vc.name + '）' : ''}` : trunk ? '\nTrunk：同時載好幾個 VLAN' : ''))}</title></line>`);
     // 兩端的埠名
     for (const [end, t, dev] of [[c.a, e.ta, A], [c.b, e.tb, B]]) {
       const tag = portTag(st, dev, end.port);
@@ -294,6 +295,7 @@ function drawLegend(svg, st, vlans, rect) {
   if (has((c) => c.media !== 'virt' && (portVlan(st.devices[c.a.dev], c.a.port) === 'trunk' || portVlan(st.devices[c.b.dev], c.b.port) === 'trunk'))) rows.push(['up trunk', 'Trunk']);
   if (Object.values(st.rt.clients || {}).some((l) => l && l.length)) rows.push(['wifi', 'Wi-Fi']);
   if (has((c) => c.media === 'virt')) rows.push(['virt', '虛擬連線']);
+  if (((st.rt.dos || {}).list || []).some((x) => x.cables.length)) rows.push(['up flood', '攻擊流量']);
   const sig = JSON.stringify([rows, [...vlans], Math.round(rect.x), Math.round(rect.y + rect.h)]);
   if (el.dataset.sig === sig) return;
   el.dataset.sig = sig;

@@ -12,6 +12,7 @@ import { recompute } from './sim.js';
 import { transfer, configFile, IMAGES, PLATFORM, PLATFORM_NAME, ensureFlash } from './files.js';
 import { newHa, haOn, haStatusLines } from './ha.js';
 import { SSL_PROFILES, wfConfigLines, applyWfCli, appIpsConfigLines, applyAppIpsCli, dnsfAvConfigLines, applyDnsfAvCli } from './utm.js';
+import { dosConfigLines, applyDosCli, diagAnomaly } from './dos.js';
 
 // HA 的密碼在設定裡顯示成 ENC <十六進位>（貼回來也認得），也可以直接打明文
 const encPass = (p) => Array.from(new TextEncoder().encode(p)).map((b) => b.toString(16).padStart(2, '0')).join('');
@@ -881,6 +882,7 @@ export function fortiConfig(state, dev) {
     // 和 FortiOS 一樣，SD-WAN 印在防火牆政策前面（政策會用到 virtual-wan-link）
     if (name === 'firewall policy') o.push(...wfConfigLines(dev), ...appIpsConfigLines(dev), ...dnsfAvConfigLines(dev), ...sdwanConfigLines(dev));
     if (hasContent(entries)) o.push(...block(name, sec, entries));
+    if (name === 'firewall policy') o.push(...dosConfigLines(dev)); // DoS 政策印在一般政策後面
   }
   return o;
 }
@@ -922,6 +924,7 @@ function getInfo(state, d, what) {
   return null;
 }
 function diagnose(state, d, what, raw = what) {
+  if (what === 'ips anomaly list') return diagAnomaly(state, d);
   if (what === 'sys sdwan health-check' || what === 'sys virtual-wan-link health-check') return diagHealth(state, d);
   if (what === 'sys sdwan service' || what === 'sys virtual-wan-link service') return diagService(state, d);
   if (what === 'vpn tunnel list') {
@@ -1063,7 +1066,7 @@ export function fortiSession(getDev, getState) {
       if (w === 'config') rawT.depth++;
       if (w === 'end' && --rawT.depth === 0) {
         stack.pop();
-        const e = rawT.label === 'webfilter' ? applyWfCli(dev(), rawT.lines) : rawT.label === 'app' || rawT.label === 'ips' ? applyAppIpsCli(dev(), rawT.label, rawT.lines) : rawT.label === 'dnsf' || rawT.label === 'av' ? applyDnsfAvCli(dev(), rawT.label, rawT.lines) : applySdwanCli(dev(), rawT.lines);
+        const e = rawT.label === 'webfilter' ? applyWfCli(dev(), rawT.lines) : rawT.label === 'app' || rawT.label === 'ips' ? applyAppIpsCli(dev(), rawT.label, rawT.lines) : rawT.label === 'dnsf' || rawT.label === 'av' ? applyDnsfAvCli(dev(), rawT.label, rawT.lines) : rawT.label === 'dos' ? applyDosCli(dev(), rawT.lines) : applySdwanCli(dev(), rawT.lines);
         if (e) { out.push(e, 'Command fail. Return code -651'); return res(); }
         changed = true;
         return res();
@@ -1088,6 +1091,7 @@ export function fortiSession(getDev, getState) {
         if (name === 'ips sensor') { stack.push({ t: 'raw', label: 'ips', depth: 1, lines: [] }); return res(); }
         if (name === 'dnsfilter profile') { stack.push({ t: 'raw', label: 'dnsf', depth: 1, lines: [] }); return res(); }
         if (name === 'antivirus profile') { stack.push({ t: 'raw', label: 'av', depth: 1, lines: [] }); return res(); }
+        if (name === 'firewall dos-policy') { stack.push({ t: 'raw', label: 'dos', depth: 1, lines: [] }); return res(); }
         const sec = SEC[name];
         if (!sec || (sec.only && !sec.only(d))) return fail([...parseErr(tok[1] || ''), '（輸入 ? 可以看到有哪些設定區段）']);
         if (sec.single) stack.push({ t: 'edit', single: true, sec, label: label(name), name, key: '', ...clone({ f: {}, sub: {}, ...sec.read(d, st())[0] }) });
@@ -1181,6 +1185,7 @@ export function fortiSession(getDev, getState) {
       if (t) { out.push(...block(t.name, spec(t), t.nested ? t.list : t.sec.read(d, st()))); return res(); }
       const name = tok.slice(1).join(' ').toLowerCase();
       if (!name || name === 'full-configuration') { out.push(...fortiConfig(st(), d)); return res(); }
+      if (name === 'firewall dos-policy') { const l = dosConfigLines(d); out.push(...(l.length ? l : ['config firewall DoS-policy', 'end'])); return res(); }
       const sec = SEC[name];
       if (!sec || (sec.only && !sec.only(d))) return fail(parseErr(tok[1]));
       out.push(...block(name, sec, sec.read(d, st())));
@@ -1195,7 +1200,7 @@ export function fortiSession(getDev, getState) {
     }
     if (cmd === 'diagnose' || cmd === 'diag') {
       const r = diagnose(st(), d, tok.slice(1).join(' ').toLowerCase(), line.trim().replace(/^diag(nose)?\s+/i, ''));
-      if (!r) return fail([...parseErr(tok[1] || ''), '（可用：diagnose vpn tunnel list、diagnose vpn ike gateway list、diagnose sys session list、diagnose sys session clear、diagnose sys ntp status）']);
+      if (!r) return fail([...parseErr(tok[1] || ''), '（可用：diagnose vpn tunnel list、diagnose vpn ike gateway list、diagnose sys session list、diagnose sys session clear、diagnose sys ntp status、diagnose ips anomaly list）']);
       out.push(...r);
       return res();
     }

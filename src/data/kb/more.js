@@ -55,7 +55,7 @@ export const MORE = [
     see: ['lb', 'nat', 'ngfw', 'pki'],
   },
   {
-    id: 'dos', t: 'DoS 與 DDoS', en: 'Denial of Service', cat: 'security', keys: ['DoS', 'DDoS', 'SYN flood', 'SYN cookie', '放大攻擊', '阻斷服務'],
+    id: 'dos', t: 'DoS 與 DDoS', en: 'Denial of Service', cat: 'security', keys: ['DoS', 'DDoS', 'SYN flood', 'SYN cookie', '放大攻擊', '阻斷服務', 'DoS 政策'], tags: ['DoS', 'SYN flood', 'DoS 政策'],
     sum: '不是偷資料，而是讓服務不能用：用大量流量塞滿線路，或用半開的連線耗盡伺服器與防火牆的資源。來源分散在很多台被控制的電腦就是 DDoS。',
     body: [
       '流量型：直接把線路灌滿。常見的是放大攻擊：偽造受害者的位址向開放的 DNS、NTP 伺服器發問，很小的問題換來很大的回應，全部打在受害者身上。自己的線路頻寬擋不住，要靠電信業者或清洗服務在上游濾掉。',
@@ -63,8 +63,8 @@ export const MORE = [
       '應用層：看起來像正常的請求（一直查很慢的頁面），流量不大但把伺服器拖垮。要靠 WAF、速率限制與驗證機制。',
     ],
     steps: { t: 'SYN flood 與 SYN cookie', items: ['攻擊者用偽造的來源位址送出大量 SYN。', '伺服器回 SYN-ACK，把這條半開的連線記在佇列裡，等不會回來的 ACK。', '佇列滿了：正常使用者的 SYN 被丟掉，網站「連不上」。', '開了 SYN cookie：伺服器不保留狀態，把必要的資訊編進 SYN-ACK 的序號裡；真正的用戶端回 ACK 時才建立連線。', '防火牆的 DoS 政策可以再限制每個來源每秒的新連線數。'] },
-    pit: ['以為有防火牆就擋得住流量型攻擊：線路在防火牆前面就滿了。', '自己的 DNS / NTP 伺服器對全世界開放遞迴查詢：會被拿去當放大攻擊的跳板。', '沒有做來源位址檢查（uRPF、BCP 38）：偽造來源的封包才出得去。'],
-    cmd: [{ v: 'FortiGate', c: ['config firewall DoS-policy', ' edit 1', '  set interface "wan1"', '  config anomaly', '   edit "tcp_syn_flood"', '    set status enable', '    set action block', '    set threshold 2000'] }],
+    pit: ['DoS 政策掛錯介面（要掛在攻擊進來的那一個），或動作還是預設的 pass：只記錄，沒有丟。', '以為有防火牆就擋得住流量型攻擊：線路在防火牆前面就滿了。', '自己的 DNS / NTP 伺服器對全世界開放遞迴查詢：會被拿去當放大攻擊的跳板。', '沒有做來源位址檢查（uRPF、BCP 38）：偽造來源的封包才出得去。'],
+    cmd: [{ v: 'FortiGate', c: ['config firewall DoS-policy', ' edit 1', '  set interface "wan1"', '  config anomaly', '   edit "tcp_syn_flood"', '    set status enable', '    set action block', '    set threshold 2000', 'diagnose ips anomaly list'] }],
     see: ['tcp-udp', 'stateful-fw', 'ngfw', 'acl', 'proxy'],
   },
   {
