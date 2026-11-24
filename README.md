@@ -69,6 +69,9 @@ npm run build    # 輸出到 dist/
 | 點設備 | 開啟它的管理頁面 |
 | 點網路線 | 查看線材、距離與協商出來的速率，或拔除 |
 | 點追蹤紀錄裡標著「封包」的那一行 | 檢視那一段訊框的 MAC、IP、TTL 與埠號 |
+| 點設備（或滑鼠移到設備、網路線上） | 它的每一條線中間標出兩端的埠名（自己這一端在前面），不用一條一條點開 |
+| 任務清單裡標著「觀察題」的目標 | 點一下作答（選擇、複選或填空）。答案存在關卡的狀態裡，可以復原；選錯會說明為什麼不是這一個 |
+| 學習筆記右上角的箭頭 | 把右邊的學習筆記收成一條窄邊，場景多出一大塊空間；點設備時設定頁面照樣展開 |
 | Ctrl + Z / Ctrl + Y | 復原 / 重做上一個設定或接線變更 |
 | 設備面板右上角的電源鈕 | 把設備關機或開機，模擬故障來驗證備援 |
 | 設備面板右上角的鉛筆 | 標註：寫一段註解（顯示在場景裡設備的旁邊）、把設備加進群組（同一群組用虛線框起來）；可以復原，跟著存檔與匯出 |
@@ -149,13 +152,13 @@ npm run build    # 輸出到 dist/
 - **評分**：過關時依實際作答時間（畫面在前景、沒有開對話框才算；標準時間是 3 分鐘加上每個目標 1.5 分鐘）、看了幾個提示、跑了幾次完整測試給 S / A / B / C 與分數，關卡選單上顯示最佳等級。設定變更的次數只列出來參考。
 - **關卡編輯器**：自由模式的「關卡設計」可以寫關卡名稱、任務說明、提示，指定哪些設備鎖定（玩家看得到、不能設定），然後試玩、存成自訂關卡、或匯出成關卡檔分享；關卡選單的「自訂關卡」可以遊玩、匯出、刪除與匯入。
 
-## 關卡（17 章 172 關）
+## 關卡（18 章 178 關）
 
 | 章節 | 關卡數 | 主題 |
 | --- | --- | --- |
 | 1 家用網路 | 5 | Hub、Switch、固定 IP、DHCP、PPPoE、NAT、DNS；光纖數據機是路由模式、後面再接自己的路由器：兩層 NAT，連接埠轉發收不到外面的連線，數據機改成橋接、路由器自己撥 PPPoE |
 | 2 小型辦公室 | 6 | 固定 IP 線路、連接埠轉發、VLAN、Trunk、子介面；固定 IP 專線換成光世代：R1 改用 PPPoE 撥接，實體介面 `pppoe-client dial-pool-number 1`、Dialer1 的 `ip address negotiated` 與 `ppp chap`，NAT 與預設路由改到 Dialer1，`mtu 1492` 與 `ip tcp adjust-mss 1452`；MikroTik 清成空白設定：RouterOS 的 /ip address、/ip dhcp-client、少了 masquerade 後面的電腦上不了網 |
-| 3 企業網路 | 6 | 防火牆政策與 DMZ、靜態路由與回程路由、一對一靜態 NAT；NAT 位址池沒有 overload：早到的四個人把公用位址借光，晚到的人上不了網（`show ip nat statistics` 的 allocated 100% 與 misses，規則還有轉換在用時要先 `clear ip nat translation *` 才能改）；公司網站用靜態 NAT，外面連得到、辦公室卻連不上：傳統的 inside / outside NAT 不處理 hairpin，改用 split DNS（內部 DNS 回內部位址，改完要 `ipconfig /flushdns` 或等 TTL）；郵件伺服器搬回公司的 DMZ：寄給客戶的信卡在佇列（DMZ → wan1 沒有放行 SMTP），客戶寄來的信進不來（MX 的公用位址沒有 VIP 轉 TCP 25、也沒有政策），而且只對外開 25 |
+| 3 企業網路 | 7 | 防火牆政策與 DMZ、靜態路由與回程路由、一對一靜態 NAT；NAT 位址池沒有 overload：早到的四個人把公用位址借光，晚到的人上不了網（`show ip nat statistics` 的 allocated 100% 與 misses，規則還有轉換在用時要先 `clear ip nat translation *` 才能改）；公司網站用靜態 NAT，外面連得到、辦公室卻連不上：傳統的 inside / outside NAT 不處理 hairpin，改用 split DNS（內部 DNS 回內部位址，改完要 `ipconfig /flushdns` 或等 TTL）；郵件伺服器搬回公司的 DMZ：寄給客戶的信卡在佇列（DMZ → wan1 沒有放行 SMTP），客戶寄來的信進不來（MX 的公用位址沒有 VIP 轉 TCP 25、也沒有政策），而且只對外開 25；公司自己架了 DNS 伺服器之後外面的網站全部打不開：伺服器沒有開轉送 (forwarder)、它自己的 DNS 設定是空的、防火牆只放行了 HTTP / HTTPS。三個環節一個一個修，而且對外的 DNS 只能放行那台伺服器（使用者不能自己問外面的 DNS） |
 | 4 資料中心 | 10 | ToR 與 SVI、Spine-Leaf 與 OSPF、銅纜 / 多模 / 單模光纖與距離；Jumbo Frame 要整條路一致（交換器默默丟掉 giant、`ping -f -l 8972`、2960 的 `system mtu jumbo` 要存檔重新開機）；光纖接好了燈還是不亮：第三方的收發器被關成 err-disabled (gbic-invalid)、兩端一端 10G 一端 1G、接頭髒了收到的光太弱（`show interfaces transceiver`、CRC）；A 路的電一跳機房就全黑：每台設備的兩個電源供應器要都裝上、都接電，而且分別接 A、B 兩路（`show environment power`、故障演練一路一路斷電）；新的 25G GPU 伺服器接不上只有 QSFP28 的 Nexus：`interface breakout module 1 port 1 map 25g-4x` 拆成 4 個 25G 的子埠，用分歧線接（10g-4x 只有 10G）；負載平衡器（F5 BIG-IP）：一臂式架構沒開 SNAT，伺服器的回應直接回給使用者（非對稱路由），SNAT Automap；tcp monitor 看不出應用程式回 500，自訂 http monitor 的 Receive String `200 OK`；Nexus 的 vPC：兩台 Leaf 上的 vPC 編號不一樣（一條 suspended）、peer-keepalive 打錯（peer-link 斷線時 dual-active），`show vpc`；UPS：停電時 B 路沒有 UPS，雙電源設備的負載全壓到 A 路的 UPS 而過載，不重要的設備改接 B 路，電池撐到發電機 |
 | 5 無線網路 | 7 | SSID、WPA2 / WPA3、PoE、頻道規劃、訪客 SSID 對應 VLAN；三台 AP 都開 80 MHz 互相重疊、會議室用 DFS 頻道被雷達打斷（改用 40 MHz 與非 DFS 頻道）；Wi-Fi 6E 的新筆電一直連在 5 GHz：6 GHz 規定要 WPA3，只支援 WPA2 的印表機讓 SSID 停在 WPA2（改成 WPA2 / WPA3 混合）；訪客入口 (Captive Portal) 設好了，登入頁面卻從來不跳出：認證前允許的位址沒有 DNS，手機查不到 captive.apple.com；Wi-Fi mesh：倉庫的基地台從 5 GHz 接回辦公室（mesh 金鑰、回程 -78 dBm 連不上，頻道寬度改成 40 MHz 多 3 dB），LAN 埠接印表機（無線橋接），測速看到回程是瓶頸 |
 | 6 網路安全 | 20 | TCP 與 UDP（只放行 TCP 53 的 ACL 擋掉了 DNS、TFTP、Syslog）、DHCP Snooping、Port Security、ACL、管理加固、DAI、BPDU Guard、802.1X / RADIUS、用 DTP 偽裝成交換器的 VLAN hopping 與邊緣埠加固；MAC flooding 把交換器的表塞滿、變成 Hub（Port Security 的 maximum 與違規動作要先設好再打開、亂造的項目要等老化或 clear）；雙重標籤從 Native VLAN 跳進伺服器 VLAN、繞過 ACL（Native VLAN 改成沒人用的、或 vlan dot1q tag native）；飯店的房間用 Private VLAN 隔離（isolated、community、promiscuous）；EAP-TLS：NPS 的伺服器憑證週末過期，星期一所有電腦同時登不進去（重新申請），時鐘差了兩年的筆電連新的憑證都「還沒生效」，沒有公司憑證的廠商筆電仍然擋在外面；分公司只有一台路由器也要當防火牆：IOS 的 Zone-Based Firewall（zone、class-map / policy-map type inspect、zone-pair，inspect 有狀態、pass 單向，DMZ 只對外開 https、不能主動連進辦公室）；上班時間有人在玩線上博弈：FortiGate 的 FortiGuard 網頁過濾封鎖類別，HTTPS 要搭配 certificate-inspection（no-inspection 看不到網址，deep-inspection 沒裝 Fortinet_CA_SSL 每個網站都跳憑證錯誤）；政策只看位址和埠，擋不住 BitTorrent、Tor 和 Log4Shell：應用程式控管封鎖 P2P / Proxy 類別、IPS 感測器保護對外的訂單系統，掛在流量經過的那一條政策上；釣魚信與「發票」：FortiGate 的 DNS 過濾在查名稱時就把釣魚網站換成封鎖頁面的位址（不用解密 HTTPS，但 DoH 或直接打 IP 就繞過），防毒只掃得到 HTTP 下載（HTTPS 要 deep-inspection）；午休才開放影音網站的時間型 ACL 晚了 8 小時：time-range 照路由器的時鐘判斷，NTP 對了，但沒有 clock timezone（網路設備出廠是 UTC）；分公司的 WAN 進來方向只有 `permit tcp any any established`：用 IP 開網頁正常，DNS 與 ping 的回應卻被擋（established 只認得 TCP 的 ACK），改用 Reflexive ACL：出去的方向 `permit … reflect MIRROR`、進來的方向 `evaluate MIRROR`，外面主動連進來的照樣擋掉；稽核拿到的設定檔備份裡 enable、帳號、vty 的密碼都是明文：改用 `enable secret`、`username … secret`，`service password-encryption` 遮住剩下的、`security passwords min-length 10` |
@@ -170,13 +173,18 @@ npm run build    # 輸出到 dist/
 | 15 網路自動化 | 6 | RESTCONF：只走 HTTPS、HTTP Basic 驗證、YANG 路徑（`ietf-interfaces`、`Cisco-IOS-XE-native`）、JSON 與 XML、狀態碼、名稱裡的 `/` 要寫成 `%2F`、自簽憑證；Ansible：INI 格式的 inventory、YAML、`network_cli`、資源模組、`--check`、PLAY RECAP 與冪等；Catalyst Center：Token 驗證的北向 API、用 SNMP / SSH 輪詢的設備清單、AI 驅動的問題清單（DHCP 失敗率偏離基準、雙工不一致、設備連不到）；HTTPS 管理要關掉、改用 NETCONF：`netconf-yang`、SSH 要先有 RSA 金鑰，用 <edit-config> 建立 Loopback；三台新交換器用 Catalyst Center 的範本一次設好：變數、草稿要提交成新版本才會部署、部署結果一台一台看（錯字那一行失敗、控制器被 access-class 擋住）；昨晚有人改了 Core、今天倉儲全斷：備份伺服器上用 git log / git show 找出少打 add 的 trunk，修好之後 ./backup.sh、git add、git commit |
 | 16 雲端網路 | 5 | AWS 的 VPC：公有 / 私有子網路與路由表、網際網路閘道與彈性 IP（一對一 NAT）、安全群組（有狀態）、NAT 閘道、網路 ACL（無狀態、臨時連接埠）、站對站 VPN 與路由傳播（混合雲），「下載設定檔」貼到公司的路由器；應用程式負載平衡器 (ALB) 回 503：目標的安全群組沒有允許 ALB 的健康檢查（來源用 ALB 的安全群組）；兩條 VPC peering 接好了，開發環境還是到不了正式環境（peering 不能轉送）：改用 Transit Gateway，兩邊的路由表都指向它、安全群組允許新的網段；有人在主控台手動改了安全群組 (drift)：Terraform 的 plan 列出差異，要留的規則補進 main.tf 再 apply，別讓 apply 把合作夥伴的規則一起拿掉 |
 | 17 虛擬化 | 6 | VMware ESXi：虛擬交換器、連接埠群組決定 VLAN（VLAN ID 0 不加標籤）、接主機的實體交換器埠要設成 Trunk 並只放行需要的 VLAN、vmk0 管理介面；VRF-Lite：兩家公司用同一個網段（`vrf definition`、`vrf forwarding` 會清掉 IP、`show ip route vrf`、`ping vrf`）；Docker：橋接網路與 veth、`-p 主機埠:容器埠`、只綁 127.0.0.1、資料庫不要發佈（Docker 會繞過 ufw）、改連接埠要重建容器；NIC teaming：ESXi 的第二張上行接到另一台交換器，那台少了一個 VLAN，同一個 VLAN 的 VM 一台通一台不通（依虛擬埠分配上行），兩邊接 ESXi 的埠要一模一樣，斷線演練時管理介面也要連得到；vMotion：主機要維護，把虛擬機器搬走，vMotion 的 VLAN 沒有放行到新主機的 Trunk，搬過去之後新主機同名群組的 VLAN 又打錯；IP hash：vSwitch 改成 IP hash、交換器卻用 LACP，兩個埠都 suspended，改成靜態的 mode on |
+| 18 封包實驗室 | 5 | 網路已經是通的，任務是「看懂它」：用封包追蹤、ARP 快取、MAC 位址表觀察之後回答觀察題。封裝（目的 MAC 是閘道不是伺服器、每過一台路由器 MAC 換一次、IP 不變、TTL 減 1）；交換器的 MAC 學習、泛洪與過期，線看不到時用 `arp -a` 加 MAC 位址表找出設備接在哪個埠；廣播網域與碰撞網域（Hub、VLAN、路由器各自把什麼切開，複選題的答案是引擎算出來的）；TCP 三向交握與埠號，「馬上被拒絕」(RST) 和「等到逾時」(半路被丟掉) 的差別，UDP 沒有交握；NAT 的轉換表、外面看到的位址、為什麼外面連不進來 |
 
 ## 學習輔助
 
-- **知識庫**：左側面板的第二個分頁（K 鍵切換），不會擋住場景，「執行測試」也一直在下面。129 則觀念、技術與演算法的說明，分成 11 類（網路基礎、IP 服務、交換與 VLAN、路由、網路安全、VPN 與廣域網路、無線、IPv6、實體層與機房、高可用與維運、自動化雲端與虛擬化）。每一則有一句話的摘要、說明、運作流程或演算法的步驟（STP 選根橋、OSPF 的 SPF、EIGRP 的 DUAL、BGP 挑路、traceroute、最長前綴比對…）、圖（封包欄位、訊息往來、對照表、子網路的 32 個位元）、常見的錯誤、各家設備的指令、相關的觀念與「在這些關卡練習」。最上面是這一關會用到的觀念，也可以搜尋（中文、英文縮寫、關鍵字都可以）。
+- **知識庫**：左側面板的第二個分頁（K 鍵切換），不會擋住場景，「執行測試」也一直在下面。141 則觀念、技術與演算法的說明，分成 11 類（網路基礎、IP 服務、交換與 VLAN、路由、網路安全、VPN 與廣域網路、無線、IPv6、實體層與機房、高可用與維運、自動化雲端與虛擬化）。每一則有一句話的摘要、說明、運作流程或演算法的步驟（STP 選根橋、OSPF 的 SPF、EIGRP 的 DUAL、BGP 挑路、traceroute、最長前綴比對…）、圖（封包欄位、訊息往來、對照表、子網路的 32 個位元）、常見的錯誤、各家設備的指令、相關的觀念與「在這些關卡練習」。最上面是這一關會用到的觀念，也可以搜尋（中文、英文縮寫、關鍵字都可以）。
 - **名詞連結**：關卡說明、學習筆記與提示裡提到的觀念有點狀底線，滑鼠移上去看一句話的摘要，點一下在知識庫打開完整的說明（提示視窗會自動關掉）。右側的學習筆記下面另外列出這一關用到的觀念。
 - **新手導覽**：第一次進第 1-1 關會一步一步帶著做（接線 → 點設備 → 設定 IP → 執行測試），每一步看遊戲真正的狀態自動前進；「說明」裡可以重看。
-- **2D 邏輯拓撲圖**：頂端列的按鈕切換。每台設備的位址、線上兩端的埠與 VLAN、線路狀態、無線與虛擬連線、VPN 通道，以及最近一次測試走過的路徑；滾輪縮放、拖曳平移、雙擊回到全圖，點設備開啟設定。
+- **關卡選單**：左邊是 18 章的導覽與每一章的進度（點一下跳到那一章，捲動時標出目前的位置），上面可以搜尋（關卡名稱、主題、標籤，符合的標籤排到卡片最前面）、只看未完成或已完成；左上角的「接著做」直接進下一個還沒完成的關卡。每張卡片標出依目標數估計的時間。
+- **學習路線**：關卡選單左邊切到「學習路線」。八條依目的排好順序的路：新手入門、CCNA 重點（照考試大綱的六個領域）、故障排除實戰、網路安全、廣域網路與 VPN、資料中心與雲端、無線網路、維運與自動化。每條分成幾個階段，標出進度與「接著做」的那一關；同一關可以出現在好幾條路線裡，進度共用。
+- **觀察題**：任務目標除了「連得通」，還可以是「看懂了沒」。點目標作答：單選、複選，或填 MAC 位址、IP、埠名、數字（MAC 不管分隔符號與大小寫，`GigabitEthernet0/6`、`gi 0/6` 都算同一個埠）。正確答案是從目前的網路算出來的；每個錯的選項有自己的說明，填空題會認出常見的錯誤答案（例如填了第一段的 MAC）。第 18 章「封包實驗室」整章都是這種關卡。
+- **2D 邏輯拓撲圖**：頂端列的按鈕切換（T 鍵）。每台設備用網路圖慣用的符號（路由器、交換器、L3 交換器、防火牆、基地台、伺服器…）加上位址；線上兩端的埠與 VLAN；Access 埠的線照 VLAN 上色（左下角的圖例列出每個 VLAN 的顏色與名稱，可以關掉）、Trunk 畫粗；同一對設備之間的好幾條線會錯開。線路狀態、無線與虛擬連線、VPN 通道，以及最近一次測試走過的路徑。執行測試時封包也在 2D 圖上跑，旁邊標著協定（ARP 廣播、ICMP 請求、TCP 443 · SYN…），到站的設備閃一下。滾輪縮放、拖曳平移、雙擊回到全圖，點設備開啟設定。
+- **3D 場景的標示**：設備的名稱標籤前面是設備種類的圖示（顏色代表狀態）；封包動畫的每一段都標出協定、埠號與三向交握的步驟；失敗原因的說明泡泡不會跑到兩側面板底下。
 - **文件產出**：2D 拓撲圖上方的「匯出圖片」把目前的拓撲圖（含位址、標註與關卡名稱）存成 SVG（向量，可以用 draw.io、Visio、Inkscape 再修改）或兩倍解析度的 PNG；「IP 位址表」列出每台設備每個介面的位址、網段、來源（固定 / DHCP）、預設閘道、VLAN、VRF 與說明，另有網段摘要，可以複製後直接貼到試算表或下載 CSV（Excel 打得開的 UTF-8）。
 - **流量熱圖**：2D 拓撲圖上方的「流量熱圖」把每條線照目前的使用率上色（綠 < 40%、黃 < 70%、橘 < 90%、紅），越忙畫得越粗，線的中間標出 Mbps 與百分比；背景流量、攝影機的影像、iperf 都算在內，一眼就看得到瓶頸在哪一段。
 - **參考解法**：提示都看完之後可以看參考解法改了哪些地方（Cisco 設備是 running-config 的差異），或讓它示範一次：重置、套用、自動跑一次測試，示範不計星。
@@ -188,13 +196,13 @@ npm run build    # 輸出到 dist/
 
 | 考試 | 有對應關卡的條目 | 還沒有關卡的條目 |
 | --- | --- | --- |
-| Cisco CCNA 200-301 v1.1 | 53 條中的 52 條 | 5.2（安全計畫） |
+| Cisco CCNA 200-301 v1.1 | 53 條中的 52 條 | 5.2（安全計畫的要素：題庫與知識庫有，沒有關卡） |
 | CompTIA Network+ N10-009 | 25 條全部有對應 | — |
 | CompTIA Security+ SY0-701 | 只列出與網路相關的 12 條，全部有對應 | — |
 
 沒有關卡的條目（安全計畫）是觀念題，題庫裡有對應的題目。
 條目編號依公開的考試大綱，標題是中文摘要。CCNA v2.0 預計在 2027 年 2 月取代 v1.1，改版後需要重新對照。
-題庫（184 題觀念題加上隨機產生的子網路計算題）是自行編寫的練習題，不是實際試題。
+題庫（291 題觀念題加上隨機產生的子網路計算題）是自行編寫的練習題，不是實際試題。
 
 ## CLI 設定指令
 
@@ -503,10 +511,10 @@ npm run build    # 輸出到 dist/
 
 完整的功能規劃（每個領域已完成、部分完成、尚未開始的項目，以及建議的實作順序）在 [PLAN.md](PLAN.md)。以下是最接近的幾項：
 
-1. 堆疊 / vPC、FortiGate HA 的 Active-Active。
-2. 獨立的帶外管理網路（管理埠、Mgmt-vrf）、STP 進階（Loop Guard、UDLD）。
-3. OSPF point-to-multipoint、BGP 的 VRF 與 MP-BGP route-target、自由模式畫牆。
-4. 中繼憑證鏈、OCSP 與 FortiGate 的憑證驗證。
+1. VXLAN / EVPN 的實作關卡（現在只有知識庫的文章與題目；引擎還沒有 VTEP 的封裝）。
+2. DoS：SYN flood 把連線表塞滿、FortiGate 的 DoS 政策（引擎還沒有攻擊流量與連線表的容量）。
+3. 「Wi-Fi 很慢」的故障排除關卡（同頻干擾與最低資料速率對速率的影響）。
+4. FortiGate HA 的 Active-Active、OSPF point-to-multipoint、OCSP。
 
 遊戲系統（成就、預算與採購、名詞表、帳號與雲端存檔、多人）暫時不做；手機與平板、多語系、無障礙、淺色主題不在規劃內。
 
@@ -552,6 +560,7 @@ src/engine/   模擬引擎（不依賴瀏覽器，可直接用 Node 測試）
   automation.js   Ansible：inventory、Jinja 變數、network_cli 與 cisco.ios 模組、PLAY RECAP
   cloud.js        公有雲的 VPC：子網路與路由表、IGW 與彈性 IP、NAT 閘道、安全群組、網路 ACL、VPN 設定檔
   faults.js       故障演練：可能的故障清單、在副本上驗證、依種子重現
+  ask.js          觀察題（type: 'ask' 的任務目標）：答案的比對（MAC、IP、埠名、數字的正規化）、選錯時的說明、複選
   l2sec.js        第二層安全：Port Security 的安全位址與違規、MAC 位址表的容量與 MAC flooding、靜態 MAC、Storm Control 的門檻、RA Guard
   policy.js       路由政策：prefix-list、route-map 套在路由上（重分配進 OSPF / BGP 時的比對與 set）
   mtu.js          MTU：每個介面的 IP MTU、交換器能收的訊框、IPsec 的額外負擔、TCP MSS 的調整
@@ -570,13 +579,13 @@ src/engine/   模擬引擎（不依賴瀏覽器，可直接用 Node 測試）
   web.js          網站與 HTTPS 憑證：信任的 CA、有效期間（用戶端的時鐘）、SAN 與萬用字元
   dns.js          DNS 伺服器的記錄、TTL 與用戶端快取
   sim6.js         IPv6：SLAAC 與 DHCPv6（RA 的 M / O / A 旗標、relay、binding）、鄰居探索、靜態路由與 OSPFv3、IPv6 ACL、ICMPv6 / TCP / UDP
-src/levels/   關卡定義：設備、初始設定、任務目標、提示、參考解法（trouble.js 是故障排除章，maint.js 是維運章，voip.js 是語音與 QoS 章，routing.js 是進階路由章，ipv6.js 是 IPv6 章的補充，vpn2.js 是多站台 VPN，wireless.js 是無線控制器章，auto.js 是自動化章，cloud.js 是雲端章，virtual.js 是虛擬化章（vSwitch、VRF、容器），team.js 是 ESXi 的 NIC teaming，lb.js 是負載平衡器，stack.js 是交換器堆疊，mesh.js 是 Wi-Fi mesh，vpc.js 是 Nexus 的 vPC，tls.js 是 HTTPS 憑證，mtu.js 是 Jumbo Frame 與 PMTUD，redist.js 是路由重分配與政策路由，routing2.js 是 OSPF 的 stub / NSSA、iBGP、VRF 裡的 OSPF 與路由洩漏，tunnels.js 是 GRE、GRE over IPsec、VTI、DMVPN 與 NAT-T，ipv6b.js 是 AAAA 與雙協定、IPv6 經過 VPN，ha.js 是 BFD 與 GLBP，ops2.js 是 NetFlow 與 police，l2sec.js 是第二層的攻擊與防護（MAC flooding、雙重標籤、Storm Control、Private VLAN、RA Guard），resil.js / audit.js / trouble2.js 是各章的補充關卡）
-src/data/     題庫、證照對照表與知識庫（data/kb：每一類一個檔案，match.js 是名詞連結與搜尋）
+src/levels/   關卡定義：設備、初始設定、任務目標、提示、參考解法（trouble.js 是故障排除章，maint.js 是維運章，voip.js 是語音與 QoS 章，routing.js 是進階路由章，ipv6.js 是 IPv6 章的補充，vpn2.js 是多站台 VPN，wireless.js 是無線控制器章，auto.js 是自動化章，cloud.js 是雲端章，virtual.js 是虛擬化章（vSwitch、VRF、容器），team.js 是 ESXi 的 NIC teaming，lb.js 是負載平衡器，stack.js 是交換器堆疊，mesh.js 是 Wi-Fi mesh，vpc.js 是 Nexus 的 vPC，tls.js 是 HTTPS 憑證，mtu.js 是 Jumbo Frame 與 PMTUD，redist.js 是路由重分配與政策路由，routing2.js 是 OSPF 的 stub / NSSA、iBGP、VRF 裡的 OSPF 與路由洩漏，tunnels.js 是 GRE、GRE over IPsec、VTI、DMVPN 與 NAT-T，ipv6b.js 是 AAAA 與雙協定、IPv6 經過 VPN，ha.js 是 BFD 與 GLBP，ops2.js 是 NetFlow 與 police，l2sec.js 是第二層的攻擊與防護（MAC flooding、雙重標籤、Storm Control、Private VLAN、RA Guard），resil.js / audit.js / trouble2.js 是各章的補充關卡，labs.js 是第 18 章封包實驗室（觀察題），dnsfwd.js 是 DNS 轉送器）
+src/data/     題庫、證照對照表、學習路線 (paths.js) 與知識庫（data/kb：每一類一個檔案，more.js 是跨分類的補充，match.js 是名詞連結與搜尋）
 src/scene/    three.js 場景、設備模型、網路線、無線涵蓋範圍與封包動畫
-src/ui/       設定面板、終端機、CLI、任務面板、測驗、模擬考、故障演練、評分、自由模式與關卡編輯器、對話框
+src/ui/       設定面板、終端機、CLI、任務面板、測驗、模擬考、故障演練、評分、自由模式與關卡編輯器、對話框；levels-menu.js 是關卡選單（章節導覽、搜尋、學習路線），devicons.js 是 2D 拓撲圖與 3D 標籤共用的設備圖示，topo2d.js 是 2D 拓撲圖
 test/         對每個關卡套用參考解法，並用負面案例確認引擎真的會擋
 e2e/          Playwright 瀏覽器端測試（用已安裝的 Chrome）
 ```
 
-新增關卡：在 `src/levels/` 的 `LEVELS` 加一筆，寫好 `setup()`、`objectives` 與 `solve()`，
+新增關卡：在 `src/levels/` 的 `LEVELS` 加一筆，寫好 `setup()`、`objectives` 與 `solve()`（觀察題的 `solve()` 要把答案填進 `s.answers`），
 在 `src/data/certs.js` 補上對應的考試條目，再跑 `npm test`。
