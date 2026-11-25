@@ -14,6 +14,8 @@
 //   pit     常見的錯誤與誤解
 //   cmd     [{ v: 平台, c: [指令…] }]
 //   see     相關的觀念（id）
+//   deep    「深入了解」：[{ h: 小標題, p?, list?, table?: { head, rows }, code?: { v, c }, note? }]。
+//           內容比較長，另外放在 deep-*.js（依文章的 id），在這裡併進來
 import { BASICS } from './basics.js';
 import { SERVICES } from './services.js';
 import { SWITCHING } from './switching.js';
@@ -27,6 +29,11 @@ import { OPS } from './ops.js';
 import { CLOUD } from './cloud.js';
 import { MORE } from './more.js';
 import { buildIndex } from './match.js';
+import { DEEP_ROUTING } from './deep-routing.js';
+import { DEEP_SWITCHING } from './deep-switching.js';
+import { DEEP_WAN } from './deep-wan.js';
+import { DEEP_SECURITY } from './deep-security.js';
+import { DEEP_SERVICES } from './deep-services.js';
 
 export const CATS = [
   { id: 'basics', name: '網路基礎', desc: 'IP 位址、子網路、MAC、ARP、TCP / UDP' },
@@ -43,5 +50,8 @@ export const CATS = [
 ];
 
 export const CONCEPTS = [...BASICS, ...SERVICES, ...SWITCHING, ...ROUTING, ...SECURITY, ...WAN, ...WIRELESS, ...IPV6, ...PHYSICAL, ...OPS, ...CLOUD, ...MORE];
+/** 「深入了解」的內容（文章 id → 段落） */
+export const DEEP = { ...DEEP_ROUTING, ...DEEP_SWITCHING, ...DEEP_WAN, ...DEEP_SECURITY, ...DEEP_SERVICES };
+for (const c of CONCEPTS) if (DEEP[c.id]) c.deep = DEEP[c.id];
 export const CONCEPT = Object.fromEntries(CONCEPTS.map((c) => [c.id, c]));
 export const KB_INDEX = buildIndex(CONCEPTS);

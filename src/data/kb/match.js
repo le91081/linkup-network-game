@@ -73,7 +73,8 @@ export function searchConcepts(concepts, q) {
   const rows = [];
   for (const c of concepts) {
     const head = norm([c.t, c.en || '', ...(c.keys || [])].join(' '));
-    const all = head + ' ' + norm([c.sum, ...(c.body || []), ...((c.steps && c.steps.items) || []), ...(c.pit || [])].join(' '));
+    const deep = (c.deep || []).flatMap((s) => [s.h, ...(s.p || []), ...(s.list || []), s.note || '']);
+    const all = head + ' ' + norm([c.sum, ...(c.body || []), ...((c.steps && c.steps.items) || []), ...(c.pit || []), ...deep].join(' '));
     if (!words.every((w) => all.includes(w))) continue;
     rows.push({ c, s: words.reduce((t, w) => t + (head.includes(w) ? 2 : 0), 0) + (norm(c.t).startsWith(words[0]) ? 3 : 0) });
   }

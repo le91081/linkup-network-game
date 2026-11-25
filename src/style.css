@@ -1426,3 +1426,25 @@ body.guide-fold { --side-r: 44px; }
 .m-tab-open { display: inline-grid; place-items: center; color: var(--faint); font-style: normal; }
 .m-tabs .tab:hover .m-tab-open { color: var(--accent); }
 .kb-dock { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin: -4px -4px 0; padding: 4px 4px 4px 10px; border-radius: 10px; background: rgba(110, 168, 255, 0.07); border: 1px solid rgba(110, 168, 255, 0.18); color: var(--muted); font-size: 11.5px; font-weight: 600; }
+
+/* ───────── 知識庫：深入了解（文章後半的完整說明）與這一篇的目錄 ───────── */
+.kb-deep { display: flex; flex-direction: column; gap: 18px; margin-top: 6px; padding-top: 16px; border-top: 1px solid var(--line); }
+.kb-deep-h { margin: 0; display: flex; align-items: baseline; gap: 10px; font-size: 15px; color: var(--text); }
+.kb-deep-h small { color: var(--faint); font-size: 11.5px; font-weight: 500; }
+.kb-deep-s { display: flex; flex-direction: column; gap: 10px; scroll-margin-top: 10px; }
+.kb-deep-s h3 { margin: 0; display: flex; align-items: baseline; gap: 9px; font-size: 13.5px; color: #e6ecfb; line-height: 1.5; }
+.kb-deep-s h3 i { flex: none; font: 700 11px var(--mono); font-style: normal; color: var(--accent); }
+.kb-deep-l { padding-left: 20px; }
+.kb-deep-n { border-color: rgba(79, 216, 196, 0.26); background: rgba(79, 216, 196, 0.05); }
+.kbr .kb-deep { gap: 26px; margin-top: 12px; padding-top: 24px; }
+.kbr .kb-deep-h { font-size: 20px; }
+.kbr .kb-deep-h small { font-size: 12.5px; }
+.kbr .kb-deep-s { gap: 13px; }
+.kbr .kb-deep-s h3 { font-size: 16.5px; gap: 11px; }
+.kbr .kb-deep-s h3 i { font-size: 12.5px; }
+.kbr-deep-tag { margin-left: 7px; padding: 1px 6px; border-radius: 6px; font: 700 10px var(--sans); font-style: normal; color: var(--accent); background: rgba(79, 216, 196, 0.12); border: 1px solid rgba(79, 216, 196, 0.28); vertical-align: 2px; }
+.kbr-toc { gap: 2px; }
+.kbr-toc-i { display: flex; align-items: baseline; gap: 8px; width: 100%; padding: 5px 8px; border: 0; border-radius: 8px; background: none; color: var(--muted); font: inherit; font-size: 12.5px; line-height: 1.5; text-align: left; cursor: pointer; }
+.kbr-toc-i:hover { background: var(--card-2); color: var(--text); }
+.kbr-toc-i i { flex: none; font: 700 10.5px var(--mono); font-style: normal; color: var(--accent); }
+.kbr-toc-i span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

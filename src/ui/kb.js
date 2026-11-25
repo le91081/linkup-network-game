@@ -147,7 +147,25 @@ const textBlocks = (c) => [
   c.pit && c.pit.length && h('div', { class: 'kb-box warn' }, h('b', { class: 'kb-box-t' }, icon('bulb', 14), '常見的錯誤'),
     h('ul', { class: 'kb-pit' }, c.pit.map((x) => h('li', null, linkText(x, c.id))))),
   c.cmd && c.cmd.length && h('div', { class: 'kb-cmds' }, c.cmd.map((x) => h('div', { class: 'kb-cmd' }, h('span', { class: 'kb-cmd-v', text: x.v }), h('pre', { text: x.c.join('\n') })))),
+  deepBlocks(c),
 ];
+const deepId = (c, n) => `kbd-${c.id}-${n}`;
+/**
+ * 「深入了解」：上面是重點，這裡是完整的說明 —— 一段一個小標題，可以有段落、條列、表格、設定範例與提醒。
+ * c.deep = [{ h, p?: [...], list?: [...], table?: { head, rows, title? }, code?: { v, c } | [...], note? }]
+ */
+function deepBlocks(c) {
+  if (!c.deep || !c.deep.length) return null;
+  return h('div', { class: 'kb-deep' },
+    h('h2', { class: 'kb-deep-h' }, h('span', { text: '深入了解' }), h('small', { text: `${c.deep.length} 個主題` })),
+    c.deep.map((s, n) => h('section', { class: 'kb-deep-s', id: deepId(c, n) },
+      h('h3', null, h('i', { text: String(n + 1).padStart(2, '0') }), h('span', { text: s.h })),
+      (s.p || []).map((x) => h('p', { class: 'kb-p' }, linkText(x, c.id))),
+      s.list && h('ul', { class: 'kb-pit kb-deep-l' }, s.list.map((x) => h('li', null, linkText(x, c.id)))),
+      s.table && figure({ type: 'table', ...s.table }),
+      s.code && h('div', { class: 'kb-cmds' }, [].concat(s.code).map((x) => h('div', { class: 'kb-cmd' }, h('span', { class: 'kb-cmd-v', text: x.v }), h('pre', { text: x.c.join('\n') })))),
+      s.note && h('div', { class: 'kb-box kb-deep-n' }, h('b', { class: 'kb-box-t' }, icon('bulb', 14), '實務與考試的重點'), h('p', { class: 'kb-p' }, linkText(s.note, c.id))))));
+}
 /** 「在這些關卡練習」的關卡按鈕 */
 function levelChips(app, c, max) {
   const lvls = conceptLevels(KB_INDEX, c, LEVELS);
@@ -211,7 +229,7 @@ function drawReader(keepNav) {
     if (on && (on.offsetTop < nav.scrollTop || on.offsetTop > nav.scrollTop + nav.clientHeight - 40)) nav.scrollTop = Math.max(0, on.offsetTop - nav.clientHeight / 3);
   }
   const card = (c) => h('button', { type: 'button', class: 'kbr-card', onclick: () => openConcept(app, c.id) },
-    h('span', { class: 'kbr-card-h' }, h('b', { text: c.t }), c.en && h('small', { text: c.en })), h('span', { class: 'kbr-card-s', text: c.sum }));
+    h('span', { class: 'kbr-card-h' }, h('b', null, c.t, c.deep && c.deep.length ? h('em', { class: 'kbr-deep-tag', title: `有「深入了解」：${c.deep.length} 個主題`, text: '深入' }) : null), c.en && h('small', { text: c.en })), h('span', { class: 'kbr-card-s', text: c.sum }));
   let kids;
   if (k.q.trim()) {
     const hits = searchConcepts(CONCEPTS, k.q);
@@ -249,7 +267,11 @@ function article(app, c, k) {
     h('p', { class: 'kb-lead', text: c.sum }),
     h('div', { class: 'kbr-cols' },
       h('div', { class: 'kbr-text' }, textBlocks(c)),
-      (see.length || lv) && h('aside', { class: 'kbr-rail' },
+      (see.length || lv || c.deep) && h('aside', { class: 'kbr-rail' },
+        c.deep && c.deep.length ? h('div', { class: 'kbr-rail-b kbr-toc' }, h('h3', { class: 'sec', text: '這一篇的內容' }),
+          h('button', { type: 'button', class: 'kbr-toc-i', onclick: () => { reader.main.scrollTop = 0; } }, '重點整理'),
+          c.deep.map((s, n) => h('button', { type: 'button', class: 'kbr-toc-i', title: s.h, onclick: () => { const el = document.getElementById(deepId(c, n)); if (el) el.scrollIntoView({ block: 'start' }); } },
+            h('i', { text: String(n + 1).padStart(2, '0') }), h('span', { text: s.h })))) : null,
         see.length ? h('div', { class: 'kbr-rail-b' }, h('h3', { class: 'sec', text: '相關的觀念' }),
           see.map((x) => h('button', { type: 'button', class: 'kbr-rel kb-see', title: x.sum, onclick: () => openConcept(app, x.id) }, h('b', { text: x.t }), h('span', { text: x.sum })))) : null,
         lv ? h('div', { class: 'kbr-rail-b' }, h('h3', { class: 'sec', text: '在這些關卡練習' }), lv) : null)),
