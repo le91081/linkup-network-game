@@ -1559,7 +1559,7 @@ function bgpTable(st, d, only) {
     prev = k;
     // 第一欄：r = RIB-failure（路由表裡有管理距離更小的路）、* = 有效（下一站查得到）；> = 最佳；i = 從 iBGP 學到的
     const v = r.ribFail ? 'r' : r.valid === false ? ' ' : '*';
-    o.push(` ${v}${r.best ? '>' : ' '}${r.ibgp && !r.adv ? 'i' : ' '} ` + pad(net, 17) + pad(r.local || r.adv ? '0.0.0.0' : fmtIp(r.nh), 20) + pad(r.med != null ? String(r.med).padStart(6) : r.local ? '     0' : '', 7)
+    o.push(` ${v}${r.best ? '>' : r.multi ? 'm' : ' '}${r.ibgp && !r.adv ? 'i' : ' '} ` + pad(net, 17) + pad(r.local || r.adv ? '0.0.0.0' : fmtIp(r.nh), 20) + pad(r.med != null ? String(r.med).padStart(6) : r.local ? '     0' : '', 7)
       + pad(!r.adv && r.lp != null && (r.lp !== 100 || r.ibgp) ? String(r.lp).padStart(6) : '', 7) + pad(String(r.weight || 0).padStart(6), 7) + ((r.adv ? r.sentPath : r.aspath).join(' ') + ' ' + (r.origin || 'i')).trim());
   }
   o.push('', `Total number of prefixes ${new Set(rows.map((r) => r.net + '/' + r.bits)).size} `);

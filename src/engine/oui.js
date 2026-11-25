@@ -40,7 +40,7 @@ export const OUI_NAME = {
 
 // 每種型號的網卡是哪一家的。'private'：手機對每個 Wi-Fi 隨機產生的私人位址；'aws'：雲端的虛擬網卡（都是本機管理位址）
 const BY_MODEL = {
-  pc: 'dell', tower: 'dell', rack1u: 'dell', laptop: 'lcfc', laptop6e: 'lcfc', phone: 'private',
+  pc: 'dell', tower: 'dell', rack1u: 'dell', gpusrv: 'dell', laptop: 'lcfc', laptop6e: 'lcfc', phone: 'private',
   ipphone: 'cisco', t54w: 'yealink', printer: 'hp', wprinter: 'hp', ipcam: 'hikvision', nvr: 'hikvision', nas: 'synology',
   bigip: 'f5', ups: 'apc', esxi: 'intel', vm: 'vmware',
   hub4: 'netgear', sw5: 'tplink', sw8: 'tplink', homerouter: 'asus', ap: 'ubiquiti', ap6e: 'ubiquiti', ont: 'zte',

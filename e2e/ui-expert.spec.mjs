@@ -57,7 +57,7 @@ test('證照地圖：六張證照排成兩列，CCNP / CCIE 的條目對應到�
   expect(await tabs.evaluateAll((bs) => bs.filter((b) => b.scrollWidth > b.clientWidth + 1).length)).toBe(0);
   await tabs.filter({ hasText: 'ENARSI' }).click();
   await expect(dlg.locator('.crow')).toHaveCount(25);
-  await expect(dlg.locator('.crow.none')).toHaveCount(1);
+  await expect(dlg.locator('.crow.none')).toHaveCount(0); // ENARSI 的 25 條都有對應的關卡了（CoPP 是 19-8）
   await expect(dlg.locator('.crow', { hasText: 'MPLS L3VPN' }).locator('.lvchip', { hasText: '20-2' })).toHaveCount(1);
   await tabs.filter({ hasText: 'ENCOR' }).click();
   await expect(dlg.locator('.crow')).toHaveCount(42);

@@ -82,6 +82,7 @@ export const PATHS = [
     steps: [
       { t: '機房的實體', d: '光纖、收發器、breakout、雙電源、UPS', ids: ['l11', 'l30', 'l115', 'l128', 'l125', 'l157'] },
       { t: '架構與備援', d: 'Spine-Leaf、vPC、堆疊、Jumbo Frame、負載平衡', ids: ['l12', 'l155', 'l153', 'l75', 'l152'] },
+      { t: '大型機房與 GPU 叢集', d: '用 eBGP 當 underlay 的 Clos 架構、每一條上行都要用到；GPU 叢集的後端網路與 rail 的接法', ids: ['l191', 'l192'] },
       { t: '虛擬化', d: 'vSwitch、NIC teaming、vMotion、VRF、容器', ids: ['l70', 'l151', 'l160', 'l158', 'l72', 'l73'] },
       { t: '公有雲', d: 'VPC、子網路、安全群組、負載平衡、Transit Gateway、Terraform', ids: ['l60', 'l61', 'l109', 'l110', 'l112'] },
     ],

@@ -16,11 +16,11 @@ test('知識庫的閱讀視窗：首頁、文章、相關的觀念與上一則�
   // 沒有釘住：左側面板還是「任務」，知識庫是另外開的視窗
   await expect(kbTab(page)).not.toHaveClass(/\bon\b/);
   await expect(page.locator('#mission .obj').first()).toBeVisible();
-  // 首頁：這一關會用到的觀念排最前面，下面是 11 個分類；左邊的清單也有
+  // 首頁：這一關會用到的觀念排最前面，下面是 12 個分類；左邊的清單也有
   await expect(dlg.locator('.kbr-sec').first().locator('.kbr-h2')).toContainText('這一關會用到');
-  await expect(dlg.locator('.kbr-sec')).toHaveCount(12);
+  await expect(dlg.locator('.kbr-sec')).toHaveCount(13);
   await expect(dlg.locator('.kbr-nav .kbr-grp .kbr-item')).toHaveCount(await dlg.locator('.kbr-sec').first().locator('.kbr-card').count());
-  await expect(dlg.locator('.kbr-nav .kbr-cat')).toHaveCount(11);
+  await expect(dlg.locator('.kbr-nav .kbr-cat')).toHaveCount(12);
   expect(await scan(page, '#modal-root', '知識庫首頁')).toEqual([]);
   // 整個視窗不捲動：左邊的清單與右邊的內容各自捲
   expect(await dlg.evaluate((el) => el.scrollHeight <= el.clientHeight + 1)).toBe(true);

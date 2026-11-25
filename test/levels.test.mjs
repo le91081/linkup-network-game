@@ -6551,6 +6551,68 @@ console.log('\nRSPAN、CoPP、EEM');
   }
 }
 
+console.log('\n資料中心：BGP 多路徑、NX-OS 的 BGP 語法、GPU 伺服器');
+{
+  const { iosSession, runningConfig } = await import('../src/engine/ios.js');
+  const { iosRun } = await import('../src/ui/cli.js');
+  const sim = await import('../src/engine/sim.js');
+  const { makeDevice: D, makeState: MS } = await import('../src/engine/model.js');
+  const ok = (cond, title) => (cond ? console.log('  ✔ ' + title) : fail(title));
+  const tools = (s) => {
+    const sessions = new Map();
+    const run = (dv, line) => { if (!sessions.has(dv)) { sessions.set(dv, iosSession(() => s.devices[dv], () => s)); sessions.get(dv).exec('enable'); } const out = []; const r = iosRun({ state: s }, dv, sessions.get(dv), line, (l) => out.push(l)); if (r.changed) settle(s); return out; };
+    const cli = (dv, lines) => lines.flatMap((l) => run(dv, l)).join('\n');
+    const rc = (dv) => [].concat(runningConfig(s, s.devices[dv])).join('\n');
+    const hops = (dv, net) => s.devices[dv].rt.routes.filter((r) => !r.bad && r.type === 'B' && r.net === parseIp(net) && r.bits === 24).map((r) => r.iface.id).sort().join(',');
+    return { cli, rc, hops };
+  };
+  {
+    const lv = LEVELS.find((x) => x.id === 'l191'), s = lv.setup(); settle(s);
+    const { cli, rc, hops } = tools(s);
+    ok(hops('l2', '10.1.1.0') === 'Eth1/49' && /10\.0\.2\.0 +4 +65001 .* Idle/.test(cli('l1', ['show ip bgp summary'])), '開場：BGP 只把一條最佳路徑放進路由表；remote-as 寫錯的鄰居停在 Idle');
+    ok(!s.devices.l2.rt.routes.some((r) => r.type === 'B' && r.net === parseIp('10.1.3.0')) && /AS_PATH loop/.test(cli('l2', ['show ip bgp summary'])), '兩台 Leaf 同一個 AS：對方的網段被迴圈偵測丟掉');
+    cli('l1', ['configure terminal', 'router bgp 65101', 'neighbor 10.0.2.0', 'remote-as 65000', 'end']);
+    ok(hops('l2', '10.1.1.0') === 'Eth1/49' && s.devices.l1.rt.bgp.peers.every((p) => p.state === 'Established'), '鄰居都建立了，還是只用一條：BGP 預設不做多路徑');
+    cli('l2', ['configure terminal', 'router bgp 65102', 'address-family ipv4 unicast', 'maximum-paths 4', 'end']);
+    ok(hops('l2', '10.1.1.0') === 'Eth1/49,Eth1/50' && /^ \*m +10\.0\.2\.2 /m.test(cli('l2', ['show ip bgp'])), 'maximum-paths 4：兩台 Spine 都放進路由表，show ip bgp 標成 *m');
+    ok(/^router bgp 65102\n {2}router-id 10\.255\.1\.2\n {2}address-family ipv4 unicast\n {4}network 10\.1\.2\.0\/24\n {4}maximum-paths 4\n {2}neighbor 10\.0\.1\.2\n {4}remote-as 65000\n {4}address-family ipv4 unicast$/m.test(rc('l2')), 'Nexus 的 running-config 是 NX-OS 的巢狀寫法');
+    lv.solve(s); settle(s);
+    ok(sim.evaluate(s, lv.objectives).every((r) => r.pass), '照參考解法：五個目標都通過');
+    // Spine-2 換成另一個 AS：兩條路的 AS path 一樣長但內容不同，要 multipath-relax 才算等價
+    cli('s2', ['configure terminal', 'no router bgp 65000', 'router bgp 65001', 'router-id 10.255.0.2', 'address-family ipv4 unicast', 'exit',
+      ...[[1, 65101], [3, 65102], [5, 65103]].flatMap(([h, as]) => [`neighbor 10.0.2.${h}`, `remote-as ${as}`, 'address-family ipv4 unicast', 'exit', 'exit']), 'end']);
+    for (const [dv, as, h] of [['l1', 65101, 0], ['l2', 65102, 2], ['l3', 65103, 4]]) cli(dv, ['configure terminal', `router bgp ${as}`, `neighbor 10.0.2.${h}`, 'remote-as 65001', 'end']);
+    ok(hops('l1', '10.1.2.0').split(',').length === 1 && s.devices.l1.rt.bgp.peers.every((p) => p.state === 'Established'), 'Spine 各用不同的 AS：AS path 一樣長但內容不同，預設不算等價');
+    cli('l1', ['configure terminal', 'router bgp 65101', 'bestpath as-path multipath-relax', 'end']);
+    ok(hops('l1', '10.1.2.0') === 'Eth1/49,Eth1/50' && /^ {2}bestpath as-path multipath-relax$/m.test(rc('l1')), 'bestpath as-path multipath-relax：只要一樣長就一起用');
+    cli('l1', ['configure terminal', 'router bgp 65101', 'address-family ipv4 unicast', 'no maximum-paths', 'end']);
+    ok(hops('l1', '10.1.2.0').split(',').length === 1 && !/maximum-paths/.test(rc('l1')), 'no maximum-paths：回到只用一條');
+  }
+  {
+    // Nexus 要先 feature bgp；Catalyst 9300 用 IOS 的寫法
+    const s = MS([D('n93180', 'n', { name: 'N9K' }), D('c9300', 'c', { name: 'C9300' })], [['n:Eth1/1', 'c:Te1/1/1']]);
+    settle(s);
+    const { cli, rc } = tools(s);
+    ok(/feature bgp/.test(cli('n', ['configure terminal', 'router bgp 65001', 'end'])), 'Nexus 沒有 feature bgp：router bgp 被拒絕');
+    cli('n', ['configure terminal', 'feature bgp', 'interface Ethernet1/1', 'no switchport', 'ip address 10.9.0.0/31', 'no shutdown', 'exit', 'interface loopback0', 'ip address 10.9.9.1/32', 'exit',
+      'router bgp 65001', 'address-family ipv4 unicast', 'network 10.9.9.1/32', 'exit', 'neighbor 10.9.0.1', 'remote-as 65002', 'description to-C9300', 'address-family ipv4 unicast', 'allowas-in 1', 'end']);
+    cli('c', ['configure terminal', 'ip routing', 'interface Te1/1/1', 'no switchport', 'ip address 10.9.0.1 255.255.255.254', 'exit', 'router bgp 65002', 'neighbor 10.9.0.0 remote-as 65001', 'maximum-paths 2', 'end']);
+    ok(s.devices.c.rt.routes.some((r) => r.type === 'B' && r.net === parseIp('10.9.9.1') && r.bits === 32), 'L3 交換器也能跑 BGP：Catalyst 9300（IOS 的寫法）學到 Nexus 的路');
+    ok(/^ {4}description to-C9300\n {4}address-family ipv4 unicast\n {6}allowas-in 1$/m.test(rc('n')) && /^ neighbor 10\.9\.0\.0 remote-as 65001$/m.test(rc('c')) && /^ maximum-paths 2$/m.test(rc('c')), '兩種寫法的 running-config：NX-OS 巢狀、IOS 一行一個 neighbor');
+  }
+  {
+    const lv = LEVELS.find((x) => x.id === 'l192'), s = lv.setup(); settle(s);
+    const { cli } = tools(s);
+    const nb = cli('r2', ['show lldp neighbors']);
+    ok(/^GPU-3 +Eth1\/3 +120 +S +rdma3$/m.test(nb) && /^GPU-1 +Eth1\/1 +120 +S +rdma2$/m.test(nb), 'GPU 伺服器會送 LLDP：Leaf 看得到每個埠對面是哪一個後端埠（接錯的那一條一眼就看得出來）');
+    ok(s.devices.gpu1.ifaces.filter((i) => i.rt && i.rt.ip != null).length === 4 && sim.transact(s, 'gpu1', { proto: 'icmp', dst: parseIp('10.20.4.12') }).ok, '一台主機四個後端埠各有位址，各走各的 rail');
+    lv.solve(s); settle(s);
+    ok(sim.evaluate(s, lv.objectives).every((r) => r.pass), '換回正確的線、補上 MTU：五個目標都通過');
+    sim.advance(s, 35); // 等下一次 LLDP 的通告（每 30 秒）
+    ok(/^GPU-3 +Eth1\/3 +120 +S +rdma2$/m.test(cli('r2', ['show lldp neighbors'])), '下一次通告之後，Leaf-R2 的 Eth1/3 看到的是 rdma2');
+  }
+}
+
 // ── 題庫與證照對照表的資料檢查 ──
 {
   const { QUESTIONS, TOPICS, LEVEL_TOPIC } = await import('../src/data/quiz.js');

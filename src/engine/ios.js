@@ -116,7 +116,7 @@ const PROMPT = {
   eigrp: '(config-router)#', rip: '(config-router)#', trange: '(config-time-range)#', mstcfg: '(config-mst)#', keychain: '(config-keychain)#', kckey: '(config-keychain-key)#',
   zone: '(config-sec-zone)#', zpair: '(config-sec-zone-pair)#', icmap: '(config-cmap)#', ipmap: '(config-pmap)#', ipmapc: '(config-pmap-c)#',
   exec: '#', config: '(config)#', if: '(config-if)#', vlan: '(config-vlan)#', raguard: '(config-ra-guard)#', router: '(config-router)#', dhcp: '(dhcp-config)#',
-  cplane: '(config-cp)#', eem: '(config-applet)#', line: '(config-line)#', tacacs: '(config-server-tacacs)#', acl: '(config-ext-nacl)#', stdacl: '(config-std-nacl)#', radius: '(config-radius-server)#',
+  nxbgpaf: '(config-router-af)#', nxbgpnbr: '(config-router-neighbor)#', nxbgpnbraf: '(config-router-neighbor-af)#', cplane: '(config-cp)#', eem: '(config-applet)#', line: '(config-line)#', tacacs: '(config-server-tacacs)#', acl: '(config-ext-nacl)#', stdacl: '(config-std-nacl)#', radius: '(config-radius-server)#',
   isakmp: '(config-isakmp)#', tset: '(cfg-crypto-trans)#', cmap: '(config-crypto-map)#', ipsecprof: '(ipsec-profile)#', flowrec: '(config-flow-record)#', flowexp: '(config-flow-exporter)#', flowmon: '(config-flow-monitor)#', pkitp: '(ca-trustpoint)#', pkichain: '(config-cert-chain)#', pkicert: '(config-pubkey)#',
   ikev2prop: '(config-ikev2-proposal)#', ikev2pol: '(config-ikev2-policy)#', ikev2kr: '(config-ikev2-keyring)#', ikev2peer: '(config-ikev2-keyring-peer)#', ikev2prof: '(config-ikev2-profile)#', track: '(config-track)#', vrfdef: '(config-vrf)#', vpcdom: '(config-vpc-domain)#', vrfctx: '(config-vrf)#', vrfaf: '(config-vrf-af)#', ipvrf: '(config-vrf)#', archive: '(config-archive)#', archlog: '(config-archive-log-cfg)#', ipsla: '(config-ip-sla)#', slaecho: '(config-ip-sla-echo)#', bgp: '(config-router)#', rmap: '(config-route-map)#', qcmap: '(config-cmap)#', pmap: '(config-pmap)#', pmapc: '(config-pmap-c)#',
 };
@@ -1755,7 +1755,7 @@ export function iosSession(getDev, getState, who = null) {
     ['feature <...>', ([f]) => {
       if (!isNexus(dev())) return err('% Invalid input detected：feature 是 NX-OS 的指令（Nexus）');
       const k = f.trim().toLowerCase();
-      if (!['vpc', 'lacp', 'interface-vlan', 'ospf', 'hsrp', 'lldp'].includes(k)) return err(`% 這個模擬沒有 feature ${k}`);
+      if (!['vpc', 'lacp', 'interface-vlan', 'ospf', 'hsrp', 'lldp', 'bgp'].includes(k)) return err(`% 這個模擬沒有 feature ${k}`);
       (dev().features ||= {})[k] = true;
       return undefined;
     }],
@@ -1847,7 +1847,8 @@ export function iosSession(getDev, getState, who = null) {
     ['router bgp <asn>', ([asn]) => {
       S.bgpAf = null;
       const d = dev();
-      if (!d.routing || d.kind !== 'router') return err('這個模擬只有路由器能跑 BGP');
+      if (!d.routing || !(d.kind === 'router' || d.kind === 'l3switch')) return err('這個模擬只有路由器與 L3 交換器能跑 BGP');
+      if (isNexus(d) && !(d.features || {}).bgp) return err('% Invalid command（NX-OS 要先 feature bgp 才有 router bgp）');
       if (!(+asn >= 1 && +asn <= 4294967295)) return err('AS 號碼的範圍是 1 – 4294967295');
       if (d.bgp && d.bgp.asn && +d.bgp.asn !== +asn) return err(`BGP is already running; AS is ${d.bgp.asn}`);
       d.bgp ||= { asn: +asn, neighbors: [], networks: [] };
@@ -2972,6 +2973,8 @@ export function iosSession(getDev, getState, who = null) {
     return note;
   }
 
+  /** NX-OS 的子模式把一行轉成 IOS 的寫法，交給 router bgp 的那一組指令處理 */
+  const viaBgp = (tok) => { const x = run(SUB.bgp, tok, []); return x.hit ? x.r : err(`% Invalid command（${tok.filter((w) => w !== 'neighbor').slice(-3).join(' ')}）`); };
   const SUB = {
     if: IF,
     vlan: [
@@ -3790,7 +3793,37 @@ export function iosSession(getDev, getState, who = null) {
       ['lifetime <n>', ([n]) => (/^\d+$/.test(n) && +n >= 120 && +n <= 86400 ? void (dev().ikev2.profs[S.cur].life = +n === 86400 ? undefined : +n) : err('lifetime 的範圍是 120 – 86400 秒'))],
       ['dpd <...>', () => undefined],
     ],
+    // NX-OS 的 BGP 是巢狀的：address-family ipv4 unicast 底下放 network 與 maximum-paths；neighbor <IP> 底下放 remote-as，再往下的 address-family 放政策。
+    // 這裡把每一行轉成 IOS 的寫法（neighbor <IP> …）交給同一組處理函式，資料只有一份
+    nxbgpaf: [
+      ['network <p>', ([p]) => { const m = String(p).match(/^(\d+\.\d+\.\d+\.\d+)\/(\d+)$/); if (!m || +m[2] > 32) return err('用法：network <網段>/<長度>，例如 network 10.1.1.0/24'); return viaBgp(['network', m[1], 'mask', fmtMask(+m[2])]); }],
+      ['no network <p>', ([p]) => { const m = String(p).match(/^(\d+\.\d+\.\d+\.\d+)\/(\d+)$/); if (!m) return err('用法：no network <網段>/<長度>'); return viaBgp(['no', 'network', m[1], 'mask', fmtMask(+m[2])]); }],
+      ['maximum-paths <...>', ([r]) => viaBgp(['maximum-paths', ...String(r).split(/\s+/)])],
+      ['no maximum-paths [...]', ([r]) => viaBgp(['no', 'maximum-paths', ...String(r || '').split(/\s+/).filter(Boolean)])],
+      ['redistribute <...>', ([r]) => viaBgp(['redistribute', ...String(r).split(/\s+/)])],
+    ],
+    nxbgpnbr: [
+      ['address-family ipv4 [...]', () => { S.mode = 'nxbgpnbraf'; return undefined; }],
+      ...['remote-as <asn>', 'description <...>', 'update-source <...>', 'ebgp-multihop <n>', 'shutdown', 'allowas-in [...]', 'next-hop-self', 'route-reflector-client', 'send-community [...]', 'default-originate', 'route-map <name> <dir>', 'prefix-list <name> <dir>', 'weight <n>']
+        .map((pat) => [pat, (args) => viaBgp(['neighbor', S.cur, ...pat.split(' ').filter((w) => !/^[<[]/.test(w)), ...args.filter((x) => x != null && x !== '').flatMap((x) => String(x).split(/\s+/))])]),
+      ['bfd', () => viaBgp(['neighbor', S.cur, 'fall-over', 'bfd'])],
+      ...['shutdown', 'allowas-in', 'next-hop-self', 'route-reflector-client', 'send-community', 'default-originate', 'update-source', 'description', 'ebgp-multihop', 'weight']
+        .map((w) => ['no ' + w + ' [...]', () => viaBgp(['no', 'neighbor', S.cur, w])]),
+      ['no bfd', () => viaBgp(['no', 'neighbor', S.cur, 'fall-over', 'bfd'])],
+    ],
     bgp: [
+      // 多路徑：最佳路徑之外，條件一樣好的路也放進路由表（預設只放一條）
+      ['maximum-paths ibgp <n>', ([n]) => (/^\d+$/.test(n) && +n >= 1 && +n <= 64 ? void (+n === 1 ? delete dev().bgp.maxPathsIbgp : (dev().bgp.maxPathsIbgp = +n)) : err('用法：maximum-paths ibgp <1-64>'))],
+      ['maximum-paths <n>', ([n]) => (/^\d+$/.test(n) && +n >= 1 && +n <= 64 ? void (+n === 1 ? delete dev().bgp.maxPaths : (dev().bgp.maxPaths = +n)) : err('用法：maximum-paths <1-64>（iBGP 的路用 maximum-paths ibgp <n>）'))],
+      ['no maximum-paths ibgp [...]', () => { delete dev().bgp.maxPathsIbgp; }],
+      ['no maximum-paths [...]', () => { delete dev().bgp.maxPaths; }],
+      ['bgp bestpath as-path multipath-relax', () => { dev().bgp.relax = true; }],
+      ['no bgp bestpath as-path multipath-relax', () => { delete dev().bgp.relax; }],
+      // NX-OS 的寫法
+      ['router-id <ip>', ([ip]) => (parseIp(ip) == null ? err('用法：router-id <A.B.C.D>') : void (dev().bgp.rid = ip))],
+      ['bestpath as-path multipath-relax', () => { dev().bgp.relax = true; }],
+      ['no bestpath as-path multipath-relax', () => { delete dev().bgp.relax; }],
+      ['neighbor <ip>', ([ip]) => { if (parseIp(ip) == null) return err('用法：neighbor <IP 位址>'); if (!isNexus(dev())) return err(`% Incomplete command.（IOS 的寫法是 neighbor ${ip} remote-as <AS>）`); enter('nxbgpnbr', ip); return undefined; }],
       ['bgp router-id <ip>', ([ip]) => (parseIp(ip) == null ? err('用法：bgp router-id <A.B.C.D>') : void (dev().bgp.rid = ip))],
       ['no bgp router-id [...]', () => { delete dev().bgp.rid; }],
       ['bgp log-neighbor-changes', () => undefined],
@@ -3806,7 +3839,7 @@ export function iosSession(getDev, getState, who = null) {
         return undefined;
       }],
       ['no address-family ipv4 vrf <v>', ([v]) => { const a = dev().bgp.vrfAf; if (a) { delete a[v]; if (!Object.keys(a).length) delete dev().bgp.vrfAf; } }],
-      ['address-family ipv4 [...]', () => { S.bgpAf = null; return undefined; }],
+      ['address-family ipv4 [...]', () => { S.bgpAf = null; if (isNexus(dev())) enter('nxbgpaf', null); return undefined; }],
       ['exit-address-family', () => { S.bgpAf = null; return undefined; }],
       ['neighbor <ip> activate', ([ip]) => {
         if (S.bgpAf !== 'vpnv4') return undefined;
@@ -3878,7 +3911,7 @@ export function iosSession(getDev, getState, who = null) {
         if (n == null || bits == null) return err('用法：network <網段> mask <遮罩>');
         const b = dev().bgp;
         if (!b.networks.some((x) => x.net === netOf(n, bits) && x.bits === bits)) b.networks.push({ net: netOf(n, bits), bits });
-        const has = (dev().rt.routes || []).some((r) => r.net === netOf(n, bits) && r.bits === bits && r.type !== 'B') || dev().ifaces.some((i) => { const x = staticNet(i); return x && x.net === netOf(n, bits) && x.bits === bits; });
+        const has = ((dev().rt || {}).routes || []).some((r) => r.net === netOf(n, bits) && r.bits === bits && r.type !== 'B') || dev().ifaces.some((i) => { const x = staticNet(i); return x && x.net === netOf(n, bits) && x.bits === bits; });
         return has ? undefined : '（路由表裡還沒有一模一樣的這個網段：BGP 的 network 只會通告路由表裡已經有的網段）';
       }],
       ['no network <ip> mask <mask>', ([ip, mask]) => { const n = parseIp(ip), bits = maskBits(mask); const b = dev().bgp; b.networks = b.networks.filter((x) => !(x.net === netOf(n, bits) && x.bits === bits)); }],
@@ -4266,6 +4299,7 @@ export function iosSession(getDev, getState, who = null) {
     return bound.length ? bound : [((d.aclDefs ||= {})[name] ||= [])];
   }
 
+  SUB.nxbgpnbraf = SUB.nxbgpnbr; // neighbor 底下的 address-family：同一組指令，只是提示字元不同
   const run = (rules, tok, out) => {
     for (const [pattern, fn] of rules) {
       const args = match(tok, pattern);
@@ -4439,6 +4473,8 @@ export function iosSession(getDev, getState, who = null) {
     };
     if (match(tok, 'end') || t0 === '^z') { S.mode = 'exec'; S.cur = null; return leave(); }
     if (match(tok, 'exit') && S.mode === 'bgp' && S.bgpAf) { S.bgpAf = null; return done(false); }
+    if (match(tok, 'exit') && S.mode === 'nxbgpnbraf') { S.mode = 'nxbgpnbr'; return done(false); }
+    if (match(tok, 'exit') && (S.mode === 'nxbgpnbr' || S.mode === 'nxbgpaf')) { S.mode = 'bgp'; S.cur = null; return done(false); }
     if (match(tok, 'exit') && S.mode === 'pmapc') { S.mode = 'pmap'; S.cur = { pm: S.cur.pm }; return done(false); }
     if (match(tok, 'exit') && S.mode === 'ipmapc') { S.mode = 'ipmap'; S.cur = { pm: S.cur.pm }; return done(false); }
     if (match(tok, 'exit') && S.mode === 'kckey') { S.mode = 'keychain'; S.cur = S.cur.chain; return done(false); }
@@ -4470,7 +4506,7 @@ export function iosSession(getDev, getState, who = null) {
     let res = trySub ? run(SUB[S.mode], tok, out) : { hit: false };
     let viaSub = res.hit;
     // 巢狀的子模式不認得的指令，先往上一層找（例如貼上設定時 log config 底下接著 archive 的 path）
-    const UP = { vrfaf: ['vrfdef', (c) => c], archlog: ['archive', () => null], slaecho: ['ipsla', (c) => c], ikev2peer: ['ikev2kr', (c) => c.kr], pmapc: ['pmap', (c) => ({ pm: c.pm })], ipmapc: ['ipmap', (c) => ({ pm: c.pm })], kckey: ['keychain', (c) => c.chain] };
+    const UP = { nxbgpaf: ['bgp', () => null], nxbgpnbr: ['bgp', () => null], nxbgpnbraf: ['bgp', () => null], vrfaf: ['vrfdef', (c) => c], archlog: ['archive', () => null], slaecho: ['ipsla', (c) => c], ikev2peer: ['ikev2kr', (c) => c.kr], pmapc: ['pmap', (c) => ({ pm: c.pm })], ipmapc: ['ipmap', (c) => ({ pm: c.pm })], kckey: ['keychain', (c) => c.chain] };
     if (!res.hit && trySub && UP[S.mode]) {
       const [pm, pc] = UP[S.mode], prev = S.mode, prevCur = S.cur;
       S.mode = pm; S.cur = pc(prevCur);
@@ -4949,6 +4985,39 @@ function aclAddr(spec) {
   const bits = m[2] == null ? 32 : +m[2];
   return bits === 32 ? 'host ' + fmtIp(ip) : `${fmtIp(netOf(ip, bits))} ${wild(bits)}`;
 }
+/** NX-OS 的 router bgp：巢狀的寫法（neighbor 底下是 remote-as，再往下的 address-family 才是政策） */
+function nxBgpLines(dev) {
+  const b = dev.bgp, o = [`router bgp ${b.asn}`];
+  if (b.rid) o.push(`  router-id ${b.rid}`);
+  if (b.relax) o.push('  bestpath as-path multipath-relax');
+  o.push('  address-family ipv4 unicast');
+  for (const x of b.networks) o.push(`    network ${fmtIp(x.net)}/${x.bits}`);
+  for (const r of b.redist || []) o.push('   ' + redistLine(r, 'bgp'));
+  if (b.maxPaths) o.push(`    maximum-paths ${b.maxPaths}`);
+  if (b.maxPathsIbgp) o.push(`    maximum-paths ibgp ${b.maxPathsIbgp}`);
+  for (const n of b.neighbors) {
+    const us = n.updSrc && dev.ifaces.find((x) => x.id === n.updSrc);
+    o.push(`  neighbor ${n.ip}`, `    remote-as ${n.remoteAs}`);
+    if (n.desc) o.push(`    description ${n.desc}`);
+    if (us) o.push(`    update-source ${longIf(us.label)}`);
+    if (n.multihop) o.push(`    ebgp-multihop ${n.multihop}`);
+    if (n.bfd) o.push('    bfd');
+    if (n.shut) o.push('    shutdown');
+    o.push('    address-family ipv4 unicast');
+    if (n.allowAs) o.push(`      allowas-in ${n.allowAs}`);
+    if (n.nhSelf) o.push('      next-hop-self');
+    if (n.rrClient) o.push('      route-reflector-client');
+    if (n.sendComm) o.push('      send-community');
+    if (n.defOrig) o.push('      default-originate');
+    if (n.weight != null) o.push(`      weight ${n.weight}`);
+    if (n.plIn) o.push(`      prefix-list ${n.plIn} in`);
+    if (n.plOut) o.push(`      prefix-list ${n.plOut} out`);
+    if (n.rmIn) o.push(`      route-map ${n.rmIn} in`);
+    if (n.rmOut) o.push(`      route-map ${n.rmOut} out`);
+  }
+  return o;
+}
+
 /** running-config 裡的 redistribute：metric、metric-type、subnets、tag、route-map 的順序和 IOS 一樣 */
 const redistLine = (r, into) => ` redistribute ${r.src}${r.as != null ? ' ' + r.as : ''}${r.metric != null ? ' metric ' + r.metric : ''}${r.type === 1 ? ' metric-type 1' : ''}${into === 'ospf' && r.src !== 'ospf' ? ' subnets' : ''}${r.tag ? ' tag ' + r.tag : ''}${r.rm ? ' route-map ' + r.rm : ''}`;
 export const aclLine = (r) => (r.evaluate ? `evaluate ${r.evaluate}` : `${r.action} ${r.proto || 'ip'} ${aclAddr(r.src)}${r.sport ? ' eq ' + r.sport : ''} ${aclAddr(r.dst)}${r.port && r.proto !== 'ip' && r.proto !== 'icmp' ? ' eq ' + r.port : ''}${r.icmp ? ' ' + r.icmp : ''}${r.established ? ' established' : ''}${r.reflect ? ` reflect ${r.reflect}${r.rtimeout ? ' timeout ' + r.rtimeout : ''}` : ''}${r.tr ? ' time-range ' + r.tr : ''}`);
@@ -5486,7 +5555,9 @@ export function runningConfig(state, dev) {
   }
   if (dev.bgp && dev.bgp.asn) {
     const b = dev.bgp;
-    o.push(`router bgp ${b.asn}`, ...(b.rid ? [` bgp router-id ${b.rid}`] : []), ' bgp log-neighbor-changes');
+    if (isNexus(dev)) o.push(...nxBgpLines(dev), '!');
+    else {
+    o.push(`router bgp ${b.asn}`, ...(b.rid ? [` bgp router-id ${b.rid}`] : []), ' bgp log-neighbor-changes', ...(b.relax ? [' bgp bestpath as-path multipath-relax'] : []));
     if (b.redistInternal) o.push(' bgp redistribute-internal');
     for (const n of b.neighbors) {
       const us = n.updSrc && dev.ifaces.find((x) => x.id === n.updSrc);
@@ -5523,7 +5594,10 @@ export function runningConfig(state, dev) {
     for (const [v, af] of Object.entries(b.vrfAf || {})) {
       o.push(' !', ` address-family ipv4 vrf ${v}`, ...(af.conn ? ['  redistribute connected'] : []), ...(af.static ? ['  redistribute static'] : []), ' exit-address-family');
     }
+    if (b.maxPaths) o.push(` maximum-paths ${b.maxPaths}`);
+    if (b.maxPathsIbgp) o.push(` maximum-paths ibgp ${b.maxPathsIbgp}`);
     o.push('!');
+    }
   }
   for (const i of dev.ifaces) if (i.mode === 'static' && i.gateway && dev.routing) o.push(`ip route 0.0.0.0 0.0.0.0 ${i.gateway}`);
   for (const r of dev.routes || []) {

@@ -69,6 +69,7 @@ function lldpCaps(d) {
   if (d.kind === 'ap') return ['B', 'W'];
   if (d.kind === 'router' || d.kind === 'firewall') return ['R'];
   if (d.kind === 'l3switch') return ['B', 'R'];
+  if (d.kind === 'host') return ['S']; // 伺服器上的 lldpd：Station
   return ['B'];
 }
 const longName = (s) => String(s).replace(/^Gi(?=\d)/, 'GigabitEthernet').replace(/^Te(?=\d)/, 'TenGigabitEthernet').replace(/^Eth(?=\d)/, 'Ethernet');
@@ -110,7 +111,7 @@ function advert(state, d, pid, proto) {
     platform: PLATFORM_ID[d.model] || CATALOG[d.model].title,
     caps: proto === 'cdp' ? cdpCaps(d) : lldpCaps(d),
     // 基地台的埠在畫面上叫「Gi0 / PoE」，通告裡是介面名稱（GigabitEthernet0、eth0）
-    port: isPhone(d) ? 'Port 1' : proto === 'cdp' ? longName(d.kind === 'ap' ? pid : p.label) : d.kind === 'ap' ? pid : p.label,
+    port: isPhone(d) ? 'Port 1' : proto === 'cdp' ? longName(d.kind === 'ap' ? pid : p.label) : d.kind === 'ap' || d.kind === 'host' ? pid : p.label,
     power: d.kind === 'ap' && CATALOG[d.model].poe ? CATALOG[d.model].poe.watts : isPhone(d) ? CATALOG[d.model].poe.watts : null,
     ip: mgmtAddr(d, pid),
     ver: versionOf(d),

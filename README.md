@@ -154,7 +154,7 @@ npm run build    # 輸出到 dist/
 - **評分**：過關時依實際作答時間（畫面在前景、沒有開對話框才算；標準時間是 3 分鐘加上每個目標 1.5 分鐘）、看了幾個提示、跑了幾次完整測試給 S / A / B / C 與分數，關卡選單上顯示最佳等級。設定變更的次數只列出來參考。
 - **關卡編輯器**：自由模式的「關卡設計」可以寫關卡名稱、任務說明、提示，指定哪些設備鎖定（玩家看得到、不能設定），然後試玩、存成自訂關卡、或匯出成關卡檔分享；關卡選單的「自訂關卡」可以遊玩、匯出、刪除與匯入。
 
-## 關卡（20 章 187 關）
+## 關卡（22 章 192 關）
 
 | 章節 | 關卡數 | 主題 |
 | --- | --- | --- |
@@ -176,16 +176,18 @@ npm run build    # 輸出到 dist/
 | 16 雲端網路 | 5 | AWS 的 VPC：公有 / 私有子網路與路由表、網際網路閘道與彈性 IP（一對一 NAT）、安全群組（有狀態）、NAT 閘道、網路 ACL（無狀態、臨時連接埠）、站對站 VPN 與路由傳播（混合雲），「下載設定檔」貼到公司的路由器；應用程式負載平衡器 (ALB) 回 503：目標的安全群組沒有允許 ALB 的健康檢查（來源用 ALB 的安全群組）；兩條 VPC peering 接好了，開發環境還是到不了正式環境（peering 不能轉送）：改用 Transit Gateway，兩邊的路由表都指向它、安全群組允許新的網段；有人在主控台手動改了安全群組 (drift)：Terraform 的 plan 列出差異，要留的規則補進 main.tf 再 apply，別讓 apply 把合作夥伴的規則一起拿掉 |
 | 17 虛擬化 | 6 | VMware ESXi：虛擬交換器、連接埠群組決定 VLAN（VLAN ID 0 不加標籤）、接主機的實體交換器埠要設成 Trunk 並只放行需要的 VLAN、vmk0 管理介面；VRF-Lite：兩家公司用同一個網段（`vrf definition`、`vrf forwarding` 會清掉 IP、`show ip route vrf`、`ping vrf`）；Docker：橋接網路與 veth、`-p 主機埠:容器埠`、只綁 127.0.0.1、資料庫不要發佈（Docker 會繞過 ufw）、改連接埠要重建容器；NIC teaming：ESXi 的第二張上行接到另一台交換器，那台少了一個 VLAN，同一個 VLAN 的 VM 一台通一台不通（依虛擬埠分配上行），兩邊接 ESXi 的埠要一模一樣，斷線演練時管理介面也要連得到；vMotion：主機要維護，把虛擬機器搬走，vMotion 的 VLAN 沒有放行到新主機的 Trunk，搬過去之後新主機同名群組的 VLAN 又打錯；IP hash：vSwitch 改成 IP hash、交換器卻用 LACP，兩個埠都 suspended，改成靜態的 mode on |
 | 18 封包實驗室 | 5 | 網路已經是通的，任務是「看懂它」：用封包追蹤、ARP 快取、MAC 位址表觀察之後回答觀察題。封裝（目的 MAC 是閘道不是伺服器、每過一台路由器 MAC 換一次、IP 不變、TTL 減 1）；交換器的 MAC 學習、泛洪與過期，線看不到時用 `ip neigh` 加 MAC 位址表找出設備接在哪個埠；廣播網域與碰撞網域（Hub、VLAN、路由器各自把什麼切開，複選題的答案是引擎算出來的）；TCP 三向交握與埠號，「馬上被拒絕」(RST) 和「等到逾時」(半路被丟掉) 的差別，UDP 沒有交握；NAT 的轉換表、外面看到的位址、為什麼外面連不進來 |
-| 19 進階實作 | 6 | CCNP 等級，除了會通還要符合設計上的要求（用 check 目標驗證）。iBGP 的 route reflector（六台路由器不做全網狀、client 與非 client、next-hop-self）；BGP 的流量工程（local-preference、MED、community 與 no-export，業者的路由器不能動）；MPLS L3VPN 的共用服務（extranet 的 route-target 設計、同一台 PE 上的 VRF 互相匯入）；園區核心的對齊（STP 根橋、HSRP Active、EtherChannel 與 track 要在同一台）；EIGRP 的彙總只設在一條線上（最長前綴把流量全拉到慢的那條、彙總的 Null0、variance 的不等價負載分擔、重分配的種子 metric）；OSPF 與 EIGRP 在兩個交界做雙向重分配（EIGRP 外部的 170 輸給倒回來的 OSPF E2：封包繞圈；`distance ospf external` 或路由標籤加 `distribute-list … in`；用種子 metric 決定主線與備援） |
+| 19 進階實作 | 9 | CCNP 等級，除了會通還要符合設計上的要求（用 check 目標驗證）。iBGP 的 route reflector（六台路由器不做全網狀、client 與非 client、next-hop-self）；BGP 的流量工程（local-preference、MED、community 與 no-export，業者的路由器不能動）；MPLS L3VPN 的共用服務（extranet 的 route-target 設計、同一台 PE 上的 VRF 互相匯入）；園區核心的對齊（STP 根橋、HSRP Active、EtherChannel 與 track 要在同一台）；EIGRP 的彙總只設在一條線上（最長前綴把流量全拉到慢的那條、彙總的 Null0、variance 的不等價負載分擔、重分配的種子 metric）；OSPF 與 EIGRP 在兩個交界做雙向重分配（EIGRP 外部的 170 輸給倒回來的 OSPF E2：封包繞圈；`distance ospf external` 或路由標籤加 `distribute-list … in`；用種子 metric 決定主線與備援）；SPAN 設錯地方與方向、改用 RSPAN 把鏡像送到別台交換器上的感測器；核心路由器被 ICMP 洪水灌到 SSH 進不去，用 CoPP 分類限速（路由協定、管理、其他 ICMP 各一個 class）；照流量計費的 4G 備援平常關著，用 EEM 在主線不通時自動打開、恢復後關掉 |
 | 20 專家情境 | 2 | CCIE 風格的多張工單：一張大拓撲、好幾個互相獨立（有的還互相遮住）的故障，加上不能違反的設計限制。企業骨幹（OSPF 多區域與 totally stubby、預設路由的主備、NAT、DMVPN + IPsec、ACL 的順序，不准加靜態路由）；業者骨幹（核心少了一段 LDP：路由都在封包卻不通、VPNv4 的 route reflector 只有一台是 client、PE-CE 的靜態路由沒有重分配、route-target 打錯，PE 之間不准直接建鄰居、兩家客戶位址重疊又要互相看不到） |
+| 21 大型資料中心 | 1 | 幾百台交換器的 Clos 架構怎麼運作。用 eBGP 當 underlay（Nexus、NX-OS 的語法）：Spine 共用一個 AS、每台 Leaf 一個；BGP 預設只用一條最佳路徑，要 `maximum-paths` 才會同時用所有的 Spine；兩台 Leaf 用了同一個 AS 會被迴圈偵測丟掉；鄰居的 remote-as 寫錯停在 Idle。規劃中的關卡（超額訂閱、不中斷的維護、VXLAN / EVPN）見 PLAN.md 第 20 節 |
+| 22 AI 資料中心 | 1 | GPU 叢集的網路。訓練節點每張 GPU 一個後端的 100G 埠，照 rail 接線（每台節點的第 k 個埠接同一台 Leaf）；兩條線插反之後燈照樣亮，要用 LLDP 逐埠核對；RDMA 的網路全程 Jumbo Frame，Nexus 的 MTU 是每個介面各自設定。規劃中的關卡（PFC 與 ECN 的無損乙太網路、大象流與 ECMP、400G 的線、每櫃的電力）見 PLAN.md 第 20 節 |
 
 ## 學習輔助
 
-- **知識庫**：按 K（或任務面板上的「知識庫」）打開寬的閱讀視窗：左邊是這一關會用到的觀念與 11 個分類的文章清單，右邊是內文，旁邊列出相關的觀念與「在這幾關會用到」，有搜尋、上一則與同分類的上下篇。想邊看邊做可以按「釘在左側」變回側邊欄（「放大閱讀」再回到視窗），釘不釘會記住。154 則觀念、技術與演算法的說明，分成 11 類（網路基礎、IP 服務、交換與 VLAN、路由、網路安全、VPN 與廣域網路、無線、IPv6、實體層與機房、高可用與維運、自動化雲端與虛擬化）。每一則有一句話的摘要、說明、運作流程或演算法的步驟（STP 選根橋、OSPF 的 SPF、EIGRP 的 DUAL、BGP 挑路、traceroute、最長前綴比對…）、圖（封包欄位、訊息往來、對照表、子網路的 32 個位元）、常見的錯誤、各家設備的指令、相關的觀念與「在這些關卡練習」。最上面是這一關會用到的觀念，也可以搜尋（中文、英文縮寫、關鍵字都可以）。其中 66 則另外有「深入了解」：原理的細節、設計上的取捨、設定範例、驗證用的 show 指令與常見的考點（標題旁有「深入」的標記），閱讀視窗左邊列出這一篇的小節目錄，點一下跳過去；CCNP / CCIE 的主題（BGP community、彙總、CEF、CoPP、uRPF、IPv6 First Hop Security、MACsec、SD-Access、EEM、資料格式、Python、實作考試的策略）各有一篇。
+- **知識庫**：按 K（或任務面板上的「知識庫」）打開寬的閱讀視窗：左邊是這一關會用到的觀念與 11 個分類的文章清單，右邊是內文，旁邊列出相關的觀念與「在這幾關會用到」，有搜尋、上一則與同分類的上下篇。想邊看邊做可以按「釘在左側」變回側邊欄（「放大閱讀」再回到視窗），釘不釘會記住。170 則觀念、技術與演算法的說明，分成 12 類（網路基礎、IP 服務、交換與 VLAN、路由、網路安全、VPN 與廣域網路、無線、IPv6、實體層與機房、高可用與維運、自動化雲端與虛擬化、資料中心與 AI 網路）。每一則有一句話的摘要、說明、運作流程或演算法的步驟（STP 選根橋、OSPF 的 SPF、EIGRP 的 DUAL、BGP 挑路、traceroute、最長前綴比對…）、圖（封包欄位、訊息往來、對照表、子網路的 32 個位元）、常見的錯誤、各家設備的指令、相關的觀念與「在這些關卡練習」。最上面是這一關會用到的觀念，也可以搜尋（中文、英文縮寫、關鍵字都可以）。其中 82 則另外有「深入了解」：原理的細節、設計上的取捨、設定範例、驗證用的 show 指令與常見的考點（標題旁有「深入」的標記），閱讀視窗左邊列出這一篇的小節目錄，點一下跳過去；CCNP / CCIE 的主題（BGP community、彙總、CEF、CoPP、uRPF、IPv6 First Hop Security、MACsec、SD-Access、EEM、資料格式、Python、實作考試的策略）各有一篇；「資料中心與 AI 網路」這一類有十六篇：Clos 架構與超額訂閱、資料中心裡的 BGP、ECMP 與雜湊、EVPN、AI 叢集的四張網路、RDMA 與 RoCEv2、PFC、ECN 與 DCQCN、rail 的設計、InfiniBand 與乙太網路、400G / 800G 的線材與光模組、AI 機櫃的電力與散熱、DPU、遙測、儲存網路、大規模的維運。
 - **名詞連結**：關卡說明、學習筆記與提示裡提到的觀念有點狀底線，滑鼠移上去看一句話的摘要，點一下在知識庫打開完整的說明（提示視窗會自動關掉）。右側的學習筆記下面另外列出這一關用到的觀念。
 - **新手導覽**：第一次進第 1-1 關會一步一步帶著做（接線 → 點設備 → 設定 IP → 執行測試），每一步看遊戲真正的狀態自動前進；「說明」裡可以重看。
-- **關卡選單**：左邊是 20 章的導覽與每一章的進度（點一下跳到那一章，捲動時標出目前的位置），上面可以搜尋（關卡名稱、主題、標籤，符合的標籤排到卡片最前面）、只看未完成或已完成；左上角的「接著做」直接進下一個還沒完成的關卡。每張卡片標出依目標數估計的時間。
-- **學習路線**：關卡選單左邊切到「學習路線」。九條依目的排好順序的路：新手入門、CCNA 重點（照考試大綱的六個領域）、故障排除實戰、網路安全、廣域網路與 VPN、資料中心與雲端、無線網路、維運與自動化、CCNP / CCIE 進階（OSPF 多區域 → EIGRP 與重分配 → BGP → 通道與 DMVPN → MPLS L3VPN → 園區高可用 → 多張工單的總驗收）。每條分成幾個階段，標出進度與「接著做」的那一關；同一關可以出現在好幾條路線裡，進度共用。
+- **關卡選單**：左邊是 22 章的導覽與每一章的進度（點一下跳到那一章，捲動時標出目前的位置），上面可以搜尋（關卡名稱、主題、標籤，符合的標籤排到卡片最前面）、只看未完成或已完成；左上角的「接著做」直接進下一個還沒完成的關卡。每張卡片標出依目標數估計的時間。
+- **學習路線**：關卡選單左邊切到「學習路線」。九條依目的排好順序的路：新手入門、CCNA 重點（照考試大綱的六個領域）、故障排除實戰、網路安全、廣域網路與 VPN、資料中心與雲端、無線網路、維運與自動化、CCNP / CCIE 進階（OSPF 多區域 → EIGRP 與重分配 → BGP → 通道與 DMVPN → MPLS L3VPN → 園區高可用 → 側錄、CoPP 與 EEM → 多張工單的總驗收）。「資料中心與雲端」那一條多了大型機房與 GPU 叢集的階段。每條分成幾個階段，標出進度與「接著做」的那一關；同一關可以出現在好幾條路線裡，進度共用。
 - **觀察題**：任務目標除了「連得通」，還可以是「看懂了沒」。點目標作答：單選、複選，或填 MAC 位址、IP、埠名、數字（MAC 不管分隔符號與大小寫，`GigabitEthernet0/6`、`gi 0/6` 都算同一個埠）。正確答案是從目前的網路算出來的；每個錯的選項有自己的說明，填空題會認出常見的錯誤答案（例如填了第一段的 MAC）。第 18 章「封包實驗室」整章都是這種關卡。
 - **2D 邏輯拓撲圖**：頂端列的按鈕切換（T 鍵）。每台設備用網路圖慣用的符號（路由器、交換器、L3 交換器、防火牆、基地台、伺服器…）加上位址；線上兩端的埠與 VLAN；Access 埠的線照 VLAN 上色（左下角的圖例列出每個 VLAN 的顏色與名稱，可以關掉）、Trunk 畫粗；同一對設備之間的好幾條線會錯開。線路狀態、無線與虛擬連線、VPN 通道，以及最近一次測試走過的路徑。執行測試時封包也在 2D 圖上跑，旁邊標著協定（ARP 廣播、ICMP 請求、TCP 443 · SYN…），到站的設備閃一下。滾輪縮放、拖曳平移、雙擊回到全圖，點設備開啟設定。
 - **3D 場景的標示**：設備的名稱標籤前面是設備種類的圖示（顏色代表狀態）；封包動畫的每一段都標出協定、埠號與三向交握的步驟；失敗原因的說明泡泡不會跑到兩側面板底下。
@@ -203,13 +205,13 @@ npm run build    # 輸出到 dist/
 | Cisco CCNA 200-301 v1.1 | 53 條中的 52 條 | 5.2（安全計畫的要素：題庫與知識庫有，沒有關卡） |
 | CompTIA Network+ N10-009 | 25 條全部有對應 | — |
 | CompTIA Security+ SY0-701 | 只列出與網路相關的 12 條，全部有對應 | — |
-| Cisco CCNP ENCOR 350-401 v1.2 | 42 條中的 35 條 | 1.3 SD-Access、2.3 LISP 與 VXLAN、4.3 SPAN、5.2.b CoPP、5.4.d TrustSec 與 MACsec、6.1 Python、6.6 EEM（知識庫有文章，沒有關卡） |
-| Cisco CCNP ENARSI 300-410 v1.1 | 25 條中的 24 條 | 3.3 CoPP |
-| Cisco CCIE Enterprise Infrastructure v1.1（實作） | 整理到第二層的 23 條中的 20 條 | 2.1 SD-Access、2.2 SD-WAN、5.2 EEM 與 Python |
+| Cisco CCNP ENCOR 350-401 v1.2 | 42 條中的 38 條 | 1.3 SD-Access、2.3 LISP 與 VXLAN、5.4.d TrustSec 與 MACsec、6.1 Python（知識庫有文章，沒有關卡） |
+| Cisco CCNP ENARSI 300-410 v1.1 | 25 條全部有對應 | — |
+| Cisco CCIE Enterprise Infrastructure v1.1（實作） | 整理到第二層的 23 條中的 21 條 | 2.1 SD-Access、2.2 SD-WAN |
 
 沒有關卡的條目（安全計畫）是觀念題，題庫裡有對應的題目。
 條目編號依公開的考試大綱，標題是中文摘要。CCNA v2.0 預計在 2027 年 2 月取代 v1.1，改版後需要重新對照。
-CCNP 的兩張依 Cisco 公布的考試大綱（ENCOR v1.2、ENARSI v1.1）；CCIE 是八小時的實作考試，條目只整理到第二層，各單元的比重與細項以 Cisco 公布的文件為準。第 19、20 章的關卡只對應到這三張。關卡練得到觀念與設定，實作考試的規模、時間壓力與設計題要另外準備。
+CCNP 的兩張依 Cisco 公布的考試大綱（ENCOR v1.2、ENARSI v1.1）；CCIE 是八小時的實作考試，條目只整理到第二層，各單元的比重與細項以 Cisco 公布的文件為準。第 19 到 22 章的關卡主要對應到這三張。關卡練得到觀念與設定，實作考試的規模、時間壓力與設計題要另外準備。
 題庫（291 題觀念題加上隨機產生的子網路計算題）是自行編寫的練習題，不是實際試題。
 
 ## CLI 設定指令
@@ -258,6 +260,10 @@ CCNP 的兩張依 Cisco 公布的考試大綱（ENCOR v1.2、ENARSI v1.1）；CC
 - **BGP**：`show ip bgp`（`*>i`、`r` RIB-failure、下一站查不到的沒有 `*`）、`show ip bgp <網段>`（inaccessible、metric、internal / external、Community、Originator 與 Cluster list、沒被選上的原因）、`show ip bgp summary`、`show ip bgp neighbors [<IP> [advertised-routes | received-routes | routes]]`（internal / external link、Route-Reflector Client、update-source）、`show ip prefix-list`、`show ip community-list`、`show route-map`、`show ip as-path-access-list`、`clear ip bgp *`。
 - **管理距離、路由過濾與標籤**：`router ospf` 底下的 `distance ospf [external <n>] [inter-area <n>] [intra-area <n>]`、`distance <n>`、`distribute-list route-map | prefix <名稱> in`（LSA 照收、SPF 照算，只是不放進這台的路由表）；`router eigrp` 底下的 `distance eigrp <內部> <外部>`、`redistribute … route-map <名稱>`（`match tag`、`set tag`）。來源那筆路的標籤會跟著重分配帶過去。`show ip ospf database external` 列出每一筆 Type-5 是哪一台送的、metric 的種類與標籤；`show ip eigrp topology <網段>` 列出每一條路的合成 metric、最小頻寬、延遲、跳數、來源的 Router ID 與標籤；`show ip route <網段>` 的 EIGRP 路由有 traffic share count。
 - **Null0**：`ip route <網段> <遮罩> Null0 [管理距離]`；`ip summary-address eigrp` 與 OSPF 的 `area range` 會在做彙總的那一台自動產生指向 Null0 的丟棄路由（`D 10.2.0.0/22 is a summary, …, Null0`，EIGRP 的管理距離是 5）。`show ip route <網段> <遮罩> longer-prefixes` 看彙總底下還有哪些明細。
+- **側錄**：`vlan <n>` 底下的 `remote-span`；`monitor session <n> destination remote vlan <v>`（來源那一台）、`monitor session <n> source remote vlan <v>`（感測器那一台）；`show monitor` 會說明鏡像送不到的原因（Trunk 沒有允許、對面沒有這個 VLAN），`show vlan remote-span`。
+- **CoPP**：`control-plane` → `service-policy input <政策>`；policy-map 的 class 可以 `police rate <n> pps` 或 `drop`；ACL 的協定可以寫 `ospf`、`eigrp`。`show policy-map control-plane` 列出每個 class 通過與丟掉的量，`show processes cpu` 看 CPU。
+- **EEM**：`event manager applet <名稱>` → `event syslog pattern "<正規表示式>"` 或 `event track <編號> state up | down | any`，`action <標籤> cli command "<指令>"`、`action <標籤> syslog msg "<文字>"`。applet 從使用者模式開始（第一步要 `enable`），標籤照字串排序。`show event manager policy registered`、`show event manager history events`。
+- **BGP 多路徑與 NX-OS 的寫法**：`maximum-paths <n>`、`maximum-paths ibgp <n>`、`bgp bestpath as-path multipath-relax`；`show ip bgp` 把多路徑標成 `*m`。L3 交換器也能跑 BGP。Nexus 要先 `feature bgp`，設定是巢狀的：`router bgp` → `address-family ipv4 unicast`（`network 10.1.1.0/24`、`maximum-paths 4`）、`neighbor <IP>` → `remote-as <AS>` → `address-family ipv4 unicast`（`allowas-in`、`route-map … in` 等），running-config 也是這個格式。
 - **MPLS VPN 的 BGP**：`address-family vpnv4` 底下的 `neighbor <ip> route-reflector-client`（和 IPv4 的分開設）、`neighbor <ip> allowas-in [次數]`（AS_PATH 裡可以出現自己的 AS，預設 3 次）、`neighbor <ip> as-override`（送給客戶之前把客戶的 AS 換成自己的）；`show ip bgp summary` 會寫出有幾筆因為 AS_PATH loop 被丟掉。業者的骨幹（VRF、MPLS 標籤、VPNv4）不模擬，用一台 PE 代表。
 - **IPv6**：`show ipv6 route [ospf | static | connected | local | <位址或前綴>]`（IOS 原樣的格式，含 L 與 FF00::/8）、`show ipv6 interface [brief | <介面>]`（加入的多點傳送群組、RA 的設定、主機要用 SLAAC 還是 DHCPv6）、`show ipv6 ospf [neighbor | interface brief]`、`show ipv6 dhcp pool | binding | interface`、`show ipv6 access-list`（命中次數與序號）、`clear ipv6 ospf process`、`clear ipv6 dhcp binding *`；`ipv6 route` 可以寫「出口介面 + link-local 下一站」與管理距離。主機上有 `sudo dhclient -6 eth0`，`traceroute`、`curl`、`telnet` 都可以用 IPv6 位址（網址寫成 `http://[2001:db8::10]/`）；用名稱 `ping` 時有 AAAA、電腦也有全域 IPv6 就用 IPv6（`ping -4` / `ping -6` 指定），`curl` 用 Happy Eyeballs。Tunnel 上也能設 IPv6 位址、跑 OSPFv3。
 - **ACL 的來源埠**：`permit tcp any eq 179 any`（回應的封包、或對方主動連過來時的來源埠）。
@@ -600,7 +606,7 @@ src/engine/   模擬引擎（不依賴瀏覽器，可直接用 Node 測試）
   web.js          網站與 HTTPS 憑證：信任的 CA、有效期間（用戶端的時鐘）、SAN 與萬用字元
   dns.js          DNS 伺服器的記錄、TTL 與用戶端快取
   sim6.js         IPv6：SLAAC 與 DHCPv6（RA 的 M / O / A 旗標、relay、binding）、鄰居探索、靜態路由與 OSPFv3、IPv6 ACL、ICMPv6 / TCP / UDP
-src/levels/   關卡定義：設備、初始設定、任務目標、提示、參考解法（trouble.js 是故障排除章，maint.js 是維運章，voip.js 是語音與 QoS 章，routing.js 是進階路由章，ipv6.js 是 IPv6 章的補充，vpn2.js 是多站台 VPN，wireless.js 是無線控制器章，auto.js 是自動化章，cloud.js 是雲端章，virtual.js 是虛擬化章（vSwitch、VRF、容器），team.js 是 ESXi 的 NIC teaming，lb.js 是負載平衡器，stack.js 是交換器堆疊，mesh.js 是 Wi-Fi mesh，vpc.js 是 Nexus 的 vPC，tls.js 是 HTTPS 憑證，mtu.js 是 Jumbo Frame 與 PMTUD，redist.js 是路由重分配與政策路由，routing2.js 是 OSPF 的 stub / NSSA、iBGP、VRF 裡的 OSPF 與路由洩漏，tunnels.js 是 GRE、GRE over IPsec、VTI、DMVPN 與 NAT-T，ipv6b.js 是 AAAA 與雙協定、IPv6 經過 VPN，ha.js 是 BFD 與 GLBP，ops2.js 是 NetFlow 與 police，l2sec.js 是第二層的攻擊與防護（MAC flooding、雙重標籤、Storm Control、Private VLAN、RA Guard），resil.js / audit.js / trouble2.js 是各章的補充關卡，labs.js 是第 18 章封包實驗室（觀察題），dnsfwd.js 是 DNS 轉送器，expert.js 是第 19 章進階實作，expert2.js 是第 20 章的多工單情境）
+src/levels/   關卡定義：設備、初始設定、任務目標、提示、參考解法（trouble.js 是故障排除章，maint.js 是維運章，voip.js 是語音與 QoS 章，routing.js 是進階路由章，ipv6.js 是 IPv6 章的補充，vpn2.js 是多站台 VPN，wireless.js 是無線控制器章，auto.js 是自動化章，cloud.js 是雲端章，virtual.js 是虛擬化章（vSwitch、VRF、容器），team.js 是 ESXi 的 NIC teaming，lb.js 是負載平衡器，stack.js 是交換器堆疊，mesh.js 是 Wi-Fi mesh，vpc.js 是 Nexus 的 vPC，tls.js 是 HTTPS 憑證，mtu.js 是 Jumbo Frame 與 PMTUD，redist.js 是路由重分配與政策路由，routing2.js 是 OSPF 的 stub / NSSA、iBGP、VRF 裡的 OSPF 與路由洩漏，tunnels.js 是 GRE、GRE over IPsec、VTI、DMVPN 與 NAT-T，ipv6b.js 是 AAAA 與雙協定、IPv6 經過 VPN，ha.js 是 BFD 與 GLBP，ops2.js 是 NetFlow 與 police，l2sec.js 是第二層的攻擊與防護（MAC flooding、雙重標籤、Storm Control、Private VLAN、RA Guard），resil.js / audit.js / trouble2.js 是各章的補充關卡，labs.js 是第 18 章封包實驗室（觀察題），dnsfwd.js 是 DNS 轉送器，expert.js 是第 19 章進階實作，expert2.js 是第 20 章的多工單情境，dcfabric.js 是第 21 與 22 章的資料中心與 GPU 叢集）
 src/data/     題庫、證照對照表、學習路線 (paths.js) 與知識庫（data/kb：每一類一個檔案，more.js 是跨分類的補充，match.js 是名詞連結與搜尋）
 src/scene/    three.js 場景、設備模型、網路線、無線涵蓋範圍與封包動畫
 src/ui/       設定面板、終端機、CLI、任務面板、測驗、模擬考、故障演練、評分、自由模式與關卡編輯器、對話框；levels-menu.js 是關卡選單（章節導覽、搜尋、學習路線），devicons.js 是 2D 拓撲圖與 3D 標籤共用的設備圖示，topo2d.js 是 2D 拓撲圖

@@ -45,10 +45,10 @@ README 說明「現在有什麼、怎麼玩」，這份文件說明「整體應�
 | 13. 設備型錄 | 13 | 0 | 0 | 0 |
 | 14. 遊戲系統 | 19 | 0 | 0 | 5 |
 | 15. 介面與體驗 | 13 | 0 | 0 | 0 |
-| 16. 工程品質 | 7 | 3 | 0 | 0 |
-| **合計** | **210** | **3** | **0** | **5** |
+| 16. 工程品質 | 8 | 1 | 0 | 0 |
+| **合計** | **211** | **1** | **0** | **5** |
 
-另外：關卡 187 關（第 17 節）、證照條目涵蓋情形（第 18 節）、建議的實作順序（第 19 節）。
+另外：關卡 192 關（第 17 節）、證照條目涵蓋情形（第 18 節）、建議的實作順序（第 19 節）、大型資料中心與 AI 資料中心的設計（第 20 節）。
 
 範圍的調整（2026-11-22）：第 14 節遊戲系統還沒做完的項目暫時不做（⏸）；第 15 節的手機與平板、多語系、無障礙、主題從規劃中移除，不做。
 
@@ -296,7 +296,7 @@ README 說明「現在有什麼、怎麼玩」，這份文件說明「整體應�
 
 | 功能 | 狀態 | 說明 |
 | --- | --- | --- |
-| 關卡 | ✅ | 20 章 187 關（清單見第 17 節） |
+| 關卡 | ✅ | 22 章 192 關（清單見第 17 節） |
 | 任務目標 | ✅ | ping、TCP、UDP、DHCP、設定檢查、故障演練、IPv6 ping、傳輸速率、遠端登入（SSH / Telnet 帳號密碼）、IP 電話註冊、通話品質 (MOS)、HTTPS（連得上之後還要通過憑證驗證）、路徑（一定要經過 / 不能經過某台設備）；TCP 的目標交握完還會送一個裝滿的資料區段（設了 DF），MTU 的問題才看得出來 |
 | 觀察題 | ✅ | 任務目標的一種（`type: 'ask'`，engine/ask.js）：玩家觀察之後作答，不是把網路弄通。單選、複選、填空（MAC、IP、埠名、數字，比對前先正規化）；正確答案由關卡給的函式從目前的網路算出來（換了接線、VLAN，答案跟著變）；每個錯的選項有自己的說明，填空題可以針對常見的錯誤答案給回饋；答案存在 `state.answers`（存檔、復原、參考解法都看得到）。作答馬上判定，不影響其他目標的結果 → 第 18 章 |
 | 提示與星等 | ✅ | 每關 3 個提示，看一個少一顆星 |
@@ -317,7 +317,7 @@ README 說明「現在有什麼、怎麼玩」，這份文件說明「整體應�
 | 模擬考模式 | ✅ | CCNA / Network+，限時、依領域比重抽題、交卷後依領域計分與逐題解說；實作題用限時的故障演練練習 |
 | 題庫進階 | ✅ | 錯題本：測驗、小考、模擬考答錯的題目照間隔重複排程（1 → 3 → 7 → 14 → 30 天，答錯回到第一盒），頂端列顯示到期題數 |
 | 預算與採購 | ⏸ | 依需求挑設備，有成本限制 |
-| 名詞表 | ✅ | 知識庫（左側面板的第二個分頁、K 鍵）：154 則觀念 / 技術 / 演算法，11 類（其中 66 則有「深入了解」：原理細節、設定範例、驗證指令、常見考點，閱讀視窗有每一篇的小節目錄），每則有摘要、說明、流程或演算法步驟、圖（欄位、訊息往來、表格、子網路位元）、常見錯誤、指令、相關觀念與練習的關卡；搜尋；這一關會用到的觀念；關卡說明、學習筆記與提示裡的名詞連結（滑鼠移上去看摘要、點一下開文章） |
+| 名詞表 | ✅ | 知識庫（左側面板的第二個分頁、K 鍵）：170 則觀念 / 技術 / 演算法，12 類（其中 82 則有「深入了解」：原理細節、設定範例、驗證指令、常見考點，閱讀視窗有每一篇的小節目錄），每則有摘要、說明、流程或演算法步驟、圖（欄位、訊息往來、表格、子網路位元）、常見錯誤、指令、相關觀念與練習的關卡；搜尋；這一關會用到的觀念；關卡說明、學習筆記與提示裡的名詞連結（滑鼠移上去看摘要、點一下開文章） |
 | 帳號與雲端存檔 | ⏸ | |
 | 多人 | ⏸ | 協作，或紅隊藍隊對抗 |
 
@@ -347,7 +347,7 @@ README 說明「現在有什麼、怎麼玩」，這份文件說明「整體應�
 | --- | --- | --- |
 | 引擎測試 | ✅ | 關卡重播、負面案例、故障情境、CLI 來回驗證、時鐘、頻寬、資料檢查 |
 | 建置 | ✅ | `vite build` |
-| 瀏覽器端測試 | ✅ | Playwright（用電腦上已裝的 Chrome，不下載瀏覽器）：每一關每台設備的每個分頁、解完到過關視窗、真的點擊與打字、各種模式，1440×900 與 1024×768，共 601 個測試。測的是打包好的版本（`vite build --mode e2e` → `dist-e2e/`，附 source map）：開發伺服器每頁要抓 280 多個檔、又是單一執行緒，平行數開再多都卡在它；平行數跟著 CPU（邏輯核心數的一半，最多 8 個），trace 只在重試時錄，重跑才過的測試一樣算失敗。8 核心 16 執行緒的電腦上整套從 27 分鐘（3 個平行、開發伺服器、每個測試都錄 trace）降到 8 分鐘。`PW_DEV=1` 改用開發伺服器、`PW_WORKERS` 指定平行數。測試要呼叫引擎或介面的函式時走 `window.linkup.engine` / `window.linkup.hud`，不在頁面裡 import 原始檔 |
+| 瀏覽器端測試 | ✅ | Playwright（用電腦上已裝的 Chrome，不下載瀏覽器）：每一關每台設備的每個分頁、解完到過關視窗、真的點擊與打字、各種模式，1440×900 與 1024×768，共 611 個測試。測的是打包好的版本（`vite build --mode e2e` → `dist-e2e/`，附 source map）：開發伺服器每頁要抓 280 多個檔、又是單一執行緒，平行數開再多都卡在它；平行數跟著 CPU（邏輯核心數的一半，最多 8 個），trace 只在重試時錄，重跑才過的測試一樣算失敗。8 核心 16 執行緒的電腦上整套從 27 分鐘（3 個平行、開發伺服器、每個測試都錄 trace）降到 8 分鐘。`PW_DEV=1` 改用開發伺服器、`PW_WORKERS` 指定平行數。測試要呼叫引擎或介面的函式時走 `window.linkup.engine` / `window.linkup.hud`，不在頁面裡 import 原始檔 |
 | 靜態檢查 | ✅ | ESLint 9（`npm run lint`）：`eslint.config.js` 用 recommended 的規則，瀏覽器、Node、Service Worker 各自的全域變數；沒用到的參數不算（面板函式的介面一致），中文的全形空白與比對命令列輸出的多個空白是故意的。第一次跑抓到的真正問題：Linux 終端機的 `sudo ip link set … mtu` 與 `sudo ip route flush cache` 用到另一個函式裡的 `sudo`（一執行就 ReferenceError）、`show cdp neighbors` 定義了兩次（前面那個舊的從來沒有用到）、return 之後到不了的程式、六十幾個沒用到的 import 與變數，都已經修好 |
 | 模組拆分 | ✅ | `sim.js` 原本 3200 行，依層級拆成 `engine/sim/` 底下 12 個模組（core、phys、l2、wifi、l3、tunnels、auth、forward、transact、resolve、objectives、bandwidth），各 60 – 660 行；`sim.js` 只留重新計算與模擬時鐘（約 270 行），並匯出和拆開之前一模一樣的 71 個公開名稱，其他程式不用改 |
 | 打包體積 | ✅ | 分成 three.js、引擎、關卡與題庫、介面四個檔案（各 220 – 520 KB），改關卡時不用重新下載 three.js 與引擎；還沒有依章節延遲載入 |
@@ -359,7 +359,7 @@ README 說明「現在有什麼、怎麼玩」，這份文件說明「整體應�
 
 ## 17. 關卡規劃
 
-### 現有的 187 關
+### 現有的 192 關
 
 | 章 | 關卡 |
 | --- | --- |
@@ -381,8 +381,10 @@ README 說明「現在有什麼、怎麼玩」，這份文件說明「整體應�
 | 16 雲端網路 | 把網站搬上雲端、私有子網路與混合雲、加了負載平衡器，網站反而打不開（ALB）、兩條 peering 接好了，開發環境還是連不到正式環境（Transit Gateway）、昨晚有人在主控台改了安全群組（Terraform） |
 | 17 虛擬化 | 一台主機，三個網段、兩家公司，同一個網段（VRF）、容器跑起來了，網頁卻打不開、同一個 VLAN，一台通一台不通（NIC teaming）、主機要維護，虛擬機器搬家（vMotion）、想要兩倍頻寬，結果整台斷線（IP hash） |
 | 18 封包實驗室 | 信封換了幾次？（封裝：MAC 只管一段、IP 管全程、TTL）、交換器怎麼知道往哪送？（MAC 學習、泛洪、過期，用 MAC 位址表找埠）、廣播會傳到哪裡？（廣播網域與碰撞網域）、敲門的三個步驟（TCP 三向交握、埠號、被拒絕與逾時）、外面看到的你是誰？（NAT 的轉換表） |
-| 19 進階實作 | 多一台路由器，要多打五條 neighbor（iBGP route reflector）、備援線路比主線還忙（BGP 的 local-preference / MED / community）、一台更新伺服器，兩家客戶都要用（L3VPN extranet）、兩台核心各做各的（STP / HSRP / EtherChannel 對齊）、兩條專線，只有慢的那條在跑（EIGRP 彙總、variance、種子 metric）、兩個路由協定、兩個交界（雙向重分配的迴圈、管理距離、路由標籤） |
+| 19 進階實作 | 多一台路由器，要多打五條 neighbor（iBGP route reflector）、備援線路比主線還忙（BGP 的 local-preference / MED / community）、一台更新伺服器，兩家客戶都要用（L3VPN extranet）、兩台核心各做各的（STP / HSRP / EtherChannel 對齊）、兩條專線，只有慢的那條在跑（EIGRP 彙總、variance、種子 metric）、兩個路由協定、兩個交界（雙向重分配的迴圈、管理距離、路由標籤）、鏡像埠上，要看的封包一個都沒有（SPAN / RSPAN）、核心一被掃，SSH 就進不去（CoPP）、4G 備援照流量計費，平常要關著（EEM） |
 | 20 專家情境 | 接手的第一天：六張工單（企業骨幹：OSPF 多區域、預設路由主備、NAT、DMVPN + IPsec、ACL）、業者的夜班：骨幹上的四張工單（LDP、VPNv4 route reflector、PE-CE 靜態路由、route-target） |
+| 21 大型資料中心 | 只用到一台 Spine（eBGP underlay、maximum-paths、Leaf 的 AS 重複） |
+| 22 AI 資料中心 | Rail 接錯了（GPU 叢集的後端網路、LLDP 對線、Jumbo Frame） |
 
 ### 規劃中的關卡
 
@@ -405,9 +407,9 @@ README 說明「現在有什麼、怎麼玩」，這份文件說明「整體應�
 | Cisco CCNA 200-301 v1.1 | 53 條中的 52 條 | 見下表 |
 | CompTIA Network+ N10-009 | 25 條全部有對應 | — |
 | CompTIA Security+ SY0-701 | 網路相關的 12 條（加上 1.4 密碼學與 PKI），全部有對應 | — |
-| Cisco CCNP ENCOR 350-401 v1.2 | 42 條中的 35 條 | 1.3 SD-Access、2.3 LISP / VXLAN、4.3 SPAN、5.2.b CoPP、5.4.d TrustSec / MACsec、6.1 Python、6.6 EEM |
-| Cisco CCNP ENARSI 300-410 v1.1 | 25 條中的 24 條 | 3.3 CoPP |
-| Cisco CCIE Enterprise Infrastructure v1.1（實作） | 第二層的 23 條中的 20 條 | 2.1 SD-Access、2.2 SD-WAN、5.2 EEM 與 Python |
+| Cisco CCNP ENCOR 350-401 v1.2 | 42 條中的 38 條 | 1.3 SD-Access、2.3 LISP / VXLAN、5.4.d TrustSec / MACsec、6.1 Python |
+| Cisco CCNP ENARSI 300-410 v1.1 | 25 條全部有對應 | — |
+| Cisco CCIE Enterprise Infrastructure v1.1（實作） | 第二層的 23 條中的 21 條 | 2.1 SD-Access、2.2 SD-WAN |
 
 CCNA 還沒有關卡的 1 條，以及補上的方式：
 
@@ -417,7 +419,7 @@ CCNA 還沒有關卡的 1 條，以及補上的方式：
 
 CCNA v2.0 預計在 2027 年 2 月取代 v1.1，改版後整張對照表要重新檢查。
 
-CCNP / CCIE 還沒有關卡的條目，知識庫都有文章（SD-Access、CoPP、MACsec、EEM、Python、資料格式…）；要做成關卡，引擎得先有對應的功能：SPAN / ERSPAN 的鏡射、control-plane 的 policy、EEM applet、SD-WAN 控制器、VXLAN 的 VTEP。
+CCNP / CCIE 還沒有關卡的條目，知識庫都有文章（SD-Access、CoPP、MACsec、EEM、Python、資料格式…）；要做成關卡，引擎得先有對應的功能：SD-Access 與 SD-WAN 的控制器、VXLAN 的 VTEP、MACsec。SPAN / RSPAN、CoPP、EEM 已經補上（19-7 到 19-9）。資料中心的關卡目前對應到 CCNP / CCIE Enterprise 的條目；之後可以加上 CCNP Data Center 的對照表。
 
 ## 19. 建議的實作順序
 
@@ -451,5 +453,87 @@ CCNP / CCIE 還沒有關卡的條目，知識庫都有文章（SD-Access、CoPP�
 | 24（已完成） | 補完各節最後幾個部分完成的項目：NIC teaming（→ 17-4、17-6）、vMotion（→ 17-5）、Wi-Fi mesh（→ 5-7）、Nexus 的 mgmt0 與 vrf management（→ 11-15）、Linux 的 nmcli（→ 11-16）、ACME 自動續約與憑證撤銷（→ 11-17）、UDLD（→ 8-14）、STP 穿過非網管交換器（→ 8-15）、Metro Ethernet 的 E-Line 與 E-LAN / L2PT（→ 7-16、7-17）、業者的 MPLS 骨幹：VRF、route-target、VPNv4、LDP（→ 7-18）、SSL-VPN 的全通道（→ 7-19）；機櫃立面圖與樓層平面圖（訊號熱圖） | 狀態表裡的 🟡 只剩第 16 節的三項 |
 | 25（已完成） | 學習體驗：關卡選單重做（章節導覽、搜尋、學習路線）、觀察題與第 18 章封包實驗室（封裝、MAC 學習、廣播網域、TCP、NAT）、DNS 轉送器（→ 3-7）、SYN flood 與 FortiGate 的 DoS 政策（→ 6-21）、2D 拓撲圖的設備符號 / VLAN 配色 / 封包動畫、3D 的埠名標示與協定標籤、收合學習筆記；知識庫補 12 則、題庫補 21 題（含 CCNA 5.2） | 關卡多到找不到下一步；基礎觀念原本只有文字，沒有動手觀察的關卡 |
 | 26（已完成） | 進階內容：第 19 章進階實作（6 關）與第 20 章專家情境（2 關，多張工單）；知識庫 141 → 154 則，66 則加上「深入了解」與小節目錄；證照地圖加上 CCNP ENCOR / ENARSI 與 CCIE EI。引擎補上：Null0 丟棄路由（靜態、EIGRP 彙總、OSPF area range）、EIGRP 的 traffic share 與依比例分流、路由標籤與 redistribute … route-map、distance（OSPF / EIGRP）、OSPF 的 distribute-list … in、default-information originate 的 always / metric / metric-type、VPNv4 的 route reflector、同一台 PE 上 VRF 之間的 RT 匯入、track 可以追蹤交換器的埠；主機的終端機全部改成 Linux（iproute2、dig、ss…） | 想練 CCNP / CCIE 等級的題目；知識庫原本每則只有簡短說明 |
+| 27（已完成） | 第 19 章補上 SPAN / RSPAN、CoPP、EEM 三關與引擎；第 21 章大型資料中心、第 22 章 AI 資料中心各一關（設計與後續的關卡見第 20 節）；知識庫新增「資料中心與 AI 網路」十六篇（154 → 170 則）。引擎補上：RSPAN、control-plane 的限速與 CPU 模型、EEM applet、BGP 多路徑、L3 交換器與 Nexus 的 BGP（NX-OS 的巢狀語法）、GPU 伺服器（多張後端網路卡、送 LLDP） | 想練大型機房與 GPU 叢集；CCNP / CCIE 還缺的三個條目 |
 | 暫停 | 遊戲系統（第 14 節）：成就、預算與採購、帳號與雲端存檔、多人、關卡編輯器補齊（學習卡、已知資訊、設定檢查目標） | 依使用者的決定暫時不做 |
 | 剩下 | VXLAN / EVPN 的實作關卡（要先有 VTEP 的封裝）、流量型的 DoS 與 SYN cookie、Wi-Fi 的空中時間與最低資料速率（同頻干擾與頻道寬度已經在 5-4）；CCNA v2.0（預計 2027 年 2 月）上路後重新檢查第 18 節的對照表 | 需要引擎先有對應的功能，或等外部的改版 |
+
+## 20. 大型資料中心與 AI 資料中心（設計）
+
+第 4 章的資料中心停在「一對 Spine、幾台 Leaf、OSPF」。這一節把它往兩個方向延伸：**規模**（幾百台交換器的 Clos 架構怎麼設計、怎麼自動化、怎麼維護）與 **AI / GPU 叢集**（為了 RDMA 而生的無損乙太網路、rail 的接法、400G 的線、一櫃幾十 kW 的電）。這兩塊是現在資料中心網路變化最快、也最缺人的地方。
+
+### 設計原則
+
+1. **先有症狀，再有名詞**：和其他章一樣，每一關從「訓練跑到一半變慢」「只用到一台 Spine」這種看得到的問題開始，不從名詞解釋開始。
+2. **流量的樣子不一樣**：一般資料中心是很多條小連線（雜湊分得很均勻）；AI 訓練是少數幾條、很大、同時起落的流量（雜湊分不均、一掉封包就全部重傳）。關卡要讓玩家實際看到這個差別。
+3. **四張網路分開看**：前端（使用者與服務）、後端（GPU 之間的 RDMA）、儲存、帶外管理，各有各的設計目標。一台 GPU 伺服器同時接在這四張網路上。
+4. **數字要對**：超額訂閱比、每櫃的瓦數、DAC 的長度、PFC 的 headroom 這些都用實際設備的量級，不用整數湊。
+5. **引擎先行**：下面每一關都列出需要的引擎功能；功能還沒有的關卡先放在知識庫與觀察題，不做「只有文字」的關卡。
+
+### 第 21 章：大型資料中心
+
+| 關卡 | 情境 | 學到什麼 | 需要的引擎功能 | 狀態 |
+| --- | --- | --- | --- | --- |
+| 21-1 只用到一台 Spine | 新的機房用 eBGP 當 underlay（每台 Leaf 一個 AS、Spine 共用一個 AS）。上線後流量全部擠在 Spine-1，Spine-2 的埠幾乎是空的；另外有兩台 Leaf 互相看不到對方的網段 | RFC 7938 的編號方式、`maximum-paths`、AS path 不一樣長時不算等價（`bestpath as-path multipath-relax`）、兩台 Leaf 用了同一個 AS 會被迴圈偵測丟掉 | BGP 的多路徑（maximum-paths、multipath-relax） | ✅ |
+| 21-2 機櫃塞滿之後 | 48 個 25G 的埠接滿伺服器，上行只有兩條 100G：夜間備份一開始，線上服務就變慢 | 超額訂閱比怎麼算（下行總頻寬 ÷ 上行總頻寬）、3:1 與 1:1 各用在哪、加上行還是分流、熱圖怎麼看 | 已有（speed 目標、流量熱圖、breakout） | ⬜ |
+| 21-3 維護一台 Spine，一條連線都不能斷 | 要升級 Spine-2 的韌體。直接重開會讓正在跑的連線斷一下 | 先把流量引走再動手（BGP 的 graceful shutdown / AS path prepend、OSPF 的 max-metric），確認沒有流量才重開，回來之後再放流量 | BGP 的 GSHUT community 或 max-metric；failover 目標的 keep（已有） | ⬜ |
+| 21-4 兩個機櫃要同一個網段 | 資料庫叢集要求兩台主機在同一個 VLAN，但它們在不同的 Leaf 底下，中間是第三層 | VXLAN 的封裝、VTEP、VNI 與 VLAN 的對應、BUM 流量怎麼送、MTU 要多 50 bytes | VTEP 的封裝與解封裝、第二層的虛擬鏈路 | ⬜ |
+| 21-5 閘道跟著虛擬機走 | 虛擬機搬到另一個機櫃之後，閘道還在原本的 Leaf：流量繞一大圈 | EVPN 的控制層（Type-2 / Type-3 / Type-5）、anycast gateway、ARP suppression、symmetric IRB | EVPN（要先有 21-4） | ⬜ |
+| 21-6 一次上線八台 Leaf | 新的一排機櫃到貨。一台一台打設定要兩天，而且一定會打錯 | 設定範本與變數（單一事實來源）、ZTP、先 --check 再套用、上線前的自動驗證 | Ansible 與範本（已有，第 15 章），要補 NX-OS 的模組 | ⬜ |
+
+### 第 22 章：AI 資料中心（GPU 叢集）
+
+| 關卡 | 情境 | 學到什麼 | 需要的引擎功能 | 狀態 |
+| --- | --- | --- | --- | --- |
+| 22-1 Rail 接錯了 | 每台節點四張 GPU，後端的埠應該各接一台 Leaf（一條 rail 一台）。有一台節點的兩條線插反了：燈都亮，但那兩張 GPU 碰不到其他節點；另外有一個埠沒有開 Jumbo Frame | 後端網路為什麼獨立、rail 的接法為什麼讓同編號的 GPU 一跳就到、用 LLDP 逐埠對線、MTU 要整條路一致 | GPU 伺服器的型號（四個後端埠、送 LLDP）、Nexus 每個介面的 MTU（已有） | ✅ |
+| 22-2 一台 GPU 伺服器，四張網路 | 新的 GPU 節點上架。它有前端、後端（每張 GPU 一張網路卡）、儲存、BMC 四種網路卡，接錯一條訓練就起不來 | 前端 / 後端 / 儲存 / 帶外管理各自的用途與設計目標；用 LLDP 對線；後端為什麼要獨立一張網路 | GPU 伺服器的型號（多張網路卡）、觀察題（已有） | ⬜ |
+| 22-3 訓練一跑就掉速 | RoCEv2 的訓練流量時快時慢。交換器的計數器顯示有封包被丟掉，RDMA 一掉封包就整段重傳 | 無損乙太網路：PFC 只開在 RDMA 的那個優先權、ECN 的門檻（先標記、再暫停）、DSCP 要一路信任到底、兩端的設定要一致；PFC storm 與 watchdog | PFC、ECN 標記、無損佇列的逐跳檢查（roce.js）、rdma 目標 | ⬜ |
+| 22-4 八條大象流，擠在兩條線上 | 四條上行，但訓練的流量只走其中兩條：RoCE 的流量很少、很大，雜湊撞在一起 | ECMP 是照流分、不是照量分；大象流的熵太低；用 UDP 來源埠增加熵、動態負載平衡（flowlet）、封包層級的分散，或乾脆用 rail 避開 | ECMP 的雜湊納入第四層的埠、每條流的頻寬模型 | ⬜ |
+| 22-5 400G 的線，三公尺就到頂 | 新的後端網路全部用 400G。有幾條線燈不亮，有幾條一直有 CRC 錯誤 | DAC / ACC / AEC / AOC 與光模組各自的距離與耗電、400G 拆成 4×100G、兩端的 FEC 要一致、MPO 的極性 | 400G 的埠與線材型號、FEC（optics.js、breakout.js 已有 100G 的部分） | ⬜ |
+| 22-6 一櫃四十千瓦 | GPU 機櫃一開機，A 路的斷路器就跳了；B 路單獨也撐不住 | 每櫃的耗電怎麼估、A / B 兩路各自要撐得住全部、PDU 與斷路器的額定值、為什麼到了這個密度要用水冷 | 每一路的容量上限（power.js 目前只算 UPS 的額定瓦數） | ⬜ |
+| 22-7 檢查點一寫，訓練就停住 | 每隔一小時寫一次 checkpoint，那幾分鐘 GPU 的使用率掉到零 | 儲存網路要獨立、MTU 要整條路一致（9000）、儲存的頻寬怎麼估 | 已有（MTU、speed 目標、QoS） | ⬜ |
+| 22-8 兩個團隊共用一個叢集 | A 團隊的訓練工作不能看到 B 團隊的資料，但兩邊都要連得到共用的儲存 | 多租戶的隔離做在哪一層（VRF、VXLAN / EVPN、DPU）、共用服務怎麼接 | VRF-Lite（已有）；完整版要 EVPN | ⬜ |
+
+### 知識庫：新的分類「資料中心與 AI 網路」
+
+每一篇都有「深入了解」。標 ✅ 的已經寫好。
+
+| 文章 | 內容 | 狀態 |
+| --- | --- | --- |
+| Clos 架構與超額訂閱 | 三層與五層的 Clos、pod 與 superspine、超額訂閱比怎麼算、為什麼 AI 的後端要 1:1 | ✅ |
+| 資料中心裡的 BGP | 為什麼大型機房用 eBGP 不用 OSPF、AS 怎麼編、multipath-relax、unnumbered、收斂與故障範圍 | ✅ |
+| ECMP 與雜湊 | 五元組雜湊、照流分而不是照量分、雜湊極化、大象流、flowlet 與動態負載平衡、封包層級的分散 | ✅ |
+| EVPN | VXLAN 的控制層：路由類型、anycast gateway、ARP suppression、symmetric IRB、多重歸屬 (ESI) | ✅ |
+| AI 叢集的四張網路 | 前端、後端、儲存、帶外管理；訓練與推論的流量差在哪；工作完成時間 (JCT) 為什麼看最慢的那一條 | ✅ |
+| RDMA 與 RoCEv2 | 繞過核心、零複製；RoCEv2 是 UDP 4791；為什麼一掉封包就很慘 (go-back-N) | ✅ |
+| PFC | 802.1Qbb：照優先權暫停、headroom 怎麼算、PFC storm 與死結、watchdog | ✅ |
+| ECN 與 DCQCN | 佇列到門檻先標記、接收端回 CNP、送端降速；和 PFC 怎麼搭配（ECN 先、PFC 墊底） | ✅ |
+| Rail-optimized 設計 | 每張 GPU 的網路卡一條 rail、同 rail 一跳到、Leaf 與 Spine 的埠怎麼配 | ✅ |
+| InfiniBand 與乙太網路 | subnet manager、以 credit 為基礎的流量控制、兩者在 AI 後端的取捨、Ultra Ethernet 想解決什麼 | ✅ |
+| 400G / 800G 的線材與光模組 | QSFP-DD 與 OSFP、DAC / ACC / AEC / AOC、DR4 / FR4、breakout、FEC、LPO 與 CPO | ✅ |
+| AI 機櫃的電力與散熱 | 每櫃的千瓦數、A / B 饋線與斷路器、氣冷的極限、冷板式水冷與 CDU、PUE | ✅ |
+| DPU 與 SmartNIC | 把網路、儲存、安全的工作從 CPU 搬到網路卡；裸機多租戶的隔離 | ✅ |
+| 資料中心的遙測 | SNMP 輪詢為什麼不夠、streaming telemetry 與 gNMI、microburst、要盯哪些計數器（PFC、ECN、丟棄） | ✅ |
+| AI 的儲存網路 | 資料集、checkpoint 與它們的流量型態；NVMe-oF、平行檔案系統；為什麼要獨立一張網路 | ✅ |
+| 大規模的維運 | 單一事實來源、ZTP、漸進式部署、先引流再維護 (drain)、故障範圍 (blast radius) | ✅ |
+
+### 引擎要補的功能
+
+| 功能 | 做法 | 狀態 |
+| --- | --- | --- |
+| BGP 多路徑 | `maximum-paths <n>`（eBGP）、`maximum-paths ibgp <n>`、`bgp bestpath as-path multipath-relax`：最佳路徑之外，條件一樣好的路也放進路由表。L3 交換器也能跑 BGP，Nexus 用 NX-OS 的巢狀語法（`feature bgp`） | ✅ |
+| GPU 伺服器 | 新型號（四張 GPU 的機型）：2 個前端埠、4 個後端埠（每張 GPU 一個）、BMC；每個埠各自的位址，伺服器會送 LLDP。八張 GPU 與儲存埠的機型還沒有 | ✅ |
+| 無損乙太網路 | 交換器的埠：`priority-flow-control mode on`、哪個優先權不丟、ECN 的門檻、信任 DSCP；RDMA 的流量逐跳檢查，任何一跳不是無損就算出掉速的程度 | ⬜ |
+| 400G 的交換器與線材 | 新型號（32×400G）、DAC 的長度上限、FEC 的種類 | ⬜ |
+| ECMP 的雜湊 | 雜湊納入來源與目的埠；每條流佔多少頻寬、撞在一起時各分到多少 | ⬜ |
+| 每一路電的容量 | PDU / 斷路器的額定安培數，超過就跳電 | ⬜ |
+| VXLAN / EVPN | VTEP、VNI、第二層的虛擬鏈路、BGP 的 l2vpn evpn address-family | ⬜ |
+
+### 實作順序
+
+1. 知識庫的新分類與十六篇文章（不需要引擎，先讓觀念上線；已完成）。
+2. BGP 多路徑與 NX-OS 的 BGP 語法 → 21-1（已完成）。
+3. GPU 伺服器的型號 → 22-1（已完成）、22-2。
+4. 無損乙太網路 → 22-3（下一步：NX-OS 的 network-qos / queuing / qos 三種政策、每個埠的 `priority-flow-control mode on`、`show interface priority-flow-control`；RDMA 的流量逐跳檢查分類、PFC、ECN 三件事）。
+5. ECMP 的雜湊與每條流的頻寬 → 22-4、21-2。
+6. 400G 與電力的容量 → 22-5、22-6。
+7. VXLAN / EVPN → 21-4、21-5、22-8（工程最大，放最後）。

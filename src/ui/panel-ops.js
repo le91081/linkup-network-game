@@ -11,7 +11,7 @@ import { nmsOf, pollOne } from '../engine/snmp.js';
 import { nfTop } from '../engine/netflow.js';
 import { genKey, vtyMode, hostKey } from '../engine/remote.js';
 
-const SERVER_MODELS = new Set(['tower', 'rack1u', 'nas']);
+const SERVER_MODELS = new Set(['tower', 'rack1u', 'nas', 'gpusrv']);
 export const isServer = (d) => SERVER_MODELS.has(d.model);
 
 // ───────────────────────── 伺服器角色 ─────────────────────────

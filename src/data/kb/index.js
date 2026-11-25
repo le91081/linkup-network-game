@@ -29,6 +29,7 @@ import { OPS } from './ops.js';
 import { CLOUD } from './cloud.js';
 import { MORE } from './more.js';
 import { ADVANCED } from './advanced.js';
+import { DATACENTER } from './datacenter.js';
 import { buildIndex } from './match.js';
 import { DEEP_ROUTING } from './deep-routing.js';
 import { DEEP_SWITCHING } from './deep-switching.js';
@@ -48,9 +49,10 @@ export const CATS = [
   { id: 'physical', name: '實體層與機房', desc: '線材、收發器、雙工、介面計數器、UPS' },
   { id: 'ops', name: '高可用與維運', desc: '帶外管理、設定管理、韌體、AAA、監控' },
   { id: 'cloud', name: '自動化、雲端與虛擬化', desc: 'RESTCONF、Ansible、Terraform、VPC、虛擬交換器' },
+  { id: 'dc', name: '資料中心與 AI 網路', desc: 'Clos、EVPN、RoCE、PFC / ECN、GPU 叢集、400G、電力與散熱' },
 ];
 
-export const CONCEPTS = [...BASICS, ...SERVICES, ...SWITCHING, ...ROUTING, ...SECURITY, ...WAN, ...WIRELESS, ...IPV6, ...PHYSICAL, ...OPS, ...CLOUD, ...MORE, ...ADVANCED];
+export const CONCEPTS = [...BASICS, ...SERVICES, ...SWITCHING, ...ROUTING, ...SECURITY, ...WAN, ...WIRELESS, ...IPV6, ...PHYSICAL, ...OPS, ...CLOUD, ...MORE, ...ADVANCED, ...DATACENTER];
 /** 「深入了解」的內容（文章 id → 段落） */
 export const DEEP = { ...DEEP_ROUTING, ...DEEP_SWITCHING, ...DEEP_WAN, ...DEEP_SECURITY, ...DEEP_SERVICES };
 for (const c of CONCEPTS) if (DEEP[c.id]) c.deep = DEEP[c.id];

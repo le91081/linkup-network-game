@@ -28,7 +28,7 @@ export const DEV_ICON = {
   patch: '<rect x="3" y="7.5" width="18" height="9" rx="1.5"/><path d="M6.5 10.5h.01M9.5 10.5h.01M12.5 10.5h.01M15.5 10.5h.01M18 10.5h.01M6.5 13.5h.01M9.5 13.5h.01M12.5 13.5h.01M15.5 13.5h.01M18 13.5h.01"/>',
 };
 
-const HOST = { pc: 'pc', laptop: 'laptop', phone: 'phone', ipphone: 'ipphone', printer: 'printer', camera: 'camera', nas: 'nas', tower: 'server', rack1u: 'server', ups: 'ups', vm: 'vm' };
+const HOST = { pc: 'pc', laptop: 'laptop', phone: 'phone', ipphone: 'ipphone', printer: 'printer', camera: 'camera', nas: 'nas', tower: 'server', rack1u: 'server', gpusrv: 'server', ups: 'ups', vm: 'vm' };
 const KIND = { hub: 'hub', switch: 'switch', mswitch: 'switch', l3switch: 'l3switch', router: 'router', homerouter: 'homerouter', firewall: 'firewall', ap: 'ap', wlc: 'wlc', internet: 'internet', cloud: 'cloud', hypervisor: 'hypervisor', lb: 'lb', patch: 'patch' };
 
 /** 這台設備該用哪一個圖示 */

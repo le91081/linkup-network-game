@@ -107,6 +107,12 @@ export const CATALOG = {
     kind: 'host', shape: 'rack1u', vendor: 'Dell', title: 'Dell PowerEdge R650',
     tagline: '1U 機架伺服器 · 2×25GbE SFP28', ports: [sfp('eth0', 'NIC 1'), sfp('eth1', 'NIC 2')],
   },
+  // AI 訓練節點：每張 GPU 配一張後端的網路卡（這裡是四張 GPU 的機型），另外有前端的埠與 BMC。伺服器上跑 lldpd，交換器看得到它
+  gpusrv: {
+    kind: 'host', shape: 'rack1u', vendor: 'Dell', title: 'Dell PowerEdge XE8640', lldp: true,
+    tagline: 'GPU 伺服器（4×GPU）· 後端 4×100G（每張 GPU 一個埠）· 前端 2×25G · BMC',
+    ports: [sfp('eth0', '前端 eth0'), sfp('eth1', '前端 eth1'), qsfp('rdma1', '後端 rdma1（GPU 1）'), qsfp('rdma2', '後端 rdma2（GPU 2）'), qsfp('rdma3', '後端 rdma3（GPU 3）'), qsfp('rdma4', '後端 rdma4（GPU 4）'), rj('bmc', 'BMC')],
+  },
   bigip: {
     kind: 'lb', shape: 'bigip', vendor: 'F5', title: 'F5 BIG-IP i2800',
     tagline: '應用程式交付控制器（負載平衡器 LTM）· 4×1GbE + 2×10GbE SFP+', ports: [rj('1.1'), rj('1.2'), rj('1.3'), rj('1.4'), sfp('2.1'), sfp('2.2')],

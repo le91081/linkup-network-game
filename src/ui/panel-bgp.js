@@ -34,7 +34,7 @@ function setPrepend(d, n, times) {
 
 export function bgpCard(ctx) {
   const { dev } = ctx;
-  if (dev.kind !== 'router') return null;
+  if (dev.kind !== 'router' && !(dev.kind === 'l3switch' && dev.bgp)) return null; // L3 交換器：用 CLI 啟用之後才顯示
   const draft = (ctx.app.bgpDraft ||= {});
   if (!dev.bgp) {
     return h('div', { class: 'card' }, cardHead('BGP'),

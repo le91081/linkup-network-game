@@ -377,16 +377,34 @@ export function computeBgp(state, { transact, logEvent, ospfOn = () => false, lo
     const all = [];
     for (const r of local[d.id]) all.push(r);
     for (const list of Object.values(ribIn[d.id] || {})) for (const r of list) all.push(r);
-    const b = best[d.id];
+    const b = best[d.id], cfg = bgpCfg(d), multi = new Set();
     for (const r of Object.values(b)) {
       if (r.local) continue;
       const p = igpTo(d, r.nh);
       if (!p) continue;
-      d.rt.routes.push({ net: r.net, bits: r.bits, via: p.via, iface: p.iface, type: 'B', ad: r.ibgp ? AD_IBGP : AD_EBGP, metric: r.med || 0, aspath: r.aspath, bnh: r.nh, ...(r.ibgp ? { ibgp: true } : {}) });
+      const put = (x, px) => d.rt.routes.push({ net: x.net, bits: x.bits, via: px.via, iface: px.iface, type: 'B', ad: x.ibgp ? AD_IBGP : AD_EBGP, metric: r.med || 0, aspath: x.aspath, bnh: x.nh, ...(x.ibgp ? { ibgp: true } : {}) });
+      put(r, p);
+      // 多路徑（maximum-paths）：到最佳路徑的比較都平手的路也放進路由表。AS path 預設要一模一樣，
+      // bestpath as-path multipath-relax 之後只要一樣長；下一站不一樣才算另一條路
+      const max = Math.max(1, +(r.ibgp ? cfg.maxPathsIbgp : cfg.maxPaths) || 1);
+      if (max < 2) continue;
+      const used = new Set([p.via ?? r.nh]);
+      for (const x of all) {
+        if (used.size >= max) break;
+        if (x === r || x.local || !x.valid || x.net !== r.net || x.bits !== r.bits || !!x.ibgp !== !!r.ibgp) continue;
+        if ((x.weight || 0) !== (r.weight || 0) || (x.lp ?? 100) !== (r.lp ?? 100) || x.aspath.length !== r.aspath.length || ORIGIN[x.origin] !== ORIGIN[r.origin] || (x.med || 0) !== (r.med || 0)) continue;
+        if (!cfg.relax && x.aspath.join(' ') !== r.aspath.join(' ')) continue;
+        if (r.ibgp && (x.igp || 0) !== (r.igp || 0)) continue;
+        const px = igpTo(d, x.nh);
+        if (!px || used.has(px.via ?? x.nh)) continue;
+        used.add(px.via ?? x.nh);
+        put(x, px);
+        multi.add(x);
+      }
     }
     // 同一個網段已經有管理距離更小的路（例如 iBGP 200 對 OSPF 110）：show ip bgp 標成 r（RIB-failure）
     const ribFail = (r) => !r.local && d.rt.routes.some((x) => !x.vrf && !x.bad && x.type !== 'B' && x.net === r.net && x.bits === r.bits && x.ad < (r.ibgp ? AD_IBGP : AD_EBGP));
-    d.rt.bgp.table = all.map((r) => ({ ...r, best: b[r.net + '/' + r.bits] === r, ...(b[r.net + '/' + r.bits] === r && ribFail(r) ? { ribFail: true } : {}) }))
+    d.rt.bgp.table = all.map((r) => ({ ...r, best: b[r.net + '/' + r.bits] === r, ...(multi.has(r) ? { multi: true } : {}), ...(b[r.net + '/' + r.bits] === r && ribFail(r) ? { ribFail: true } : {}) }))
       .sort((x, y) => (x.net >>> 0) - (y.net >>> 0) || x.bits - y.bits || (y.best ? 1 : 0) - (x.best ? 1 : 0));
     for (const p of d.rt.bgp.peers) {
       const s = sessions.find((x) => (x.a === d && x.bIp === parseIp(p.ip)) || (x.b === d && x.aIp === parseIp(p.ip)));

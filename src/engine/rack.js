@@ -8,7 +8,7 @@ export const RACK_U = 42;
 export const PDU_W = 3680; // 一條 16 A / 230 V 的 PDU
 /** 機架式設備佔幾 U */
 const RU = {
-  rack1u: 1, esxi: 1, bigip: 1, ups: 2, isr4321: 1, isr4331: 1, c2960: 1, c2960p: 1, patch24: 1, metroe: 1, metroelan: 1,
+  rack1u: 1, gpusrv: 4, esxi: 1, bigip: 1, ups: 2, isr4321: 1, isr4331: 1, c2960: 1, c2960p: 1, patch24: 1, metroe: 1, metroelan: 1,
   cx6100: 1, ex2300: 1, c9300: 1, fg100f: 1, n93180: 1, n9332: 1, c9800: 1, nvr: 1,
 };
 /** 桌上型：放在層板上（層板 1U 加上設備本身的高度） */
