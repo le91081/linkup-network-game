@@ -1412,7 +1412,11 @@ export function iosSession(getDev, getState, who = null) {
     if (parseIp(net) == null || maskBits(mask) == null) return err(ROUTE_USAGE);
     const w = String(rest || '').split(/\s+/).filter(Boolean);
     let outIf = null;
-    if (parseIp(via) == null) {
+    if (/^null0?$/i.test(via) && (/0$/.test(via) || w[0] === '0')) {
+      // ip route <網段> <遮罩> Null0：丟棄路由（「Null 0」中間有空白也可以）
+      if (!/0$/.test(via)) w.shift();
+      outIf = 'Null0'; via = '';
+    } else if (parseIp(via) == null) {
       // 先寫出口介面、再寫下一站：出口介面可以在別的 VRF（VRF 之間的路由洩漏）。「GigabitEthernet 0/0/1」中間有空白也可以
       if (w[0] && /^\d+\/[\d/.]+$|^\d+$/.test(w[0]) && parseIp(w[0]) == null && !/\d$/.test(via)) via += w.shift();
       const i = ifByName(via);
@@ -1449,7 +1453,8 @@ export function iosSession(getDev, getState, who = null) {
   const routeHit = (v, net, mask, rest) => {
     const w = String(rest || '').split(/\s+/).filter(Boolean);
     let outIf = null;
-    if (w[0] && parseIp(w[0]) == null) { const i = ifByName(w[0]); if (!isErr(i)) { outIf = i.id; w.shift(); } }
+    if (/^null0$/i.test(w[0] || '')) { outIf = 'Null0'; w.shift(); }
+    else if (w[0] && parseIp(w[0]) == null) { const i = ifByName(w[0]); if (!isErr(i)) { outIf = i.id; w.shift(); } }
     const via = w[0] && parseIp(w[0]) != null ? w[0] : null;
     return (x) => (x.vrf || '') === v && x.dst === net && parseMask(x.mask || '') === maskBits(mask) && (!via || x.via === via) && (!outIf || x.outIf === outIf);
   };
@@ -1963,7 +1968,7 @@ export function iosSession(getDev, getState, who = null) {
       }
       for (const i of d.ifaces) if (!i.vrf) i.ospf = false;
       d.ospfDefault = false; delete d.ospfDefOpt; d.ospfNets = [];
-      for (const k of ['ospfRedist', 'ospfRid', 'ospfAreas', 'ospfRanges', 'ospfAreaAuth', 'ospfPassive', 'ospfPassiveDefault', 'ospfNoPassive', 'ospfRefBw', 'ospfMaxPaths']) delete d[k];
+      for (const k of ['ospfRedist', 'ospfRid', 'ospfAreas', 'ospfRanges', 'ospfAreaAuth', 'ospfPassive', 'ospfPassiveDefault', 'ospfNoPassive', 'ospfRefBw', 'ospfMaxPaths', 'ospfDist', 'ospfDistIn']) delete d[k];
       return undefined;
     }],
     ['ip dhcp excluded-address <a> [...]', ([a, b]) => {
@@ -3034,6 +3039,28 @@ export function iosSession(getDev, getState, who = null) {
       ['no auto-cost reference-bandwidth [...]', () => { delete oc().ospfRefBw; }],
       ['maximum-paths <n>', ([n]) => (+n >= 1 && +n <= 32 ? void (oc().ospfMaxPaths = +n === 4 ? undefined : +n) : err('maximum-paths 的範圍是 1 – 32'))],
       ['no maximum-paths [...]', () => { delete oc().ospfMaxPaths; }],
+      // 管理距離：distance ospf external <n> [inter-area <n>] [intra-area <n>] 分開設；distance <n> 三種一起改
+      ['distance ospf <...>', ([rest]) => {
+        const t = String(rest || '').split(/\s+/).filter(Boolean), K = { external: 'ext', 'inter-area': 'inter', 'intra-area': 'intra' }, o = { ...(oc().ospfDist || {}) };
+        if (!t.length || t.length % 2) return err('用法：distance ospf [external <1-255>] [inter-area <1-255>] [intra-area <1-255>]');
+        for (let k = 0; k < t.length; k += 2) {
+          const hit = Object.keys(K).filter((x) => x.startsWith(t[k].toLowerCase()));
+          if (hit.length !== 1 || !/^\d+$/.test(t[k + 1]) || !(+t[k + 1] >= 1 && +t[k + 1] <= 255)) return err('用法：distance ospf [external <1-255>] [inter-area <1-255>] [intra-area <1-255>]');
+          if (+t[k + 1] === 110) delete o[K[hit[0]]]; else o[K[hit[0]]] = +t[k + 1];
+        }
+        if (Object.keys(o).length) oc().ospfDist = o; else delete oc().ospfDist;
+        return undefined;
+      }],
+      ['distance <n>', ([n]) => {
+        if (!/^\d+$/.test(n) || !(+n >= 1 && +n <= 255)) return err('用法：distance <1-255>，或 distance ospf external <n> inter-area <n> intra-area <n>');
+        if (+n === 110) delete oc().ospfDist; else oc().ospfDist = { ext: +n, inter: +n, intra: +n };
+        return undefined;
+      }],
+      ['no distance [...]', () => { delete oc().ospfDist; }],
+      // distribute-list … in：LSA 照樣收、SPF 照樣算，只是符合 deny 的路不放進這台的路由表
+      ['distribute-list route-map <name> in', ([name]) => { oc().ospfDistIn = { rm: name }; return (dev().routeMaps || {})[name] ? undefined : `（route-map ${name} 還沒有建立：建立之前所有 OSPF 的路都會被擋下）`; }],
+      ['distribute-list prefix <name> in', ([name]) => { oc().ospfDistIn = { pl: name }; return (dev().prefixLists || {})[name] ? undefined : `（prefix-list ${name} 還沒有建立：建立之前所有 OSPF 的路都會被擋下）`; }],
+      ['no distribute-list [...]', () => { delete oc().ospfDistIn; }],
       ['area <a> range <ip> <mask> [...]', ([a, ip, mask]) => {
         const n = parseIp(ip), bits = maskBits(mask);
         if (!/^\d+$/.test(a) || n == null || bits == null) return err('用法：area 1 range 10.1.0.0 255.255.0.0');
@@ -3870,6 +3897,12 @@ export function iosSession(getDev, getState, who = null) {
       ['no eigrp log-neighbor-changes', () => undefined],
       ['variance <n>', ([n]) => (/^\d+$/.test(n) && +n >= 1 && +n <= 128 ? void (+n === 1 ? delete dev().eigrp.variance : (dev().eigrp.variance = +n)) : err('variance 是 1 – 128'))],
       ['no variance [...]', () => { delete dev().eigrp.variance; }],
+      ['distance eigrp <int> <ext>', ([a, b]) => {
+        if (![a, b].every((x) => /^\d+$/.test(x) && +x >= 1 && +x <= 255)) return err('用法：distance eigrp <內部 1-255> <外部 1-255>（預設 90 與 170）');
+        if (+a === 90 && +b === 170) delete dev().eigrp.dist; else dev().eigrp.dist = [+a, +b];
+        return undefined;
+      }],
+      ['no distance [...]', () => { delete dev().eigrp.dist; }],
       ['maximum-paths <n>', ([n]) => (/^\d+$/.test(n) && +n >= 1 && +n <= 32 ? void (+n === 4 ? delete dev().eigrp.maxPaths : (dev().eigrp.maxPaths = +n)) : err('maximum-paths 是 1 – 32'))],
       ['no maximum-paths [...]', () => { delete dev().eigrp.maxPaths; }],
       ['metric weights <tos> <k1> <k2> <k3> <k4> <k5>', ([, ...k]) => {
@@ -3898,8 +3931,10 @@ export function iosSession(getDev, getState, who = null) {
           metric = t.slice(mi + 1, mi + 6).map(Number);
           if (metric.length !== 5 || metric.some((x) => !Number.isFinite(x) || x < 0) || metric[0] < 1) return err('metric 要寫五個值：頻寬 (kbps) 延遲 (十微秒) 可靠度 負載 MTU，例如 metric 10000 100 255 1 1500');
         }
+        const ri = t.findIndex((x) => x.toLowerCase() === 'route-map');
+        if (ri >= 0 && !t[ri + 1]) return err('用法：redistribute … route-map <名稱>');
         const e = dev().eigrp;
-        e.redist = [...(e.redist || []).filter((r) => r.src !== kind), { src: kind, ...(kind === 'ospf' ? { pid: +t[0] || 1 } : {}), ...(metric ? { metric } : {}) }];
+        e.redist = [...(e.redist || []).filter((r) => r.src !== kind), { src: kind, ...(kind === 'ospf' ? { pid: +t[0] || 1 } : {}), ...(metric ? { metric } : {}), ...(ri >= 0 ? { rm: t[ri + 1] } : {}) }];
         return kind !== 'connected' && !metric && !e.defMetric ? '（還沒有種子 metric：static / OSPF 的路要有 metric 或 default-metric 才會宣告出去）' : undefined;
       }],
       ['no redistribute <src> [...]', ([src]) => { const e = dev().eigrp, s = String(src).toLowerCase(); e.redist = (e.redist || []).filter((r) => !r.src.startsWith(s)); if (!e.redist.length) delete e.redist; return undefined; }],
@@ -5308,7 +5343,8 @@ export function runningConfig(state, dev) {
     o.push(`router eigrp ${e.as}`);
     for (const n of (e.nets || []).slice().sort((a, b) => (a.net >>> 0) - (b.net >>> 0) || a.bits - b.bits)) o.push(` network ${fmtIp(n.net)} ${wild(n.bits)}`); // IOS 照網段排序
     if (e.defMetric) o.push(` default-metric ${e.defMetric.join(' ')}`);
-    for (const r of e.redist || []) o.push(` redistribute ${r.src}${r.src === 'ospf' ? ' ' + (r.pid || 1) : ''}${r.metric ? ' metric ' + r.metric.join(' ') : ''}`);
+    if (e.dist) o.push(` distance eigrp ${e.dist[0]} ${e.dist[1]}`);
+    for (const r of e.redist || []) o.push(` redistribute ${r.src}${r.src === 'ospf' ? ' ' + (r.pid || 1) : ''}${r.metric ? ' metric ' + r.metric.join(' ') : ''}${r.rm ? ' route-map ' + r.rm : ''}`);
     if (e.k) o.push(` metric weights 0 ${e.k.join(' ')}`);
     if (e.variance) o.push(` variance ${e.variance}`);
     if (e.maxPaths) o.push(` maximum-paths ${e.maxPaths}`);
@@ -5341,6 +5377,12 @@ export function runningConfig(state, dev) {
     for (const n of stmts) o.push(` network ${fmtIp(n.net)} ${wild(n.bits)} area ${+(n.area || 0)}`);
     for (const i of os) o.push(i.bind.t === 'loop' ? ` network ${fmtIp(i.rt.ip)} 0.0.0.0 area ${+(i.ospfArea || 0)}` : ` network ${fmtIp(netOf(i.rt.ip, i.rt.bits))} ${wild(i.rt.bits)} area ${+(i.ospfArea || 0)}`);
     if (c.ospfMaxPaths) o.push(` maximum-paths ${c.ospfMaxPaths}`);
+    if (c.ospfDistIn) o.push(c.ospfDistIn.rm ? ` distribute-list route-map ${c.ospfDistIn.rm} in` : ` distribute-list prefix ${c.ospfDistIn.pl} in`);
+    if (c.ospfDist) {
+      const x = c.ospfDist;
+      if (x.ext != null && x.ext === x.inter && x.ext === x.intra) o.push(` distance ${x.ext}`);
+      else o.push(' distance ospf' + (x.intra != null ? ` intra-area ${x.intra}` : '') + (x.inter != null ? ` inter-area ${x.inter}` : '') + (x.ext != null ? ` external ${x.ext}` : ''));
+    }
     if (c.ospfDefault) { const x = c.ospfDefOpt || {}; o.push(' default-information originate' + (x.always ? ' always' : '') + (x.metric != null ? ` metric ${x.metric}` : '') + (x.type ? ` metric-type ${x.type}` : '')); }
     o.push('!');
   }
@@ -5402,8 +5444,8 @@ export function runningConfig(state, dev) {
   }
   for (const i of dev.ifaces) if (i.mode === 'static' && i.gateway && dev.routing) o.push(`ip route 0.0.0.0 0.0.0.0 ${i.gateway}`);
   for (const r of dev.routes || []) {
-    const oi = r.outIf && dev.ifaces.find((x) => x.id === r.outIf);
-    if (!r.dst || (!r.via && !oi)) continue; // 沒有下一站的只有「ip route … Tunnel0」
+    const oi = r.outIf === 'Null0' ? { label: 'Null0' } : r.outIf && dev.ifaces.find((x) => x.id === r.outIf);
+    if (!r.dst || (!r.via && !oi)) continue; // 沒有下一站的只有「ip route … Tunnel0」與「ip route … Null0」
     if (r.vrf && ((dev.vrfs || {})[r.vrf] || {}).style === 'ctx') continue; // NX-OS：寫在 vrf context 底下
     o.push(`ip route ${r.vrf ? 'vrf ' + r.vrf + ' ' : ''}${r.dst} ${parseMask(r.mask || '') != null ? fmtMask(parseMask(r.mask)) : r.mask} ${oi ? longIf(oi.label) + (r.via ? ' ' : '') : ''}${r.via || ''}${r.global ? ' global' : ''}${+r.ad > 1 ? ' ' + r.ad : ''}${r.track != null && r.track !== '' ? ' track ' + r.track : ''}`);
   }

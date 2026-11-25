@@ -10,7 +10,7 @@ import { computeRip } from '../rip.js';
 import { fmtIp, netOf, parseIp, parseMask, sameNet } from '../ip.js';
 import { logEvent } from '../ops.js';
 import { buildWave } from './forward.js';
-import { cmp, dnsList, hash, isVlanSw, vrfOf } from './core.js';
+import { NULL0, cmp, dnsList, hash, isVlanSw, vrfOf } from './core.js';
 import { hostDomain, l2Explore, learnPath, reversed } from './l2.js';
 import { transact } from './transact.js';
 import { greLines, greReach, greRecursion, isTun, nhrpRoutes, tunIfaces } from './gre.js';
@@ -359,6 +359,8 @@ function buildRoutes(state, d) {
     if (dst == null || bits == null) continue;
     if (s.track != null && s.track !== '' && !trackUp(state, d, s.track).up) continue; // 追蹤的物件 Down：這條路由從路由表撤掉
     if (via == null) {
+      // ip route <網段> <遮罩> Null0：丟棄路由（配合 BGP 的 network、彙總，或把不要的流量丟掉）
+      if (s.outIf === 'Null0') { r.push({ net: netOf(dst, bits), bits, via: null, iface: NULL0, type: 'S', ad: Math.max(1, +s.ad || 1), metric: 0, vrf: s.vrf || '', exitIf: true, null0: true }); continue; }
       // ip route <網段> <遮罩> Tunnel0：只寫出口介面（點對點的介面不需要下一站）
       const out = s.outIf ? d.ifaces.find((x) => x.id === s.outIf) : null;
       // ip route 0.0.0.0 0.0.0.0 Dialer1：PPPoE 的點對點連線，下一站就是 ISP 那一端
@@ -392,9 +394,10 @@ function buildRoutes(state, d) {
 
 /**
  * 最長相符，再比管理距離、metric。好幾條一樣好的路（等價多路徑）：依來源與目的位址雜湊挑一條，
- * 同一對位址永遠走同一條（CEF 的 per-destination load sharing），不同的主機會分散到不同的路
+ * 同一對位址永遠走同一條（CEF 的 per-destination load sharing），不同的主機會分散到不同的路。
+ * 最符合的是指向 Null0 的丟棄路由：預設當成沒有路（回傳 null）；null0 = true 才回傳那一筆（轉送時用來說明原因）
  */
-export function lookupRoute(d, ip, src, vrf = '') {
+export function lookupRoute(d, ip, src, vrf = '', null0 = false) {
   let best = null;
   const ties = [];
   for (const r of d.rt.routes) {
@@ -402,7 +405,13 @@ export function lookupRoute(d, ip, src, vrf = '') {
     if (!best || r.bits > best.bits || (r.bits === best.bits && (r.ad < best.ad || (r.ad === best.ad && r.metric < best.metric)))) { best = r; ties.length = 0; ties.push(r); }
     else if (r.bits === best.bits && r.ad === best.ad && r.metric === best.metric && r.via !== best.via) ties.push(r);
   }
-  if (ties.length > 1 && src != null) return ties[hash(fmtIp(src) + '>' + fmtIp(ip)) % ties.length];
+  if (best && best.null0) return null0 ? best : null;
+  if (ties.length > 1 && src != null) {
+    const h = hash(fmtIp(src) + '>' + fmtIp(ip));
+    // 不等價負載分擔（EIGRP variance）：照 traffic share count 的比例分配
+    if (ties.some((r) => r.share > 1)) { let n = h % ties.reduce((a, r) => a + (r.share || 1), 0); for (const r of ties) { n -= r.share || 1; if (n < 0) return r; } }
+    return ties[h % ties.length];
+  }
   return best;
 }
 /** 某個目的地所有等價的路（給 show ip route 與 traceroute 用） */
@@ -460,7 +469,13 @@ function routesOnce(state, quiet) {
   // OSPF 先算的時候還沒有 BGP / EIGRP 的路：有設備把它們重分配進 OSPF，就留著那些路、把 OSPF 的路拿掉再算一次
   const devs = Object.values(state.devices);
   if (devs.some((d) => d.rt && (d.ospfRedist || []).some((r) => (r.src === 'bgp' && d.rt.routes.some((x) => x.type === 'B')) || (r.src === 'eigrp' && d.rt.eigrp) || (r.src === 'rip' && d.rt.rip)))) {
-    for (const d of devs) if (d.rt && d.rt.routes) d.rt.routes = d.rt.routes.filter((r) => r.type !== 'O');
+    for (const d of devs) {
+      if (!d.rt || !d.rt.routes) continue;
+      // 第一輪算出來的是 OSPF 自己本來就有的路：記下每個網段的管理距離，重分配 EIGRP 的時候用來判斷那筆 EIGRP 的路有沒有真的在路由表裡
+      d.rt.ospfNative = {};
+      for (const r of d.rt.routes) if (r.type === 'O' && !r.bad && !(r.vrf || '')) { const k = r.net + '/' + r.bits; d.rt.ospfNative[k] = Math.min(d.rt.ospfNative[k] ?? 255, r.ad); }
+      d.rt.routes = d.rt.routes.filter((r) => r.type !== 'O');
+    }
     computeOspf(state, ospfOn);
   }
   computeVpn(state, { lookupRoute }); // MPLS L3VPN：PE 之間的 VPNv4 路由放進各自的 VRF

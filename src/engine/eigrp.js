@@ -16,10 +16,11 @@
 // d.rt.eigrp = { as, rid, ifs: { 介面: { peers, passive, hello, hold, why: [] } }, nbrs: [...], topo: { 'net/bits': {...} } }
 import { fmtIp, netOf, parseIp } from './ip.js';
 import { l2Explore } from './sim/l2.js';
-import { vrfOf } from './sim/core.js';
+import { NULL0, vrfOf } from './sim/core.js';
 import { linkInfo } from './model.js';
+import { rmRoute } from './policy.js';
 
-export const EIGRP_AD = 90, EIGRP_EX_AD = 170;
+export const EIGRP_AD = 90, EIGRP_EX_AD = 170, EIGRP_SUM_AD = 5;
 export const K_DEFAULT = [1, 0, 1, 0, 0];
 export const eigrpOn = (d) => !!(d && d.eigrp && +d.eigrp.as > 0);
 /** network 敘述沒寫萬用遮罩：用有類別的網段（A 類 /8、B 類 /16、C 類 /24） */
@@ -35,6 +36,8 @@ export function eigrpIf(d, i) {
 export const eigrpPassive = (d, i) => (d.eigrp.passiveDefault ? !(d.eigrp.noPassive || []).includes(i.id) : (d.eigrp.passive || []).includes(i.id));
 export const eigrpHello = (i) => +i.eigrpHello || 5;
 export const eigrpHold = (i) => +i.eigrpHold || 3 * eigrpHello(i);
+/** 管理距離 [內部, 外部]：distance eigrp <內部> <外部> */
+export const eigrpDist = (d) => (Array.isArray(d.eigrp && d.eigrp.dist) ? d.eigrp.dist.map(Number) : [EIGRP_AD, EIGRP_EX_AD]);
 export const eigrpK = (d) => (Array.isArray(d.eigrp.k) && d.eigrp.k.length === 5 ? d.eigrp.k.map(Number) : K_DEFAULT);
 
 /** 介面的頻寬 (kbps)：bandwidth 指令優先，不然看協商出來的速率 */
@@ -179,19 +182,39 @@ export function computeEigrp(state, { log = () => {}, ospfOn = () => false } = {
     }
     for (const r of d.eigrp.redist || []) {
       const met = r.metric || d.eigrp.defMetric;
+      const rmOk = (x) => { if (!r.rm) return {}; return rmRoute(d, r.rm, { net: x.net, bits: x.bits, tag: +x.tag || 0 }); };
       const srcRoutes = (d.rt.routes || []).filter((x) => !x.bad && !(x.vrf || '') && (r.src === 'static' ? x.type === 'S' : r.src === 'connected' ? x.type === 'C' : r.src === 'ospf' ? x.type === 'O' || (x.type === 'C' && !!x.iface && ospfOn(d, x.iface)) : false)); // ospf：連同跑 OSPF 的直連網段
       for (const x of srcRoutes) {
         const key = pfx(x.net, x.bits);
         if (m.has(key)) continue;
-        if (r.src === 'connected') { m.set(key, { net: x.net, bits: x.bits, bw: eigrpBw(state, d, x.iface), dly: eigrpDly(state, d, x.iface), ex: true, conn: false, redist: 'connected' }); continue; }
+        // route-map：deny 或沒有符合的不重分配；來源那筆路的標籤跟著帶進來，set tag 可以改
+        const set = rmOk(x);
+        if (!set) continue;
+        const tag = set.tag != null ? +set.tag : +x.tag || 0;
+        if (r.src === 'connected') { m.set(key, { net: x.net, bits: x.bits, bw: eigrpBw(state, d, x.iface), dly: eigrpDly(state, d, x.iface), ex: true, conn: false, redist: 'connected', tag }); continue; }
         if (!met) continue; // 沒有種子 metric：static / ospf 不會被宣告出去
-        m.set(key, { net: x.net, bits: x.bits, bw: +met[0], dly: +met[1] * 10, ex: true, conn: false, redist: r.src });
+        m.set(key, { net: x.net, bits: x.bits, bw: +met[0], dly: +met[1] * 10, ex: true, conn: false, redist: r.src, tag });
       }
     }
     own.set(d.id, m);
   }
   // 4. 距離向量：反覆交換，直到沒有變化（DUAL 的結果和最後收斂的值一樣）
-  const adv = new Map(nodes.map((d) => [d.id, new Map([...own.get(d.id)].map(([k, v]) => [k, { ...v, fd: eigrpMetric(v.bw, v.dly, eigrpK(d)), succIfs: new Set() }]))]));
+  const mineOf = (d) => new Map([...own.get(d.id)].map(([k, v]) => [k, { ...v, fd: eigrpMetric(v.bw, v.dly, eigrpK(d)), succIfs: new Set(), hops: 0, orig: E(d).rid }]));
+  // 介面上設了彙總（ip summary-address eigrp）、範圍裡有更明確的網段：這台自己多一筆彙總，指向 Null0（管理距離 5）。
+  // 它和其他的路一樣會送給所有鄰居；設了彙總的那個介面另外把範圍內的明細壓掉
+  const withSummaries = (d, m) => {
+    for (const i of d.ifaces) {
+      if (!running(d, i)) continue;
+      for (const s of i.eigrpSum || []) {
+        const comps = [...m.values()].filter((v) => !(v.net === s.net && v.bits === s.bits) && inside(v.net, v.bits, s));
+        if (!comps.length) continue;
+        const best = comps.reduce((a, b) => (b.fd < a.fd ? b : a));
+        m.set(pfx(s.net, s.bits), { net: s.net, bits: s.bits, bw: best.bw, dly: best.dly, fd: best.fd, ex: comps.every((c) => c.ex), summary: true, null0: true, succIfs: new Set(), hops: 0, orig: E(d).rid });
+      }
+    }
+    return m;
+  };
+  const adv = new Map(nodes.map((d) => [d.id, withSummaries(d, mineOf(d))]));
   const outOf = (x, j) => {
     // x 從 j 送出去的更新：split horizon、彙總
     const list = [];
@@ -205,7 +228,7 @@ export function computeEigrp(state, { log = () => {}, ospfOn = () => false } = {
     for (const s of sums) {
       const comps = list.filter((v) => inside(v.net, v.bits, s));
       const best = comps.reduce((a, b) => (b.fd < a.fd ? b : a));
-      out.push({ net: s.net, bits: s.bits, bw: best.bw, dly: best.dly, fd: best.fd, ex: comps.every((c) => c.ex), summary: true, succIfs: new Set() });
+      out.push({ net: s.net, bits: s.bits, bw: best.bw, dly: best.dly, fd: best.fd, ex: comps.every((c) => c.ex), summary: true, succIfs: new Set(), hops: 0, orig: E(x).rid });
     }
     return out;
   };
@@ -223,7 +246,7 @@ export function computeEigrp(state, { log = () => {}, ospfOn = () => false } = {
           for (const v of src) {
             const bw = Math.min(v.bw, eigrpBw(state, d, s.i)), dly = v.dly + eigrpDly(state, d, s.i);
             const key = pfx(v.net, v.bits);
-            (c.get(key) || c.set(key, []).get(key)).push({ net: v.net, bits: v.bits, bw, dly, fd: eigrpMetric(bw, dly, eigrpK(d)), rd: v.fd, ex: v.ex, via: o.i.rt.ip ?? parseIp(o.i.ip || ''), iface: s.i, from: o.d.id, stale: p.stale, summary: !!v.summary });
+            (c.get(key) || c.set(key, []).get(key)).push({ net: v.net, bits: v.bits, bw, dly, fd: eigrpMetric(bw, dly, eigrpK(d)), rd: v.fd, ex: v.ex, via: o.i.rt.ip ?? parseIp(o.i.ip || ''), iface: s.i, from: o.d.id, stale: p.stale, summary: !!v.summary, hops: (v.hops || 0) + 1, orig: v.orig, xp: v.xp || v.redist, tag: v.tag || 0 });
           }
         }
       }
@@ -231,12 +254,13 @@ export function computeEigrp(state, { log = () => {}, ospfOn = () => false } = {
     }
     let changed = false;
     for (const d of nodes) {
-      const next = new Map([...own.get(d.id)].map(([k, v]) => [k, { ...v, fd: eigrpMetric(v.bw, v.dly, eigrpK(d)), succIfs: new Set() }]));
+      const next = mineOf(d);
       for (const [key, list] of cand.get(d.id)) {
         if (next.has(key)) continue; // 自己就有（直連或重分配）
         const best = list.reduce((a, b) => (b.fd < a.fd ? b : a));
-        next.set(key, { net: best.net, bits: best.bits, bw: best.bw, dly: best.dly, fd: best.fd, ex: best.ex, succIfs: new Set(list.filter((x) => x.fd === best.fd).map((x) => x.iface.id)) });
+        next.set(key, { net: best.net, bits: best.bits, bw: best.bw, dly: best.dly, fd: best.fd, ex: best.ex, succIfs: new Set(list.filter((x) => x.fd === best.fd).map((x) => x.iface.id)), hops: best.hops, orig: best.orig, xp: best.xp, tag: best.tag });
       }
+      withSummaries(d, next);
       const old = adv.get(d.id);
       if (old.size !== next.size || [...next].some(([k, v]) => { const o = old.get(k); return !o || o.fd !== v.fd || [...v.succIfs].join() !== [...o.succIfs].join(); })) changed = true;
       adv.set(d.id, next);
@@ -244,23 +268,42 @@ export function computeEigrp(state, { log = () => {}, ospfOn = () => false } = {
     if (!changed) break;
   }
   // 記下每個鄰居最後送來的更新：之後它不見了、還在 Hold time 裡的時候用
-  const plain = (v) => ({ net: v.net, bits: v.bits, bw: v.bw, dly: v.dly, fd: v.fd, ex: !!v.ex, ...(v.summary ? { summary: true } : {}) });
+  const plain = (v) => ({ net: v.net, bits: v.bits, bw: v.bw, dly: v.dly, fd: v.fd, ex: !!v.ex, hops: v.hops || 0, orig: v.orig, ...(v.tag ? { tag: v.tag } : {}), ...(v.xp || v.redist ? { xp: v.xp || v.redist } : {}), ...(v.summary ? { summary: true } : {}) });
   for (const p of live) if (!p.stale) p.rec.snap = { [p.a.d.id + '/' + p.a.i.id]: outOf(p.a.d, p.a.i).map(plain), [p.b.d.id + '/' + p.b.i.id]: outOf(p.b.d, p.b.i).map(plain) };
   // 5. 拓撲表與路由表
   for (const d of nodes) {
     const e = E(d), mine = own.get(d.id), c = cand.get(d.id) || new Map();
-    const variance = Math.max(1, +d.eigrp.variance || 1), maxPaths = Math.max(1, +d.eigrp.maxPaths || 4);
-    for (const [key, v] of mine) e.topo[key] = { net: v.net, bits: v.bits, fd: eigrpMetric(v.bw, v.dly, eigrpK(d)), conn: v.conn, ex: v.ex, redist: v.redist, iface: v.iface, succ: [], fs: [], all: [] };
-    for (const [key, list] of c) {
+    const variance = Math.max(1, +d.eigrp.variance || 1), maxPaths = Math.max(1, +d.eigrp.maxPaths || 4), [adIn, adEx] = eigrpDist(d);
+    for (const [key, v] of mine) e.topo[key] = { net: v.net, bits: v.bits, fd: eigrpMetric(v.bw, v.dly, eigrpK(d)), bw: v.bw, dly: v.dly, conn: v.conn, ex: v.ex, redist: v.redist, tag: v.tag || 0, iface: v.iface, succ: [], fs: [], all: [] };
+    // 自己產生的彙總：拓撲表裡是 via Summary，路由表裡指向 Null0（管理距離 5，比任何學來的路都優先）
+    const sums = new Map([...adv.get(d.id)].filter(([, v]) => v.null0));
+    for (const [key, v] of sums) {
       if (mine.has(key)) continue;
+      e.topo[key] = { net: v.net, bits: v.bits, fd: v.fd, bw: v.bw, dly: v.dly, ex: v.ex, sum0: true, succ: [], fs: [], all: (c.get(key) || []) };
+      if ((d.rt.routes || []).some((r) => r.type === 'C' && r.net === v.net && r.bits === v.bits)) continue;
+      d.rt.routes.push({ net: v.net, bits: v.bits, via: null, iface: NULL0, type: 'E', ad: EIGRP_SUM_AD, metric: v.fd, null0: true, bw: v.bw, dly: v.dly, hops: 0 });
+    }
+    for (const [key, list] of c) {
+      if (sums.has(key)) continue;
+      if (mine.has(key)) {
+        // 自己重分配進來的網段，別的路由器也送來一份、而且 metric 比自己的種子 metric 好：EIGRP 會想把它放進路由表（外部路由的管理距離）。
+        // 預設的 170 贏不了原本的路（OSPF 110、靜態 1），只是列在備援裡；把外部的管理距離調得比來源協定小，它就會蓋掉原本的路
+        const own = mine.get(key), ownFd = e.topo[key].fd, best = Math.min(...list.map((x) => x.fd));
+        e.topo[key].all = list;
+        if (!own.redist || own.redist === 'connected' || best >= ownFd) continue;
+        for (const x of list.filter((y) => y.fd === best).slice(0, maxPaths)) d.rt.routes.push({ net: x.net, bits: x.bits, via: x.via, iface: x.iface, type: 'E', sub: 'EX', tag: x.tag || 0, ad: adEx, metric: best, real: x.fd, bw: x.bw, dly: x.dly, hops: x.hops, ...(x.stale ? { staleNbr: true } : {}) });
+        continue;
+      }
       const best = Math.min(...list.map((x) => x.fd));
       const succ = list.filter((x) => x.fd === best), fs = list.filter((x) => x.fd !== best && x.rd < best);
-      e.topo[key] = { net: list[0].net, bits: list[0].bits, fd: best, ex: succ[0].ex, summary: succ[0].summary, succ, fs, all: list };
+      e.topo[key] = { net: list[0].net, bits: list[0].bits, fd: best, ex: succ[0].ex, tag: succ[0].tag || 0, summary: succ[0].summary, succ, fs, all: list };
       // 路由表：successor（等價的最多 maxPaths 條）；variance > 1 時，FD 不超過最佳 n 倍的 feasible successor 也放進去
       const use = [...succ, ...fs.filter((x) => x.fd <= variance * best).sort((a, b) => a.fd - b.fd)].slice(0, maxPaths);
       const conn = (d.rt.routes || []).some((r) => r.type === 'C' && r.net === list[0].net && r.bits === list[0].bits);
       if (conn) continue;
-      for (const x of use) d.rt.routes.push({ net: x.net, bits: x.bits, via: x.via, iface: x.iface, type: 'E', ...(x.ex ? { sub: 'EX' } : {}), ad: x.ex ? EIGRP_EX_AD : EIGRP_AD, metric: best, real: x.fd, ...(x.stale ? { staleNbr: true } : {}) });
+      // traffic share count：metric 都一樣是 1；不等價的時候最好的那條是 240，其他照 metric 的反比
+      const uneq = use.some((x) => x.fd !== best);
+      for (const x of use) d.rt.routes.push({ net: x.net, bits: x.bits, via: x.via, iface: x.iface, type: 'E', ...(x.ex ? { sub: 'EX', tag: x.tag || 0 } : {}), ad: x.ex ? adEx : adIn, metric: best, real: x.fd, bw: x.bw, dly: x.dly, hops: x.hops, ...(uneq ? { share: Math.max(1, Math.round((240 * best) / x.fd)) } : {}), ...(x.stale ? { staleNbr: true } : {}) });
     }
   }
 }
@@ -290,11 +333,34 @@ export function eigrpTopoLines(state, d, longIf, all = false) {
   const o = [`EIGRP-IPv4 Topology Table for AS(${e.as})/ID(${e.rid != null ? fmtIp(e.rid) : '0.0.0.0'})`, 'Codes: P - Passive, A - Active, U - Update, Q - Query, R - Reply,', '       r - reply Status, s - sia Status ', ''];
   const rows = Object.values(e.topo).sort((a, b) => (a.net >>> 0) - (b.net >>> 0) || a.bits - b.bits);
   for (const t of rows) {
-    o.push(`P ${fmtIp(t.net)}/${t.bits}, ${t.conn || t.redist ? 1 : t.succ.length} successors, FD is ${t.fd}${t.ex ? ', tag is 0' : ''}`);
+    o.push(`P ${fmtIp(t.net)}/${t.bits}, ${t.conn || t.redist || t.sum0 ? 1 : t.succ.length} successors, FD is ${t.fd}${t.ex ? `, tag is ${t.tag || 0}` : ''}`);
     if (t.conn) { o.push(`        via Connected, ${longIf(t.iface.label)}`); continue; }
     if (t.redist) { o.push(`        via Redistributed (${t.fd}/0)`); continue; }
+    if (t.sum0) { o.push(`        via Summary (${t.fd}/0), Null0`); if (!all) continue; }
     const list = all ? t.all.slice().sort((a, b) => a.fd - b.fd) : [...t.succ, ...t.fs];
     for (const x of list) o.push(`        via ${fmtIp(x.via)} (${x.fd}/${x.rd}), ${longIf(x.iface.label)}`);
+  }
+  return o;
+}
+
+/** show ip eigrp topology <網段>：一個網段每一條路的細節（合成的 metric 與組成它的頻寬、延遲、跳數） */
+export function eigrpTopoEntryLines(state, d, longIf, net, bits) {
+  const e = d.rt && d.rt.eigrp;
+  if (!e) return ['% EIGRP 沒有在這台設備上執行（router eigrp <AS>）'];
+  const t = Object.values(e.topo).filter((x) => (bits != null ? x.net === netOf(net, bits) && x.bits === bits : netOf(net, x.bits) === x.net)).sort((a, b) => b.bits - a.bits)[0];
+  if (!t) return ['% Entry not in topology table', '（拓撲表裡沒有這個網段：先用 show ip eigrp topology 看有哪些）'];
+  const n = t.conn || t.redist || t.sum0 ? 1 : t.succ.length;
+  const o = [`EIGRP-IPv4 Topology Entry for AS(${e.as})/ID(${e.rid != null ? fmtIp(e.rid) : '0.0.0.0'}) for ${fmtIp(t.net)}/${t.bits}`,
+    `  State is Passive, Query origin flag is 1, ${n} Successor(s), FD is ${t.fd}, RIB is ${t.fd}`, '  Descriptor Blocks:'];
+  const vector = (bw, dly, hops, orig, ex, tag) => ['      Vector metric:', `        Minimum bandwidth is ${bw} Kbit`, `        Total delay is ${dly} microseconds`, '        Reliability is 255/255', '        Load is 1/255', '        Minimum MTU is 1500',
+    `        Hop count is ${hops}`, `        Originating router is ${orig != null ? fmtIp(orig) : '0.0.0.0'}`,
+    ...(ex ? ['      External data:', `        AS number of route is ${ex === 'ospf' ? 1 : 0}`, `        External protocol is ${ex === 'ospf' ? 'OSPF' : ex === 'static' ? 'Static' : ex === 'connected' ? 'Connected' : 'Unknown'}, external metric is 0`, `        Administrator tag is ${tag || 0} (0x${(tag || 0).toString(16).padStart(8, '0').toUpperCase()})`] : [])];
+  if (t.conn) o.push(`  0.0.0.0 (${longIf(t.iface.label)}), from Connected, Send flag is 0x0`, `      Composite metric is (${t.fd}/0), route is Internal`, ...vector(t.bw, t.dly, 0, e.rid));
+  else if (t.redist) o.push('  0.0.0.0, from Redistributed, Send flag is 0x0', `      Composite metric is (${t.fd}/0), route is External`, ...vector(t.bw, t.dly, 0, e.rid, t.redist, t.tag));
+  else if (t.sum0) o.push('  0.0.0.0 (Null0), from 0.0.0.0, Send flag is 0x0', `      Composite metric is (${t.fd}/0), route is Internal`, ...vector(t.bw, t.dly, 0, e.rid));
+  for (const x of t.all.slice().sort((a, b) => a.fd - b.fd)) {
+    o.push(`  ${fmtIp(x.via)} (${longIf(x.iface.label)}), from ${fmtIp(x.via)}, Send flag is 0x0`, `      Composite metric is (${x.fd}/${x.rd}), route is ${x.ex ? 'External' : 'Internal'}`, ...vector(x.bw, x.dly, x.hops || 1, x.orig, x.ex ? x.xp || 'ext' : null, x.tag));
+    if (!t.sum0 && x.fd !== t.fd && !(x.rd < t.fd)) o.push(`（這條路對方回報的距離 ${x.rd} 沒有小於這台目前的 FD ${t.fd}：不符合可行條件，不是 feasible successor，variance 設再大也不會用）`);
   }
   return o;
 }
@@ -321,12 +387,12 @@ export function eigrpProtoLines(state, d, longIf, hms) {
   return [`Routing Protocol is "eigrp ${e.as}"`, '  Outgoing update filter list for all interfaces is not set', '  Incoming update filter list for all interfaces is not set',
     '  Default networks flagged in outgoing updates', '  Default networks accepted from incoming updates', `  Redistributing: ${[`eigrp ${e.as}`, ...red].join(', ')}`,
     `  EIGRP-IPv4 Protocol for AS(${e.as})`, `    Metric weight K1=${k[0]}, K2=${k[1]}, K3=${k[2]}, K4=${k[3]}, K5=${k[4]}`, '    Soft SIA disabled', '    NSF-aware route hold timer is 240',
-    `    Router-ID: ${e.rid != null ? fmtIp(e.rid) : '0.0.0.0'}`, '    Topology : 0 (base)', '      Active Timer: 3 min', '      Distance: internal 90 external 170',
+    `    Router-ID: ${e.rid != null ? fmtIp(e.rid) : '0.0.0.0'}`, '    Topology : 0 (base)', '      Active Timer: 3 min', `      Distance: internal ${eigrpDist(d)[0]} external ${eigrpDist(d)[1]}`,
     `      Maximum path: ${+c.maxPaths || 4}`, '      Maximum hopcount 100', `      Maximum metric variance ${+c.variance || 1}`, '',
     '  Automatic Summarization: disabled', `  Maximum path: ${+c.maxPaths || 4}`, '  Routing for Networks:',
     ...(c.nets || []).map((n) => `    ${fmtIp(n.net)}${n.bits === classBitsOf(n.net) ? '' : '/' + n.bits}`),
     ...(pas.length ? ['  Passive Interface(s):', ...pas.map((i) => '    ' + longIf(i.label))] : []),
     '  Routing Information Sources:', '    Gateway         Distance      Last Update',
-    ...e.nbrs.filter((n) => !n.stale).map((n) => `    ${fmtIp(n.ip).padEnd(16)}${String(EIGRP_AD).padStart(8)}      ${hms(Math.max(0, state.clock - n.since))}`),
-    `  Distance: internal ${EIGRP_AD} external ${EIGRP_EX_AD}`];
+    ...e.nbrs.filter((n) => !n.stale).map((n) => `    ${fmtIp(n.ip).padEnd(16)}${String(eigrpDist(d)[0]).padStart(8)}      ${hms(Math.max(0, state.clock - n.since))}`),
+    `  Distance: internal ${eigrpDist(d)[0]} external ${eigrpDist(d)[1]}`];
 }

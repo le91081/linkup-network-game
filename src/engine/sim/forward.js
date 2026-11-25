@@ -624,7 +624,7 @@ export function forward(state, ctx, startId, pkt) {
     // 主機的目的地快取：之前收到 ICMP Redirect 的目的地，直接送給 Redirect 指定的下一站
     const rdRoute = !inIf && !cloud && dev.kind === 'host' && !vrfNow ? redirectRoute(state, dev, pkt.dst) : null;
     if (rdRoute) log.push({ dev: dev.id, kind: 'info', text: `${dev.name} 的目的地快取：之前收到 ${state.devices[rdRoute.redirect.by] ? state.devices[rdRoute.redirect.by].name : '路由器'} 的 ICMP Redirect，往 ${fmtIp(pkt.dst)} 直接送給 ${fmtIp(rdRoute.via)}（不經過預設閘道）` });
-    let route = (pbrName && pbrRoute(dev, pbrName, pkt, vrfNow, log)) || (cloud ? cloud.out : rdRoute || lookupRoute(dev, pkt.dst, pkt.src, vrfNow));
+    let route = (pbrName && pbrRoute(dev, pbrName, pkt, vrfNow, log)) || (cloud ? cloud.out : rdRoute || lookupRoute(dev, pkt.dst, pkt.src, vrfNow, true));
     // SD-WAN：查到的是 SD-WAN 的預設路由，就由 SD-WAN 規則挑成員（沒有符合的規則：照來源位址分散）
     if (route && route.sdwan != null) {
       const pk = sdwanPick(state, dev, pkt);
@@ -634,6 +634,10 @@ export function forward(state, ctx, startId, pkt) {
     if (!route) {
       D('packet', `IP: s=${fmtIp(pkt.src)} (${inIf ? longIf(inIf.label) : 'local'}), d=${fmtIp(pkt.dst)}, len ${ipLen(pkt)}, unroutable`);
       return drop(noRouteReason(state, dev, pkt.dst));
+    }
+    if (route.null0) {
+      D('packet', `IP: s=${fmtIp(pkt.src)} (${inIf ? longIf(inIf.label) : 'local'}), d=${fmtIp(pkt.dst)} (Null0), len ${ipLen(pkt)}, discard`);
+      return drop(`${dev.name}：往 ${fmtIp(pkt.dst)} 最符合的路由是 ${fmtIp(route.net)}/${route.bits} → Null0（${route.type === 'S' ? '靜態的丟棄路由' : '彙總自動產生的丟棄路由：彙總的範圍裡沒有這個位址更明確的路'}），封包在這裡丟掉`);
     }
     if (route.mpls && !pkt.mpls) {
       const L = route.mpls, pe = state.devices[L.pe];

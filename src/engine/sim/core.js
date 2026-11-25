@@ -135,5 +135,8 @@ export function setQuiet(v) { const p = QUIET; QUIET = v; return p; }
 export const PBR_HITS = new WeakMap();
 export const pbrHits = (e) => PBR_HITS.get(e) || { pk: 0, by: 0 };
 
+/** Null0：把封包丟掉的虛擬介面（ip route … Null0、彙總路由自動產生的丟棄路由） */
+export const NULL0 = { id: 'Null0', label: 'Null0', null0: true, bind: { t: 'null' }, rt: { ip: null, bits: null, link: true, vips: [] } };
+
 /** 因為 time-range 現在不在時間內而暫時不生效的 ACL 規則（每次重算時由 timerange.js 更新） */
 export const TR_OFF = new WeakSet();

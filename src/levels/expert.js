@@ -427,4 +427,193 @@ export const LEVELS96 = [
     },
     recap: ['每個 VLAN 的 STP 根橋與 HSRP Active 放在同一台，回程的路由 cost 也對齊；不同的 VLAN 交錯放在兩台上分擔。', 'HSRP 要 preempt 才會搶、要追蹤上行才會讓；Port-channel 兩端的每一條成員都要加進去。'],
   },
+  {
+    id: 'l185', chapter: 19, title: '兩條專線，只有慢的那條在跑', subtitle: 'EIGRP 進階：彙總與最長前綴、不等價負載分擔 (variance)、重分配的種子 metric', tags: ['EIGRP', 'variance', '彙總', 'summary-address', '路由重分配', 'feasible successor'],
+    brief: '分公司用兩條專線連回總公司：A 線 100 Mbps、B 線 50 Mbps，全公司跑 EIGRP。網管報表顯示總公司往分公司的流量全部擠在比較慢的 B 線，A 線幾乎是空的；另外，分公司一直連不到合作廠商的訂單系統。合作廠商的路由器跑的是 OSPF，由 HQ-Core 負責和它交換路由。請讓兩條專線依頻寬比例分擔流量、總公司只看到分公司的一條彙總路由，並讓分公司連得到合作廠商。',
+    given: [
+      ['專線', 'A 線 10.0.12.0/30（100 Mbps）· B 線 10.0.21.0/30（50 Mbps）· HQ-RT 是 .1、BR-RT 是 .2'],
+      ['分公司', '10.2.0.0/24（PC .50）、10.2.1.0/24、10.2.2.0/24、10.2.3.0/24 → 彙總成 10.2.0.0/22'],
+      ['總公司', 'HQ-RT ↔ HQ-Core 10.0.0.0/30 · ERP 10.1.0.10'],
+      ['合作廠商', 'HQ-Core ↔ PT-RT 172.31.0.0/30（OSPF area 0）· 訂單系統 172.20.0.10'],
+      ['設計要求', 'EIGRP AS 100 · 兩條專線都要有流量（比例約 2：1）· 總公司的路由表裡分公司只有一條 10.2.0.0/22'],
+    ],
+    learn: [
+      { t: '彙總只做一半的後果', d: '彙總是寫在介面上的（ip summary-address eigrp）。只在 A 線的介面上設，B 線照樣送出四條 /24 的明細。總公司於是同時有 A 線來的 /22 與 B 線來的 /24：最長前綴比對永遠選 /24，所有往分公司的流量都走 B 線，和頻寬、metric 完全無關。每一條往外的線都要設一樣的彙總。' },
+      { t: '彙總的那一台多一條 Null0', d: '設了彙總的路由器自己會多一筆「D 10.2.0.0/22 is a summary, Null0」（管理距離 5）。範圍裡已經不存在的網段，封包到這裡就丟掉，不會順著預設路由又被送回總公司、在兩台之間來回到 TTL 歸零。這筆彙總和其他的路一樣會送給所有鄰居，設了彙總的那個介面另外把明細壓掉。' },
+      { t: '可行條件與 variance', d: 'EIGRP 預設只用 metric 最好的那條路。variance 2 讓 metric 在最佳路徑兩倍以內的路也裝進路由表，並依 metric 的反比分配流量 —— 但只限 feasible successor：鄰居回報的距離 (RD) 要小於自己目前的最佳距離 (FD)。兩條平行的線接到同一台鄰居時一定符合。' },
+      { t: 'metric 看最窄的頻寬', d: 'metric = 256 ×（10⁷ ÷ 路徑上最小的頻寬 kbps ＋ 延遲總和 ÷ 10）。介面上的 bandwidth 要照實際的合約頻寬設（它不會改變實際的速率，只是告訴路由協定與 QoS）。100 Mbps 與 50 Mbps 的 metric 大約差兩倍，所以 variance 要 2。' },
+      { t: '種子 metric', d: '把別的協定的路倒進 EIGRP 時，EIGRP 不知道它的頻寬與延遲是多少。沒有指定的話 metric 是無限大，路由根本不會送出去：redistribute ospf 1 metric 100000 100 255 1 1500（頻寬 kbps、延遲、可靠度、負載、MTU），或用 default-metric 一次設定。倒進 OSPF 則有預設值（20），不指定也會出現。' },
+      { t: '怎麼驗證', d: 'show ip eigrp topology 看每個網段的 FD 與每個鄰居的 RD（括號裡的兩個數字）；show ip route <網段> 看有幾個下一站、traffic share count 各是多少；show ip protocols 看 variance 與重分配的設定；D EX 是從外部重分配進來的路（AD 170）。' },
+    ],
+    setup() {
+      const s = makeState([
+        D('isr4331', 'pt', { name: 'PT-RT（合作廠商）', host: 'PT-RT', pos: [-13, -7], locked: true, note: '合作廠商的路由器：跑 OSPF，不是你管的' }),
+        D('tower', 'order', { name: '訂單系統', pos: [-13, -1.5], ip: '172.20.0.10', gw: '172.20.0.1', services: WEB }),
+        D('isr4331', 'core', { name: 'HQ-Core', pos: [-7, -4] }),
+        D('tower', 'erp', { name: 'ERP', pos: [-7, 1.5], ip: '10.1.0.10', gw: '10.1.0.1', services: WEB }),
+        D('isr4331', 'hq', { name: 'HQ-RT', pos: [-1, -4] }),
+        D('isr4331', 'br', { name: 'BR-RT', pos: [8, -4] }),
+        D('pc', 'pc', { name: '分公司 PC', pos: [8, 1.5], ip: '10.2.0.50', gw: '10.2.0.1' }),
+      ], [
+        ['pt:Gi0/0/0', 'core:Gi0/0/2'], ['pt:Gi0/0/1', 'order:eth0'], ['core:Gi0/0/1', 'erp:eth0'], ['core:Gi0/0/0', 'hq:Gi0/0/2'],
+        ['hq:Gi0/0/0', 'br:Gi0/0/0'], ['hq:Gi0/0/1', 'br:Gi0/0/1'], ['br:Gi0/0/2', 'pc:eth0'],
+      ]);
+      recompute(s);
+      cfg(s, 'pt', [...ifIp('Gi0/0/0', '172.31.0.2'), ...ifIp('Gi0/0/1', '172.20.0.1', '255.255.255.0'),
+        'router ospf 1', 'network 172.31.0.0 0.0.0.3 area 0', 'network 172.20.0.0 0.0.0.255 area 0', 'passive-interface Gi0/0/1', 'exit']);
+      // HQ-Core：兩個方向的重分配都設了，但 OSPF → EIGRP 沒有給 metric
+      cfg(s, 'core', [...ifIp('Gi0/0/0', '10.0.0.2'), ...ifIp('Gi0/0/1', '10.1.0.1', '255.255.255.0'), ...ifIp('Gi0/0/2', '172.31.0.1'),
+        'router eigrp 100', 'network 10.0.0.0 0.0.0.3', 'network 10.1.0.0 0.0.0.255', 'passive-interface Gi0/0/1', 'redistribute ospf 1', 'exit',
+        'router ospf 1', 'network 172.31.0.0 0.0.0.3 area 0', 'redistribute eigrp 100 subnets', 'exit']);
+      const wan = (a, b) => [...ifIp('Gi0/0/0', a, '255.255.255.252', ['bandwidth 100000', 'description LINE-A 100M']), ...ifIp('Gi0/0/1', b, '255.255.255.252', ['bandwidth 50000', 'description LINE-B 50M'])];
+      cfg(s, 'hq', [...wan('10.0.12.1', '10.0.21.1'), ...ifIp('Gi0/0/2', '10.0.0.1'),
+        'router eigrp 100', 'network 10.0.0.0 0.0.0.3', 'network 10.0.12.0 0.0.0.3', 'network 10.0.21.0 0.0.0.3', 'exit']);
+      // BR-RT：彙總只設在 A 線的介面上；B 線照樣送出四條 /24
+      cfg(s, 'br', [...wan('10.0.12.2', '10.0.21.2'), ...ifIp('Gi0/0/2', '10.2.0.1', '255.255.255.0'),
+        ...[1, 2, 3].flatMap((n) => [`interface Loopback${n}`, `ip address 10.2.${n}.1 255.255.255.0`, 'exit']),
+        'interface Gi0/0/0', 'ip summary-address eigrp 100 10.2.0.0 255.255.252.0', 'exit',
+        'router eigrp 100', 'network 10.0.12.0 0.0.0.3', 'network 10.0.21.0 0.0.0.3', 'network 10.2.0.0 0.0.3.255', 'passive-interface Gi0/0/2', 'exit']);
+      recompute(s);
+      return s;
+    },
+    objectives: [
+      { type: 'tcp', from: 'pc', to: 'order', port: 443, label: '分公司連得到合作廠商的訂單系統（https://172.20.0.10）' },
+      {
+        type: 'check', label: '總公司只看到分公司的一條彙總 10.2.0.0/22，沒有 /24 的明細',
+        test(s) {
+          for (const id of ['hq', 'core']) {
+            const d = dev(s, id), r = (d.rt.routes || []).filter((x) => !x.bad && (x.net >>> 10) === (parseIp('10.2.0.0') >>> 10));
+            const fine = r.find((x) => x.bits > 22);
+            if (fine) return `${d.name} 的路由表裡還有 ${[fine.net >>> 24, (fine.net >>> 16) & 255, (fine.net >>> 8) & 255, fine.net & 255].join('.')}/${fine.bits}（從 ${fine.iface ? fine.iface.label : '?'} 學到）：每一條往總公司的線都要設彙總，不然比較長的前綴一定贏`;
+            if (!r.some((x) => x.bits === 22)) return `${d.name} 沒有 10.2.0.0/22 這條彙總路由`;
+          }
+          return true;
+        },
+      },
+      {
+        type: 'check', label: '兩條專線都有流量：兩個方向的路由都有兩個下一站（A 線與 B 線）',
+        test(s) {
+          const hops = (id, net, bits) => new Set((dev(s, id).rt.routes || []).filter((x) => !x.bad && x.net === parseIp(net) && x.bits === bits && x.iface).map((x) => x.iface.id));
+          const a = hops('br', '10.1.0.0', 24), b = hops('hq', '10.2.0.0', 22);
+          if (a.size < 2) return `BR-RT 往 ERP 的網段（10.1.0.0/24）只走 ${[...a].join('、') || '？'}：B 線的 metric 大約是 A 線的兩倍，要 variance 2 才會一起用`;
+          if (b.size < 2) return `HQ-RT 往分公司（10.2.0.0/22）只走 ${[...b].join('、') || '？'}：HQ-RT 也要設 variance（兩個方向各自決定）`;
+          return true;
+        },
+      },
+      { type: 'tcp', from: 'pc', to: 'erp', port: 443, label: '分公司照常打得開 ERP' },
+      { type: 'failover', label: 'A 線斷了，分公司照樣連得到 ERP 與合作廠商', cut: [['hq', 'Gi0/0/0']], test: { type: 'tcp', from: 'pc', to: 'order', port: 443 } },
+    ],
+    hints: [
+      'HQ-RT：show ip route 10.2.0.0 255.255.252.0 longer-prefixes。10.2.0.0/22 從 A 線來，另外還有四條 /24 從 B 線（Gi0/0/1）來：比較長的前綴永遠贏，所以流量全走 B 線。BR-RT：interface Gi0/0/1 → ip summary-address eigrp 100 10.2.0.0 255.255.252.0。',
+      '彙總一致之後，HQ-RT 的 show ip eigrp topology 10.2.0.0/22 有兩條路，但只有 A 線的被選中。router eigrp 100 → variance 2；BR-RT 也一樣（它往總公司的方向）。show ip route 之後同一個網段會有兩個下一站，traffic share count 大約 2：1。',
+      '合作廠商：BR-RT 的路由表沒有 172.20.0.0/24。HQ-Core 的 show running-config | section eigrp 有 redistribute ospf 1，卻沒有 metric：EIGRP 不知道這些路的頻寬與延遲，當成無限大、不送出去。改成 redistribute ospf 1 metric 100000 100 255 1 1500（或加一行 default-metric 100000 100 255 1 1500）。',
+    ],
+    solve(s) {
+      cfg(s, 'br', ['interface Gi0/0/1', 'ip summary-address eigrp 100 10.2.0.0 255.255.252.0', 'exit', 'router eigrp 100', 'variance 2']);
+      cfg(s, 'hq', ['router eigrp 100', 'variance 2']);
+      cfg(s, 'core', ['router eigrp 100', 'redistribute ospf 1 metric 100000 100 255 1 1500']);
+    },
+    recap: ['彙總要在每一條往外的介面上都設：少一條，對面就會收到比較長的明細，流量全部走那一條。', 'variance 讓 feasible successor 一起分擔流量；倒進 EIGRP 的路一定要有種子 metric。'],
+  },
+  {
+    id: 'l186', chapter: 19, title: '兩個路由協定、兩個交界', subtitle: '雙向重分配：管理距離造成的迴圈、路由標籤、用種子 metric 決定主線與備援', tags: ['路由重分配', 'OSPF', 'EIGRP', '管理距離', 'route tag', 'distribute-list', '路徑控制'],
+    brief: '工廠的舊網路跑 EIGRP，新的資料中心跑 OSPF。上個月為了備援，把兩邊用兩台邊界路由器（ASBR-1、ASBR-2）接起來，兩台都做雙向重分配。上線之後：資料中心的監控主機連得到工廠的 MES 伺服器，卻一直連不到產線的 HMI —— traceroute 看到封包在 DC-Core 和邊界路由器之間來回。產線閘道是設備商管的，FAB-Core 用一條靜態路由指過去，再重分配進 EIGRP。請找出原因修好，並讓 ASBR-1 成為兩個方向的主線、ASBR-2 只在 ASBR-1 故障時接手。',
+    given: [
+      ['資料中心 (OSPF area 0)', 'DC-Core ↔ ASBR-1 10.0.14.0/30 · DC-Core ↔ ASBR-2 10.0.24.0/30 · 監控主機 10.40.0.50'],
+      ['工廠 (EIGRP AS 100)', 'FAB-Core ↔ ASBR-1 10.0.13.0/30 · FAB-Core ↔ ASBR-2 10.0.23.0/30 · MES 10.30.0.10'],
+      ['產線', '192.168.50.0/24（HMI .10），在設備商的閘道 10.30.0.2 後面 —— FAB-Core 上是靜態路由，重分配進 EIGRP'],
+      ['設計要求', '平常兩個方向都走 ASBR-1；ASBR-1 整台故障時自動改走 ASBR-2'],
+      ['不能動', '產線閘道是設備商管的；FAB-Core 的靜態路由與重分配不用改'],
+    ],
+    learn: [
+      { t: '管理距離決定相信誰', d: '同一個網段從兩個協定學到時，路由器不比 metric（單位不一樣，沒辦法比），只看管理距離：EIGRP 內部 90、OSPF 110、EIGRP 外部 170。MES 的網段是 EIGRP 內部的路（90），邊界路由器會直接走 EIGRP；產線的網段是重分配進 EIGRP 的外部路由（170）—— 另一台邊界路由器把它倒進 OSPF 之後，這一台從 OSPF 也學到一份（110），於是相信 OSPF，把封包往資料中心送。兩台都這樣想，封包就在中間來回。' },
+      { t: '修法一：調整管理距離', d: '在兩台邊界路由器的 router ospf 底下 distance ospf external 171：OSPF 外部路由比 EIGRP 外部（170）還不可信，產線的網段就會回到 EIGRP 這一邊。只動 external，OSPF 區域內的路還是 110。反過來把 EIGRP 外部調到比 110 小（distance eigrp 90 105）是常見的錯誤：資料中心自己的網段也會被倒進 EIGRP 再繞回來。' },
+      { t: '修法二：路由標籤', d: '重分配的時候貼上標籤（route-map 裡 set tag 100，或 redistribute … tag 100），另一台邊界路由器看到這個標籤就知道「這是從 EIGRP 來的」：router ospf 底下 distribute-list route-map <名稱> in，route-map 第一條 deny、match tag 100，第二條 permit。LSA 還是在資料庫裡，只是不放進這一台的路由表。這個做法不必記各協定的管理距離，協定再多也適用。' },
+      { t: '種子 metric 決定走哪一台', d: '倒進 OSPF 的外部路由預設是 E2、metric 20，兩台都一樣，資料中心就把流量分給兩台。讓備援那一台用比較大的 metric（redistribute eigrp 100 subnets metric 100），主線的 20 就贏了。倒進 EIGRP 的方向一樣：備援那一台給比較小的頻寬或比較大的延遲，FAB-Core 算出來的 metric 比較差，平常就只走主線。' },
+      { t: '怎麼查', d: 'show ip route <網段> 看 Known via 是哪一個協定、distance 多少；show ip ospf database external 看是誰（Advertising Router）送出這筆外部路由、Tag 是多少；show ip eigrp topology <網段> 看外部路由的來源協定與標籤；traceroute 看封包在哪兩台之間來回。' },
+    ],
+    setup() {
+      const s = makeState([
+        D('pc', 'mon', { name: '監控主機', pos: [-13, 2], ip: '10.40.0.50', gw: '10.40.0.1' }),
+        D('isr4331', 'r4', { name: 'DC-Core', pos: [-9, -3] }),
+        D('isr4331', 'r1', { name: 'ASBR-1', pos: [-2, -7] }),
+        D('isr4331', 'r2', { name: 'ASBR-2', pos: [-2, 1] }),
+        D('isr4331', 'r3', { name: 'FAB-Core', pos: [5, -3] }),
+        D('sw5', 'sw', { name: '工廠的交換器', pos: [10, -3] }),
+        D('tower', 'mes', { name: 'MES 伺服器', pos: [10, -8], ip: '10.30.0.10', gw: '10.30.0.1', services: WEB }),
+        D('isr4321', 'gw', { name: '產線閘道（設備商）', host: 'LINE-GW', pos: [14, -3], locked: true, note: '設備商管理的閘道：不跑路由協定，預設路由指向 FAB-Core' }),
+        D('tower', 'hmi', { name: '產線 HMI', pos: [14, 2], ip: '192.168.50.10', gw: '192.168.50.1', services: WEB }),
+      ], [
+        ['mon:eth0', 'r4:Gi0/0/2'], ['r4:Gi0/0/0', 'r1:Gi0/0/0'], ['r4:Gi0/0/1', 'r2:Gi0/0/0'],
+        ['r1:Gi0/0/1', 'r3:Gi0/0/0'], ['r2:Gi0/0/1', 'r3:Gi0/0/1'], ['r3:Gi0/0/2', 'sw:1'], ['sw:2', 'mes:eth0'], ['sw:3', 'gw:Gi0/0/0'], ['gw:Gi0/0/1', 'hmi:eth0'],
+      ]);
+      recompute(s);
+      cfg(s, 'gw', [...ifIp('Gi0/0/0', '10.30.0.2', '255.255.255.0'), ...ifIp('Gi0/0/1', '192.168.50.1', '255.255.255.0'), 'ip route 0.0.0.0 0.0.0.0 10.30.0.1']);
+      cfg(s, 'r4', [...ifIp('Gi0/0/0', '10.0.14.2'), ...ifIp('Gi0/0/1', '10.0.24.2'), ...ifIp('Gi0/0/2', '10.40.0.1', '255.255.255.0'), ...lo0('4.4.4.4'),
+        'router ospf 1', 'router-id 4.4.4.4', 'network 10.0.14.0 0.0.0.3 area 0', 'network 10.0.24.0 0.0.0.3 area 0', 'network 10.40.0.0 0.0.0.255 area 0', 'passive-interface Gi0/0/2', 'exit']);
+      // 兩台邊界路由器：一模一樣的雙向重分配
+      const asbr = (n) => [...ifIp('Gi0/0/0', `10.0.${n}4.1`), ...ifIp('Gi0/0/1', `10.0.${n}3.1`), ...lo0(`${n}.${n}.${n}.${n}`),
+        'router eigrp 100', `eigrp router-id ${n}.${n}.${n}.${n}`, `network 10.0.${n}3.0 0.0.0.3`, 'redistribute ospf 1 metric 100000 100 255 1 1500', 'exit',
+        'router ospf 1', `router-id ${n}.${n}.${n}.${n}`, `network 10.0.${n}4.0 0.0.0.3 area 0`, 'redistribute eigrp 100 subnets', 'exit'];
+      cfg(s, 'r1', asbr(1));
+      cfg(s, 'r2', asbr(2));
+      cfg(s, 'r3', [...ifIp('Gi0/0/0', '10.0.13.2'), ...ifIp('Gi0/0/1', '10.0.23.2'), ...ifIp('Gi0/0/2', '10.30.0.1', '255.255.255.0'), ...lo0('3.3.3.3'),
+        'ip route 192.168.50.0 255.255.255.0 10.30.0.2',
+        'router eigrp 100', 'eigrp router-id 3.3.3.3', 'network 10.0.13.0 0.0.0.3', 'network 10.0.23.0 0.0.0.3', 'network 10.30.0.0 0.0.0.255', 'passive-interface Gi0/0/2',
+        'redistribute static metric 100000 100 255 1 1500', 'exit']);
+      recompute(s);
+      return s;
+    },
+    objectives: [
+      { type: 'tcp', from: 'mon', to: 'hmi', port: 443, label: '監控主機連得到產線的 HMI（https://192.168.50.10）' },
+      {
+        type: 'check', label: '兩台邊界路由器往產線（192.168.50.0/24）都直接交給 FAB-Core，不會繞回資料中心',
+        test(s) {
+          for (const id of ['r1', 'r2']) {
+            const d = dev(s, id), all = (d.rt.routes || []).filter((x) => !x.bad && x.net === parseIp('192.168.50.0') && x.bits === 24);
+            if (!all.length) return `${d.name} 的路由表裡沒有 192.168.50.0/24`;
+            const best = all.reduce((a, b) => (b.ad < a.ad ? b : a));
+            if (best.type !== 'E') return `${d.name} 往 192.168.50.0/24 用的是 OSPF 的外部路由（管理距離 ${best.ad}，從另一台邊界路由器倒進 OSPF 的那一份），EIGRP 的外部路由（${(all.find((x) => x.type === 'E') || { ad: 170 }).ad}）輸了：封包被送回資料中心`;
+          }
+          return true;
+        },
+      },
+      {
+        type: 'check', label: '邊界路由器往資料中心的網段（10.40.0.0/24）還是走 OSPF，沒有被倒回來的路蓋掉',
+        test(s) {
+          for (const id of ['r1', 'r2']) {
+            const d = dev(s, id), all = (d.rt.routes || []).filter((x) => !x.bad && x.net === parseIp('10.40.0.0') && x.bits === 24);
+            if (!all.length) return `${d.name} 的路由表裡沒有 10.40.0.0/24`;
+            const best = all.reduce((a, b) => (b.ad < a.ad ? b : a));
+            if (best.type !== 'O') return `${d.name} 往資料中心的 10.40.0.0/24 走的是 EIGRP 外部路由（管理距離 ${best.ad}）：這是另一台邊界路由器倒進 EIGRP 的那一份，把 EIGRP 外部調得比 OSPF（110）還小就會這樣`;
+          }
+          return true;
+        },
+      },
+      {
+        type: 'check', label: '平常兩個方向都只走 ASBR-1（主線）',
+        test(s) {
+          const hops = (id, ip) => { const all = (dev(s, id).rt.routes || []).filter((x) => !x.bad && x.net === parseIp(ip) && x.bits === 24), ad = Math.min(...all.map((x) => x.ad)); return all.filter((x) => x.ad === ad); };
+          const out = hops('r4', '192.168.50.0'), back = hops('r3', '10.40.0.0');
+          if (!out.length) return 'DC-Core 的路由表裡沒有 192.168.50.0/24';
+          if (!back.length) return 'FAB-Core 的路由表裡沒有 10.40.0.0/24';
+          if (out.some((x) => x.iface.id !== 'Gi0/0/0')) return `DC-Core 往產線的路${out.length > 1 ? '同時走兩台邊界路由器（兩筆 E2 的 metric 一樣）' : '走的是 ASBR-2'}：讓 ASBR-2 倒進 OSPF 的 metric 比 ASBR-1 大`;
+          if (back.some((x) => x.iface.id !== 'Gi0/0/0')) return `FAB-Core 往資料中心的路${back.length > 1 ? '同時走兩台邊界路由器（兩邊的種子 metric 一樣）' : '走的是 ASBR-2'}：讓 ASBR-2 倒進 EIGRP 的種子 metric 比 ASBR-1 差（頻寬小一點或延遲大一點）`;
+          return true;
+        },
+      },
+      { type: 'tcp', from: 'mon', to: 'mes', port: 443, label: '監控主機照常連得到 MES 伺服器' },
+      { type: 'failover', label: 'ASBR-1 整台故障：監控主機照樣連得到產線的 HMI', down: ['r1'], test: { type: 'tcp', from: 'mon', to: 'hmi', port: 443 } },
+    ],
+    hints: [
+      'ASBR-1：show ip route 192.168.50.0。Known via "ospf 1"、distance 110 —— 它相信的是 ASBR-2 倒進 OSPF 的那一份，不是 FAB-Core 給的 EIGRP 外部路由（170）。ASBR-2 也一樣，所以封包在 DC-Core 與邊界路由器之間來回。MES 的 10.30.0.0/24 是 EIGRP 內部路由（90），所以沒事。',
+      '兩台邊界路由器都要改，擇一：(1) router ospf 1 → distance ospf external 171；(2) 重分配時貼標籤、另一台擋掉：route-map TAG-EIGRP permit 10 / set tag 100，redistribute eigrp 100 subnets route-map TAG-EIGRP；route-map NO-BACK deny 10 / match tag 100、route-map NO-BACK permit 20，router ospf 1 → distribute-list route-map NO-BACK in。',
+      '主線與備援：只改 ASBR-2。router ospf 1 → redistribute eigrp 100 subnets metric 100（原本有 route-map 的話要一起寫）；router eigrp 100 → redistribute ospf 1 metric 10000 1000 255 1 1500。DC-Core 的 show ip route 192.168.50.0 與 FAB-Core 的 show ip route 10.40.0.0 都只剩往 ASBR-1 的那一條。',
+    ],
+    solve(s) {
+      for (const id of ['r1', 'r2']) cfg(s, id, ['router ospf 1', 'distance ospf external 171']);
+      cfg(s, 'r2', ['router ospf 1', 'redistribute eigrp 100 subnets metric 100', 'exit', 'router eigrp 100', 'redistribute ospf 1 metric 10000 1000 255 1 1500']);
+    },
+    recap: ['同一個網段從兩個協定學到時只看管理距離：兩個交界的雙向重分配，要用 distance 或路由標籤避免相信倒回來的那一份。', '種子 metric 決定對面走哪一台邊界路由器：主線給好的、備援給差的。'],
+  },
 ];

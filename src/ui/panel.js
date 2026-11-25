@@ -428,7 +428,7 @@ function routesTab(ctx, body) {
   const vr = vrfs.length > 0 || dev.routes.some((r) => r.vrf || r.outIf);
   const cls = 'c-route' + (trk ? ' t' : '');
   // 出口介面：留空＝在這條路由自己的路由表找下一站；global＝下一站在全域的路由表；選介面＝從那個介面出去（可以是別的 VRF：路由洩漏）
-  const exitOpts = (r) => [['', '出口：自動'], ...(r.vrf ? [['@global', '下一站在全域 (global)']] : []),
+  const exitOpts = (r) => [['', '出口：自動'], ...(r.vrf ? [['@global', '下一站在全域 (global)']] : []), ...(r.outIf === 'Null0' ? [['Null0', '出口 Null0（丟棄）']] : []),
     ...dev.ifaces.filter((i) => i.bind.t !== 'wlan').map((i) => [i.id, `出口 ${i.label}${vrfs.length ? (i.vrf ? '（' + i.vrf + '）' : '（全域）') : ''}`])];
   const exitOf = (r) => (r.global ? '@global' : r.outIf || '');
   const setExit = (r, v) => { delete r.global; delete r.outIf; if (v === '@global') r.global = true; else if (v) r.outIf = v; };

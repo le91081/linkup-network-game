@@ -154,7 +154,7 @@ export function openCerts(app, which = 'ccna') {
       h('div', { class: 'hero' }, h('div', { class: 'hero-ic' }, icon('award', 30)),
         h('div', null, h('h1', { text: '證照地圖' }), h('p', { text: '每一關對應到哪些考試條目，以及哪些範圍目前還沒有關卡。' })),
         h('div', { class: 'prog' }, h('b', { text: `${covered} / ${items.length}` }), h('span', { text: `條目有對應關卡 · 你已完成 ${cleared} 條` }))),
-      h('div', { class: 'seg' }, CERTS.map((c) => h('button', { type: 'button', class: c.id === id ? 'on' : '', onclick: () => draw(c.id) }, `${c.name} ${c.code}`))),
+      h('div', { class: 'seg certs' }, CERTS.map((c) => h('button', { type: 'button', class: c.id === id ? 'on' : '', onclick: () => draw(c.id) }, `${c.name} ${c.code}`))),
       h('div', { class: 'cbar' }, h('i', { style: { width: (cleared / items.length) * 100 + '%' } }), h('em', { style: { width: (covered / items.length) * 100 + '%' } })),
       h('p', { class: 'muted', style: { fontSize: '12.5px' }, text: cert.note + ' 條目標題為中文摘要，實際範圍請以官方公布的考試大綱為準。' }),
       ...cert.domains.map((d) => h('section', { class: 'chapter' }, h('h2', { text: d.name }),

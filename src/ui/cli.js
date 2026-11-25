@@ -29,7 +29,7 @@ import { nat64Rows, nat64Stats, clearNat64 } from '../engine/sim6.js';
 import { vtpCapable, vtpOf, vtpStatusLines } from '../engine/vtp.js';
 import { zbfActive } from '../engine/zbf.js';
 import { envPowerLines } from '../engine/power.js';
-import { eigrpNeighborLines, eigrpTopoLines, eigrpIfLines, eigrpProtoLines, eigrpBw, eigrpDly } from '../engine/eigrp.js';
+import { eigrpNeighborLines, eigrpTopoLines, eigrpTopoEntryLines, eigrpIfLines, eigrpProtoLines, eigrpBw, eigrpDly } from '../engine/eigrp.js';
 import { ripDbLines, ripProtoLines } from '../engine/rip.js';
 import { epcCmd, epcDelete, epcShow } from '../engine/epc.js';
 import { timeRangeLines } from '../engine/timerange.js';
@@ -824,6 +824,11 @@ const SHOW = {
     if (!vs.length) return ['%OSPF: Router process 1 is not running'];
     return vs.flatMap((v, k) => [...(k ? [''] : []), ...ospfDbLines(st, d, v)]);
   },
+  'show ip ospf database external': (st, d) => {
+    const vs = ospfViews(st, d).filter((v) => v.o2 && v.db);
+    if (!vs.length) return ['%OSPF: Router process 1 is not running'];
+    return vs.flatMap((v, k) => [...(k ? [''] : []), ...ospfDbLines(st, d, v, true)]);
+  },
   'show snmp': (st, d) => {
     const m = d.mgmt || {};
     if (!m.snmp || m.snmp === 'off') return ['%SNMP agent not enabled'];
@@ -1327,6 +1332,7 @@ function ribOf(d, vrf = '') {
 }
 const routeTail = (st, r) => {
   if (r.type === 'C' || r.type === 'L') return `is directly connected, ${longIf(r.iface.label)}`;
+  if (r.null0) return r.type === 'S' ? 'is directly connected, Null0' : `is a summary, ${rtAge(st, r)}, Null0`; // 丟棄路由
   const m = `[${r.ad}/${r.metric}] via ${fmtIp(r.via)}`;
   if (r.type === 'O') return `${m}, ${rtAge(st, r)}, ${longIf(r.iface.label)}`;
   if (r.type === 'E') return `[${r.ad}/${r.real ?? r.metric}] via ${fmtIp(r.via)}, ${rtAge(st, r)}, ${longIf(r.iface.label)}`; // variance 的路：路由表照最佳的分流，顯示自己的 metric
@@ -1393,13 +1399,26 @@ function routeEntry(st, d, rs) {
   } else if (r.type === 'S' || r.type === 'D') {
     o.push(`  Known via "static", distance ${r.ad}, metric 0${def ? ', candidate default path' : ''}`, '  Routing Descriptor Blocks:');
     rs.forEach((x, k) => o.push(`  ${k ? ' ' : '*'} ${x.via != null ? fmtIp(x.via) : `directly connected, via ${longIf(x.iface.label)}`}`, metricLine(0)));
+  } else if (r.type === 'O' && r.null0) {
+    o.push('  Known via "ospf 1", distance 110, metric 0, type intra area', '  Routing Descriptor Blocks:', '  * directly connected, via Null0', metricLine(0), '（area range 自動產生的丟棄路由：彙總的範圍裡沒有更明確的路時，封包在這裡丟掉）');
   } else if (r.type === 'O') {
     const type = { IA: 'inter area', E2: 'extern 2', E1: 'extern 1', N2: 'NSSA extern 2', N1: 'NSSA extern 1' }[r.sub] || 'intra area';
     const pid = r.vrf ? +((d.ospfVrf || {})[r.vrf] || {}).pid || 1 : 1;
-    if (/^[EN][12]$/.test(r.sub || '')) o.push(`  Known via "ospf ${pid}", distance 110, metric ${r.metric}${def ? ', candidate default path' : ''}`, `  Tag ${r.tag ?? (def ? 1 : 0)}, type ${type}${/2$/.test(r.sub) ? `, forward metric ${r.fwd ?? 1}` : ''}`);
-    else o.push(`  Known via "ospf ${pid}", distance 110, metric ${r.metric}${def ? ', candidate default path' : ''}, type ${type}`);
+    if (/^[EN][12]$/.test(r.sub || '')) o.push(`  Known via "ospf ${pid}", distance ${r.ad}, metric ${r.metric}${def ? ', candidate default path' : ''}`, `  Tag ${r.tag ?? (def ? 1 : 0)}, type ${type}${/2$/.test(r.sub) ? `, forward metric ${r.fwd ?? 1}` : ''}`);
+    else o.push(`  Known via "ospf ${pid}", distance ${r.ad}, metric ${r.metric}${def ? ', candidate default path' : ''}, type ${type}`);
     o.push(`  Last update from ${fmtIp(r.via)} on ${longIf(r.iface.label)}, ${rtAge(st, r)} ago`, '  Routing Descriptor Blocks:');
     rs.forEach((x, k) => o.push(`  ${k ? ' ' : '*'} ${fmtIp(x.via)}, from ${x.adv != null ? fmtIp(x.adv) : fmtIp(x.via)}, ${rtAge(st, x)} ago, via ${longIf(x.iface.label)}`, metricLine(x.metric)));
+  } else if (r.type === 'E') {
+    const as = (d.eigrp || {}).as;
+    const vec = (x) => [`      Total delay is ${x.dly ?? 0} microseconds, minimum bandwidth is ${x.bw ?? 0} Kbit`, '      Reliability 255/255, minimum MTU 1500 bytes', `      Loading 1/255, Hops ${x.hops ?? 0}`];
+    o.push(`  Known via "eigrp ${as}", distance ${r.ad}, metric ${r.metric}${def ? ', candidate default path' : ''}, type ${r.sub === 'EX' ? 'external' : 'internal'}`, `  Redistributing via eigrp ${as}`);
+    if (r.null0) o.push('  Routing Descriptor Blocks:', '  * directly connected, via Null0', `      Route metric is ${r.metric}, traffic share count is 1`, ...vec(r));
+    else {
+      if (r.sub === 'EX') o.push(`  Tag ${r.tag || 0}`);
+      o.push(`  Last update from ${fmtIp(r.via)} on ${longIf(r.iface.label)}, ${rtAge(st, r)} ago`, '  Routing Descriptor Blocks:');
+      rs.forEach((x, k) => o.push(`  ${k ? ' ' : '*'} ${fmtIp(x.via)}, from ${fmtIp(x.via)}, ${rtAge(st, x)} ago, via ${longIf(x.iface.label)}`, `      Route metric is ${x.real ?? x.metric}, traffic share count is ${x.share || 1}`, ...vec(x)));
+      if (rs.some((x) => x.share > 1)) o.push(`（variance ${(d.eigrp || {}).variance}：metric 不一樣的路一起用，流量照 traffic share count 的比例分配）`);
+    }
   } else if (r.type === 'B') {
     const asn = (bgpCfg(d) || {}).asn, path = r.aspath || [];
     const nh = (x) => x.bnh ?? x.via;
@@ -1640,7 +1659,7 @@ function ospfProcLines(st, d, v) {
     })];
 }
 /** show ip ospf database：一個程序 */
-function ospfDbLines(st, d, v) {
+function ospfDbLines(st, d, v, extDetail = false) {
   const o2 = v.o2, db = v.db;
   const age = (x) => String(((x * 7 + st.clock) % 1800) | 0).padStart(4);
   const seq = (x) => '0x800000' + (((x >>> 0) % 200) + 16).toString(16).toUpperCase().padStart(2, '0');
@@ -1676,6 +1695,19 @@ function ospfDbLines(st, d, v) {
   // Type-5：整個網域的一般區域都有同一份；只在 stub / NSSA 區域裡的路由器完全沒有
   const hasNormal = (o2.areas || []).some((a) => (kinds[a] || 'normal') === 'normal');
   const ext = hasNormal ? [...db.asbrs.filter(sameDom).flatMap((id) => ((db.exts || {})[id] || []).map((x) => ({ ...x, rid: db.rid[id] }))), ...(db.translated || []).filter((x) => sameDom(x.by)).map((x) => ({ ...x, rid: db.rid[x.by] }))] : [];
+  // show ip ospf database external：每一筆 Type-5 的細節（是哪一台 ASBR 送的、metric 的種類、路由標籤）
+  if (extDetail) {
+    o.length = 1;
+    if (!ext.length) return [...o, '', '（這個網域裡沒有 Type-5 的外部路由：沒有任何一台把別的來源重分配進 OSPF）'];
+    o.push('', '\t\tType-5 AS External Link States');
+    for (const x of ext) {
+      o.push('', `  LS age: ${age(x.net + 1).trim()}`, '  Options: (No TOS-capability, DC, Upward)', '  LS Type: AS External Link', `  Link State ID: ${fmtIp(x.net)} (External Network Number )`, `  Advertising Router: ${fmtIp(x.rid)}`,
+        `  LS Seq Number: ${seq(x.net + 1).slice(2)}`, `  Checksum: ${ck(x.net + 7)}`, '  Length: 36', `  Network Mask: /${x.bits}`,
+        `        Metric Type: ${x.type === 1 ? '1 (Comparable directly to link state metric)' : '2 (Larger than any link state path)'}`, '        MTID: 0 ', `        Metric: ${x.metric} `,
+        `        Forward Address: ${x.fa != null ? fmtIp(x.fa) : '0.0.0.0'}`, `        External Route Tag: ${x.tag || (x.def ? 1 : 0)}`);
+    }
+    return o;
+  }
   if (ext.length) { o.push('', '\t\tType-5 AS External Link States', '', 'Link ID         ADV Router      Age         Seq#       Checksum Tag'); for (const x of ext) o.push(pad(fmtIp(x.net), 16) + pad(fmtIp(x.rid), 16) + pad(age(x.net + 1), 12) + pad(seq(x.net + 1), 11) + pad(ck(x.net + 7), 9) + (x.tag || (x.def ? 1 : 0))); }
   return o;
 }
@@ -1696,8 +1728,9 @@ function protocolLines(st, d, vrf) {
     ...on.filter((i) => !stmts.some((n) => (i.rt.ip >>> (32 - n.bits || 0)) === (n.net >>> (32 - n.bits || 0)))).map((i) => `    ${longIf(i.label)}`),
     ...((c.ospfRedist || []).length ? [`  Redistributing: ${(c.ospfRedist || []).map((r) => r.src + (r.as != null ? ' ' + r.as : '')).join(', ')}`] : []),
     '  Routing Information Sources:', '    Gateway         Distance      Last Update',
-    ...v.nbrs.filter((n) => n.state === 'full').map((n) => `    ${pad(fmtIp(n.rid ?? n.ip), 16)}${pad(110, 14)}${hms(Math.min(st.clock, 3600))}`),
-    '  Distance: (default is 110)'];
+    ...v.nbrs.filter((n) => n.state === 'full').map((n) => `    ${pad(fmtIp(n.rid ?? n.ip), 16)}${pad((c.ospfDist || {}).intra || 110, 14)}${hms(Math.min(st.clock, 3600))}`),
+    ...(c.ospfDistIn ? [`  Incoming routes filtered by ${c.ospfDistIn.rm ? 'route-map ' + c.ospfDistIn.rm : 'prefix-list ' + c.ospfDistIn.pl}（distribute-list … in）`] : []),
+    c.ospfDist ? `  Distance: intra-area ${c.ospfDist.intra || 110} inter-area ${c.ospfDist.inter || 110} external ${c.ospfDist.ext || 110}` : '  Distance: (default is 110)'];
 }
 
 // ───────────────────────── QoS ─────────────────────────
@@ -2269,6 +2302,15 @@ function showOrPing(app, devId, line, print) {
     ipv6IfLines(st, d, i).forEach((l) => print(l, l.startsWith('（') ? 'hint' : 'pre'));
     return true;
   }
+  // show ip eigrp topology <網段>[/長度] 或 <網段> <遮罩>
+  {
+    const m = line.trim().match(/^sh(?:o(?:w)?)?\s+ip\s+eigrp\s+(?:\d+\s+)?to(?:p(?:o(?:l(?:o(?:g(?:y)?)?)?)?)?)?\s+(\d+\.\d+\.\d+\.\d+)(?:\/(\d+)|\s+(\d+\.\d+\.\d+\.\d+))?$/i);
+    if (m && parseIp(m[1]) != null) {
+      const bits = m[2] != null ? +m[2] : m[3] != null ? parseMask(m[3]) : null;
+      eigrpTopoEntryLines(st, d, longIf, parseIp(m[1]), bits).forEach((l) => print(l, l.startsWith('（') ? 'hint' : 'pre'));
+      return true;
+    }
+  }
   // show ip protocols vrf <名稱>
   if (tok[0].length >= 2 && 'show'.startsWith(tok[0]) && tok[1] === 'ip' && (tok[2] || '').length >= 4 && 'protocols'.startsWith(tok[2]) && tok[3] === 'vrf') {
     const v = line.trim().split(/\s+/)[4];
@@ -2303,6 +2345,12 @@ function showOrPing(app, devId, line, print) {
     if (!d.routing) { routeLines(st, d, () => true).forEach((l) => print(l, l.startsWith('（') ? 'hint' : 'pre')); return true; }
     const ip = parseIp(tok[3]), bits = tok[4] != null ? parseMask(tok[4]) : null;
     if (tok[4] != null && bits == null) { print(`% Invalid input detected：${tok[4]} 不是子網路遮罩`, 'warn'); return true; }
+    // show ip route <網段> <遮罩> longer-prefixes：這個範圍裡所有的路（看彙總底下還有沒有更長的明細）
+    if (tok[5] != null) {
+      if (!(tok[5].length >= 2 && 'longer-prefixes'.startsWith(tok[5].toLowerCase()))) { print(`% Invalid input detected：${tok[5]}`, 'warn'); return true; }
+      routeLines(st, d, (r) => r.bits >= bits && netOf(r.net, bits) === netOf(ip, bits), rvrf).forEach((l) => print(l, l.startsWith('（') ? 'hint' : 'pre'));
+      return true;
+    }
     const { rib } = ribOf(d, rvrf);
     let hit;
     if (bits != null) hit = rib.filter((r) => r.bits === bits && r.net === netOf(ip, bits));

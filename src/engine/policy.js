@@ -77,15 +77,18 @@ export function ospfExternals(d, ospfOn, vrf = '') {
   const bgpOk = (r) => r.type === 'B' && (!r.ibgp || !!(d.bgp && d.bgp.redistInternal));
   for (const rd of (c && c.ospfRedist) || []) {
     // redistribute eigrp：EIGRP 學到的路（內部與外部），加上跑 EIGRP 的直連網段（只有全域的路由表）
-    const eigOk = (r) => !vrf && !!(d.rt && d.rt.eigrp) && (r.type === 'E' || (r.type === 'C' && !!r.iface && !!d.rt.eigrp.ifs[r.iface.id] && !ospfOn(d, r.iface)));
+    // EIGRP 的路在路由表裡輸給 OSPF 自己本來就有的路（管理距離比較小）：它不在路由表裡，不會被重分配（不然 OSPF 的網段會被倒回 OSPF）
+    const lost = (r) => { const ad = ((d.rt && d.rt.ospfNative) || {})[r.net + '/' + r.bits]; return (ad != null && ad < r.ad) || d.rt.routes.some((x) => !x.bad && x.type !== 'E' && x.type !== 'O' && !(x.vrf || '') && x.net === r.net && x.bits === r.bits && x.ad < r.ad); };
+    const eigOk = (r) => !vrf && !!(d.rt && d.rt.eigrp) && ((r.type === 'E' && !r.null0 && !lost(r)) || (r.type === 'C' && !!r.iface && !!d.rt.eigrp.ifs[r.iface.id] && !ospfOn(d, r.iface)));
     const ripOk = (r) => !vrf && !!(d.rt && d.rt.rip) && (r.type === 'R' || (r.type === 'C' && !!r.iface && !!d.rt.rip.ifs[r.iface.id] && !ospfOn(d, r.iface)));
     const pick = (r) => (rd.src === 'rip' ? ripOk(r) : rd.src === 'static' ? r.type === 'S' : rd.src === 'connected' ? r.type === 'C' && !(r.iface && ospfOn(d, r.iface)) : rd.src === 'bgp' ? bgpOk(r) : rd.src === 'eigrp' ? eigOk(r) : false);
     for (const r of (d.rt && d.rt.routes) || []) {
       // 預設路由不會跟著 redistribute 出去：要用 default-information originate
       if (r.bad || (r.vrf || '') !== vrf || r.bits === 0 || !pick(r) || out.some((x) => x.net === r.net && x.bits === r.bits)) continue;
-      const e = { net: r.net, bits: r.bits, metric: rd.metric != null ? +rd.metric : SEED[rd.src], type: +rd.type === 1 ? 1 : 2, tag: +rd.tag || 0, src: rd.src };
+      // 路由標籤：來源的路本來就有的標籤會跟著帶過去；redistribute … tag 或 route-map 的 set tag 可以改掉。match tag 比的是來源那筆路的標籤
+      const e = { net: r.net, bits: r.bits, metric: rd.metric != null ? +rd.metric : SEED[rd.src], type: +rd.type === 1 ? 1 : 2, tag: +rd.tag || +r.tag || 0, src: rd.src };
       if (rd.rm) {
-        const s = rmRoute(d, rd.rm, e);
+        const s = rmRoute(d, rd.rm, { net: r.net, bits: r.bits, tag: +r.tag || 0 });
         if (!s) continue;
         if (s.med != null) e.metric = +s.med;
         if (s.metricType) e.type = s.metricType;

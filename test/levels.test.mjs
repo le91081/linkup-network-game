@@ -6328,6 +6328,118 @@ console.log('\nSYN flood 與 FortiGate 的 DoS 政策');
   if (!['l01', 'l173', 'l174', 'l175', 'l176', 'l177'].every((id) => pathIds(start).includes(id))) fail('新手入門路線要包含第一關與封包實驗室的五關');
 }
 
+console.log('\nNull0 丟棄路由、EIGRP 彙總與不等價負載分擔');
+{
+  const { iosSession, runningConfig } = await import('../src/engine/ios.js');
+  const { iosRun } = await import('../src/ui/cli.js');
+  const sim = await import('../src/engine/sim.js');
+  const ok = (cond, title) => (cond ? console.log('  ✔ ' + title) : fail(title));
+  const sessions = new Map();
+  const run = (s, id, line) => { const k = s.devices[id]; if (!sessions.has(k)) sessions.set(k, iosSession(() => s.devices[id], () => s)); const out = []; const r = iosRun({ state: s }, id, sessions.get(k), line, (l) => out.push(l)); if (r.changed) settle(s); return out; };
+  const cli = (s, id, lines) => lines.flatMap((l) => run(s, id, l)).join('\n');
+  const route = (s, id, ip, bits) => s.devices[id].rt.routes.filter((r) => !r.bad && r.net === parseIp(ip) && r.bits === bits);
+  // EIGRP：彙總只設在一條線上
+  const lv = LEVELS.find((x) => x.id === 'l185');
+  const s = lv.setup(); settle(s);
+  cli(s, 'br', ['enable']); cli(s, 'hq', ['enable']);
+  ok(/^D {8}10\.2\.0\.0\/22 is a summary, \d\d:\d\d:\d\d, Null0$/m.test(cli(s, 'br', ['show ip route eigrp'])) && route(s, 'br', '10.2.0.0', 22).every((r) => r.null0 && r.ad === 5),
+    'ip summary-address eigrp：設定的那一台自己多一筆指向 Null0 的彙總（管理距離 5）');
+  ok(/^P 10\.2\.0\.0\/22, 1 successors, FD is \d+\n {8}via Summary \(\d+\/0\), Null0$/m.test(cli(s, 'br', ['show ip eigrp topology'])), 'show ip eigrp topology：via Summary … Null0');
+  const lp = cli(s, 'hq', ['show ip route 10.2.0.0 255.255.252.0 longer-prefixes']);
+  ok(/10\.2\.0\.0\/22 \[90\/\d+\] via 10\.0\.12\.2/.test(lp) && (lp.match(/10\.2\.\d\.0\/24 \[90\/\d+\] via 10\.0\.21\.2/g) || []).length === 4 && !/10\.1\.0\.0/.test(lp),
+    'show ip route … longer-prefixes：彙總從 A 線來，四條 /24 的明細從沒有設彙總的 B 線來');
+  const te = cli(s, 'hq', ['show ip eigrp topology 10.2.0.0/22']);
+  ok(/Topology Entry for AS\(100\)\/ID\(10\.0\.21\.1\) for 10\.2\.0\.0\/22/.test(te) && /Composite metric is \(26112\/2816\), route is Internal/.test(te) && /Minimum bandwidth is 100000 Kbit/.test(te) && /Hop count is 1/.test(te) && /Originating router is 10\.2\.3\.1/.test(te),
+    'show ip eigrp topology <網段>：合成的 metric、最小頻寬、延遲、跳數、來源的 Router ID');
+  ok(/Entry not in topology table/.test(cli(s, 'hq', ['show ip eigrp topology 192.168.99.0/24'])), 'show ip eigrp topology <不存在的網段>：Entry not in topology table');
+  // 往彙總範圍裡不存在的網段：BR-RT 丟掉，不會順著別的路繞回去
+  cli(s, 'br', ['configure terminal', 'interface Loopback3', 'shutdown', 'end']);
+  const dead = sim.transact(s, 'erp', { proto: 'icmp', dst: parseIp('10.2.3.200') });
+  ok(!dead.ok && /Null0/.test(dead.reason) && dead.failDev === 'br', '彙總範圍裡已經不存在的網段：封包到了做彙總的那一台就被 Null0 丟掉');
+  cli(s, 'br', ['configure terminal', 'interface Loopback3', 'no shutdown', 'end']);
+  lv.solve(s); settle(s);
+  const re = cli(s, 'hq', ['show ip route 10.2.0.0 255.255.252.0']);
+  ok(/Known via "eigrp 100", distance 90, metric 26112, type internal/.test(re) && /Route metric is 26112, traffic share count is 240/.test(re) && /Route metric is 51712, traffic share count is 121/.test(re) && /minimum bandwidth is 50000 Kbit/.test(re),
+    'variance 2：show ip route <網段> 列出兩條路，traffic share count 照 metric 的反比（240：121）');
+  // 不同的來源位址照比例分到兩條線
+  const { lookupRoute } = await import('../src/engine/sim/l3.js');
+  const cnt = {};
+  for (let k = 1; k <= 240; k++) { const r = lookupRoute(s.devices.hq, parseIp('10.2.0.50'), parseIp(`10.1.${k % 4}.${k}`)); cnt[r.iface.id] = (cnt[r.iface.id] || 0) + 1; }
+  ok(cnt['Gi0/0/0'] > cnt['Gi0/0/1'] * 1.4 && cnt['Gi0/0/1'] > 40, `不等價負載分擔：240 個來源位址，A 線 ${cnt['Gi0/0/0']} 個、B 線 ${cnt['Gi0/0/1']} 個（大約 2：1）`);
+  ok(/External protocol is OSPF/.test(cli(s, 'br', ['show ip eigrp topology 172.20.0.0 255.255.255.0'])), '重分配進來的路：External data 寫出原本的協定');
+  // 靜態的 Null0 與 OSPF area range 的丟棄路由
+  const l4 = LEVELS.find((x) => x.id === 'l184');
+  const t = l4.setup(); l4.solve(t); settle(t);
+  cli(t, 'core', ['enable', 'configure terminal', 'router ospf 1', 'area 10 range 10.50.0.0 255.255.0.0', 'exit', 'ip route 10.99.0.0 255.255.0.0 Null0', 'ip route 10.98.0.0 255.255.0.0 Null 0 200', 'end']);
+  const rt = cli(t, 'core', ['show ip route']);
+  ok(/^O {8}10\.50\.0\.0\/16 is a summary, \d\d:\d\d:\d\d, Null0$/m.test(rt) && /^S {8}10\.99\.0\.0\/16 is directly connected, Null0$/m.test(rt), 'show ip route：area range 的丟棄路由（O … is a summary, Null0）與靜態的 Null0');
+  ok(/^O IA {5}10\.50\.0\.0\/16 /m.test(cli(t, 'e1', ['enable', 'show ip route ospf'])), 'area range：骨幹裡的路由器只看到一條彙總');
+  const rcOf = () => [].concat(runningConfig(t, t.devices.core)).join('\n'), rc = rcOf();
+  ok(/^ip route 10\.99\.0\.0 255\.255\.0\.0 Null0$/m.test(rc) && /^ip route 10\.98\.0\.0 255\.255\.0\.0 Null0 200$/m.test(rc), 'running-config：ip route … Null0 [管理距離]');
+  const a = sim.transact(t, 'hqpc', { proto: 'icmp', dst: parseIp('10.50.200.1') }), b = sim.transact(t, 'hqpc', { proto: 'icmp', dst: parseIp('10.99.1.1') });
+  ok(!a.ok && /10\.50\.0\.0\/16 → Null0/.test(a.reason) && a.failDev === 'core', '彙總範圍裡沒有的位址：ABR 用丟棄路由丟掉，不會順著預設路由繞出去');
+  ok(!b.ok && /靜態的丟棄路由/.test(b.reason), '往靜態 Null0 的網段：封包被丟掉，原因寫明是 Null0');
+  ok(/Null0/.test(sim.transact(t, 'core', { proto: 'icmp', dst: parseIp('10.99.1.1') }).reason || ''), '路由器自己 ping 往 Null0 的位址：原因也是 Null0');
+  cli(t, 'core', ['configure terminal', 'no ip route 10.99.0.0 255.255.0.0 Null0', 'end']);
+  ok(!/10\.99\.0\.0/.test(rcOf()) && /10\.98\.0\.0/.test(rcOf()), 'no ip route … Null0：只刪掉那一條');
+}
+
+console.log('\n雙向重分配：管理距離、路由標籤、distribute-list');
+{
+  const { iosSession, runningConfig } = await import('../src/engine/ios.js');
+  const { iosRun } = await import('../src/ui/cli.js');
+  const sim = await import('../src/engine/sim.js');
+  const ok = (cond, title) => (cond ? console.log('  ✔ ' + title) : fail(title));
+  const lv = LEVELS.find((x) => x.id === 'l186');
+  const mk = () => {
+    const s = lv.setup(); settle(s);
+    const sessions = new Map();
+    const run = (id, line) => { if (!sessions.has(id)) { sessions.set(id, iosSession(() => s.devices[id], () => s)); sessions.get(id).exec('enable'); } const out = []; const r = iosRun({ state: s }, id, sessions.get(id), line, (l) => out.push(l)); if (r.changed) settle(s); return out; };
+    const cli = (id, lines) => lines.flatMap((l) => run(id, l)).join('\n');
+    const best = (id, ip) => { const all = s.devices[id].rt.routes.filter((r) => !r.bad && r.net === parseIp(ip) && r.bits === 24); return all.length ? all.reduce((a, b) => (b.ad < a.ad ? b : a)) : null; };
+    const rc = (id) => [].concat(runningConfig(s, s.devices[id])).join('\n');
+    const tcp = () => sim.transact(s, 'mon', { proto: 'tcp', dst: parseIp('192.168.50.10'), dport: 443 });
+    return { s, cli, best, rc, tcp };
+  };
+  {
+    const { cli, best, rc, tcp } = mk();
+    const r = tcp();
+    ok(!r.ok && /迴圈/.test(r.reason) && best('r1', '192.168.50.0').type === 'O' && best('r2', '192.168.50.0').type === 'O', '兩個交界都做雙向重分配：EIGRP 外部路由 (170) 輸給另一台倒進 OSPF 的 E2 (110)，封包繞圈');
+    ok(best('r1', '10.30.0.0').type === 'E' && best('r1', '10.30.0.0').ad === 90, 'EIGRP 內部的網段 (90) 不受影響');
+    ok(!/10\.40\.0\.0/.test(cli('r4', ['show ip ospf database external'])), 'OSPF 自己的網段不會被倒回 OSPF（那筆 EIGRP 外部路由沒有贏進路由表）');
+    cli('r1', ['configure terminal', 'router ospf 1', 'distance ospf external 171', 'end']);
+    cli('r2', ['configure terminal', 'router ospf 1', 'distance ospf ext 171', 'end']);
+    ok(tcp().ok && best('r1', '192.168.50.0').type === 'E' && best('r2', '192.168.50.0').ad === 170, 'distance ospf external 171：兩台都改回相信 EIGRP，連線恢復');
+    ok(/^ distance ospf external 171$/m.test(rc('r1')) && /Distance: intra-area 110 inter-area 110 external 171/.test(cli('r1', ['show ip protocols'])) && /\[171\/20\]/.test(cli('r1', ['show ip route'])), 'running-config、show ip protocols、show ip route 都看得到新的管理距離');
+    cli('r1', ['configure terminal', 'router ospf 1', 'no distance', 'distance 130', 'end']);
+    ok(/^ distance 130$/m.test(rc('r1')) && best('r1', '10.40.0.0').ad === 130, 'distance <n>：區域內、區域間、外部一起改');
+  }
+  {
+    const { s, cli, best, rc, tcp } = mk();
+    for (const id of ['r1', 'r2']) cli(id, ['configure terminal', 'route-map NO-BACK deny 10', 'match tag 100', 'exit', 'route-map NO-BACK permit 20', 'exit', 'router ospf 1', 'redistribute eigrp 100 subnets tag 100', 'distribute-list route-map NO-BACK in', 'end']);
+    const db = cli('r4', ['show ip ospf database external']);
+    ok(/Link State ID: 192\.168\.50\.0 \(External Network Number \)\n {2}Advertising Router: 1\.1\.1\.1/.test(db) && /External Route Tag: 100/.test(db) && /Metric Type: 2/.test(db), 'show ip ospf database external：Advertising Router、metric 的種類、路由標籤');
+    ok(tcp().ok && best('r2', '192.168.50.0').type === 'E' && !s.devices.r2.rt.routes.some((r) => r.type === 'O' && r.sub === 'E2'), '路由標籤 + distribute-list route-map … in：帶標籤的外部路由不放進路由表');
+    ok(best('r2', '10.40.0.0').type === 'O' && /Tag 100, type extern 2/.test(cli('r4', ['show ip route 192.168.50.0'])), '沒有標籤的 OSPF 路由照常放進去；其他路由器照樣看得到標籤');
+    ok(/^ distribute-list route-map NO-BACK in$/m.test(rc('r1')) && /redistribute eigrp 100 subnets tag 100$/m.test(rc('r1')) && /route-map NO-BACK/.test(cli('r1', ['show ip protocols'])), 'running-config 與 show ip protocols 列出 distribute-list');
+    cli('r1', ['configure terminal', 'router ospf 1', 'no distribute-list route-map NO-BACK in', 'end']);
+    ok(!/distribute-list/.test(rc('r1')) && best('r1', '192.168.50.0').type === 'O', 'no distribute-list：又開始相信倒回來的那一份');
+  }
+  {
+    const { s, cli, best, rc } = mk();
+    cli('r2', ['configure terminal', 'router eigrp 100', 'redistribute ospf 1 metric 10000 1000 255 1 1500', 'end']);
+    ok(best('r2', '10.40.0.0').type === 'O' && s.devices.r2.rt.routes.some((r) => r.type === 'E' && r.sub === 'EX' && r.net === parseIp('10.40.0.0') && r.ad === 170), '自己的種子 metric 比較差：別台倒進 EIGRP 的那一份只是備援（170 贏不了 OSPF 的 110）');
+    for (const id of ['r1', 'r2']) cli(id, ['configure terminal', 'router eigrp 100', 'distance eigrp 90 105', 'end']);
+    ok(best('r2', '10.40.0.0').type === 'E' && best('r2', '10.40.0.0').ad === 105 && best('r1', '192.168.50.0').type === 'E', 'distance eigrp 90 105：產線的網段回到 EIGRP，但資料中心自己的網段也被倒回來的 EIGRP 外部路由蓋掉');
+    ok(/^ distance eigrp 90 105$/m.test(rc('r2')) && /Distance: internal 90 external 105/.test(cli('r2', ['show ip protocols'])), 'running-config 與 show ip protocols：distance eigrp');
+    cli('r1', ['configure terminal', 'route-map TO-EIGRP permit 10', 'set tag 77', 'exit', 'router eigrp 100', 'redistribute ospf 1 metric 100000 100 255 1 1500 route-map TO-EIGRP', 'end']);
+    ok(/^P 10\.40\.0\.0\/24, 1 successors, FD is \d+, tag is 77$/m.test(cli('r3', ['show ip eigrp topology'])) && /Administrator tag is 77 /.test(cli('r3', ['show ip eigrp topology 10.40.0.0/24'])) && / route-map TO-EIGRP$/m.test(rc('r1')),
+      'redistribute ospf … route-map：set tag 的標籤跟著 EIGRP 外部路由傳出去');
+    cli('r1', ['configure terminal', 'route-map TO-EIGRP deny 5', 'match tag 0', 'end']);
+    ok(!s.devices.r3.rt.routes.some((r) => r.type === 'E' && r.net === parseIp('10.40.0.0') && r.iface.id === 'Gi0/0/0'), 'route-map 的 deny：符合的路不重分配進 EIGRP');
+  }
+}
+
 // ── 題庫與證照對照表的資料檢查 ──
 {
   const { QUESTIONS, TOPICS, LEVEL_TOPIC } = await import('../src/data/quiz.js');

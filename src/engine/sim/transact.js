@@ -120,9 +120,11 @@ function transactInner(state, fromId, spec) {
       return done({ ok: true, responder: fromId });
     }
     const t = src.rt.tunnels.find((x) => x.up && x.vip != null && selMatch(x.remote, spec.dst) && !(x.exclude && selMatch(x.exclude, spec.dst)));
-    const r = t ? null : lookupRoute(src, spec.dst, undefined, spec.vrf || '');
+    const r0 = t ? null : lookupRoute(src, spec.dst, undefined, spec.vrf || '', true), r = r0 && r0.null0 ? null : r0;
     if (!t && !r) {
-      const reason = state.rt.off[fromId] ? (state.rt.offWhy || {})[fromId] || `${src.name} 沒有電` : noRouteReason(state, src, spec.dst);
+      const reason = state.rt.off[fromId] ? (state.rt.offWhy || {})[fromId] || `${src.name} 沒有電`
+        : r0 ? `${src.name}：往 ${fmtIp(spec.dst)} 最符合的路由是 ${fmtIp(r0.net)}/${r0.bits} → Null0（${r0.type === 'S' ? '靜態的丟棄路由' : '彙總自動產生的丟棄路由：彙總的範圍裡沒有這個位址更明確的路'}），封包直接丟掉`
+          : noRouteReason(state, src, spec.dst);
       ctx.log.push({ dev: fromId, kind: 'drop', text: reason });
       return done({ ok: false, reason, failDev: fromId, phase: 'request' });
     }

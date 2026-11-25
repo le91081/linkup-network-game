@@ -32,7 +32,8 @@
 import { netOf, sameNet, fmtIp, parseIp } from './ip.js';
 import { net6, fmtIp6 } from './ip6.js';
 import { linkInfo } from './model.js';
-import { ospfExternals } from './policy.js';
+import { NULL0 } from './sim/core.js';
+import { ospfExternals, plHit, rmRoute } from './policy.js';
 import { l2Explore } from './sim.js';
 
 export const OSPF_WAIT = 40; // 新的廣播網段：先等 Wait timer（= Dead interval）才選 DR / BDR
@@ -211,7 +212,7 @@ const globals6 = (i) => (i.rt && i.rt.v6 ? i.rt.v6.addrs : []);
  * 介面層級的函式拿 (設備, 介面)，程序層級的函式拿節點（VRF 的程序看 d.ospfVrf 裡的設定）
  */
 const V4 = (ospfOn) => ({
-  ns: '', key: 'ospf', name: 'OSPF', zero: 0, enc: (x) => x, dec: (x) => x,
+  ns: '', key: 'ospf', name: 'OSPF', zero: 0, enc: (x) => x, dec: (x) => x, null0: NULL0,
   vrfsOf: (d) => ['', ...Object.keys(d.ospfVrf || {}).filter((v) => (d.vrfs || {})[v])],
   keyOf: (vrf) => ospfKeys(vrf).key, nkeyOf: (vrf) => ospfKeys(vrf).nkey, ridKey: (vrf) => 'rid' + ospfKeys(vrf).ns,
   on: (d, i) => ospfOn(d, i) && i.rt.ip != null,
@@ -237,6 +238,9 @@ const V4 = (ospfOn) => ({
   originates: (v) => !!(ospfProc(v.dev, v.vrf) || {}).ospfDefault,
   // default-information originate 的選項：{ always, metric, type }
   defOpt: (v) => (ospfProc(v.dev, v.vrf) || {}).ospfDefOpt || {},
+  // distance ospf external / inter-area / intra-area 與 distribute-list … in
+  dist: (v) => (ospfProc(v.dev, v.vrf) || {}).ospfDist || {},
+  keep: (v, r) => { const f = (ospfProc(v.dev, v.vrf) || {}).ospfDistIn; return !f || (f.rm ? !!rmRoute(v.dev, f.rm, { net: r.net, bits: r.bits, tag: +r.tag || 0 }) : plHit(v.dev, f.pl, r)); },
   externals: (v) => ospfExternals(v.dev, ospfOn, v.vrf),
   // Type-7 的 forwarding address：ASBR 在那個 NSSA 裡的位址（Loopback 優先，再來是最大的介面位址）
   fa: (v, area) => {
@@ -271,6 +275,8 @@ const V6 = {
   routes: (v) => v.dev.rt.routes6,
   originates: (v) => !!(v.dev.ospf6 || {}).default,
   defOpt: () => ({}),
+  dist: () => ({}),
+  keep: () => true,
   externals: () => [],
   areaType: () => 'normal', areaCfg: () => ({}), fa: () => null,
 };
@@ -718,6 +724,7 @@ function computeOspfAf(state, af) {
     const ext = {};
     const add = (k, cand) => {
       if ((intra[d.id] || {})[k] || (inter[d.id] || {})[k]) return;
+      cand.hops = cand.hops.map((h) => ({ ...h, asbr: cand.asbr })); // 等價的時候每個下一站各自記得是哪一台 ASBR 送的
       const cur = ext[k], c = cur ? extCmp(cand, cur) : -1;
       if (c < 0) ext[k] = cand;
       else if (c === 0) merge(cur.hops, cand.hops);
@@ -757,16 +764,29 @@ function computeOspfAf(state, af) {
 
   // 7. 裝進路由表：每個等價的第一站各一筆（最多 maximum-paths 條）
   for (const d of nodes) {
+    const dist = af.dist(d);
     const put = (r, sub) => {
       if (af.routes(d).some((x) => (x.vrf || '') === d.vrf && x.type === 'C' && x.net === r.net && x.bits === r.bits)) return;
+      if (!af.keep(d, r)) return; // distribute-list … in 擋下來的：LSA 還在資料庫裡，只是不放進路由表
+      const ad = (/^[EN]/.test(sub) ? dist.ext : sub === 'IA' ? dist.inter : dist.intra) || 110;
       const hops = r.hops.filter((h) => h.iface).slice(0, maxPaths(d));
       // adv：發布這筆 LSA 的路由器（show ip route <網段> 的 from），E2 / N2 另外記往 ASBR 的內部 cost (forward metric)
       const adv = r.owner != null ? rid[r.owner] : null;
-      for (const h of hops) af.routes(d).push({ net: r.net, bits: r.bits, via: h.via, iface: h.iface, type: 'O', sub, ad: 110, metric: r.metric, adv, ...(d.vrf ? { vrf: d.vrf } : {}), ...(r.fwd != null ? { fwd: r.fwd } : {}), ...(r.tag ? { tag: r.tag } : {}) });
+      for (const h of hops) af.routes(d).push({ net: r.net, bits: r.bits, via: h.via, iface: h.iface, type: 'O', sub, ad, metric: r.metric, adv: h.asbr != null && rid[h.asbr] != null ? rid[h.asbr] : adv, ...(d.vrf ? { vrf: d.vrf } : {}), ...(r.fwd != null ? { fwd: r.fwd } : {}), ...(r.tag ? { tag: r.tag } : {}) });
     };
     for (const r of Object.values(intra[d.id] || {})) if (r.hops.length) put(r, '');
     for (const r of Object.values(inter[d.id] || {})) put(r, 'IA');
     for (const e of Object.values(O(d).exts || {})) put({ net: e.net, bits: e.bits, metric: e.metric, hops: e.hops, owner: e.asbr, fwd: e.fwd, tag: e.tag }, (e.nssa ? 'N' : 'E') + (e.type === 1 ? 1 : 2));
+    // area range：ABR 自己多一筆指向 Null0 的丟棄路由。彙總的範圍裡沒有更明確的路時，封包在這裡丟掉，不會順著預設路由又繞回來
+    if (af.null0) {
+      for (const s of Object.values(sumInto0[d.id] || {})) {
+        if (!s.range) continue;
+        const rs = af.routes(d), same = (x) => (x.vrf || '') === (d.vrf || '') && x.net === s.net && x.bits === s.bits;
+        if (rs.some((x) => same(x) && x.type === 'C')) continue;
+        for (let k = rs.length - 1; k >= 0; k--) if (same(rs[k]) && rs[k].type === 'O') rs.splice(k, 1);
+        rs.push({ net: s.net, bits: s.bits, via: null, iface: af.null0, type: 'O', sub: '', ad: 110, metric: 0, null0: true, ...(d.vrf ? { vrf: d.vrf } : {}) });
+      }
+    }
     O(d).abr = abrs.has(d.id);
     O(d).asbr = asbrs.includes(d);
     O(d).areas = areasOf(d.id);
