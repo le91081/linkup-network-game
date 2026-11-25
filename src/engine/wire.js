@@ -8,7 +8,7 @@
 // state.dyn.sniff / dflow   FortiGate 的 sniffer 與 debug flow 設定
 import { linkInfo, DTP_MODELS } from './model.js';
 import { cdpOn, lldpTxOn, cdpCfg, lldpCfg, deviceIdOf } from './disc.js';
-import { fmtIp, parseIp, parseCidr, netOf } from './ip.js';
+import { fmtIp, parseIp, parseCidr, netOf, parseVlanList } from './ip.js';
 import { epcRecord } from './epc.js';
 import { bpduSilent } from './stpcfg.js';
 /** 接終端設備的 PortFast 埠（不是交換器之間跑 STP 的線） */
@@ -212,16 +212,50 @@ export function spanDest(d, pid) {
   const s = d.sw && d.sw.span;
   return !!s && Object.values(s).some((x) => x.dst === pid);
 }
-/** 訊框從 pid 進來 (rx) 或送出 (tx) 時，要不要複製一份到某個 SPAN 目的埠。回傳目的埠的清單 */
+/** 訊框從 pid 進來 (rx) 或送出 (tx) 時，要不要複製一份：回傳 { ports: 這台的目的埠, vlans: 要放進去的 RSPAN VLAN } */
 function spanCopies(d, pid, dir) {
-  const s = d.sw && d.sw.span;
-  if (!s) return [];
-  const out = [];
+  const s = d.sw && d.sw.span, out = { ports: [], vlans: [] };
+  if (!s) return out;
   for (const x of Object.values(s)) {
     const m = x.src && x.src[pid];
-    if (x.dst && m && (m === 'both' || m === dir) && x.dst !== pid) out.push(x.dst);
+    if (!m || !(m === 'both' || m === dir)) continue;
+    if (x.dst && x.dst !== pid) out.ports.push(x.dst);
+    if (x.dstVlan != null) out.vlans.push(x.dstVlan);
   }
   return out;
+}
+const isRspan = (d, v) => !!(d && d.sw && d.sw.mode === 'vlan' && (d.sw.vlans || []).some((x) => x.id === v && x.rspan));
+const trunkCarries = (d, pid, v) => {
+  const pc = d.sw && d.sw.ports[pid], t = d.rt && d.rt.dtp && d.rt.dtp[pid];
+  if (!pc || !(t ? t.oper === 'trunk' : pc.mode === 'trunk')) return false;
+  const l = parseVlanList(pc.allowed);
+  return l == null || l.includes(v);
+};
+/**
+ * RSPAN：從一台交換器把鏡像的訊框放進 RSPAN VLAN 之後，會送到哪些遠端的目的埠。
+ * 回傳 { targets: [{ dev, port }], why: [走不過去的原因] }：VLAN 要在路上每一台交換器都是 remote-span，Trunk 兩端都要允許它
+ */
+export function rspanReach(state, swId, vlan) {
+  const start = state.devices[swId], targets = [], why = [];
+  if (!isRspan(start, vlan)) return { targets, why: [`${start ? start.name : swId} 上的 VLAN ${vlan} 不是 remote-span`] };
+  const seen = new Set([swId]), queue = [swId];
+  while (queue.length) {
+    const id = queue.shift(), d = state.devices[id];
+    if (id !== swId) for (const x of Object.values(d.sw.span || {})) if (x.srcVlan === vlan && x.dst) targets.push({ dev: id, port: x.dst });
+    for (const p of d.ports) {
+      const l = state.rt.links[id + ':' + p.id];
+      if (!l || seen.has(l.dev)) continue;
+      const o = state.devices[l.dev];
+      if (!o || !o.sw || o.sw.mode !== 'vlan' || !o.sw.ports[l.port]) continue;
+      const op = o.ports.find((x) => x.id === l.port);
+      if (!trunkCarries(d, p.id, vlan)) { if (d.sw.ports[p.id] && d.sw.ports[p.id].mode === 'trunk') why.push(`${d.name} 的 ${p.label}（往 ${o.name}）沒有允許 VLAN ${vlan}`); continue; }
+      if (!trunkCarries(o, l.port, vlan)) { why.push(`${o.name} 的 ${op ? op.label : l.port}（往 ${d.name}）沒有允許 VLAN ${vlan}`); continue; }
+      if (!isRspan(o, vlan)) { why.push(`${o.name} 沒有 VLAN ${vlan}，或它不是 remote-span`); continue; }
+      seen.add(l.dev); queue.push(l.dev);
+    }
+  }
+  if (!targets.length && !why.length) why.push(`沒有任何一台交換器把 VLAN ${vlan} 當成來源（monitor session <n> source remote vlan ${vlan}）並指定目的埠`);
+  return { targets, why };
 }
 
 // ───────────────────────── 每一段線路 ─────────────────────────
@@ -249,12 +283,15 @@ export function onHop(state, h, frame, leak) {
   const mirror = (sw, pid, dir) => {
     const d = state.devices[sw];
     if (!d || !d.sw || pid == null) return;
-    for (const dst of spanCopies(d, pid, dir)) {
-      if (done.has(sw + ':' + dst)) continue;
-      done.add(sw + ':' + dst);
-      const l = state.rt.links[sw + ':' + dst];
+    const c = spanCopies(d, pid, dir);
+    const out = c.ports.map((p) => ({ dev: sw, port: p }));
+    for (const v of c.vlans) out.push(...rspanReach(state, sw, v).targets);
+    for (const t of out) {
+      if (done.has(t.dev + ':' + t.port)) continue;
+      done.add(t.dev + ':' + t.port);
+      const l = state.rt.links[t.dev + ':' + t.port];
       if (!l) continue;
-      countFrame(state, sw, dst, l.dev, l.port, f);
+      countFrame(state, t.dev, t.port, l.dev, l.port, f);
       record(state, l.dev, f, 'span');
     }
   };

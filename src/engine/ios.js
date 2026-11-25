@@ -20,6 +20,7 @@ import { logEvent, markReboot, setClock, SEVERITY, bootTime, longIf, localUsers,
 import { isNexus, isCat2960, isCat9300, ICMP_TYPES } from './mtu.js';
 import { genKey } from './remote.js';
 import { fhrpProto, fhrpGroup, fhrpPreempt } from './track.js';
+import { setEemRunner, eemActions } from './eem.js';
 import { archiveNow, archiveLines, cfgLog, cfgDiff, ARCH_MAX_DEFAULT } from './archive.js';
 import { vtpCapable, vtpOf, vtpSet } from './vtp.js';
 import { ZBF_PROTO, newZbf, zbfConfigLines } from './zbf.js';
@@ -115,7 +116,7 @@ const PROMPT = {
   eigrp: '(config-router)#', rip: '(config-router)#', trange: '(config-time-range)#', mstcfg: '(config-mst)#', keychain: '(config-keychain)#', kckey: '(config-keychain-key)#',
   zone: '(config-sec-zone)#', zpair: '(config-sec-zone-pair)#', icmap: '(config-cmap)#', ipmap: '(config-pmap)#', ipmapc: '(config-pmap-c)#',
   exec: '#', config: '(config)#', if: '(config-if)#', vlan: '(config-vlan)#', raguard: '(config-ra-guard)#', router: '(config-router)#', dhcp: '(dhcp-config)#',
-  line: '(config-line)#', tacacs: '(config-server-tacacs)#', acl: '(config-ext-nacl)#', stdacl: '(config-std-nacl)#', radius: '(config-radius-server)#',
+  cplane: '(config-cp)#', eem: '(config-applet)#', line: '(config-line)#', tacacs: '(config-server-tacacs)#', acl: '(config-ext-nacl)#', stdacl: '(config-std-nacl)#', radius: '(config-radius-server)#',
   isakmp: '(config-isakmp)#', tset: '(cfg-crypto-trans)#', cmap: '(config-crypto-map)#', ipsecprof: '(ipsec-profile)#', flowrec: '(config-flow-record)#', flowexp: '(config-flow-exporter)#', flowmon: '(config-flow-monitor)#', pkitp: '(ca-trustpoint)#', pkichain: '(config-cert-chain)#', pkicert: '(config-pubkey)#',
   ikev2prop: '(config-ikev2-proposal)#', ikev2pol: '(config-ikev2-policy)#', ikev2kr: '(config-ikev2-keyring)#', ikev2peer: '(config-ikev2-keyring-peer)#', ikev2prof: '(config-ikev2-profile)#', track: '(config-track)#', vrfdef: '(config-vrf)#', vpcdom: '(config-vpc-domain)#', vrfctx: '(config-vrf)#', vrfaf: '(config-vrf-af)#', ipvrf: '(config-vrf)#', archive: '(config-archive)#', archlog: '(config-archive-log-cfg)#', ipsla: '(config-ip-sla)#', slaecho: '(config-ip-sla-echo)#', bgp: '(config-router)#', rmap: '(config-route-map)#', qcmap: '(config-cmap)#', pmap: '(config-pmap)#', pmapc: '(config-pmap-c)#',
 };
@@ -472,7 +473,7 @@ function parseAclRule0(tok) {
   if (/^\d+$/.test(tok[0])) n++;
   const action = ['permit', 'deny'].find((a) => a.startsWith((tok[n] || ' ').toLowerCase()));
   const proto = (tok[n + 1] || '').toLowerCase();
-  if (!action || !['ip', 'tcp', 'udp', 'icmp', 'esp', 'gre', 'ahp'].includes(proto)) return null; // esp = IP 協定 50、gre = 47、ahp = 51
+  if (!action || !['ip', 'tcp', 'udp', 'icmp', 'esp', 'gre', 'ahp', 'ospf', 'eigrp'].includes(proto)) return null; // esp = IP 協定 50、gre = 47、ahp = 51；ospf / eigrp 給 CoPP 的分類用
   n += 2;
   const addr = () => {
     const t = (tok[n] || '').toLowerCase();
@@ -2245,10 +2246,33 @@ export function iosSession(getDev, getState, who = null) {
     }],
     ['no banner motd [...]', () => { if (dev().mgmt) delete dev().mgmt.banner; }],
     // ── 連接埠鏡像 (SPAN)：把來源埠進出的訊框複製一份到目的埠，接上電腦就能用 Wireshark 看 ──
+    ['monitor session <n> source remote vlan <v>', ([n, v]) => {
+      const e = needSw();
+      if (e) return e;
+      if (!/^\d+$/.test(n) || +n < 1 || +n > 66) return err('session 編號是 1 – 66');
+      const vl = dev().sw.vlans.find((x) => x.id === +v);
+      if (!vl || !vl.rspan) return err(`% VLAN ${v} is not a remote span VLAN（先 vlan ${v} → remote-span）`);
+      const s = ((dev().sw.span ||= {})[n] ||= { src: {}, dst: '' });
+      if (s.dstVlan != null) return err('% 這個 session 的目的已經是 remote vlan：來源與目的不能都是 RSPAN VLAN');
+      s.src = {}; s.srcVlan = +v;
+      return undefined;
+    }],
+    ['monitor session <n> destination remote vlan <v>', ([n, v]) => {
+      const e = needSw();
+      if (e) return e;
+      if (!/^\d+$/.test(n) || +n < 1 || +n > 66) return err('session 編號是 1 – 66');
+      const vl = dev().sw.vlans.find((x) => x.id === +v);
+      if (!vl || !vl.rspan) return err(`% VLAN ${v} is not a remote span VLAN（先 vlan ${v} → remote-span）`);
+      const s = ((dev().sw.span ||= {})[n] ||= { src: {}, dst: '' });
+      if (s.srcVlan != null) return err('% 這個 session 的來源已經是 remote vlan：來源與目的不能都是 RSPAN VLAN');
+      s.dst = ''; s.dstVlan = +v;
+      return `（鏡像的訊框會放進 VLAN ${v}，沿著 Trunk 送出去：路上每一台交換器都要有這個 remote-span 的 VLAN，Trunk 也要允許它）`;
+    }],
     ['monitor session <n> source interface <...>', ([n, rest]) => {
       const e = needSw();
       if (e) return e;
       if (!/^\d+$/.test(n) || +n < 1 || +n > 66) return err('session 編號是 1 – 66');
+      if ((((dev().sw || {}).span || {})[n] || {}).srcVlan != null) return err(`% session ${n} 的來源已經是 remote vlan（先 no monitor session ${n}）`);
       const t = rest.trim().split(/\s+/), last = t[t.length - 1].toLowerCase();
       const dir = ['rx', 'tx', 'both'].includes(last) ? (t.pop(), last) : 'both';
       const r = resolveRange(dev(), t.join(' '));
@@ -2270,6 +2294,7 @@ export function iosSession(getDev, getState, who = null) {
       if (!t.port) return err(`${t.name} 不是實體連接埠`);
       const sw = dev().sw, s = ((sw.span ||= {})[n] ||= { src: {}, dst: '' });
       if (s.src[t.port.id]) return err(`% ${t.port.label} 已經是這個 session 的來源埠，不能同時當目的埠`);
+      delete s.dstVlan;
       const other = Object.entries(sw.span).find(([k, x]) => k !== n && x.dst === t.port.id);
       if (other) return err(`% ${t.port.label} 已經是 session ${other[0]} 的目的埠`);
       s.dst = t.port.id;
@@ -2319,6 +2344,18 @@ export function iosSession(getDev, getState, who = null) {
     ['line vty [...]', () => { if (!dev().mgmt) return err('這台設備不支援'); enter('line', null); return undefined; }],
     // 設定封存
     ['archive', () => { const d = dev(); if (!d.mgmt) return err('這台設備不支援'); d.archive ||= {}; enter('archive', null); return undefined; }],
+    // EEM：事件發生時自動執行一串指令
+    ['event manager applet <name> [...]', ([name]) => {
+      const d = dev();
+      if (!d.mgmt) return err('這台設備不支援 EEM');
+      if (!/^[\w.-]+$/.test(name)) return err('% applet 的名稱只能用英文字母、數字、底線與連字號');
+      ((d.eem ||= {})[name] ||= { event: null, actions: [] });
+      enter('eem', name);
+      return undefined;
+    }],
+    ['no event manager applet <name>', ([name]) => { const d = dev(); if (!(d.eem || {})[name]) return err(`% 沒有 applet ${name}`); delete d.eem[name]; if (!Object.keys(d.eem).length) delete d.eem; return undefined; }],
+    // CoPP：送給設備自己的封包（管理、ping、路由協定）在交給 CPU 之前先限速
+    ['control-plane [...]', () => { if (!dev().routing) return err('% 這台設備沒有啟用 IP 路由，沒有 control-plane 的設定'); enter('cplane', null); return undefined; }],
     ['no archive', () => { delete dev().archive; }],
     // 物件追蹤：介面的線路協定，或 IP SLA 的探測結果
     ['track <n> interface <if> line-protocol', ([n, name]) => {
@@ -2945,6 +2982,9 @@ export function iosSession(getDev, getState, who = null) {
         S.cur.name = name;
         return undefined;
       }],
+      // RSPAN：這個 VLAN 專門用來載鏡像的訊框（不學 MAC、不接使用者），沿著 Trunk 送到遠端的交換器
+      ['remote-span', () => { if (S.cur.id === 1) return err('% VLAN 1 不能當成 RSPAN VLAN'); S.cur.rspan = true; return undefined; }],
+      ['no remote-span', () => { delete S.cur.rspan; }],
       ['private-vlan <t>', ([t]) => {
         if (!pvlanOk()) return err('% Private VLANs are not supported on this platform（Catalyst 2960 只有 switchport protected）');
         const v = ['primary', 'isolated', 'community'].find((x) => x.startsWith(t.toLowerCase()));
@@ -3529,6 +3569,41 @@ export function iosSession(getDev, getState, who = null) {
       ['description <...>', () => undefined],
       // 在 peer 底下直接輸入下一個 peer：和 IOS 一樣回到 keyring 那一層
       ['peer <name>', ([n]) => { const kr = S.cur.kr; dev().ikev2.krs[kr].peers[n] ||= {}; S.cur = { kr, peer: n }; return undefined; }],
+    ],
+    eem: [
+      ['event syslog pattern <...>', ([p]) => {
+        const v = String(p).trim().replace(/^"(.*)"$/, '$1');
+        if (!v) return err('用法：event syslog pattern "<正規表示式>"，例如 "LINEPROTO-5-UPDOWN.*GigabitEthernet0/0/0.*down"');
+        try { RegExp(v); } catch { return err('% Invalid regular expression（正規表示式的寫法不對）'); }
+        dev().eem[S.cur].event = { t: 'syslog', pattern: v };
+        return undefined;
+      }],
+      ['event track <n> state <st>', ([n, st]) => {
+        const s2 = ['up', 'down', 'any'].find((x) => x.startsWith(String(st).toLowerCase()));
+        if (!/^\d+$/.test(n) || !s2) return err('用法：event track <追蹤物件的編號> state up | down | any');
+        dev().eem[S.cur].event = { t: 'track', id: +n, st: s2 };
+        return (dev().track || {})[n] ? undefined : `（track ${n} 還沒有建立：建立之前這個 applet 不會被觸發）`;
+      }],
+      ['no event [...]', () => { dev().eem[S.cur].event = null; }],
+      ['action <label> cli command <...>', ([label, c]) => {
+        const v = String(c).trim().replace(/^"(.*)"$/, '$1'), a = dev().eem[S.cur];
+        if (!v) return err('用法：action <標籤> cli command "<指令>"');
+        a.actions = [...a.actions.filter((x) => x.id !== label), { id: label, t: 'cli', v }];
+        return undefined;
+      }],
+      ['action <label> syslog msg <...>', ([label, c]) => {
+        const v = String(c).trim().replace(/^"(.*)"$/, '$1'), a = dev().eem[S.cur];
+        if (!v) return err('用法：action <標籤> syslog msg "<文字>"');
+        a.actions = [...a.actions.filter((x) => x.id !== label), { id: label, t: 'syslog', v }];
+        return undefined;
+      }],
+      ['action <label> <...>', () => err('這個模擬的 EEM 支援兩種動作：action <標籤> cli command "<指令>"、action <標籤> syslog msg "<文字>"')],
+      ['no action <label> [...]', ([label]) => { const a = dev().eem[S.cur]; a.actions = a.actions.filter((x) => x.id !== label); }],
+    ],
+    cplane: [
+      ['service-policy input <name>', ([name]) => { const d = dev(); if (!(d.policyMaps || {})[name]) return err(`% policy map ${name} not configured`); d.copp = name; return undefined; }],
+      ['service-policy output <name>', () => err('% 這個模擬的 control-plane 只支援 input（管制送進 CPU 的封包）')],
+      ['no service-policy [...]', () => { delete dev().copp; }],
     ],
     archive: [
       ['path <url>', ([u]) => {
@@ -4129,6 +4204,10 @@ export function iosSession(getDev, getState, who = null) {
       ['set ip dscp <v>', ([v]) => setDscp(v)],
       ['set dscp <v>', ([v]) => setDscp(v)],
       ['no set [...]', () => pmSet((c) => { delete c.set; })],
+      // CoPP 常用每秒封包數：police rate 100 pps；drop 是整個 class 直接丟掉
+      ['police rate <n> pps [...]', ([n]) => (/^\d+$/.test(n) && +n >= 1 ? pmSet((c) => { c.police = { pps: +n, bps: +n * 800 }; delete c.drop; }) : err('用法：police rate <每秒封包數> pps'))],
+      ['drop', () => pmSet((c) => { c.drop = true; delete c.police; })],
+      ['no drop', () => pmSet((c) => { delete c.drop; })],
       ['police cir <bps> [...]', ([b]) => (+b >= 8000 ? pmSet((c) => { c.police = { bps: +b }; }) : err('用法：police cir <bps>，例如 police cir 1000000'))],
       ['police <bps> [...]', ([b]) => (+b >= 8000 ? pmSet((c) => { c.police = { bps: +b }; }) : err('用法：police <bps>'))],
       ['no police [...]', () => pmSet((c) => { delete c.police; })],
@@ -4236,6 +4315,7 @@ export function iosSession(getDev, getState, who = null) {
     }
     if (S.mode === 'exec' && S.priv < 15) {
       if (match(tok, 'enable') || match(tok, 'enable 15')) {
+        if (who && who.eem) { S.priv = 15; return done(false); } // EEM 的工作階段：enable 不問密碼
         const sec = (dev().mgmt || {}).enableSecret || (dev().mgmt || {}).enablePass;
         if (!sec && !(who && /vty/i.test(String(who.line || '')))) { S.priv = 15; return done(false); }
         if (!sec) { out.push('% No password set'); out.push('（遠端登入要先在設備上設定 enable secret，才能從使用者模式進入特權模式；或用 privilege 15 的帳號登入）'); return done(false); }
@@ -4947,7 +5027,7 @@ export function runningConfig(state, dev) {
     // VTP：真的 IOS 把這些存在 vlan.dat，這裡為了貼回設定方便印在 running-config；client 的 VLAN 由 server 同步，不印
     const vt = vtpCapable(dev) ? vtpOf(dev) : null;
     if (vt && (vt.domain || vt.mode !== 'server' || vt.pass || vt.ver !== 1)) o.push(...(vt.domain ? [`vtp domain ${vt.domain}`] : []), ...(vt.mode !== 'server' ? [`vtp mode ${vt.mode}`] : []), ...(vt.ver !== 1 ? [`vtp version ${vt.ver}`] : []), ...(vt.pass ? [`vtp password ${vt.pass}`] : []), '!');
-    if (!(vt && vt.mode === 'client')) for (const v of sw.vlans.slice().sort((a, b) => a.id - b.id)) if (v.id !== 1) o.push(`vlan ${v.id}`, ...(v.pvlan ? [` private-vlan ${v.pvlan}`] : []), ...(v.pvlan === 'primary' && (v.assoc || []).length ? [` private-vlan association ${v.assoc.join(',')}`] : []), ` name ${v.name.replace(/\s+/g, '_')}`);
+    if (!(vt && vt.mode === 'client')) for (const v of sw.vlans.slice().sort((a, b) => a.id - b.id)) if (v.id !== 1) o.push(`vlan ${v.id}`, ...(v.pvlan ? [` private-vlan ${v.pvlan}`] : []), ...(v.pvlan === 'primary' && (v.assoc || []).length ? [` private-vlan association ${v.assoc.join(',')}`] : []), ` name ${v.name.replace(/\s+/g, '_')}`, ...(v.rspan ? [' remote-span'] : []));
     if (sw.tagNative) o.push('!', 'vlan dot1q tag native');
     for (const [n, p] of Object.entries(sw.raPolicies || {})) o.push('!', `ipv6 nd raguard policy ${n}`, ` device-role ${p.role || 'host'}`);
     // 和真的 Catalyst 一樣，errdisable recovery 印在 spanning-tree 前面
@@ -4988,7 +5068,9 @@ export function runningConfig(state, dev) {
     for (const [n, s] of Object.entries(sw.span || {})) {
       const lab = (pid) => (dev.ports.find((p) => p.id === pid) || {}).label || pid;
       for (const [pid, dir] of Object.entries(s.src || {})) o.push(`monitor session ${n} source interface ${lab(pid)}${dir === 'both' ? '' : ' ' + dir}`);
+      if (s.srcVlan != null) o.push(`monitor session ${n} source remote vlan ${s.srcVlan}`);
       if (s.dst) o.push(`monitor session ${n} destination interface ${lab(s.dst)}`);
+      if (s.dstVlan != null) o.push(`monitor session ${n} destination remote vlan ${s.dstVlan}`);
     }
     const vl = sw.vlans.map((v) => v.id).sort((a, b) => a - b).join(',');
     if (sw.snoop && sw.snoop.on) o.push('ip dhcp snooping', `ip dhcp snooping vlan ${vl}`);
@@ -5028,7 +5110,8 @@ export function runningConfig(state, dev) {
       if (c.fq) o.push('  fair-queue');
       if (c.qlimit) o.push(`  queue-limit ${c.qlimit} packets`);
       if (c.set) o.push(`  set dscp ${dscpName(c.set.dscp)}`);
-      if (c.police) o.push(`  police cir ${c.police.bps}`, '   conform-action transmit ', '   exceed-action drop ');
+      if (c.police) o.push(c.police.pps != null ? `  police rate ${c.police.pps} pps` : `  police cir ${c.police.bps}`, '   conform-action transmit ', '   exceed-action drop ');
+      if (c.drop) o.push('  drop');
       if (c.shape) o.push(`  shape average ${c.shape.bps}`);
       if (c.child) o.push(`  service-policy ${c.child}`);
     }
@@ -5582,6 +5665,13 @@ export function runningConfig(state, dev) {
     if (allow.length) { o.push(`ip access-list standard ${an}`); for (const c of allow) o.push(c.bits === 32 ? ` permit host ${fmtIp(c.net)}` : ` permit ${fmtIp(netOf(c.net, c.bits))} ${wild(c.bits)}`); }
     const tr = [m.ssh && 'ssh', m.telnet && 'telnet'].filter(Boolean).join(' ') || 'none';
     const et = m.execTimeout == null || m.execTimeout === '' ? null : +m.execTimeout;
+    for (const [name, a] of Object.entries(dev.eem || {})) {
+      o.push(`event manager applet ${name}`);
+      if (a.event) o.push(a.event.t === 'syslog' ? ` event syslog pattern "${a.event.pattern}"` : ` event track ${a.event.id} state ${a.event.st}`);
+      for (const x of eemActions(a)) o.push(` action ${x.id} ${x.t === 'cli' ? 'cli command' : 'syslog msg'} "${x.v}"`);
+      o.push('!');
+    }
+    if (dev.copp) o.push('control-plane', ` service-policy input ${dev.copp}`, '!');
     if (m.conPass) o.push('line con 0', ` password ${pw(m.conPass, m.conPassEnc)}`, ' login', '!');
     o.push('line vty 0 4', ` transport input ${tr}`, ...(allow.length ? [` access-class ${an} in`] : []),
       ...(et != null && et !== 600 ? [` exec-timeout ${Math.floor(et / 60)} ${et % 60}`] : []), ...(m.vtyPriv != null ? [` privilege level ${m.vtyPriv}`] : []), ...(m.vtyPass ? [` password ${pw(m.vtyPass, m.vtyPassEnc ?? true)}`] : []),
@@ -5615,3 +5705,12 @@ function fhrpOn(i, proto, g) {
   if (+g !== 1) v.group = +g; else delete v.group;
   return v;
 }
+
+// EEM 的 applet 要執行 CLI 指令：把「在這台設備上開一個工作階段、照順序打指令」交給 eem.js（它不能反過來 import 這個檔）
+setEemRunner((state, d, lines) => {
+  // 和真的 IOS 一樣從使用者模式開始：applet 的第一步要是 enable
+  const S = iosSession(() => d, () => state, { priv: 1, eem: true });
+  let error = '';
+  for (const l of lines) { const bad = ((S.exec(l) || {}).out || []).find((o) => String(o).startsWith('%')); if (bad && !error) error = `${l} → ${bad}`; }
+  return { error };
+});

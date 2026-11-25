@@ -22,6 +22,8 @@ import { computeAuth } from './sim/auth.js';
 import { dnsList, hash, ifaceMac, isVlanSw, vrfOf } from './sim/core.js';
 import { flowsTick } from './sim/bandwidth.js';
 import { computeDos, dosLog } from './dos.js';
+import { computeCopp } from './copp.js';
+import { eemDrain } from './eem.js';
 import { ifaceActive, isBridgePort, l2Explore, macAgeOf, prepL2Attacks } from './sim/l2.js';
 import { prepMcast } from './sim/mcast.js';
 export { isMcast, snoopOn, querierOf } from './sim/mcast.js';
@@ -142,6 +144,8 @@ export function recompute(state) {
     // DoS：攻擊流量打不打得到、有沒有被 DoS 政策丟掉（要等路由與政策都算好）
     if ((state.attacks || []).length) {
       state.rt.dos = computeDos(state, (from, spec) => transact(state, from, spec));
+      // 打設備自己位址的洪水：看 CoPP 放多少進 CPU
+      if (state.attacks.some((a) => a && a.cp)) { const cp = computeCopp(state, (from, spec) => transact(state, from, spec)); state.rt.copp = cp.byDev; state.rt.dos.list.push(...cp.list); }
       dosLog(state, (d, sev, forti) => logEvent(state, d, sev, '', '', forti));
     }
     opsAfter(state);
@@ -149,6 +153,15 @@ export function recompute(state) {
     if (realDown === undefined) delete state.down; else state.down = realDown;
   }
   delete state.dyn.boot;
+  // EEM：這一次計算寫進紀錄的事件觸發了 applet → 執行它的指令，設定變了就再算一次（連鎖最多四層）
+  if ((state.dyn.eemQ || []).length) {
+    const depth = state.dyn.eemDepth || 0;
+    if (depth >= 4) delete state.dyn.eemQ;
+    else if (eemDrain(state, logEvent)) {
+      state.dyn.eemDepth = depth + 1;
+      try { recompute(state); } finally { if (depth) state.dyn.eemDepth = depth; else delete state.dyn.eemDepth; }
+    }
+  }
   return state;
 }
 

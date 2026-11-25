@@ -80,6 +80,7 @@ export function slaTick(state, probe) {
       let s = S[k];
       if (!s || dyn.boot) {
         S[k] = { ok: r.ok, t0: now, last: now, rtt: r.rtt, okN: r.ok ? 1 : 0, failN: r.ok ? 0 : 1, code: r.code };
+        if (r.ok) flipped = true; // 第一次探測就通了：追蹤它的路由剛才是照「還沒有結果」算的，要用新的結果重算
         continue;
       }
       const due = s.t0 + Math.floor((now - s.t0) / freq + 1e-9) * freq; // 現在之前最近的一次探測

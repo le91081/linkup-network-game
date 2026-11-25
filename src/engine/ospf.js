@@ -33,6 +33,7 @@ import { netOf, sameNet, fmtIp, parseIp } from './ip.js';
 import { net6, fmtIp6 } from './ip6.js';
 import { linkInfo } from './model.js';
 import { NULL0 } from './sim/core.js';
+import { coppRoutingWhy } from './copp.js';
 import { ospfExternals, plHit, rmRoute } from './policy.js';
 import { l2Explore } from './sim.js';
 
@@ -218,7 +219,7 @@ const V4 = (ospfOn) => ({
   on: (d, i) => ospfOn(d, i) && i.rt.ip != null,
   area: ospfArea, cost: ospfCost, passive: ospfPassive, prio: ospfPrio, hello: ospfHello, dead: ospfDead, netType: ospfNetType,
   rid: (state, v) => ospfRid(state, v.dev, v.vrf),
-  mismatch: (d, i, x, j, ai, aj) => helloMismatch(d, i, x, j, ai, aj) || stubMismatch(d, i, x, j, ai),
+  mismatch: (d, i, x, j, ai, aj) => coppRoutingWhy(d, 'ospf', j.rt.ip, 0xe0000005) || coppRoutingWhy(x, 'ospf', i.rt.ip, 0xe0000005) || helloMismatch(d, i, x, j, ai, aj) || stubMismatch(d, i, x, j, ai),
   areaType: (v, area) => ospfAreaType(ospfProc(v.dev, v.vrf), area),
   areaCfg: (v, area) => ospfAreaCfg(ospfProc(v.dev, v.vrf), area),
   // 同一個子網路的才會成為鄰居

@@ -17,7 +17,7 @@ import { archiveFiles, nextArchiveName, cfgDiff, ARCH_MAX_DEFAULT } from '../eng
 import { psMax, psMode, psConfigured, camSize, stormLimit } from '../engine/l2sec.js';
 import { iosClock, deviceTime, ntpInfo, logRows, clearLog, syslogStats, uptimeOf, routerId, longIf, SEVERITY, NTP_POLL, vtyRows, idleLimit } from '../engine/ops.js';
 import { quietLeft } from '../engine/remote.js';
-import { counters, clearCounters, clearedAt, spanDest, debugOf, setDebug, consoleRows } from '../engine/wire.js';
+import { counters, clearCounters, clearedAt, spanDest, rspanReach, debugOf, setDebug, consoleRows } from '../engine/wire.js';
 import { DEBUG_KINDS } from '../engine/debug.js';
 import { ensureFlash, IMAGES, PLATFORM, fsName, flashUsed, buildOf, installedImgs, imgTag } from '../engine/files.js';
 import { hostKey, vtyMode } from '../engine/remote.js';
@@ -29,6 +29,8 @@ import { nat64Rows, nat64Stats, clearNat64 } from '../engine/sim6.js';
 import { vtpCapable, vtpOf, vtpStatusLines } from '../engine/vtp.js';
 import { zbfActive } from '../engine/zbf.js';
 import { envPowerLines } from '../engine/power.js';
+import { coppLines, cpuLines } from '../engine/copp.js';
+import { eemPolicyLines, eemHistoryLines } from '../engine/eem.js';
 import { eigrpNeighborLines, eigrpTopoLines, eigrpTopoEntryLines, eigrpIfLines, eigrpProtoLines, eigrpBw, eigrpDly } from '../engine/eigrp.js';
 import { ripDbLines, ripProtoLines } from '../engine/rip.js';
 import { epcCmd, epcDelete, epcShow } from '../engine/epc.js';
@@ -748,7 +750,8 @@ const SHOW = {
       pad('Port', 10) + ['Single-Col', 'Multi-Col', 'Late-Col', 'Excess-Col', 'Carri-Sen', 'Runts'].map((x) => x.padStart(11)).join(''),
       ...ports.map((p) => { const c = counters(st, d.id, p.id); const coll = Math.max(0, c.coll - c.late); return pad(p.label, 10) + n(Math.ceil(coll * 0.7)) + n(Math.floor(coll * 0.3)) + n(c.late) + n(0) + n(0) + n(c.runts); })];
   },
-  'show monitor': (st, d) => monitorLines(d, null),
+  'show monitor': (st, d) => monitorLines(d, null, st),
+  'show vlan remote-span': (st, d) => { const l = ((d.sw || {}).vlans || []).filter((v) => v.rspan).map((v) => v.id); return ['Remote SPAN VLANs', '------------------------------------------------------------------------------', l.join(',')]; },
   'show debugging': (st, d) => {
     const x = debugOf(st, d.id);
     if (!x) return ['（目前沒有開啟任何 debug）'];
@@ -1065,6 +1068,11 @@ const SHOW = {
     }
     return o;
   },
+  'show policy-map control-plane': (st, d) => coppLines(st, d),
+  'show event manager policy registered': (st, d) => eemPolicyLines(d),
+  'show event manager history events': (st, d) => eemHistoryLines(st, d, hms),
+  'show processes cpu': (st, d) => cpuLines(st, d),
+  'show processes cpu sorted': (st, d) => cpuLines(st, d),
   'show policy-map interface': (st, d) => d.ifaces.filter((i) => i.qosIn || i.qosOut).flatMap((i) => policyIfLines(st, d, i)),
   'show mls qos': (st, d) => (d.kind !== 'mswitch' ? ['% 這個指令只適用於 Catalyst 2960 這類交換器'] : [`QoS is ${d.sw.qos && d.sw.qos.on ? 'enabled' : 'disabled'}`, 'QoS ip packet dscp rewrite is enabled',
     ...(d.sw.qos && d.sw.qos.on ? [] : ['（mls qos 沒有開：交換器不看也不改封包上的標記，原樣轉送）'])]),
@@ -1812,7 +1820,7 @@ function versionLines(st, d) {
 void IMAGES;
 
 /** show monitor [session n] */
-function monitorLines(d, only) {
+function monitorLines(d, only, st) {
   const span = (d.sw && d.sw.span) || {};
   const lab = (pid) => (d.ports.find((p) => p.id === pid) || {}).label || pid;
   const ids = Object.keys(span).filter((k) => only == null || k === String(only));
@@ -1821,9 +1829,11 @@ function monitorLines(d, only) {
   for (const k of ids) {
     const s = span[k], src = Object.entries(s.src || {});
     const list = (dir) => src.filter(([, v]) => v === dir).map(([p]) => lab(p)).join(',');
-    o.push(`Session ${k}`, '---------', 'Type                   : Local Session', 'Source Ports           :',
-      ...(['both', 'rx', 'tx'].filter((x) => list(x)).map((x) => `    ${pad({ both: 'Both', rx: 'RX Only', tx: 'TX Only' }[x], 19)}: ${list(x)}`)),
-      `Destination Ports      : ${s.dst ? lab(s.dst) : ''}`, '    Encapsulation      : Native', '          Ingress      : Disabled', '');
+    const type = s.dstVlan != null ? 'Remote Source Session' : s.srcVlan != null ? 'Remote Destination Session' : 'Local Session';
+    o.push(`Session ${k}`, '---------', `Type                   : ${type}`,
+      ...(s.srcVlan != null ? [`Source RSPAN VLAN      : ${s.srcVlan}`] : ['Source Ports           :', ...(['both', 'rx', 'tx'].filter((x) => list(x)).map((x) => `    ${pad({ both: 'Both', rx: 'RX Only', tx: 'TX Only' }[x], 19)}: ${list(x)}`))]),
+      ...(s.dstVlan != null ? [`Dest RSPAN VLAN        : ${s.dstVlan}`] : [`Destination Ports      : ${s.dst ? lab(s.dst) : ''}`, '    Encapsulation      : Native', '          Ingress      : Disabled']), '');
+    if (s.dstVlan != null && st) { const r = rspanReach(st, d.id, s.dstVlan); if (!r.targets.length) o.push(...r.why.map((w) => `（鏡像送不到任何目的埠：${w}）`), ''); }
   }
   return o;
 }
@@ -2415,7 +2425,7 @@ function showOrPing(app, devId, line, print) {
     return true;
   }
   if (tok[0].length >= 2 && 'show'.startsWith(tok[0]) && (tok[1] || '').length >= 3 && 'monitor'.startsWith(tok[1]) && tok[2] && 'session'.startsWith(tok[2]) && tok[3]) {
-    monitorLines(d, tok[3]).forEach((l) => print(l, 'pre'));
+    monitorLines(d, tok[3], st).forEach((l) => print(l, l.startsWith('（') ? 'hint' : 'pre'));
     return true;
   }
   if (tok[0] === 'clear' && tok.length > 1) {

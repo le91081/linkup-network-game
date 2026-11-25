@@ -119,6 +119,7 @@ export const PATHS = [
       { t: '通道與 DMVPN', d: 'GRE、GRE over IPsec、VTI、mGRE 與 NHRP、用憑證驗證的 IKEv2', ids: ['l88', 'l89', 'l90', 'l91', 'l101'] },
       { t: 'VRF 與 MPLS L3VPN', d: 'VRF-Lite、路由洩漏、LDP、VPNv4、route-target、PE-CE、共用服務', ids: ['l72', 'l82', 'l171', 'l134', 'l182'] },
       { t: '園區的高可用', d: 'MST、STP 的防護、FHRP 與追蹤、EtherChannel、多播', ids: ['l138', 'l139', 'l64', 'l96', 'l183', 'l145'] },
+      { t: '看得見、守得住、自己會處理', d: 'SPAN 與 RSPAN 的側錄、CoPP 保護設備自己的 CPU、EEM 在事件發生時自動下指令', ids: ['l188', 'l189', 'l190'] },
       { t: '多張工單的總驗收', d: '先讀圖、由下往上查，修好一個地方再回頭確認沒有弄壞別的', ids: ['l184', 'l187'] },
     ],
   },

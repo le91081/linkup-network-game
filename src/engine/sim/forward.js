@@ -26,6 +26,7 @@ import { redirectFor, learnRedirect, redirectRoute } from '../redirect.js';
 import { reflexAdd, reflexHit } from '../reflex.js';
 import { ltmPick, pickText, noVsReason } from '../ltm.js';
 import { floodedWhy } from '../dos.js';
+import { cpWhy } from '../copp.js';
 
 // ───────────────────────────── 封包轉送 ─────────────────────────────
 
@@ -529,7 +530,7 @@ export function forward(state, ctx, startId, pkt) {
         }
         T('vf_ip_route_input_common', `find a route: flag=84000000 gw-${fmtIp(pkt.dst)} via root`);
         // 這個服務正被 SYN flood 塞滿：新的連線排不進半開連線的佇列
-        const fl = floodedWhy(state, dev, pkt);
+        const fl = floodedWhy(state, dev, pkt) || cpWhy(state, dev, pkt);
         const r = fl ? { ok: false, dev: dev.id, reason: fl } : deliver(dev, inIf, pkt);
         if (!r.ok) { log.push({ dev: dev.id, kind: 'drop', text: r.reason }); T('fw_local_in_handler', 'iprope_in_check() check failed on policy 0, drop'); }
         else if (pkt.proto !== 'esp') {

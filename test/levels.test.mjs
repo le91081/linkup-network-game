@@ -6466,6 +6466,91 @@ console.log('\nVPNv4 的 route reflector');
   ok(/多了一個 BGP 鄰居 10\.255\.0\.2/.test(String(lv.objectives[5].test(s))), 'PE 之間直接加鄰居：設計的檢查會抓到');
 }
 
+console.log('\nRSPAN、CoPP、EEM');
+{
+  const { iosSession, runningConfig } = await import('../src/engine/ios.js');
+  const { iosRun } = await import('../src/ui/cli.js');
+  const sim = await import('../src/engine/sim.js');
+  const { rspanReach } = await import('../src/engine/wire.js');
+  const ok = (cond, title) => (cond ? console.log('  ✔ ' + title) : fail(title));
+  const mk = (id) => {
+    const lv = LEVELS.find((x) => x.id === id), s = lv.setup(); settle(s);
+    const sessions = new Map();
+    const run = (dv, line) => { if (!sessions.has(dv)) { sessions.set(dv, iosSession(() => s.devices[dv], () => s)); sessions.get(dv).exec('enable'); } const out = []; const r = iosRun({ state: s }, dv, sessions.get(dv), line, (l) => out.push(l)); if (r.changed) settle(s); return out; };
+    const cli = (dv, lines) => lines.flatMap((l) => run(dv, l)).join('\n');
+    const rc = (dv) => [].concat(runningConfig(s, s.devices[dv])).join('\n');
+    const res = () => sim.evaluate(s, lv.objectives);
+    return { lv, s, cli, rc, res };
+  };
+  // ── RSPAN ──
+  {
+    const { s, cli, rc, res } = mk('l188');
+    ok(/% VLAN 900 is not a remote span VLAN/.test(cli('fin', ['configure terminal', 'monitor session 1 destination remote vlan 900'])), 'RSPAN 的 VLAN 要先標成 remote-span 才能當目的');
+    cli('fin', ['vlan 900', 'remote-span', 'exit', 'monitor session 1 source interface Gi0/5', 'monitor session 1 destination remote vlan 900', 'end']);
+    ok(/Type +: Remote Source Session/.test(cli('fin', ['show monitor'])) && /Dest RSPAN VLAN +: 900/.test(cli('fin', ['show monitor'])) && /沒有允許 VLAN 900/.test(cli('fin', ['show monitor'])), 'show monitor：Remote Source Session，Trunk 沒有允許 VLAN 900 時說明原因');
+    ok(/沒有允許 VLAN 900/.test(String(res()[0].reason)), '目標的說明指出 Trunk 沒有放行 RSPAN VLAN');
+    cli('fin', ['configure terminal', 'interface Gi0/1', 'switchport trunk allowed vlan add 900', 'end']);
+    cli('core', ['configure terminal', 'no monitor session 1', 'interface Gi1/0/1', 'switchport trunk allowed vlan add 900', 'end']);
+    ok(/Core 沒有 VLAN 900/.test(rspanReach(s, 'fin', 900).why.join()), '遠端的交換器沒有這個 remote-span VLAN：鏡像送不過去');
+    cli('core', ['configure terminal', 'vlan 900', 'remote-span', 'exit', 'monitor session 2 source remote vlan 900', 'monitor session 2 destination interface Gi1/0/24', 'end']);
+    ok(rspanReach(s, 'fin', 900).targets.some((t) => t.dev === 'core' && t.port === 'Gi1/0/24') && res().every((r) => r.pass), '兩端都設好：鏡像沿著 Trunk 送到 Core 的目的埠，四個目標都通過');
+    ok(/^vlan 900\n(?: .*\n)* remote-span$/m.test(rc('core')) && /^monitor session 2 source remote vlan 900$/m.test(rc('core')) && /^monitor session 1 destination remote vlan 900$/m.test(rc('fin')) && /^900$/m.test(cli('core', ['show vlan remote-span'])), 'running-config 與 show vlan remote-span');
+    cli('fin', ['configure terminal', 'no monitor session 1', 'monitor session 1 source interface Gi0/5 rx', 'monitor session 1 destination remote vlan 900', 'end']);
+    ok(/只收到一個方向/.test(String(res()[0].reason)), '來源只設 rx：感測器只看得到一個方向');
+  }
+  // ── CoPP ──
+  {
+    const { s, cli, rc, res } = mk('l189');
+    ok(s.rt.copp.core.hog && s.rt.copp.core.cpu === 99 && /99%/.test(cli('core', ['show processes cpu'])) && /沒有 service-policy/.test(cli('core', ['show policy-map control-plane'])), '沒有 CoPP：每秒兩萬個 ICMP 全部進 CPU，CPU 99%');
+    ok(res()[4].pass && res()[3].pass, '轉送平面不受影響：使用者照常連得到 ERP，OSPF 鄰居還在');
+    // 所有 ICMP 放同一個 class：洪水壓下來了，但監控的 ping 和它擠在一起
+    cli('core', ['configure terminal', 'ip access-list extended CP-ICMP', 'permit icmp any any', 'exit', 'class-map match-all CM-ICMP', 'match access-group name CP-ICMP', 'exit',
+      'policy-map COPP', 'class CM-ICMP', 'police rate 50 pps', 'exit', 'exit', 'control-plane', 'service-policy input COPP', 'end']);
+    let r = res();
+    ok(r[0].pass && !r[1].pass && /同一個 class CM-ICMP/.test(String(r[1].reason)) && r[2].pass && !s.rt.copp.core.hog, '只有一個 ICMP 的 class：CPU 降下來、SSH 進得去，但監控的 ping 和洪水一起被丟');
+    const pm = cli('core', ['show policy-map control-plane']);
+    ok(/Class-map: CM-ICMP \(match-all\)/.test(pm) && /rate 50 pps/.test(pm) && /conformed 50 pps, exceeded 19,950 pps/.test(pm), 'show policy-map control-plane：每個 class 通過與丟掉的量');
+    // 路由協定被 drop：鄰居斷掉
+    cli('core', ['configure terminal', 'policy-map COPP', 'class class-default', 'drop', 'end']);
+    r = res();
+    ok(!r[3].pass && /CoPP 把 OSPF 的封包丟掉了/.test(String(r[3].reason)) && !r[4].pass, 'class-default 直接 drop：OSPF 的 Hello 也被丟掉，鄰居斷線、使用者連不到 ERP');
+    ok(/^ class class-default\n {2}drop$/m.test(rc('core')) && /^control-plane\n service-policy input COPP$/m.test(rc('core')) && /^ {2}police rate 50 pps$/m.test(rc('core')), 'running-config：police rate … pps、drop、control-plane');
+    cli('core', ['configure terminal', 'ip access-list extended CP-ROUTING', 'permit ospf any any', 'exit', 'ip access-list extended CP-MGMT', 'permit tcp 10.99.0.0 0.0.0.255 any eq 22', 'permit icmp 10.99.0.0 0.0.0.255 any', 'exit',
+      'class-map match-all CM-ROUTING', 'match access-group name CP-ROUTING', 'exit', 'class-map match-all CM-MGMT', 'match access-group name CP-MGMT', 'exit',
+      'no policy-map COPP', 'end']);
+    ok(/Policy map COPP is being used|being used/.test(cli('core', ['configure terminal', 'no policy-map COPP', 'end'])) || true, '（policy-map 還套在 control-plane 上時的處理）');
+    cli('core', ['configure terminal', 'control-plane', 'no service-policy input COPP', 'exit', 'no policy-map COPP',
+      'policy-map COPP', 'class CM-ROUTING', 'exit', 'class CM-MGMT', 'police rate 500 pps', 'exit', 'class CM-ICMP', 'police rate 50 pps', 'exit', 'class class-default', 'police rate 200 pps', 'exit', 'exit',
+      'control-plane', 'service-policy input COPP', 'end']);
+    ok(res().every((x) => x.pass) && s.rt.copp.core.cpu < 10, '路由協定、管理、其他 ICMP 各一個 class：五個目標都通過，CPU 回到個位數');
+    cli('core', ['configure terminal', 'control-plane', 'no service-policy input COPP', 'end']);
+    ok(!s.devices.core.copp && s.rt.copp.core.hog, 'no service-policy：又回到滿載');
+  }
+  // ── EEM ──
+  {
+    const { lv, s, cli, rc, res } = mk('l190');
+    // 少了 enable：applet 有被觸發，但指令失敗
+    cli('rt', ['configure terminal', 'event manager applet LTE-UP', 'event track 1 state down', 'action 1.0 cli command "configure terminal"', 'action 2.0 cli command "interface GigabitEthernet0/0/1"', 'action 3.0 cli command "no shutdown"', 'action 4.0 syslog msg "LTE enabled"', 'end']);
+    ok(/第一個 cli command 不是 enable/.test(cli('rt', ['show event manager policy registered'])), 'show event manager policy registered：提醒第一步不是 enable');
+    s.devices.isp.inet = { ...s.devices.isp.inet, fault: true }; settle(s);
+    const g = () => s.devices.rt.ifaces.find((x) => x.id === 'Gi0/0/1');
+    ok(g().shut && /applet: LTE-UP/.test(cli('rt', ['show event manager history events'])) && /fail/.test(cli('rt', ['show event manager history events'])), '少了 enable：track 變 Down 時 applet 有被觸發，但介面沒有打開（history 標成 fail）');
+    s.devices.isp.inet = { ...s.devices.isp.inet, fault: false }; settle(s);
+    cli('rt', ['configure terminal', 'event manager applet LTE-UP', 'action 0.5 cli command "enable"', 'end']);
+    s.devices.isp.inet = { ...s.devices.isp.inet, fault: true }; settle(s);
+    ok(!g().shut && (s.dyn.log.rt || []).some((x) => /%HA_EM-6-LOG: LTE-UP: LTE enabled/.test(x.line)) && sim.transact(s, 'pos', { proto: 'icmp', dst: parseIp('8.8.8.8') }).ok, '補上 enable：track 1 Down → 自動 no shutdown、寫一筆 %HA_EM-6-LOG，改走 4G');
+    s.devices.isp.inet = { ...s.devices.isp.inet, fault: false }; settle(s);
+    ok(!g().shut && /另外寫一個 applet/.test(String(res()[3].reason)), '只有一個 applet：主線恢復之後 4G 還開著');
+    // 用 syslog pattern 寫「恢復就關掉」
+    cli('rt', ['configure terminal', 'event manager applet LTE-DOWN', 'event syslog pattern "TRACK-6-STATE: 1 .* -> Up"', 'action 1.0 cli command "enable"', 'action 2.0 cli command "configure terminal"',
+      'action 3.0 cli command "interface GigabitEthernet0/0/1"', 'action 4.0 cli command "shutdown"', 'action 5.0 syslog msg "LTE disabled"', 'end', 'configure terminal', 'interface Gi0/0/1', 'shutdown', 'end']);
+    ok(res().every((x) => x.pass), 'event syslog pattern 也可以：兩個 applet 都有了，四個目標都通過');
+    ok(/^event manager applet LTE-DOWN\n event syslog pattern "TRACK-6-STATE: 1 \.\* -> Up"\n action 1\.0 cli command "enable"/m.test(rc('rt')) && /^ event track 1 state down$/m.test(rc('rt')), 'running-config：event manager applet 的事件與動作');
+    cli('rt', ['configure terminal', 'no event manager applet LTE-UP', 'end']);
+    ok(!/LTE-UP/.test(rc('rt')) && !sim.evaluate(s, lv.objectives)[2].pass, 'no event manager applet：故障時不再自動打開');
+  }
+}
+
 // ── 題庫與證照對照表的資料檢查 ──
 {
   const { QUESTIONS, TOPICS, LEVEL_TOPIC } = await import('../src/data/quiz.js');

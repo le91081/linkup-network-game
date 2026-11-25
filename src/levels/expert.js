@@ -1,11 +1,13 @@
 // 第十九章：進階實作（CCNP 等級）。每一關把幾項技術放在同一張拓撲裡，除了「通」之外還有設計上的要求
 // （不能用全網狀、流量要走指定的出口、任何一台壞掉都不能斷…），用 check 目標驗證。
 // 設備的設定全部用 CLI 打進去（typeIn），和玩家在 CLI 分頁看到的 running-config 一致。
-import { makeDevice as D, makeState, cloneState } from '../engine/model.js';
+import { makeDevice as D, makeState, setLine, cloneState } from '../engine/model.js';
 import { parseIp, netOf } from '../engine/ip.js';
 import { iosSession } from '../engine/ios.js';
-import { recompute, transact } from '../engine/sim.js';
+import { recompute, settle, transact } from '../engine/sim.js';
 import { dev, WEB } from './util.js';
+import { setCapture, captureOf, rspanReach } from '../engine/wire.js';
+import { coppRoutingWhy } from '../engine/copp.js';
 
 export const CHAPTERS13 = [
   { id: 19, title: '進階實作', desc: 'CCNP 等級：路由反射器、BGP 的流量工程、EIGRP 與 OSPF 的進階設計、MPLS 的共用服務、園區核心的對齊。除了會通，還要符合設計上的要求。' },
@@ -47,6 +49,14 @@ const RR = { c1: '10.255.0.11', c2: '10.255.0.12' };
 const CLIENTS = { ea: '10.255.0.1', eb: '10.255.0.2', d1: '10.255.0.21', d2: '10.255.0.22' };
 const ospfAll = ['router ospf 1', 'network 10.0.0.0 0.255.255.255 area 0', 'exit'];
 const ibgpTo = (ip, extra = []) => [`neighbor ${ip} remote-as 65010`, `neighbor ${ip} update-source Loopback0`, ...extra.map((x) => `neighbor ${ip} ${x}`)];
+
+/** 在複製出來的狀態上打幾條測試連線，回傳某台主機（接在鏡像目的埠上）擷取到的訊框 */
+const spanSeen = (s, host, flows) => {
+  const c = cloneState(s); recompute(c);
+  setCapture(c, host, true);
+  for (const [from, ip, port] of flows) transact(c, from, { proto: 'tcp', dst: parseIp(ip), dport: port });
+  return (captureOf(c, host) || { frames: [] }).frames.filter((x) => x.how === 'span');
+};
 
 export const LEVELS96 = [
   {
@@ -615,5 +625,244 @@ export const LEVELS96 = [
       cfg(s, 'r2', ['router ospf 1', 'redistribute eigrp 100 subnets metric 100', 'exit', 'router eigrp 100', 'redistribute ospf 1 metric 10000 1000 255 1 1500']);
     },
     recap: ['同一個網段從兩個協定學到時只看管理距離：兩個交界的雙向重分配，要用 distance 或路由標籤避免相信倒回來的那一份。', '種子 metric 決定對面走哪一台邊界路由器：主線給好的、備援給差的。'],
+  },
+  {
+    id: 'l188', chapter: 19, title: '鏡像埠上，要看的封包一個都沒有', subtitle: 'SPAN 與 RSPAN：鏡像的來源、方向、remote-span 的 VLAN 怎麼沿著 Trunk 送到感測器', tags: ['SPAN', 'RSPAN', 'remote-span', '封包擷取', 'NDR', 'Trunk'],
+    brief: '資安團隊在核心交換器上接了一台 NDR 感測器，要側錄財務伺服器的流量。上週有人在 Core 上設了 SPAN，把往財務交換器的上行埠鏡像給感測器。結果：財務部的電腦連財務伺服器的流量，感測器一個封包都沒看到；經過上行埠的流量只看得到一個方向；反而一般使用者往檔案伺服器的流量全部被送了過去，把感測器的儲存空間吃光。請改成「只鏡像財務伺服器那一個埠、進出兩個方向都要」，其他人的流量不要送過去。',
+    given: [
+      ['Core (C9300)', 'Gi1/0/1 Trunk → SW-FIN · Gi1/0/10 檔案伺服器（VLAN 20）· Gi1/0/24 NDR 感測器 · VLAN 10 / 20 的閘道在這裡'],
+      ['SW-FIN (C2960)', 'Gi0/1 Trunk → Core（只允許 VLAN 10,20）· Gi0/5 財務伺服器 · Gi0/6 財務 PC（都在 VLAN 10）· Gi0/7 一般 PC（VLAN 20）'],
+      ['位址', '財務伺服器 10.10.10.10 · 財務 PC 10.10.10.50 · 一般 PC 10.10.20.50 · 檔案伺服器 10.10.20.10'],
+      ['RSPAN 用的 VLAN', '900（還沒有建立）'],
+      ['要求', '感測器只收財務伺服器那個埠的流量（進與出）；不能動到使用者的連線'],
+    ],
+    learn: [
+      { t: 'SPAN 只看得到經過那個埠的訊框', d: '鏡像的是「來源埠」上進出的訊框。財務 PC 和財務伺服器接在同一台交換器上，彼此的流量在 SW-FIN 裡就轉送完了，根本不會走到 Core 的上行埠 —— 在 Core 上鏡像再多也看不到。要看哪個埠的流量，來源就要設在那個埠所在的交換器上。' },
+      { t: 'rx、tx、both', d: 'monitor session 1 source interface Gi0/5 後面不寫就是 both。rx 只複製從那個埠「進來」的訊框，tx 只複製「送出去」的。只設 rx 會只看到一個方向，TCP 的連線在分析工具裡變成只有請求沒有回應。' },
+      { t: 'RSPAN：用一個 VLAN 把鏡像載到遠端', d: '感測器不在來源的那一台交換器上時，用 RSPAN：建一個專用的 VLAN 並標成 remote-span，來源的交換器把鏡像的訊框放進這個 VLAN（destination remote vlan 900），沿著 Trunk 送到感測器所在的交換器，那一台再把這個 VLAN 當成來源（source remote vlan 900）送到目的埠。' },
+      { t: '路上每一段都要通', d: 'RSPAN VLAN 和一般的 VLAN 一樣要在路上每一台交換器上存在（而且都要標 remote-span），每一條 Trunk 兩端都要允許它。Trunk 有限制允許的 VLAN 時最容易漏掉：show interfaces trunk、show vlan remote-span、show monitor 逐一對。' },
+      { t: '目的埠不是一般的埠', d: 'SPAN 的目的埠只送出複製的訊框，不學 MAC、不跑生成樹、接在上面的設備也不能用它上網，所以感測器通常另外有一個管理用的網路卡。要跨第三層送鏡像（感測器在另一個站點）用 ERSPAN：把鏡像的訊框包進 GRE，用 IP 路由送過去。' },
+    ],
+    setup() {
+      const s = makeState([
+        D('c9300', 'core', { name: 'Core', pos: [0, -6] }),
+        D('c2960', 'fin', { name: 'SW-FIN', pos: [-7, -1] }),
+        D('tower', 'ndr', { name: 'NDR 感測器', pos: [8, -9], ip: '192.168.99.10', note: '側錄用的網路卡：開著混雜模式收鏡像的訊框，不用它上網' }),
+        D('nas', 'nas', { name: '檔案伺服器', pos: [8, -2], ip: '10.10.20.10', gw: '10.10.20.1', services: WEB }),
+        D('tower', 'srv', { name: '財務伺服器', pos: [-12, 4], ip: '10.10.10.10', gw: '10.10.10.1', services: WEB }),
+        D('pc', 'finpc', { name: '財務 PC', pos: [-7, 5], ip: '10.10.10.50', gw: '10.10.10.1' }),
+        D('pc', 'gen', { name: '一般 PC', pos: [-2, 4], ip: '10.10.20.50', gw: '10.10.20.1' }),
+      ], [
+        ['core:Gi1/0/1', 'fin:Gi0/1'], ['core:Gi1/0/10', 'nas:eth0'], ['core:Gi1/0/24', 'ndr:eth0'],
+        ['fin:Gi0/5', 'srv:eth0'], ['fin:Gi0/6', 'finpc:eth0'], ['fin:Gi0/7', 'gen:eth0'],
+      ]);
+      recompute(s);
+      const vlans = ['vlan 10', 'name FINANCE', 'exit', 'vlan 20', 'name USERS', 'exit'];
+      const acc = (p, v) => [`interface ${p}`, 'switchport mode access', `switchport access vlan ${v}`, 'spanning-tree portfast', 'exit'];
+      // Core：上週設的本機 SPAN —— 來源是往 SW-FIN 的上行埠，而且只有 rx
+      cfg(s, 'core', ['ip routing', ...vlans, 'interface Gi1/0/1', 'switchport mode trunk', 'switchport trunk allowed vlan 10,20', 'exit', ...acc('Gi1/0/10', 20),
+        'interface Vlan10', 'ip address 10.10.10.1 255.255.255.0', 'exit', 'interface Vlan20', 'ip address 10.10.20.1 255.255.255.0', 'exit',
+        'monitor session 1 source interface Gi1/0/1 rx', 'monitor session 1 destination interface Gi1/0/24']);
+      cfg(s, 'fin', [...vlans, 'interface Gi0/1', 'switchport mode trunk', 'switchport trunk allowed vlan 10,20', 'exit', ...acc('Gi0/5', 10), ...acc('Gi0/6', 10), ...acc('Gi0/7', 20)]);
+      recompute(s);
+      return s;
+    },
+    objectives: [
+      {
+        type: 'check', label: '感測器收得到財務伺服器的流量，而且進、出兩個方向都有（包含同一台交換器上的財務 PC 連它）',
+        test(s) {
+          const f = spanSeen(s, 'ndr', [['finpc', '10.10.10.10', 443], ['gen', '10.10.10.10', 443]]);
+          const srv = parseIp('10.10.10.10'), pc = parseIp('10.10.10.50');
+          const to = f.some((x) => x.src === pc && x.dst === srv), from = f.some((x) => x.src === srv && x.dst === pc);
+          if (!to && !from) {
+            const fin = dev(s, 'fin'), ses = Object.values(fin.sw.span || {});
+            if (!ses.some((x) => x.src && x.src['Gi0/5'])) return '財務 PC 連財務伺服器的流量，感測器一個封包都沒收到：兩台都接在 SW-FIN 上，流量不會經過 Core 的上行埠。鏡像的來源要設在 SW-FIN 的 Gi0/5（財務伺服器那個埠）';
+            const rv = ses.find((x) => x.src && x.src['Gi0/5'] && x.dstVlan != null);
+            if (!rv) return 'SW-FIN 的 session 有來源埠，但沒有把鏡像送出去：感測器接在 Core，要用 RSPAN（monitor session <n> destination remote vlan 900）';
+            return `鏡像的訊框到不了感測器：${rspanReach(s, 'fin', rv.dstVlan).why.join('；')}`;
+          }
+          if (!to || !from) return `感測器只收到一個方向（${to ? '財務 PC → 伺服器' : '伺服器 → 財務 PC'}）：來源埠的方向要是 both，不是只有 rx 或 tx`;
+          return true;
+        },
+      },
+      {
+        type: 'check', label: '其他人的流量不會送到感測器：一般 PC 連檔案伺服器的封包不在鏡像裡',
+        test(s) {
+          const f = spanSeen(s, 'ndr', [['gen', '10.10.20.10', 443]]);
+          const a = parseIp('10.10.20.50'), b = parseIp('10.10.20.10');
+          if (f.some((x) => (x.src === a && x.dst === b) || (x.src === b && x.dst === a))) return '一般 PC 連檔案伺服器的封包也被送到感測器：來源不要用整個上行埠，只鏡像財務伺服器那一個埠';
+          return true;
+        },
+      },
+      { type: 'tcp', from: 'finpc', to: 'srv', port: 443, label: '財務 PC 照常連得到財務伺服器' },
+      { type: 'tcp', from: 'gen', to: 'nas', port: 443, label: '一般 PC 照常連得到檔案伺服器' },
+    ],
+    hints: [
+      'Core：show monitor。Session 1 的來源是 Gi1/0/1、RX Only：只看得到從 SW-FIN 進來的訊框。財務 PC 與財務伺服器都在 SW-FIN，它們之間的流量不會上來；VLAN 20 的使用者要到檔案伺服器卻一定經過這裡。先 no monitor session 1。',
+      'SW-FIN：vlan 900 → remote-span；monitor session 1 source interface Gi0/5（不寫方向就是 both）；monitor session 1 destination remote vlan 900；interface Gi0/1 → switchport trunk allowed vlan add 900。',
+      'Core：vlan 900 → remote-span；interface Gi1/0/1 → switchport trunk allowed vlan add 900；monitor session 2 source remote vlan 900；monitor session 2 destination interface Gi1/0/24。兩台的 show monitor 都看不到「鏡像送不到任何目的埠」的說明就對了。',
+    ],
+    solve(s) {
+      cfg(s, 'fin', ['vlan 900', 'name RSPAN', 'remote-span', 'exit', 'monitor session 1 source interface Gi0/5', 'monitor session 1 destination remote vlan 900', 'interface Gi0/1', 'switchport trunk allowed vlan add 900']);
+      cfg(s, 'core', ['no monitor session 1', 'vlan 900', 'name RSPAN', 'remote-span', 'exit', 'interface Gi1/0/1', 'switchport trunk allowed vlan add 900', 'exit',
+        'monitor session 2 source remote vlan 900', 'monitor session 2 destination interface Gi1/0/24']);
+    },
+    recap: ['鏡像的來源要設在流量真的經過的那個埠；感測器在別台交換器上就用 RSPAN。', 'RSPAN VLAN 要在路上每一台都是 remote-span，每一條 Trunk 都要允許它。'],
+  },
+  {
+    id: 'l189', chapter: 19, title: '核心一被掃，SSH 就進不去', subtitle: 'CoPP：保護設備自己的 CPU —— 分類、限速、路由協定與管理流量要分開', tags: ['CoPP', 'control-plane', 'police', '設備加固', 'DoS', 'OSPF'],
+    brief: '辦公區有一台中毒的電腦，正在對核心路由器 Core-RT 的 Loopback 位址狂送 ICMP（每秒兩萬個）。資料還轉得動（使用者照常連得到 ERP），但 Core-RT 的 CPU 滿載：網管工作站 SSH 進不去、監控系統 ping 不到它，告警響個不停。請在 Core-RT 上設定 CoPP：把洪水壓下來，同時保住路由協定、網管工作站的 SSH 與監控的 ping。資安規範另外要求：不能只靠介面上的 ACL 擋（攻擊換一個方向進來就沒用了），control-plane 一定要有限速。',
+    given: [
+      ['Core-RT', 'Lo0 10.255.0.1 · Gi0/0/0 辦公區 10.10.0.1/24 · Gi0/0/1 → DIST-RT 10.0.0.1/30（OSPF）· Gi0/0/2 管理網段 10.99.0.1/24'],
+      ['DIST-RT', '10.0.0.2/30 · ERP 的網段 10.20.0.0/24（ERP 10.20.0.10）'],
+      ['網管工作站', '10.99.0.10：用 SSH 管理 Core-RT（帳號 netops），監控系統也在這台，每分鐘 ping Core-RT 的 Loopback'],
+      ['攻擊', '中毒的電腦 10.10.0.66 → 10.255.0.1，ICMP，每秒 20,000 個'],
+      ['Core-RT 的 CPU', '每秒大約處理得了 3,000 個送給它自己的封包'],
+    ],
+    learn: [
+      { t: '轉送和 CPU 是兩回事', d: '經過路由器的封包由轉送平面（CEF、硬體）處理，不太吃 CPU；但「目的位址就是路由器自己」的封包（ping 它、SSH、SNMP、路由協定）全部要交給 CPU。所以對路由器自己的位址灌封包，資料照樣轉得動，管理卻進不去 —— 而且任何一台能送封包給它的設備都做得到。' },
+      { t: 'CoPP 的組成', d: '和介面上的 QoS 是同一套語法（MQC）：用 ACL 把送給自己的封包分類（class-map match access-group name …），在 policy-map 裡替每個 class 設限速（police rate 100 pps，或 police 64000）或直接 drop，最後套在 control-plane 底下（service-policy input）。它對所有介面進來、要交給 CPU 的封包都生效，這是它比介面 ACL 好的地方。' },
+      { t: 'policer 不分好壞', d: '限速是照 class 算的：同一個 class 裡擠著洪水時，正常的封包和攻擊的封包一樣照比例被丟。所以分類要夠細 —— 路由協定一個 class、來自管理網段的 SSH / SNMP / ping 一個 class、其他來源的 ICMP 另一個 class（限得很緊）。要保護的流量絕對不能和「可能被灌爆的流量」放在一起。' },
+      { t: '順序與 class-default', d: 'policy-map 裡的 class 由上往下比對，第一個符合的生效。路由協定放最前面，而且通常不限速（或限得很寬）：把 OSPF 的 Hello 丟掉，鄰居四十秒後就斷，比被攻擊還慘。class-default 收剩下的全部，給一個保守的限速；不要直接 drop，除非前面已經把所有要用的協定列完。' },
+      { t: '怎麼驗證', d: 'show policy-map control-plane 看每個 class 進來多少、通過 (conformed) 多少、丟掉 (exceeded) 多少；show processes cpu 看 CPU 降下來了沒；show ip ospf neighbor 確認鄰居還在。先用寬鬆的限速上線、觀察幾天計數器再收緊，是實務上的做法。' },
+    ],
+    setup() {
+      const s = makeState([
+        D('isr4331', 'core', { name: 'Core-RT', pos: [0, -5], init(d) { Object.assign(d.mgmt, { user: 'netops', pass: 'N3t0ps!26', priv: 15, sshKey: { bits: 2048, gen: 1 }, domain: 'corp.local', vtyLogin: 'local', telnet: false, ssh: true }); } }),
+        D('isr4331', 'dist', { name: 'DIST-RT', pos: [8, -5] }),
+        D('tower', 'erp', { name: 'ERP', pos: [12, 0], ip: '10.20.0.10', gw: '10.20.0.1', services: WEB }),
+        D('tower', 'nms', { name: '網管工作站', pos: [0, -11], ip: '10.99.0.10', gw: '10.99.0.1' }),
+        D('sw8', 'sw', { name: '辦公區交換器', pos: [-7, -1] }),
+        D('pc', 'pc', { name: '使用者 PC', pos: [-11, 4], ip: '10.10.0.50', gw: '10.10.0.1' }),
+        D('pc', 'bot', { name: '中毒的電腦', pos: [-4, 4], ip: '10.10.0.66', gw: '10.10.0.1', locked: true, note: '已經通報使用者關機，但人還沒找到：這台不能動' }),
+      ], [
+        ['core:Gi0/0/0', 'sw:1'], ['sw:2', 'pc:eth0'], ['sw:3', 'bot:eth0'], ['core:Gi0/0/1', 'dist:Gi0/0/0'], ['core:Gi0/0/2', 'nms:eth0'], ['dist:Gi0/0/1', 'erp:eth0'],
+      ]);
+      recompute(s);
+      cfg(s, 'core', [...lo0('10.255.0.1'), ...ifIp('Gi0/0/0', '10.10.0.1', '255.255.255.0'), ...ifIp('Gi0/0/1', '10.0.0.1'), ...ifIp('Gi0/0/2', '10.99.0.1', '255.255.255.0'),
+        'router ospf 1', 'router-id 10.255.0.1', 'network 10.0.0.0 0.0.0.3 area 0', 'network 10.10.0.0 0.0.0.255 area 0', 'network 10.99.0.0 0.0.0.255 area 0', 'network 10.255.0.1 0.0.0.0 area 0',
+        'passive-interface Gi0/0/0', 'passive-interface Gi0/0/2', 'exit']);
+      cfg(s, 'dist', [...lo0('10.255.0.2'), ...ifIp('Gi0/0/0', '10.0.0.2'), ...ifIp('Gi0/0/1', '10.20.0.1', '255.255.255.0'),
+        'router ospf 1', 'router-id 10.255.0.2', 'network 10.0.0.0 0.0.0.3 area 0', 'network 10.20.0.0 0.0.0.255 area 0', 'network 10.255.0.2 0.0.0.0 area 0', 'passive-interface Gi0/0/1', 'exit']);
+      s.attacks = [{ id: 'flood', from: 'bot', ip: '10.255.0.1', kind: 'icmp', pps: 20000, on: true, cp: true, label: '中毒的電腦送出的 ICMP 洪水' }];
+      recompute(s);
+      return s;
+    },
+    objectives: [
+      { type: 'login', from: 'nms', ip: '10.255.0.1', proto: 'ssh', user: 'netops', pass: 'N3t0ps!26', label: '網管工作站 SSH 得進 Core-RT' },
+      { type: 'ping', from: 'nms', ip: '10.255.0.1', label: '監控系統 ping 得到 Core-RT 的 Loopback' },
+      {
+        type: 'check', label: 'Core-RT 的 control-plane 有限速，洪水被壓在 CPU 處理得了的範圍內',
+        test(s) {
+          const d = dev(s, 'core'), cp = (s.rt.copp || {}).core;
+          if (!d.copp) return cp ? 'control-plane 底下沒有 service-policy：只靠介面的 ACL 擋，攻擊換一個方向進來就沒用了' : 'control-plane 底下沒有 service-policy（資安規範要求一定要有 CoPP，就算洪水已經被別的方法擋掉）';
+          if (!(d.policyMaps || {})[d.copp]) return `policy-map ${d.copp} 還沒有建立`;
+          if (cp && cp.hog) return `Core-RT 的 CPU 還是忙不過來（${cp.cpu}%）：每秒還有 ${Math.round(cp.passed)} 個封包通過 CoPP 交給 CPU。洪水分到的那個 class 限速要更緊（幾十到幾百 pps）`;
+          return true;
+        },
+      },
+      {
+        type: 'check', label: 'OSPF 的鄰居還在：CoPP 沒有把路由協定的封包丟掉',
+        test(s) {
+          const n = ((dev(s, 'core').rt.nbrs) || []).find((x) => x.dev === 'dist');
+          if (n && n.state === 'full') return true;
+          const w = coppRoutingWhy(dev(s, 'core'), 'ospf', parseIp('10.0.0.2'), parseIp('224.0.0.5'));
+          return `Core-RT 和 DIST-RT 的 OSPF 鄰居不是 FULL${w ? '：' + w : n && n.why ? '：' + n.why : ''}`;
+        },
+      },
+      { type: 'tcp', from: 'pc', to: 'erp', port: 443, label: '使用者照常連得到 ERP' },
+    ],
+    hints: [
+      'Core-RT：show processes cpu（IP Input 把 CPU 佔滿）、show policy-map control-plane（沒有 service-policy）。先用 ACL 分類：ip access-list extended CP-ROUTING → permit ospf any any；ip access-list extended CP-MGMT → permit tcp 10.99.0.0 0.0.0.255 any eq 22、permit icmp 10.99.0.0 0.0.0.255 any；ip access-list extended CP-ICMP → permit icmp any any。',
+      'class-map match-all CM-ROUTING → match access-group name CP-ROUTING（CM-MGMT、CM-ICMP 照做）。policy-map COPP：class CM-ROUTING（不限速）、class CM-MGMT → police rate 500 pps、class CM-ICMP → police rate 50 pps、class class-default → police rate 200 pps。順序很重要：CM-MGMT 要在 CM-ICMP 前面，管理網段的 ping 才不會和洪水擠在一起。',
+      'control-plane → service-policy input COPP。show policy-map control-plane：CM-ICMP 每秒進來 20,000、conformed 50、其餘 exceeded；show processes cpu 降回個位數。不要對 class-default 或路由協定下 drop。',
+    ],
+    solve(s) {
+      cfg(s, 'core', ['ip access-list extended CP-ROUTING', 'permit ospf any any', 'exit',
+        'ip access-list extended CP-MGMT', 'permit tcp 10.99.0.0 0.0.0.255 any eq 22', 'permit icmp 10.99.0.0 0.0.0.255 any', 'exit',
+        'ip access-list extended CP-ICMP', 'permit icmp any any', 'exit',
+        'class-map match-all CM-ROUTING', 'match access-group name CP-ROUTING', 'exit', 'class-map match-all CM-MGMT', 'match access-group name CP-MGMT', 'exit', 'class-map match-all CM-ICMP', 'match access-group name CP-ICMP', 'exit',
+        'policy-map COPP', 'class CM-ROUTING', 'exit', 'class CM-MGMT', 'police rate 500 pps', 'exit', 'class CM-ICMP', 'police rate 50 pps', 'exit', 'class class-default', 'police rate 200 pps', 'exit', 'exit',
+        'control-plane', 'service-policy input COPP']);
+    },
+    recap: ['送給設備自己的封包都要 CPU 處理：用 CoPP 分類限速，路由協定、管理、其他各一個 class。', 'policer 不分好壞：要保護的流量不能和可能被灌爆的流量放在同一個 class。'],
+  },
+  {
+    id: 'l190', chapter: 19, noDrill: true, title: '4G 備援照流量計費，平常要關著', subtitle: 'EEM：事件發生時自動下指令 —— 主線不通才打開備援介面，恢復之後再關掉', tags: ['EEM', 'event manager', 'IP SLA', 'track', '自動化', '備援'],
+    brief: '門市的路由器有兩條對外線路：光纖主線，以及一條 4G 備援。4G 是照流量計費的，介面只要開著，系統更新、背景同步就會偷偷走它，上個月的帳單因此多了好幾千元 —— 所以規定 4G 的介面平常要 shutdown。問題是主線一斷就得有人半夜爬起來手動打開。IP SLA 與追蹤物件（track 1）前人已經設好了，請用 EEM 讓路由器自己處理：track 1 一 Down 就打開 4G 的介面，回到 Up 就關掉，而且每次切換都要留下一筆紀錄。',
+    given: [
+      ['主線', 'Gi0/0/0 → 光纖 ISP，閘道 203.0.113.1 · 預設路由綁 track 1'],
+      ['備援', 'Gi0/0/1 → 4G 業者，閘道 198.51.100.1 · 浮動靜態路由（AD 10）· 介面平常 shutdown'],
+      ['探測', 'ip sla 1：每 10 秒從主線 ping 1.1.1.1 · track 1 ip sla 1 reachability（都已經設好）'],
+      ['要求', '平常 Gi0/0/1 是 administratively down；主線不通時自動打開、恢復之後自動關掉；每次切換寫一筆 syslog'],
+    ],
+    learn: [
+      { t: 'EEM 是設備自己的「如果…就…」', d: 'event manager applet 由一個事件 (event) 加上一串動作 (action) 組成：事件可以是某一筆 syslog（event syslog pattern "…"，用正規表示式比對）、追蹤物件改變狀態（event track 1 state down）、計時器、SNMP 的數值…。事件發生時，設備在自己身上照順序執行動作，不需要外部的管理主機。' },
+      { t: 'cli command 從使用者模式開始', d: 'action 1.0 cli command "enable" 幾乎永遠是第一步，接著才是 configure terminal、interface …、no shutdown、end。少了 enable，後面的指令全部失敗，而且不會有任何提示 —— show event manager history events 看得到 applet 有被觸發，設定卻沒有變。' },
+      { t: 'action 的標籤照字串排序', d: '標籤（1.0、2.0…）決定執行順序，但比較的是字串：10.0 會排在 2.0 前面。超過九步時用 01、02… 或 1.0、1.5、2.0 這種寫法。' },
+      { t: '一個方向一個 applet', d: '「斷了就打開」與「好了就關掉」是兩個事件，寫成兩個 applet。只寫前一個的話，主線恢復之後 4G 還開著 —— 路由已經切回主線（因為 track 回到 Up），但介面開著就有背景流量在計費。' },
+      { t: '什麼時候該用、什麼時候不該', d: 'EEM 適合「設備自己就該處理、等不到人」的事：開關備援介面、故障當下自動收集 show 的輸出、把特定的錯誤轉成明確的告警。能用協定本身的機制（追蹤的靜態路由、HSRP 的 track）解決的事不要用 EEM 重做；大範圍的設定變更交給 Ansible 這類集中式的工具。' },
+    ],
+    setup() {
+      const s = makeState([
+        setLine(D('internet', 'isp', { name: '光纖 ISP', pos: [-6, -10] }), 'line1', { type: 'static', gw: '203.0.113.1', mask: '255.255.255.252', assign: '203.0.113.2' }),
+        setLine(D('internet', 'lte', { name: '4G 業者（照流量計費）', pos: [6, -10] }), 'line1', { type: 'static', gw: '198.51.100.1', mask: '255.255.255.252', assign: '198.51.100.2' }),
+        D('isr4331', 'rt', {
+          name: 'Store-RT', pos: [0, -5],
+          init(d) {
+            Object.assign(d.ifaces[0], { ip: '203.0.113.2', mask: '255.255.255.252', nat: true });
+            Object.assign(d.ifaces[1], { ip: '198.51.100.2', mask: '255.255.255.252', nat: true, shut: true });
+            Object.assign(d.ifaces[2], { ip: '192.168.1.1', mask: '255.255.255.0' });
+          },
+        }),
+        D('sw5', 'sw', { name: '門市的交換器', pos: [0, 0] }),
+        D('pc', 'pos', { name: 'POS 收銀機', pos: [-4, 4.5], ip: '192.168.1.20', gw: '192.168.1.1', dns: '8.8.8.8' }),
+        D('pc', 'pc', { name: '店長的電腦', pos: [4, 4.5], ip: '192.168.1.30', gw: '192.168.1.1', dns: '8.8.8.8' }),
+      ], [['isp:line1', 'rt:Gi0/0/0'], ['lte:line1', 'rt:Gi0/0/1'], ['rt:Gi0/0/2', 'sw:1'], ['pos:eth0', 'sw:2'], ['pc:eth0', 'sw:3']]);
+      recompute(s);
+      cfg(s, 'rt', ['ip sla 1', 'icmp-echo 1.1.1.1 source-interface Gi0/0/0', 'frequency 10', 'exit', 'ip sla schedule 1 life forever start-time now', 'track 1 ip sla 1 reachability',
+        'ip route 0.0.0.0 0.0.0.0 203.0.113.1 track 1', 'ip route 0.0.0.0 0.0.0.0 198.51.100.1 10', 'ip route 1.1.1.1 255.255.255.255 203.0.113.1']);
+      recompute(s);
+      return s;
+    },
+    objectives: [
+      { type: 'tcp', from: 'pos', name: 'www.example.com', port: 443, label: '平常：POS 收銀機連得到雲端的服務（走光纖）' },
+      {
+        type: 'check', label: '平常 4G 的介面是關著的（administratively down），不會有流量被計費',
+        test(s) {
+          const i = dev(s, 'rt').ifaces.find((x) => x.id === 'Gi0/0/1');
+          return i.shut ? true : 'Gi0/0/1（4G）現在是開著的：背景流量會被計費。它平常要 shutdown，由 EEM 在主線不通的時候才打開';
+        },
+      },
+      { type: 'failover', label: '光纖 ISP 的骨幹故障（介面燈號正常）：路由器自己打開 4G，POS 照樣連得到雲端', ispFail: ['isp'], test: { type: 'tcp', from: 'pos', name: 'www.example.com', port: 443 } },
+      {
+        type: 'check', label: '主線恢復之後，4G 的介面自動關回去，而且兩次切換都有留下紀錄',
+        test(s) {
+          const c = cloneState(s);
+          settle(c);
+          c.devices.isp.inet = { ...c.devices.isp.inet, fault: true };
+          settle(c);
+          const g = () => c.devices.rt.ifaces.find((x) => x.id === 'Gi0/0/1');
+          if (g().shut) return '模擬主線故障：track 1 變成 Down 之後，Gi0/0/1 沒有被打開（show event manager history events 看 applet 有沒有被觸發、第一步是不是 enable）';
+          c.devices.isp.inet = { ...c.devices.isp.inet, fault: false };
+          settle(c);
+          if (!g().shut) return '模擬主線恢復：track 1 回到 Up 之後，Gi0/0/1 還開著。「好了就關掉」要另外寫一個 applet（event track 1 state up）';
+          const logs = ((c.dyn.log || {}).rt || []).filter((x) => /HA_EM-6-LOG/.test(x.line));
+          if (logs.length < 2) return `切換的時候沒有留下紀錄（只看到 ${logs.length} 筆 %HA_EM-6-LOG）：兩個 applet 都要有 action … syslog msg "…"`;
+          return true;
+        },
+      },
+    ],
+    hints: [
+      'Store-RT：show track（track 1 目前 Up）、show ip interface brief（Gi0/0/1 是 administratively down）。主線一故障，track 1 變 Down、往光纖的預設路由撤掉，但備援的介面是關的，浮動路由也用不了。',
+      'event manager applet LTE-UP → event track 1 state down → action 1.0 cli command "enable"、action 2.0 cli command "configure terminal"、action 3.0 cli command "interface GigabitEthernet0/0/1"、action 4.0 cli command "no shutdown"、action 5.0 cli command "end"、action 6.0 syslog msg "Primary down, LTE backup enabled"。',
+      '再寫一個 LTE-DOWN：event track 1 state up，動作一樣，只是第四步改成 shutdown、訊息改成 "Primary restored, LTE backup disabled"。寫完用 show event manager policy registered 檢查；不要自己手動 no shutdown Gi0/0/1。',
+    ],
+    solve(s) {
+      const applet = (name, st, cmd, msg) => [`event manager applet ${name}`, `event track 1 state ${st}`, 'action 1.0 cli command "enable"', 'action 2.0 cli command "configure terminal"',
+        'action 3.0 cli command "interface GigabitEthernet0/0/1"', `action 4.0 cli command "${cmd}"`, 'action 5.0 cli command "end"', `action 6.0 syslog msg "${msg}"`, 'exit'];
+      cfg(s, 'rt', [...applet('LTE-UP', 'down', 'no shutdown', 'Primary down, LTE backup enabled'), ...applet('LTE-DOWN', 'up', 'shutdown', 'Primary restored, LTE backup disabled')]);
+    },
+    recap: ['EEM：事件（syslog、track…）加上一串動作，設備自己處理等不到人的事。', 'cli command 的第一步是 enable；「發生」與「恢復」各寫一個 applet。'],
   },
 ];

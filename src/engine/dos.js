@@ -35,7 +35,7 @@ const fmtN = fmtCount;
 export function computeDos(state, probe) {
   const out = { list: [], hit: {} };
   for (const a of state.attacks || []) {
-    if (!a || a.on === false || !state.devices[a.from]) continue;
+    if (!a || a.on === false || a.cp || !state.devices[a.from]) continue; // cp：打設備自己的洪水，在 copp.js 處理
     const dst = parseIp(a.ip || ''), anomaly = KIND[a.kind || 'syn'] || 'tcp_syn_flood';
     if (dst == null) continue;
     const r = probe(a.from, { proto: 'tcp', dst, dport: a.port, quiet: true, flood: true });

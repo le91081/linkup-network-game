@@ -9,6 +9,7 @@ import { mgmtSpec } from './mgmtsrc.js';
 import { parseIp, fmtIp } from './ip.js';
 import { transact, macsBehind, closeFlow, poeTable } from './sim.js';
 import { isIos, archiveRunning } from './ios.js';
+import { eemOnLog } from './eem.js';
 import { linkInfo, CATALOG } from './model.js';
 import { ensureFlash, bootPick, isCiscoOs, IMAGES } from './files.js';
 import { nmsTick, queueTrap, flushTraps } from './snmp.js';
@@ -215,6 +216,7 @@ export function logEvent(state, d, sev, tag, msg, forti) {
   if (isIos(d)) {
     if (!tag) return; // 只有 FortiGate 才有的事件
     line = `${stampPre(state, d, 'log')}%${tag}: ${msg}`;
+    eemOnLog(state, d, tag, msg); // EEM：有沒有 applet 在等這個事件
   } else if (d.kind === 'firewall' && forti) {
     const s = plainStamp(state, d);
     line = `date=${s.date} time=${s.time} devname="${d.name}" ${forti}`;
