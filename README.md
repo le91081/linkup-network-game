@@ -39,6 +39,7 @@ npm run build    # 輸出到 dist/
 - `e2e/ui-mtu.spec.mjs`：`ping -M do -s` 找出 MTU、交換器的 giants 與 2960 的 Jumbo MTU（存檔、重新開機）、PMTUD 黑洞與 TCP MSS 調整。
 - `e2e/ui-stage11.spec.mjs`：VRF 的 CLI 與路由分頁、Docker 主機的終端機與分頁、HTTPS 憑證錯誤的排除（curl、換憑證、匯入根憑證、打開自動校時）。
 - `e2e/ui-boot.spec.mjs`：載入畫面（程式載入之前不會露出「視窗太窄」的提示、載入失敗的說明）與視窗太窄的提示卡（寬度跟著視窗變、900 像素的門檻、依裝置的建議）。
+- `e2e/ui-expert.spec.mjs`：進階內容。知識庫的「深入了解」（小節、旁邊的目錄、點目錄跳到小節、表格與指令不超出閱讀區）、證照地圖的六張證照（排成兩列、CCNP / CCIE 的條目數、進階關卡的標籤、點條目上的關卡直接進去）、第 19 章的 CLI（管理距離造成的迴圈、`distance ospf external`、`show ip eigrp topology <網段>`、`show ip ospf database external`）。
 
 失敗時的截圖與操作紀錄在 `e2e/.results/`，可以用 `npx playwright show-trace <trace.zip>` 一步一步回放。
 

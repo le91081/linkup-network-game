@@ -347,7 +347,7 @@ README 說明「現在有什麼、怎麼玩」，這份文件說明「整體應�
 | --- | --- | --- |
 | 引擎測試 | ✅ | 關卡重播、負面案例、故障情境、CLI 來回驗證、時鐘、頻寬、資料檢查 |
 | 建置 | ✅ | `vite build` |
-| 瀏覽器端測試 | ✅ | Playwright（用電腦上已裝的 Chrome，不下載瀏覽器）：每一關每台設備的每個分頁、解完到過關視窗、真的點擊與打字、各種模式，1440×900 與 1024×768，共 569 個測試。測的是打包好的版本（`vite build --mode e2e` → `dist-e2e/`，附 source map）：開發伺服器每頁要抓 280 多個檔、又是單一執行緒，平行數開再多都卡在它；平行數跟著 CPU（邏輯核心數的一半，最多 8 個），trace 只在重試時錄，重跑才過的測試一樣算失敗。8 核心 16 執行緒的電腦上整套從 27 分鐘（3 個平行、開發伺服器、每個測試都錄 trace）降到 8 分鐘。`PW_DEV=1` 改用開發伺服器、`PW_WORKERS` 指定平行數。測試要呼叫引擎或介面的函式時走 `window.linkup.engine` / `window.linkup.hud`，不在頁面裡 import 原始檔 |
+| 瀏覽器端測試 | ✅ | Playwright（用電腦上已裝的 Chrome，不下載瀏覽器）：每一關每台設備的每個分頁、解完到過關視窗、真的點擊與打字、各種模式，1440×900 與 1024×768，共 601 個測試。測的是打包好的版本（`vite build --mode e2e` → `dist-e2e/`，附 source map）：開發伺服器每頁要抓 280 多個檔、又是單一執行緒，平行數開再多都卡在它；平行數跟著 CPU（邏輯核心數的一半，最多 8 個），trace 只在重試時錄，重跑才過的測試一樣算失敗。8 核心 16 執行緒的電腦上整套從 27 分鐘（3 個平行、開發伺服器、每個測試都錄 trace）降到 8 分鐘。`PW_DEV=1` 改用開發伺服器、`PW_WORKERS` 指定平行數。測試要呼叫引擎或介面的函式時走 `window.linkup.engine` / `window.linkup.hud`，不在頁面裡 import 原始檔 |
 | CI | 🟡 | `.github/workflows/ci.yml`：引擎測試、兩種建置、Playwright（ubuntu-latest 內建的 Chrome），失敗時上傳截圖與 trace。還沒有遠端儲存庫，推上 GitHub 才會開始跑 |
 | 靜態檢查 | 🟡 | ESLint 9（`npm run lint`，CI 的第一步）：`eslint.config.js` 用 recommended 的規則，瀏覽器、Node、Service Worker 各自的全域變數；沒用到的參數不算（面板函式的介面一致），中文的全形空白與比對命令列輸出的多個空白是故意的。第一次跑抓到的真正問題：Linux 終端機的 `sudo ip link set … mtu` 與 `sudo ip route flush cache` 用到另一個函式裡的 `sudo`（一執行就 ReferenceError）、`show cdp neighbors` 定義了兩次（前面那個舊的從來沒有用到）、return 之後到不了的程式、六十幾個沒用到的 import 與變數，都已經修好。還沒有型別檢查（整個專案是 JavaScript，沒有型別註記） |
 | 模組拆分 | ✅ | `sim.js` 原本 3200 行，依層級拆成 `engine/sim/` 底下 12 個模組（core、phys、l2、wifi、l3、tunnels、auth、forward、transact、resolve、objectives、bandwidth），各 60 – 660 行；`sim.js` 只留重新計算與模擬時鐘（約 270 行），並匯出和拆開之前一模一樣的 71 個公開名稱，其他程式不用改 |

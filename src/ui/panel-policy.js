@@ -19,7 +19,7 @@ export function redistCard(ctx) {
   const rmOpts = [['', '全部都送（不過濾）'], ...Object.keys(dev.routeMaps || {}).map((n) => [n, `route-map ${n}`])];
   const block = (title, getList, setList, srcs, into) => {
     const list = getList();
-    return [h('div', { class: 'acl-h' }, h('span', { text: title }), h('em', { text: into === 'ospf' ? '這台變成 ASBR' : into === 'eigrp' ? '外部路由 D EX（AD 170）' : 'origin 是 ?' })),
+    return [h('div', { class: 'acl-h' }, h('span', { text: title }), h('em', { text: into === 'ospf' ? '這台變成 ASBR' : into === 'eigrp' ? `外部路由 D EX（AD ${(dev.eigrp.dist || [90, 170])[1]}）` : 'origin 是 ?' })),
       ...srcs.map((src) => {
         const cur = list.find((x) => x.src === src);
         return h('div', { class: 'redist-row' },
@@ -29,7 +29,8 @@ export function redistCard(ctx) {
             if (v) l.push({ src, ...(src === 'bgp' ? { as: +dev.bgp.asn } : src === 'ospf' ? { as: 1 } : src === 'eigrp' ? { as: +dev.eigrp.as } : {}) });
             setList(l);
           }, into === 'eigrp' && src === 'connected' ? '直連網段（沒有跑 EIGRP 的介面）' : SRC_NAME[src], { rerender: true }),
-          cur && into === 'eigrp' && h('div', { class: 'redist-opts' }, h('span', { class: 'muted mono', text: cur.metric ? `metric ${cur.metric.join(' ')}` : src === 'connected' ? '用介面的頻寬與延遲' : `default-metric ${dev.eigrp.defMetric.join(' ')}` })),
+          cur && into === 'eigrp' && h('div', { class: 'redist-opts' }, h('span', { class: 'muted mono', text: cur.metric ? `metric ${cur.metric.join(' ')}` : src === 'connected' ? '用介面的頻寬與延遲' : dev.eigrp.defMetric ? `default-metric ${dev.eigrp.defMetric.join(' ')}` : '沒有種子 metric：這些路不會宣告出去（CLI：redistribute … metric，或 default-metric）' }),
+            cur.rm && h('span', { class: 'muted mono', text: `route-map ${cur.rm}` })),
           cur && into !== 'eigrp' && h('div', { class: 'redist-opts' },
             into === 'ospf' && sel(ctx, () => String(cur.type || 2), (v) => { if (+v === 1) cur.type = 1; else delete cur.type; }, [['2', 'E2（metric 固定）'], ['1', 'E1（加上內部的 cost）']]),
             sel(ctx, () => cur.rm || '', (v) => { if (v) cur.rm = v; else delete cur.rm; }, rmOpts, { rerender: true })));
