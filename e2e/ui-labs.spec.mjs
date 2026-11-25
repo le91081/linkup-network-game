@@ -16,10 +16,10 @@ test('關卡選單：章節導覽與進度、搜尋、只看未完成、學習�
   await expect(dlg).toBeVisible();
   expect(await scan(page, '#modal-root', '關卡選單')).toEqual([]);
   // 左邊 18 章，每一章有「完成數 / 總數」；右邊的章節標題一樣多
-  await expect(dlg.locator('.lvp-row[data-ch]')).toHaveCount(18);
+  await expect(dlg.locator('.lvp-row[data-ch]')).toHaveCount(20);
   await expect(dlg.locator('.lvp-row[data-ch="18"]')).toContainText('封包實驗室');
   await expect(dlg.locator('.lvp-row[data-ch="18"] .c')).toHaveText('0/5');
-  await expect(dlg.locator('.lvp-main .chapter')).toHaveCount(18);
+  await expect(dlg.locator('.lvp-main .chapter')).toHaveCount(20);
   // 整個視窗不捲動，只有右邊的清單會捲；其他模式的卡片一直看得到
   expect(await dlg.evaluate((el) => el.scrollHeight <= el.clientHeight + 1)).toBe(true);
   await expect(dlg.locator('.mode-card', { hasText: '故障演練' })).toBeVisible();
@@ -41,14 +41,14 @@ test('關卡選單：章節導覽與進度、搜尋、只看未完成、學習�
   await q.press('Escape');
   await expect(q).toHaveValue('');
   await expect(dlg).toBeVisible();
-  await expect(dlg.locator('.lvp-main .chapter')).toHaveCount(18);
+  await expect(dlg.locator('.lvp-main .chapter')).toHaveCount(20);
   // 只看已完成：還沒有任何一關
   await dlg.locator('.lvp-filter button', { hasText: '已完成' }).click();
   await expect(dlg.locator('.lvp-note')).toContainText('還沒有完成的關卡');
   await dlg.locator('.lvp-filter button', { hasText: '全部' }).click();
-  // 學習路線：八條；進「新手入門」看到階段與順序，第一關標著「接著做」
+  // 學習路線：九條；進「新手入門」看到階段與順序，第一關標著「接著做」
   await dlg.locator('.lvp-view button', { hasText: '學習路線' }).click();
-  await expect(dlg.locator('.pathc')).toHaveCount(8);
+  await expect(dlg.locator('.pathc')).toHaveCount(9);
   expect(await scan(page, '#modal-root', '學習路線總覽')).toEqual([]);
   await dlg.locator('.pathc', { hasText: '新手入門' }).click();
   await expect(dlg.locator('.path-head h2')).toHaveText('新手入門');

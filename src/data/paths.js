@@ -108,6 +108,20 @@ export const PATHS = [
       { t: '自動化', d: 'RESTCONF、NETCONF、Ansible、控制器範本、Git', ids: ['l58', 'l111', 'l59', 'l62', 'l113', 'l114'] },
     ],
   },
+  {
+    id: 'expert', t: 'CCNP / CCIE 進階', ic: 'star',
+    who: '已經有 CCNA 的程度，準備 CCNP Enterprise（ENCOR、ENARSI），或想挑戰 CCIE 風格的實作題',
+    d: '進階路由的每一塊先各自練熟：OSPF 的區域類型、EIGRP、重分配、BGP、通道與 DMVPN、MPLS L3VPN，再做有設計限制的實作題，最後是好幾張工單疊在一起的大拓撲。',
+    steps: [
+      { t: 'OSPF 做到多區域', d: 'DR / BDR、cost 與等價多路徑、ABR 與彙總、stub / NSSA、BFD', ids: ['l47', 'l48', 'l49', 'l79', 'l80', 'l95'] },
+      { t: 'EIGRP 與路由重分配', d: 'DUAL 與 feasible successor、彙總、variance、種子 metric、管理距離與路由標籤、政策路由', ids: ['l129', 'l77', 'l78', 'l185', 'l186'] },
+      { t: 'BGP', d: 'eBGP 的路徑選擇、iBGP 與 next-hop、route reflector、community 與流量工程', ids: ['l50', 'l81', 'l180', 'l181'] },
+      { t: '通道與 DMVPN', d: 'GRE、GRE over IPsec、VTI、mGRE 與 NHRP、用憑證驗證的 IKEv2', ids: ['l88', 'l89', 'l90', 'l91', 'l101'] },
+      { t: 'VRF 與 MPLS L3VPN', d: 'VRF-Lite、路由洩漏、LDP、VPNv4、route-target、PE-CE、共用服務', ids: ['l72', 'l82', 'l171', 'l134', 'l182'] },
+      { t: '園區的高可用', d: 'MST、STP 的防護、FHRP 與追蹤、EtherChannel、多播', ids: ['l138', 'l139', 'l64', 'l96', 'l183', 'l145'] },
+      { t: '多張工單的總驗收', d: '先讀圖、由下往上查，修好一個地方再回頭確認沒有弄壞別的', ids: ['l184', 'l187'] },
+    ],
+  },
 ];
 
 export const PATH = Object.fromEntries(PATHS.map((p) => [p.id, p]));

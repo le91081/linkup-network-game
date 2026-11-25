@@ -6440,6 +6440,32 @@ console.log('\n雙向重分配：管理距離、路由標籤、distribute-list')
   }
 }
 
+console.log('\nVPNv4 的 route reflector');
+{
+  const { iosSession, runningConfig } = await import('../src/engine/ios.js');
+  const sim = await import('../src/engine/sim.js');
+  const ok = (cond, title) => (cond ? console.log('  ✔ ' + title) : fail(title));
+  const lv = LEVELS.find((x) => x.id === 'l187');
+  const s = lv.setup(); settle(s);
+  const cfg = (id, lines) => { const S = iosSession(() => s.devices[id], () => s); for (const l of ['enable', 'configure terminal', ...lines, 'end']) S.exec(l); settle(s); };
+  const rcvd = (id) => s.devices[id].rt.vpn.rcvd.map((r) => `${r.from}:${r.rd}:${r.net >>> 24}.${(r.net >>> 16) & 255}.${(r.net >>> 8) & 255}.0`).sort().join(' ');
+  const vrfHas = (id, v, ip) => s.devices[id].rt.routes.some((r) => !r.bad && (r.vrf || '') === v && r.net === parseIp(ip) && r.type === 'B');
+  ok(s.devices.p1.rt.vpn.rcvd.length === 5 && !Object.keys(s.devices.p1.vrfs || {}).length, 'route reflector 自己沒有 VRF，照樣收下每台 PE 的 VPNv4 路由');
+  ok(vrfHas('pe3', 'CUST-A', '10.1.0.0') && vrfHas('pe1', 'CUST-A', '10.3.0.0') && vrfHas('pe1', 'CUST-A', '172.16.2.0'), 'client 的路反射給所有人；非 client 的路反射給 client');
+  ok(!vrfHas('pe3', 'CUST-A', '172.16.2.0') && !/pe2:/.test(rcvd('pe3')) && !/pe3:/.test(rcvd('pe2')), '兩台都不是 client：彼此的路不會被反射');
+  const r = s.devices.pe3.rt.vpn.rcvd.find((x) => x.from === 'pe1');
+  ok(r && r.nh === parseIp('10.255.0.1') && r.learned === 'p1' && r.cl.join() === 'p1', '反射的路：下一站還是原本那台 PE 的 Loopback，不是 route reflector');
+  ok(sim.transact(s, 'a1', { proto: 'icmp', dst: parseIp('10.3.0.50') }).ok, '封包直接沿著 LSP 走到對面的 PE（PE1 → P1 → PE3）');
+  cfg('p1', ['router bgp 64500', 'address-family vpnv4', 'neighbor 10.255.0.2 route-reflector-client', 'neighbor 10.255.0.3 route-reflector-client']);
+  ok(vrfHas('pe3', 'CUST-A', '172.16.2.0') && /pe3:/.test(rcvd('pe2')), '都設成 client 之後，PE2 與 PE3 互相學到對方的路');
+  const rc = [].concat(runningConfig(s, s.devices.p1)).join('\n');
+  ok(/ address-family vpnv4\n(?: {2}neighbor .*\n)* {2}neighbor 10\.255\.0\.2 route-reflector-client/.test(rc) && !/^ neighbor 10\.255\.0\.2 route-reflector-client$/m.test(rc), 'running-config：route-reflector-client 寫在 address-family vpnv4 底下（和 IPv4 的分開）');
+  cfg('pe3', ['vrf definition CUST-B', 'address-family ipv4', 'route-target import 64500:1']);
+  ok(/同時匯入了兩家/.test(String(lv.objectives[4].test(s))), 'B 公司的 VRF 多匯入 A 公司的 RT：隔離的檢查會抓到');
+  cfg('pe3', ['vrf definition CUST-B', 'address-family ipv4', 'no route-target import 64500:1', 'exit', 'exit', 'router bgp 64500', 'neighbor 10.255.0.2 remote-as 64500']);
+  ok(/多了一個 BGP 鄰居 10\.255\.0\.2/.test(String(lv.objectives[5].test(s))), 'PE 之間直接加鄰居：設計的檢查會抓到');
+}
+
 // ── 題庫與證照對照表的資料檢查 ──
 {
   const { QUESTIONS, TOPICS, LEVEL_TOPIC } = await import('../src/data/quiz.js');

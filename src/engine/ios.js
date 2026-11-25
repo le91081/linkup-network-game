@@ -3749,7 +3749,7 @@ export function iosSession(getDev, getState, who = null) {
         const b = dev().bgp, cur = b.neighbors.find((n) => n.ip === ip);
         if (cur) {
           // 從 iBGP 改成 eBGP（或反過來）：只有 iBGP 才能用的設定跟著拿掉
-          if ((+cur.remoteAs === +b.asn) !== (+asn === +b.asn)) delete cur.rrClient;
+          if ((+cur.remoteAs === +b.asn) !== (+asn === +b.asn)) { delete cur.rrClient; delete cur.vpnRr; }
           cur.remoteAs = +asn;
         } else b.neighbors.push({ ip, remoteAs: +asn });
         return undefined;
@@ -3771,9 +3771,9 @@ export function iosSession(getDev, getState, who = null) {
       ['neighbor <ip> route-reflector-client', ([ip]) => {
         const n = dev().bgp.neighbors.find((x) => x.ip === ip);
         if (n && +n.remoteAs !== +dev().bgp.asn) return err(`% Invalid command for an EBGP peer（route-reflector-client 只能設在 iBGP 鄰居上：${ip} 是 AS ${n.remoteAs}）`);
-        return nb(ip, (x) => { x.rrClient = true; });
+        return nb(ip, (x) => { if (S.bgpAf === 'vpnv4') x.vpnRr = true; else x.rrClient = true; });
       }],
-      ['no neighbor <ip> route-reflector-client', ([ip]) => nb(ip, (n) => { delete n.rrClient; })],
+      ['no neighbor <ip> route-reflector-client', ([ip]) => nb(ip, (n) => { if (S.bgpAf === 'vpnv4') delete n.vpnRr; else delete n.rrClient; })],
       ['neighbor <ip> ebgp-multihop [...]', ([ip, ttl]) => {
         const v = ttl ? +ttl : 255;
         if (!(v >= 1 && v <= 255) || (ttl && !/^\d+$/.test(ttl))) return err('用法：neighbor <IP> ebgp-multihop [1-255]');
@@ -5434,7 +5434,7 @@ export function runningConfig(state, dev) {
     }
     if (b.neighbors.some((n) => n.vpnv4)) {
       o.push(' !', ' address-family vpnv4');
-      for (const n of b.neighbors.filter((x) => x.vpnv4)) o.push(`  neighbor ${n.ip} activate`, ...(n.vpnNoExt ? [] : [`  neighbor ${n.ip} send-community extended`]));
+      for (const n of b.neighbors.filter((x) => x.vpnv4)) o.push(`  neighbor ${n.ip} activate`, ...(n.vpnNoExt ? [] : [`  neighbor ${n.ip} send-community extended`]), ...(n.vpnRr ? [`  neighbor ${n.ip} route-reflector-client`] : []));
       o.push(' exit-address-family');
     }
     for (const [v, af] of Object.entries(b.vrfAf || {})) {

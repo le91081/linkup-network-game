@@ -5,11 +5,13 @@
 //   介面 i.mpls = true                                                    mpls ip（LDP）
 //   d.bgp.neighbors[n].vpnv4 = true                                       address-family vpnv4 → neighbor <ip> activate
 //   d.bgp.neighbors[n].vpnNoExt = true                                    no neighbor <ip> send-community extended（RT 跟著不見）
+//   d.bgp.neighbors[n].vpnRr = true                                       address-family vpnv4 → neighbor <ip> route-reflector-client
 //   d.bgp.vrfAf[名稱] = { conn, static }                                  address-family ipv4 vrf <名稱> → redistribute connected / static
 //
 // 計算（routesOnce 的最後，BGP 鄰居算好之後）：
 //   每台 PE 把 VRF 裡的直連 / 靜態路由（有 redistribute 的）帶上 RD 與匯出的 RT，變成 VPNv4 路由；
 //   兩台 PE 之間的 BGP 是 Established、兩端都在 vpnv4 啟用了對方：對面就收到這些路由，
+//   route reflector 把收到的再送出去（client 的路給所有人、非 client 的路只給 client），下一站維持原本那台 PE；
 //   RT 和自己某個 VRF 的匯入 RT 對得上才放進那個 VRF 的路由表（type 'B'，下一站是對面 PE 的 Loopback）。
 //   同一台 PE 上的兩個 VRF 之間也一樣照 RT 匯入（route.leakVrf：來源的 VRF；直接從那個 VRF 的介面送出去，不貼標籤）。
 // 轉送（sim/forward.js）：VRF 的路由帶著 mpls 的話，封包貼上 VPN 標籤、在全域的路由表走到對面的 PE；
@@ -73,6 +75,8 @@ export function computeVpn(state, { lookupRoute }) {
   const byIp = new Map();
   for (const d of pes) for (const i of d.ifaces) if (i.rt && i.rt.ip != null && !i.vrf) byIp.set(i.rt.ip, d);
   for (const d of pes) d.rt.vpn = { sent: exportsOf(d), rcvd: [], peers: [] };
+  // 可以交換 VPNv4 路由的鄰居關係：BGP 是 Established、兩端都在 vpnv4 啟用了對方
+  const sess = new Map(pes.map((d) => [d.id, []]));
   for (const d of pes) {
     for (const n of d.bgp.neighbors) {
       if (!n.vpnv4) continue;
@@ -83,13 +87,41 @@ export function computeVpn(state, { lookupRoute }) {
       d.rt.vpn.peers.push(rec);
       if (!peer || peer.state !== 'Established') { rec.why = peer && peer.why ? peer.why : 'BGP 鄰居還沒有建立'; continue; }
       if (!back || !back.vpnv4) { rec.why = `${o ? o.name : n.ip} 沒有在 address-family vpnv4 底下 activate 這個鄰居：兩端都要啟用，才會交換 VPNv4 路由`; continue; }
-      // 對面送過來的：下一站是對面送 BGP 用的位址（鄰居關係建立在它上面，通常是 update-source 的 Loopback）
-      const nh = parseIp(n.ip);
-      for (const r of o.rt.vpn.sent) {
-        d.rt.vpn.rcvd.push({ ...r, rts: back.vpnNoExt ? [] : r.rts, from: o.id, nh, peerIp: n.ip });
-        rec.pfx++;
+      sess.get(d.id).push({ n, o, back, rec });
+    }
+  }
+  // 每台收到的 VPNv4 路由：同一台 PE 的同一筆（RD + 網段）只留一份。反覆交換到不再變化 ——
+  // route reflector 把收到的路再送出去：從 client 來的給所有鄰居，從非 client 來的只給 client；下一站不改（還是原本那台 PE）
+  const key = (r) => r.from + '|' + r.rd + '|' + r.net + '/' + r.bits;
+  const got = new Map(pes.map((d) => [d.id, new Map()]));
+  const ibgp = (a, n) => +n.remoteAs === +a.bgp.asn;
+  for (let round = 0; round < 8; round++) {
+    let changed = false;
+    for (const d of pes) {
+      const mine = got.get(d.id);
+      for (const { n, o, back } of sess.get(d.id)) {
+        // o 自己的路：下一站是 o 送 BGP 用的位址（鄰居關係建立在它上面，通常是 update-source 的 Loopback）
+        const offers = o.rt.vpn.sent.map((r) => ({ ...r, from: o.id, nh: parseIp(n.ip), cl: [] }));
+        // o 收到、再反射出來的
+        for (const r of got.get(o.id).values()) {
+          if (r.from === d.id || r.learned === d.id || r.cl.includes(d.id)) continue; // 不送回原本的那一台，也不送回給它的人
+          const src = (o.bgp.neighbors || []).find((x) => byIp.get(parseIp(x.ip)) === state.devices[r.learned]);
+          if (src && ibgp(o, src) && ibgp(o, back) && !src.vpnRr && !back.vpnRr) continue; // iBGP 學到的不再傳給 iBGP：除非其中一邊是 client
+          offers.push({ ...r, cl: [...r.cl, o.id] });
+        }
+        for (const r of offers) {
+          const k = key(r), cur = mine.get(k);
+          if (cur && cur.cl.length <= r.cl.length) continue;
+          mine.set(k, { ...r, rts: back.vpnNoExt ? [] : r.rts, learned: o.id, peerIp: n.ip });
+          changed = true;
+        }
       }
     }
+    if (!changed) break;
+  }
+  for (const d of pes) {
+    d.rt.vpn.rcvd = [...got.get(d.id).values()];
+    for (const { o, rec } of sess.get(d.id)) rec.pfx = d.rt.vpn.rcvd.filter((r) => r.learned === o.id).length;
   }
   // 匯入：RT 對得上的才放進 VRF；下一站在全域的路由表要查得到
   for (const d of pes) {

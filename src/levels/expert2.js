@@ -167,4 +167,112 @@ export const LEVELS97 = [
     },
     recap: ['大題目先讀圖：把每一台「該有卻沒有」的鄰居與路由列出來，再一張一張處理，修完回頭確認沒有弄壞別的。', '區域類型兩端要一致、E2 的預設路由只比 metric、備援一定要實際拔線測、DMVPN 由下往上查、ACL 的例外寫在前面。'],
   },
+  {
+    id: 'l187', chapter: 20, noDrill: true, title: '業者的夜班：骨幹上的四張工單', subtitle: '服務供應商骨幹總驗收：OSPF、LDP、VPNv4 與 route reflector、route-target、PE-CE 的靜態路由',
+    tags: ['MPLS', 'L3VPN', 'LDP', 'VPNv4', 'route reflector', 'route-target', 'VRF', '故障排除'],
+    brief: '你在電信業者的維運中心值夜班。骨幹是三台 PE 接一台核心 P1，P1 同時是 VPNv4 的 route reflector；上面有兩家客戶（A 公司三個據點、B 公司兩個據點，兩家的台北辦公室剛好用了同一個網段）。白天的同事做了一輪「整理設定」，交班單上留了四張工單。骨幹的設計有幾條規定不能違反：PE 之間不直接建 BGP 鄰居（一律經過 route reflector）、核心 P1 不放任何客戶的 VRF、兩家客戶互相看不到。',
+    given: [
+      ['骨幹 (AS 64500)', 'P1 Lo0 10.255.0.100 · PE1 Lo0 10.255.0.1 · PE2 Lo0 10.255.0.2 · PE3 Lo0 10.255.0.3 · OSPF area 0 + LDP + VPNv4'],
+      ['A 公司', 'VRF CUST-A · RD / RT 64500:1 · 台北 10.1.0.0/24（PE1）· 台中 10.2.0.0/24（在 CE 後面，PE2 ↔ CE 172.16.2.0/30）· 高雄 10.3.0.0/24（PE3）'],
+      ['B 公司', 'VRF CUST-B · RD / RT 64500:2 · 台北 10.1.0.0/24（PE1，和 A 公司重疊）· 高雄 10.30.0.0/24（PE3）'],
+      ['工單 #1', 'A 公司：台中據點完全失聯，連 PE2 接 CE 的那一段都 ping 不到'],
+      ['工單 #2', 'A 公司：台中的檔案伺服器（10.2.0.10）沒有任何據點看得到'],
+      ['工單 #3', 'A 公司：高雄和台中之間不通，但兩邊到台北都正常'],
+      ['工單 #4', 'B 公司：高雄連不到台北的 ERP（10.1.0.10）'],
+      ['不能違反', 'PE 只和 P1 建 BGP 鄰居 · P1 不設 VRF · A 公司與 B 公司的路由表互相看不到對方 · A 公司台中的 CE 是客戶的設備，不能動'],
+    ],
+    learn: [
+      { t: '三層東西疊在一起', d: 'MPLS L3VPN 要三件事都成立：(1) IGP 讓每台 PE 的 Loopback 互相到得了；(2) LDP 在每一段骨幹的鏈路上都發出標籤，PE 到 PE 才有一條完整的 LSP；(3) VPNv4 的 BGP 把客戶的路由連同 VPN 標籤與 route-target 送到別台 PE。排除問題照這個順序由下往上查，不要一開始就盯著 VRF。' },
+      { t: '路由都在，封包卻不通', d: '控制層（BGP）走的是 TCP，只要 IGP 通就建得起來；資料層要靠標籤。中間有一段鏈路沒開 mpls ip，VPNv4 的路由照樣學得到，但封包到了那一段沒有外層標籤可用，核心路由器又不認識客戶的位址，只能丟掉。show mpls ldp neighbor 與 show mpls forwarding-table 看每一段有沒有標籤。' },
+      { t: 'route reflector 的規則', d: '從 client 學到的路會反射給所有人；從非 client 學到的路只反射給 client。所以兩台都不是 client 的 PE 之間永遠拿不到對方的路，但它們各自和 client 之間是通的 —— 症狀就是「有些據點之間通、有些不通」。VPNv4 的 client 要在 address-family vpnv4 底下設。' },
+      { t: 'PE 與 CE 之間的靜態路由', d: 'CE 後面的網段不是 PE 的直連網段：PE 在 VRF 裡用靜態路由指向 CE，還要在 BGP 的 address-family ipv4 vrf 底下 redistribute static，別台 PE 才學得到。只有 redistribute connected 的話，送出去的只有 PE 和 CE 之間那一小段。' },
+      { t: 'route-target 是唯一的開關', d: '一筆 VPNv4 路由會被放進哪些 VRF，只看它帶的 RT 有沒有在那個 VRF 的 import 清單裡。RD 不一樣沒關係，RT 打錯一碼就完全收不到，而且不會有任何錯誤訊息。兩家客戶位址重疊也沒問題 —— 只要沒有任何一個 VRF 同時匯入兩家的 RT。' },
+    ],
+    setup() {
+      const s = makeState([
+        D('isr4331', 'p1', { name: 'P1（核心 + RR）', host: 'P1', pos: [0, -10] }),
+        D('isr4331', 'pe1', { name: 'PE1（台北）', host: 'PE1', pos: [-10, -5] }),
+        D('isr4331', 'pe2', { name: 'PE2（台中）', host: 'PE2', pos: [0, -4] }),
+        D('isr4331', 'pe3', { name: 'PE3（高雄）', host: 'PE3', pos: [10, -5] }),
+        D('pc', 'a1', { name: 'A 公司 台北', pos: [-14, 1], ip: '10.1.0.50', gw: '10.1.0.1' }),
+        D('tower', 'b1', { name: 'B 公司 台北的 ERP', pos: [-8, 1], ip: '10.1.0.10', gw: '10.1.0.1', services: WEB }),
+        D('isr4321', 'ce2', { name: 'A 公司 台中的 CE', host: 'A-TXG-CE', pos: [0, 1], locked: true, note: '客戶自己的路由器：預設路由指向 PE2，後面是台中辦公室 10.2.0.0/24' }),
+        D('tower', 'a2', { name: 'A 公司 台中的檔案伺服器', pos: [0, 6], ip: '10.2.0.10', gw: '10.2.0.1', services: WEB }),
+        D('pc', 'a3', { name: 'A 公司 高雄', pos: [8, 1], ip: '10.3.0.50', gw: '10.3.0.1' }),
+        D('pc', 'b3', { name: 'B 公司 高雄', pos: [14, 1], ip: '10.30.0.50', gw: '10.30.0.1' }),
+      ], [
+        ['p1:Gi0/0/0', 'pe1:Gi0/0/0'], ['p1:Gi0/0/1', 'pe2:Gi0/0/0'], ['p1:Gi0/0/2', 'pe3:Gi0/0/0'],
+        ['pe1:Gi0/0/1', 'a1:eth0'], ['pe1:Gi0/0/2', 'b1:eth0'], ['pe2:Gi0/0/1', 'ce2:Gi0/0/0'], ['ce2:Gi0/0/1', 'a2:eth0'], ['pe3:Gi0/0/1', 'a3:eth0'], ['pe3:Gi0/0/2', 'b3:eth0'],
+      ]);
+      recompute(s);
+      const lo0 = (ip) => ['interface Loopback0', `ip address ${ip} 255.255.255.255`, 'exit'];
+      const vrf = (name, rd, exp, imp) => [`vrf definition ${name}`, `rd ${rd}`, 'address-family ipv4', `route-target export ${exp}`, `route-target import ${imp}`, 'exit-address-family', 'exit'];
+      const acc = (port, v, ip, mask = '255.255.255.0') => [`interface ${port}`, `vrf forwarding ${v}`, `ip address ${ip} ${mask}`, 'exit'];
+      /** 一台 PE：上行（OSPF + LDP）、和 RR 的 VPNv4 鄰居、每個 VRF 的重分配 */
+      const pe = (lo, up, vrfs) => [...lo0(lo), 'interface Gi0/0/0', `ip address ${up} 255.255.255.252`, 'mpls ip', 'exit',
+        'router ospf 1', `router-id ${lo}`, 'network 10.0.0.0 0.0.0.255 area 0', `network ${lo} 0.0.0.0 area 0`, 'exit',
+        'router bgp 64500', 'neighbor 10.255.0.100 remote-as 64500', 'neighbor 10.255.0.100 update-source Loopback0', 'address-family vpnv4', 'neighbor 10.255.0.100 activate', 'exit-address-family',
+        ...vrfs.flatMap(([v, ...red]) => [`address-family ipv4 vrf ${v}`, ...red.map((x) => `redistribute ${x}`), 'exit-address-family']), 'exit'];
+      cfg(s, 'pe1', [...vrf('CUST-A', '64500:1', '64500:1', '64500:1'), ...vrf('CUST-B', '64500:2', '64500:2', '64500:2'),
+        ...acc('Gi0/0/1', 'CUST-A', '10.1.0.1'), ...acc('Gi0/0/2', 'CUST-B', '10.1.0.1'), ...pe('10.255.0.1', '10.0.0.2', [['CUST-A', 'connected'], ['CUST-B', 'connected']])]);
+      // 工單 #2：PE2 有往 CE 的靜態路由，但 BGP 只重分配了 connected
+      cfg(s, 'pe2', [...vrf('CUST-A', '64500:1', '64500:1', '64500:1'), ...acc('Gi0/0/1', 'CUST-A', '172.16.2.1', '255.255.255.252'),
+        'ip route vrf CUST-A 10.2.0.0 255.255.255.0 172.16.2.2', ...pe('10.255.0.2', '10.0.0.6', [['CUST-A', 'connected']])]);
+      // 工單 #4：PE3 的 CUST-B 匯入的 route-target 打成 64500:22
+      cfg(s, 'pe3', [...vrf('CUST-A', '64500:1', '64500:1', '64500:1'), ...vrf('CUST-B', '64500:2', '64500:2', '64500:22'),
+        ...acc('Gi0/0/1', 'CUST-A', '10.3.0.1'), ...acc('Gi0/0/2', 'CUST-B', '10.30.0.1'), ...pe('10.255.0.3', '10.0.0.10', [['CUST-A', 'connected'], ['CUST-B', 'connected']])]);
+      // P1：工單 #1 往 PE2 的介面沒有 mpls ip；工單 #3 只有 PE1 是 route-reflector-client
+      cfg(s, 'p1', [...lo0('10.255.0.100'),
+        'interface Gi0/0/0', 'ip address 10.0.0.1 255.255.255.252', 'mpls ip', 'exit',
+        'interface Gi0/0/1', 'ip address 10.0.0.5 255.255.255.252', 'exit',
+        'interface Gi0/0/2', 'ip address 10.0.0.9 255.255.255.252', 'mpls ip', 'exit',
+        'router ospf 1', 'router-id 10.255.0.100', 'network 10.0.0.0 0.0.0.255 area 0', 'network 10.255.0.100 0.0.0.0 area 0', 'exit',
+        'router bgp 64500', ...['10.255.0.1', '10.255.0.2', '10.255.0.3'].flatMap((p) => [`neighbor ${p} remote-as 64500`, `neighbor ${p} update-source Loopback0`]),
+        'address-family vpnv4', ...['10.255.0.1', '10.255.0.2', '10.255.0.3'].map((p) => `neighbor ${p} activate`), 'neighbor 10.255.0.1 route-reflector-client', 'exit-address-family', 'exit']);
+      cfg(s, 'ce2', [...ifIp('Gi0/0/0', '172.16.2.2'), ...ifIp('Gi0/0/1', '10.2.0.1', '255.255.255.0'), 'ip route 0.0.0.0 0.0.0.0 172.16.2.1']);
+      recompute(s);
+      return s;
+    },
+    objectives: [
+      { type: 'tcp', from: 'a1', ip: '10.2.0.10', port: 443, label: '#1 #2　A 公司台北打得開台中的檔案伺服器（10.2.0.10）' },
+      { type: 'tcp', from: 'a3', ip: '10.2.0.10', port: 443, label: '#3　A 公司高雄打得開台中的檔案伺服器' },
+      { type: 'tcp', from: 'b3', ip: '10.1.0.10', port: 443, label: '#4　B 公司高雄打得開台北的 ERP（10.1.0.10）' },
+      { type: 'ping', from: 'a1', ip: '10.3.0.50', label: 'A 公司台北與高雄照常互通' },
+      {
+        type: 'check', label: '兩家客戶互相看不到：A 的路由表裡沒有 B 的網段，B 的路由表裡也沒有 A 的',
+        test(s) {
+          const has = (id, v, ip) => (dev(s, id).rt.routes || []).some((r) => !r.bad && (r.vrf || '') === v && r.net === parseIp(ip) && r.bits === 24);
+          for (const id of ['pe1', 'pe2', 'pe3']) {
+            const d = dev(s, id);
+            if (has(id, 'CUST-A', '10.30.0.0')) return `${d.name} 的 VRF CUST-A 裡出現了 B 公司的 10.30.0.0/24：有 VRF 同時匯入了兩家的 route-target`;
+            for (const n of ['10.2.0.0', '10.3.0.0']) if (has(id, 'CUST-B', n)) return `${d.name} 的 VRF CUST-B 裡出現了 A 公司的 ${n}/24：有 VRF 同時匯入了兩家的 route-target`;
+          }
+          return true;
+        },
+      },
+      {
+        type: 'check', label: '設計沒有被破壞：PE 只和 P1 建 BGP 鄰居，P1 上沒有任何 VRF',
+        test(s) {
+          for (const id of ['pe1', 'pe2', 'pe3']) {
+            const d = dev(s, id), bad = ((d.bgp || {}).neighbors || []).find((n) => n.ip !== '10.255.0.100');
+            if (bad) return `${d.name} 多了一個 BGP 鄰居 ${bad.ip}：PE 之間不直接建鄰居，要讓 route reflector 把路反射過去`;
+          }
+          if (Object.keys(dev(s, 'p1').vrfs || {}).length) return 'P1 上不可以有 VRF：核心只負責標籤交換與反射路由，不碰客戶的路由表';
+          return true;
+        },
+      },
+    ],
+    hints: [
+      '由下往上查。PE2：show mpls ldp neighbor 是空的 —— P1 的 Gi0/0/1（往 PE2）沒有 mpls ip。OSPF 與 BGP 都正常，所以 VPNv4 的路由學得到，但封包沒有外層標籤可用。P1：interface Gi0/0/1 → mpls ip。',
+      '台中的 10.2.0.0/24 在 CE 後面：PE2 的 show ip route vrf CUST-A 有這條靜態路由，但 show bgp vpnv4 unicast all 裡沒有 —— router bgp 64500 → address-family ipv4 vrf CUST-A → redistribute static。',
+      '高雄 ↔ 台中不通、兩邊到台北都通：P1 的 address-family vpnv4 底下只有 PE1 是 route-reflector-client。PE2、PE3 是非 client，彼此的路不會被反射。把 10.255.0.2 與 10.255.0.3 也設成 route-reflector-client（不要在 PE 之間直接加鄰居）。',
+      'B 公司：PE3 的 show vrf detail CUST-B，Import VPN route-target 是 64500:22，B 公司的 RT 是 64500:2。vrf definition CUST-B → address-family ipv4 → no route-target import 64500:22、route-target import 64500:2。',
+    ],
+    solve(s) {
+      cfg(s, 'p1', ['interface Gi0/0/1', 'mpls ip', 'exit', 'router bgp 64500', 'address-family vpnv4', 'neighbor 10.255.0.2 route-reflector-client', 'neighbor 10.255.0.3 route-reflector-client']);
+      cfg(s, 'pe2', ['router bgp 64500', 'address-family ipv4 vrf CUST-A', 'redistribute static']);
+      cfg(s, 'pe3', ['vrf definition CUST-B', 'address-family ipv4', 'no route-target import 64500:22', 'route-target import 64500:2']);
+    },
+    recap: ['L3VPN 由下往上查：IGP → LDP（每一段都要有標籤）→ VPNv4（route reflector 的 client）→ VRF 的 route-target 與重分配。', '「有些據點通、有些不通」多半是反射或 route-target；「路由都在卻不通」多半是標籤。'],
+  },
 ];
