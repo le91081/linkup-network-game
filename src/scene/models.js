@@ -114,9 +114,19 @@ function jack(g, u, id, x, y, z, nx, nz, o = {}) {
   (u.jackLed ||= {})[id] = led;
 }
 
-/** 一排網路孔：設備有幾個埠就做幾個，從 (x0) 開始每隔 dx 一個 */
+/**
+ * 一排網路孔：設備有幾個埠就做幾個，從 (x0) 開始每隔 dx 一個。
+ * 孔放在哪一面，要看預設的視角（從左前上方往下看）看不看得到：高的機身（螢幕、直立式主機、NAS…）背面整個被自己擋住，
+ * 線會像是停在半空中，所以這些設備的孔都放在左側；矮的機身（機架式伺服器）才放背面。
+ */
 function jacks(g, u, dev, x0, dx, y, z, nx, nz, o) {
   dev.ports.forEach((p, i) => jack(g, u, p.id, nx ? x0 : x0 + i * dx, y, nx ? z + i * dx : z, nx, nz, { media: p.media, ...o }));
+}
+
+/** 把 n 個孔排在一段寬度 span 裡、以 center 為中心：間距最多 dx，放不下就擠一點。回傳 [第一個孔的位置, 間距] */
+function spread(n, dx, span, center = 0) {
+  const step = n > 1 ? Math.min(dx, span / (n - 1)) : 0;
+  return [center - (step * (n - 1)) / 2, step];
 }
 
 function facePlate(g, u, w, h, z, y, bg = '#161c2b') {
@@ -174,7 +184,7 @@ const BUILDERS = {
     u.led = new THREE.Mesh(new THREE.TorusGeometry(0.16, 0.02, 8, 32), glow(PALETTE.screenOff, 0.4));
     u.led.position.set(0, 0, 0.485);
     head.add(u.led);
-    jacks(g, u, dev, 0, 0.3, 0.12, -0.52, 0, -1, { w: 0.16, h: 0.09, t: 0.07 });
+    jacks(g, u, dev, -0.3, 0.3, 0.1, -0.2, -1, 0, { w: 0.16, h: 0.09, t: 0.07 });
     u.rect = [-0.32, 0.32, -0.52, 0.55];
   },
   pc(g, dev, u) {
@@ -190,9 +200,10 @@ const BUILDERS = {
     box(g, 0.14, 0.5, 0.1, mat(PALETTE.mid), 0, 0.27, -0.26);
     box(g, 0.75, 0.05, 0.46, mat(PALETTE.mid), 0, 0.025, -0.2);
     box(g, 1.2, 0.05, 0.4, mat(PALETTE.light), 0, 0.03, 0.55, 0.02);
-    // 網路孔在底座後方（從正面可以從螢幕下緣的空隙看到）
-    jacks(g, u, dev, 0.22, 0.3, 0.12, -0.43, 0, -1);
-    u.rect = [-0.9, 0.9, -0.45, 0.77];
+    // 網路孔在底座的左側（放在背面會整個被螢幕擋住，看起來像線停在螢幕後面的半空中）
+    jacks(g, u, dev, -0.375, 0.3, 0.12, -0.2, -1, 0);
+    // 走線要避開的範圍只算貼著桌面的底座與鍵盤：螢幕是懸空的，線可以從下面過
+    u.rect = [-0.62, 0.62, -0.45, 0.77];
   },
   laptop(g, dev, u) {
     Object.assign(u, { w: 1.7, h: 1.15, d: 1.6 });
@@ -217,7 +228,7 @@ const BUILDERS = {
     box(g, 1.2, 0.2, 0.04, mat(PALETTE.black), 0, 0.3, 0.51, 0.01);
     box(g, 1.0, 0.025, 0.55, mat(0xffffff, { rough: 0.9 }), 0, 0.24, 0.72, 0.01);
     u.led = box(g, 0.12, 0.03, 0.05, glow(PALETTE.screenOff, 0.4), 0.6, 0.67, 0.4, 0.01);
-    jacks(g, u, dev, 0.5, 0.3, 0.17, -0.7, 0, -1);
+    jacks(g, u, dev, -0.8, 0.3, 0.17, -0.4, -1, 0);
     u.rect = [-0.8, 0.8, -0.7, 1.0];
   },
   nas(g, dev, u) {
@@ -225,7 +236,7 @@ const BUILDERS = {
     box(g, 0.95, 1.1, 1.2, mat(PALETTE.darker, { rough: 0.45 }), 0, 0.55, 0, 0.07);
     for (const x of [-0.21, 0.21]) box(g, 0.36, 0.82, 0.04, mat(PALETTE.dark), x, 0.5, 0.61, 0.02);
     u.led = box(g, 0.5, 0.035, 0.03, glow(PALETTE.screenOff, 0.4), 0, 1.0, 0.61, 0.012);
-    jacks(g, u, dev, -0.16, 0.32, 0.22, -0.6, 0, -1);
+    jacks(g, u, dev, -0.475, 0.32, 0.22, -0.3, -1, 0);
     u.rect = [-0.475, 0.475, -0.6, 0.63];
   },
   tower(g, dev, u) {
@@ -234,7 +245,7 @@ const BUILDERS = {
     box(g, 0.62, 1.05, 0.04, mat(PALETTE.black), 0, 0.62, 0.71, 0.02);
     for (let i = 0; i < 4; i++) box(g, 0.5, 0.05, 0.03, mat(PALETTE.mid, { metal: 0.4 }), 0, 0.28 + i * 0.2, 0.73, 0.01);
     u.led = box(g, 0.5, 0.035, 0.03, glow(PALETTE.screenOff, 0.4), 0, 1.32, 0.72, 0.012);
-    jacks(g, u, dev, -0.15, 0.3, 0.3, -0.7, 0, -1);
+    jacks(g, u, dev, -0.39, 0.32, 0.3, -0.42, -1, 0);
     u.rect = [-0.39, 0.39, -0.7, 0.75];
   },
   rack1u(g, dev, u) {
@@ -246,8 +257,9 @@ const BUILDERS = {
       box(g, 0.2, 0.12, 0.03, mat(PALETTE.black), -0.98 + i * 0.24, 0.19 + r * 0.23, 0.755, 0.01);
     }
     u.led = box(g, 0.28, 0.035, 0.03, glow(PALETTE.screenOff, 0.4), 1.02, 0.42, 0.757, 0.012);
-    // 機架式伺服器的網路卡在背面
-    jacks(g, u, dev, 0.5, 0.34, 0.2, -0.75, 0, -1, { w: 0.2, h: 0.1 });
+    // 機架式伺服器的網路卡在背面：機身矮，線從後面插進去看得到。埠多的機型（GPU 伺服器、負載平衡器）排滿整個背板
+    const [jx, jd] = spread(dev.ports.length, 0.34, 2.1);
+    jacks(g, u, dev, jx, jd, 0.2, -0.75, 0, -1, { w: 0.2, h: 0.1 });
     u.rect = [-1.3, 1.3, -0.8, 0.8];
   },
   /** UPS：2U 的機身、前面一塊液晶面板 */
@@ -257,7 +269,7 @@ const BUILDERS = {
     box(g, 0.7, 0.3, 0.03, glow(0x7dd3fc, 0.7), -0.6, 0.55, 0.805, 0.01);
     for (let i = 0; i < 3; i++) box(g, 0.14, 0.08, 0.03, glow(i === 0 ? 0x5dfc9b : 0x39425a, 0.9), 0.3 + i * 0.22, 0.6, 0.805, 0.01);
     u.led = box(g, 0.2, 0.035, 0.03, glow(PALETTE.screenOff, 0.4), 1.0, 0.25, 0.805, 0.012);
-    jacks(g, u, dev, 0.5, 0.3, 0.2, -0.8, 0, -1, { w: 0.2, h: 0.1 });
+    jacks(g, u, dev, -1.25, 0.3, 0.2, -0.4, -1, 0, { w: 0.2, h: 0.1 });
     u.rect = [-1.3, 1.3, -0.8, 0.8];
   },
   /** 負載平衡器：1U 的機身加上一條紅色的燈條 */
@@ -305,7 +317,7 @@ const BUILDERS = {
     tilt.add(u.screen);
   },
   ipphone(g, dev, u) {
-    // 桌上型 IP 電話：左邊是話筒，右邊是斜放的螢幕與按鍵；網路孔（SW、PC）在背面
+    // 桌上型 IP 電話：左邊是話筒，右邊是斜放的螢幕與按鍵；網路孔（SW、PC）在機身右側（背面會被往後斜的螢幕蓋住）
     Object.assign(u, { w: 1.5, h: 0.75, d: 1.25 });
     box(g, 1.35, 0.12, 1.0, mat(PALETTE.black, { rough: 0.45 }), 0.05, 0.06, 0, 0.05);
     const tilt = new THREE.Group();
@@ -318,8 +330,8 @@ const BUILDERS = {
     tilt.add(u.screen);
     for (let r = 0; r < 4; r++) for (let c = 0; c < 3; c++) box(tilt, 0.13, 0.08, 0.03, mat(PALETTE.mid, { metal: 0.3 }), -0.17 + c * 0.17, 0.4 - r * 0.1, 0.06, 0.015);
     box(g, 0.3, 0.14, 0.98, mat(PALETTE.black, { rough: 0.35 }), -0.55, 0.19, 0, 0.07);
-    jacks(g, u, dev, -0.05, 0.32, 0.12, -0.5, 0, -1, { w: 0.15, h: 0.1, t: 0.06 });
-    u.rect = [-0.72, 0.72, -0.52, 0.55];
+    jacks(g, u, dev, 0.725, 0.34, 0.075, -0.3, 1, 0, { w: 0.15, h: 0.07, t: 0.06 });
+    u.rect = [-0.72, 0.725, -0.52, 0.55];
   },
   ap(g, dev, u) {
     Object.assign(u, { w: 1.5, h: 2.15, d: 1.5 });
@@ -336,8 +348,8 @@ const BUILDERS = {
     u.led.rotation.x = Math.PI / 2;
     u.led.position.y = 1.955;
     g.add(u.led);
-    // 基地台的網路孔在底座後方
-    jacks(g, u, dev, 0, 0.3, 0.08, -0.34, 0, -1, { w: 0.16, h: 0.09, t: 0.07 });
+    // 基地台的網路孔在底座左側
+    jacks(g, u, dev, -0.34, 0.3, 0.08, 0, -1, 0, { w: 0.16, h: 0.09, t: 0.07 });
     u.rect = [-0.36, 0.36, -0.36, 0.36];
   },
   hub: (g, dev, u) => netBox(g, dev, u, { w: 1.6, h: 0.36, d: 1.0, color: 0xcfd5e2, bg: '#2a3144' }),
@@ -389,8 +401,12 @@ const BUILDERS = {
     spin.add(orbit);
     u.spin = spin;
     u.noShadowParts = [wire];
-    // ISP 線路從底座正面接出來
-    jacks(g, u, dev, 0, 0.3, 0.1, 0.9, 0, 1);
+    // ISP 線路從底座正面接出來：好幾條線路時沿著圓形底座的邊緣排開（孔做深一點，嵌在底座裡）
+    const [gx, gd] = spread(dev.ports.length, 0.3, 0.9);
+    dev.ports.forEach((p, i) => {
+      const x = gx + i * gd;
+      jack(g, u, p.id, x, 0.1, Math.sqrt(0.9 * 0.9 - x * x), 0, 1, { media: p.media, t: 0.22 });
+    });
     u.rect = [-0.95, 0.95, -0.95, 0.95];
   },
   /** 公有雲的 VPC：一塊有琥珀色邊界的底板（VPC），上面一排小伺服器（EC2），上方浮著一朵雲 */

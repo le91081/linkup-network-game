@@ -17,6 +17,9 @@ const ease = (k) => (k < 0.5 ? 2 * k * k : 1 - Math.pow(-2 * k + 2, 2) / 2);
 const FLOOR = 0.075; // 線躺在桌面上的高度
 const MARGIN = 0.2; // 繞過機身時和機身保持的距離
 const LANE = 0.13; // 同一側有好幾條線要繞時，一條比一條靠外
+/** 線從孔出來之後，離機身多遠才落到桌面：孔越高落得越遠，上下兩排的線才不會疊在一起 */
+const leadOut = (y) => 0.4 + Math.max(0, y - FLOOR);
+const LABEL_GAP = 6; // 名稱標籤和它的定位點之間空幾個像素
 
 /** 線段 a→b（只看水平面）有沒有穿過往外放大 m 之後的矩形 */
 function crossesRect(a, b, r, m) {
@@ -280,15 +283,46 @@ export class Scene3D {
     for (const g of this.devices.values()) {
       const u = g.userData;
       for (const sx of [-1, 1]) for (const sz of [-1, 1]) for (const y of [0, u.h]) {
-        p.set(g.position.x + sx * (u.w / 2 + 1.3), y, g.position.z + sz * (u.d / 2 + 1.1)); // 留邊給設備下方的標籤
+        p.set(g.position.x + sx * (u.w / 2 + 1.3), y, g.position.z + sz * (u.d / 2 + 1.1)); // 設備四周留一點空間
         const a = p.dot(right), b = p.dot(up);
         x0 = Math.min(x0, a); x1 = Math.max(x1, a); y0 = Math.min(y0, b); y1 = Math.max(y1, b);
       }
     }
     const ins = this.insets;
-    // 再扣掉一些像素，留給會超出設備外框的名稱標籤
-    const availW = Math.max(220, this.W - ins.left - ins.right - 90), availH = Math.max(200, this.H - ins.top - ins.bottom - 40);
-    const span = clamp(Math.max(((x1 - x0) * this.H) / availW, ((y1 - y0) * this.H) / availH) * 1.06, 14, 70);
+    // 面板之間的範圍（像素）。設備的外框只用其中一部分，四周留一些空間；名稱標籤可以用到幾乎貼著面板
+    const fullW = Math.max(220, this.W - ins.left - ins.right), fullH = Math.max(200, this.H - ins.top - ins.bottom);
+    const availW = Math.max(220, fullW - 90), availH = Math.max(200, fullH - 40);
+    const padX = Math.max(0, (fullW - availW / 1.06) / 2), padY = Math.max(0, (fullH - availH / 1.06) / 2);
+    // 名稱標籤的大小是固定的像素，鏡頭拉得越遠，它在場景裡佔的範圍越大，很長的名稱會超出設備四周留的空間。
+    // 標籤是固定跟著設備走的（不會自己避開面板），所以對焦時要把每一個標籤的外框也放進面板之間
+    const labs = this.labelBoxes().map((l) => {
+      const g = this.devices.get(l.id);
+      p.set(g.position.x, 0, g.position.z + g.userData.labelZ);
+      return { a: p.dot(right), b: p.dot(up), hw: l.w / 2 + 8, h: l.h + LABEL_GAP + 8 };
+    });
+    const need = (sp, withLabels = true) => {
+      const k = sp / this.H; // 一個像素是場景裡的多少
+      let l = x0 - padX * k, r = x1 + padX * k, bot = y0 - padY * k;
+      const top = y1 + padY * k;
+      if (withLabels) for (const q of labs) { l = Math.min(l, q.a - q.hw * k); r = Math.max(r, q.a + q.hw * k); bot = Math.min(bot, q.b - q.h * k); }
+      return { l, r, bot, top, span: clamp(Math.max(((r - l) * this.H) / fullW, ((top - bot) * this.H) / fullH), 14, 70) };
+    };
+    // 需要的範圍和鏡頭的遠近互相影響（越遠，像素換算成場景裡的距離越大）：反覆算到不再變
+    const solve = (withLabels) => {
+      let cur = need(14, withLabels);
+      for (let i = 0; i < 40; i++) {
+        const next = need(cur.span, withLabels);
+        const done = Math.abs(next.span - cur.span) < cur.span * 0.0005;
+        cur = next;
+        if (done) break;
+      }
+      return cur.span;
+    };
+    // 為了標籤最多只多拉遠一成多：面板之間很窄的時候（小螢幕又開著設定頁面）再怎麼拉遠標籤也放不下，
+    // 只會讓設備變得更小、標籤疊得更嚴重
+    const span = Math.min(solve(true), solve(false) * 1.12);
+    let fitted = need(span);
+    x0 = fitted.l; x1 = fitted.r; y0 = fitted.bot; y1 = fitted.top;
     const upp = span / this.H;
     const t = new THREE.Vector3()
       .addScaledVector(right, (x0 + x1) / 2 - ((ins.left - ins.right) / 2) * upp)
@@ -306,6 +340,15 @@ export class Scene3D {
       v.target.lerpVectors(t0, t, k);
       this.updateCamera();
     }, true);
+  }
+
+  /** 每個名稱標籤的大小（像素）。用沒有縮小的樣子來量：鏡頭拉遠之後標籤只會更小 */
+  labelBoxes() {
+    const layer = this.labelLayer, compact = layer.classList.contains('compact');
+    if (compact) layer.classList.remove('compact');
+    const out = [...this.labels].map(([id, l]) => ({ id, w: l.el.offsetWidth, h: l.el.offsetHeight }));
+    if (compact) layer.classList.add('compact');
+    return out;
   }
 
   ndc(e) {
@@ -706,6 +749,11 @@ export class Scene3D {
       this.world.add(g);
       this.devices.set(d.id, g);
       const u = g.userData;
+      // 名稱標籤放在設備的正前方。線插在正面的設備（交換器、路由器…）要再往前一點，
+      // 放在線落到桌面的位置之後：不然標籤剛好蓋住插頭，看起來像線接在標籤上
+      let lz = u.d / 2 + 0.25;
+      for (const p of Object.values(u.ports || {})) if (p.nz > 0) lz = Math.max(lz, p.z + leadOut(p.y) + 0.1);
+      u.labelZ = Math.min(lz, u.d / 2 + 0.85);
       x0 = Math.min(x0, d.pos[0] - u.w / 2); x1 = Math.max(x1, d.pos[0] + u.w / 2);
       z0 = Math.min(z0, d.pos[1] - u.d / 2); z1 = Math.max(z1, d.pos[1] + u.d / 2);
       const el = document.createElement('div');
@@ -749,7 +797,7 @@ export class Scene3D {
       const gs = (gr.devs || []).map((id) => this.devices.get(id)).filter(Boolean);
       if (!gs.length) continue;
       let x0 = Infinity, x1 = -Infinity, z0 = Infinity, z1 = -Infinity;
-      for (const g of gs) { const u = g.userData; x0 = Math.min(x0, g.position.x - u.w / 2); x1 = Math.max(x1, g.position.x + u.w / 2); z0 = Math.min(z0, g.position.z - u.d / 2); z1 = Math.max(z1, g.position.z + u.d / 2); }
+      for (const g of gs) { const u = g.userData; x0 = Math.min(x0, g.position.x - u.w / 2); x1 = Math.max(x1, g.position.x + u.w / 2); z0 = Math.min(z0, g.position.z - u.d / 2); z1 = Math.max(z1, g.position.z + u.labelZ - 0.25); }
       x0 -= 0.9; x1 += 0.9; z0 -= 0.9; z1 += 1.5; // 下面多留一點，設備的名稱標籤才在框裡
       const pts = [[x0, z0], [x1, z0], [x1, z1], [x0, z1]].map(([x, z]) => new THREE.Vector3(x, 0.03, z));
       const line = new THREE.LineLoop(new THREE.BufferGeometry().setFromPoints(pts), new THREE.LineDashedMaterial({ color: gr.color || 0x6ea8ff, dashSize: 0.35, gapSize: 0.22, transparent: true, opacity: 0.85 }));
@@ -843,7 +891,7 @@ export class Scene3D {
       const ea = this.portEnd(c.a.dev, c.a.port, c.b.dev), eb = this.portEnd(c.b.dev, c.b.port, c.a.dev);
       // 每一端：插在孔裡的一小段是直的，出來之後往下落到桌面
       const lead = (e) => {
-        const out = 0.4 + Math.max(0, e.p.y - FLOOR); // 孔越高，落地點離機身越遠，上下兩排的線才不會疊在一起
+        const out = leadOut(e.p.y);
         return {
           out,
           inside: e.p.clone().addScaledVector(e.n, -0.03),
@@ -1154,19 +1202,14 @@ export class Scene3D {
     const v = new THREE.Vector3();
     const compact = this.H / this.view.span < 22;
     if (compact !== this.compactLabels) { this.compactLabels = compact; this.labelLayer.classList.toggle('compact', compact); }
-    // 標籤不要跑到兩側面板或下方的封包追蹤底下：寬度每隔一段時間量一次（每一格都量會讓瀏覽器一直重新排版）
-    this.frameNo = (this.frameNo || 0) + 1;
-    if (this.frameNo % 15 === 1 || !this.labelW || this.labelW.size !== this.labels.size) { this.labelW = new Map(); for (const [id, l] of this.labels) this.labelW.set(id, l.el.offsetWidth); }
-    const ins = this.insets, xl = ins.left + 6, xr = this.W - ins.right - 6, yb = this.H - ins.bottom - 26;
+    // 標籤永遠固定在自己那台設備的正前方，跟著鏡頭一起移動：不會在畫面邊緣被推開、停住，再跳回去。
+    // 剛載入時標籤會不會被兩側的面板蓋住，由 fit() 對焦時負責（把標籤的大小也算進去）
+    const ins = this.insets, xl = ins.left + 6, xr = this.W - ins.right - 6;
     for (const [id, l] of this.labels) {
       const g = this.devices.get(id), u = g.userData;
-      v.set(g.position.x, 0, g.position.z + u.d / 2 + 0.25);
+      v.set(g.position.x, 0, g.position.z + u.labelZ);
       const s = this.toScreen(v);
-      const hw = (this.labelW.get(id) || 0) / 2;
-      // 只推回「被切到一部分」的標籤；設備整個移出畫面（使用者自己平移）的標籤就讓它跟著走
-      if (xr - xl > hw * 2 && s.x > xl - hw && s.x < xr + hw) s.x = Math.min(Math.max(s.x, xl + hw), xr - hw);
-      if (yb > ins.top && s.y > yb && s.y < yb + 40) s.y = yb;
-      l.el.style.transform = `translate(-50%, 0) translate(${s.x.toFixed(1)}px, ${(s.y + (compact ? 3 : 6)).toFixed(1)}px)`;
+      l.el.style.transform = `translate(-50%, 0) translate(${s.x.toFixed(1)}px, ${(s.y + (compact ? LABEL_GAP / 2 : LABEL_GAP)).toFixed(1)}px)`;
       const z = String(Math.round(s.y));
       if (l.el.style.zIndex !== z) l.el.style.zIndex = z;
     }
